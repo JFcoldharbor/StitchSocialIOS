@@ -28,6 +28,7 @@ struct ContextualVideoOverlay: View {
         notificationService: NotificationService()
     )
     @StateObject private var userService = UserService()
+    @StateObject private var authService = AuthService()
     @State private var showingProfileSheet = false
     @State private var showingThreadView = false
     @State private var selectedUserID: String?
@@ -42,6 +43,9 @@ struct ContextualVideoOverlay: View {
     @State private var realCreatorName: String?
     @State private var realThreadCreatorName: String?
     @State private var isLoadingUserData = false
+    
+    // Recording state
+    @State private var showingStitchRecording = false
     
     // MARK: - Computed Properties
     
@@ -170,8 +174,24 @@ struct ContextualVideoOverlay: View {
             }
         }
         .sheet(isPresented: $showingThreadView) {
-            // TODO: Replace with actual thread view
-            Text("Thread: \(video.threadID ?? video.id)")
+            ThreadView(
+                threadID: video.threadID ?? video.id,
+                videoService: VideoService(),
+                userService: userService
+            )
+        }
+        .fullScreenCover(isPresented: $showingStitchRecording) {
+            RecordingView(
+                recordingContext: getStitchRecordingContext(),
+                onVideoCreated: { videoMetadata in
+                    showingStitchRecording = false
+                    // Refresh engagement data after stitch creation
+                    Task { await loadEngagementData() }
+                },
+                onCancel: {
+                    showingStitchRecording = false
+                }
+            )
         }
     }
     
@@ -440,7 +460,7 @@ struct ContextualVideoOverlay: View {
                     )
             )
         }
-        .buttonStyle(ContextualScaleButtonStyle())
+        .buttonStyle(PlainButtonStyle())
     }
     
     private func tierBadge(isThread: Bool) -> some View {
@@ -838,22 +858,43 @@ struct ContextualVideoOverlay: View {
     }
     
     private func loadEngagementData() async {
-        let engagement = VideoEngagement(
-            videoID: video.id,
-            creatorID: video.creatorID,
-            hypeCount: video.hypeCount,
-            coolCount: video.coolCount,
-            shareCount: video.shareCount,
-            replyCount: video.replyCount,
-            viewCount: video.viewCount,
-            lastEngagementAt: Date()
-        )
-        
-        await MainActor.run {
-            videoEngagement = engagement
+        // Get fresh video data from database
+        if let updatedVideo = try? await VideoService().getVideo(id: video.id) {
+            let engagement = VideoEngagement(
+                videoID: updatedVideo.id,
+                creatorID: updatedVideo.creatorID,
+                hypeCount: updatedVideo.hypeCount,
+                coolCount: updatedVideo.coolCount,
+                shareCount: updatedVideo.shareCount,
+                replyCount: updatedVideo.replyCount,
+                viewCount: updatedVideo.viewCount,
+                lastEngagementAt: Date()
+            )
+            
+            await MainActor.run {
+                videoEngagement = engagement
+            }
+            
+            print("✅ CONTEXTUAL OVERLAY: Loaded fresh engagement data - \(engagement.hypeCount) hypes, \(engagement.coolCount) cools")
+        } else {
+            // Fallback to original video data if database fetch fails
+            let engagement = VideoEngagement(
+                videoID: video.id,
+                creatorID: video.creatorID,
+                hypeCount: video.hypeCount,
+                coolCount: video.coolCount,
+                shareCount: video.shareCount,
+                replyCount: video.replyCount,
+                viewCount: video.viewCount,
+                lastEngagementAt: Date()
+            )
+            
+            await MainActor.run {
+                videoEngagement = engagement
+            }
+            
+            print("⚠️ CONTEXTUAL OVERLAY: Using fallback engagement data - \(engagement.hypeCount) hypes, \(engagement.coolCount) cools")
         }
-        
-        print("✅ CONTEXTUAL OVERLAY: Loaded engagement data - \(engagement.hypeCount) hypes, \(engagement.coolCount) cools")
     }
     
     private func checkUserEngagementStatus() async {
@@ -862,7 +903,17 @@ struct ContextualVideoOverlay: View {
     
     private func checkFollowingStatus() async {
         guard let currentUserID = currentUserID else { return }
-        print("🔄 CONTEXTUAL OVERLAY: Checking follow status for \(video.creatorID)")
+        
+        do {
+            let followStatus = try await userService.isFollowing(followerID: currentUserID, followingID: video.creatorID)
+            await MainActor.run {
+                isFollowing = followStatus
+            }
+            print("🔄 CONTEXTUAL OVERLAY: Follow status for \(video.creatorID): \(followStatus)")
+        } catch {
+            print("❌ CONTEXTUAL OVERLAY: Failed to check follow status - \(error)")
+            // Keep default false state on error
+        }
     }
     
     // MARK: - FIXED Engagement Handling with UI Updates
@@ -896,6 +947,7 @@ struct ContextualVideoOverlay: View {
             onAction?(.reply)
             return
         case .stitch:
+            showingStitchRecording = true
             onAction?(.stitch)
             return
         }
@@ -905,7 +957,7 @@ struct ContextualVideoOverlay: View {
                 videoID: video.id,
                 engagementType: interactionType,
                 userID: currentUserID,
-                userTier: UserTier.rookie
+                userTier: authService.currentUser?.tier ?? UserTier.rookie
             )
             
             // 🔥 KEY FIX: Reload engagement data to refresh UI counts
@@ -976,6 +1028,28 @@ struct ContextualVideoOverlay: View {
     }
     
     // MARK: - Helper Methods
+    
+    private func getStitchRecordingContext() -> RecordingContext {
+        if let threadID = video.threadID {
+            let threadInfo = ThreadInfo(
+                title: video.title,
+                creatorName: video.creatorName,
+                creatorID: video.creatorID,
+                thumbnailURL: video.thumbnailURL,
+                participantCount: 1,
+                stitchCount: video.replyCount
+            )
+            return .stitchToThread(threadID: threadID, threadInfo: threadInfo)
+        } else {
+            let videoInfo = CameraVideoInfo(
+                title: video.title,
+                creatorName: video.creatorName,
+                creatorID: video.creatorID,
+                thumbnailURL: video.thumbnailURL
+            )
+            return .replyToVideo(videoID: video.id, videoInfo: videoInfo)
+        }
+    }
     
     private func formatCount(_ count: Int) -> String {
         if count >= 1_000_000 {

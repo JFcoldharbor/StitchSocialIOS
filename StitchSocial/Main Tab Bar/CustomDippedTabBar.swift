@@ -67,16 +67,16 @@ struct CustomDippedTabBar: View {
     
     // MARK: - Private State
     
-    @State private var tabBarHeight: CGFloat = 43 // Container 20% smaller (54 * 0.8)
+    @State private var tabBarHeight: CGFloat = 33 // Container 20% smaller (54 * 0.8)
     @State private var tabBarOffset: CGFloat = 0
-    @State private var createButtonScale: CGFloat = 1.0
+    @State private var createButtonScale: CGFloat = 1.10
     
     // MARK: - Tab Bar Configuration
     
     private let tabBarCornerRadius: CGFloat = 11 // Container proportionally smaller (14 * 0.8)
-    private let dippedRadius: CGFloat = 19 // Container proportionally smaller (24 * 0.8)
-    private let createButtonSize: CGFloat = 62 // Keep create button same size
-    private let tabItemSize: CGFloat = 13 // Container proportionally smaller
+    private let dippedRadius: CGFloat = 0 // Container proportionally smaller (24 * 0.8)
+    private let createButtonSize: CGFloat = 68 // Keep create button same size
+    private let tabItemSize: CGFloat = 30 // Container proportionally smaller
     
     var body: some View {
         ZStack {
@@ -122,7 +122,7 @@ struct CustomDippedTabBar: View {
                 
                 Spacer()
             }
-            .padding(.horizontal, 9) // Container proportionally smaller (11 * 0.8)
+            .padding(.horizontal, 5) // Container proportionally smaller (11 * 0.8)
             .frame(height: tabBarHeight)
             
             // Floating create button
@@ -216,7 +216,7 @@ struct CustomDippedTabBar: View {
                             ),
                             lineWidth: 2.4 // Reduced from 3
                         )
-                        .frame(width: createButtonSize + 5, height: createButtonSize + 5) // Reduced from +6
+                        .frame(width: createButtonSize + 10, height: createButtonSize + 10) // Reduced from +6
                         .blur(radius: 1.6) // Reduced from 2
                     
                     // Glassmorphism background
@@ -263,7 +263,7 @@ struct CustomDippedTabBar: View {
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     ),
-                                    lineWidth: 1.6 // Reduced from 2
+                                    lineWidth: 1 // Reduced from 2
                                 )
                         )
                         .frame(width: createButtonSize, height: createButtonSize)
@@ -288,12 +288,12 @@ struct CustomDippedTabBar: View {
                 color: Color.black.opacity(0.4),
                 radius: 12, // Reduced from 15
                 x: 0,
-                y: 14 // Reduced from 10
+                y: 25 // Reduced from 10
             )
             .offset(y: -10) // Reduced from -12
             
             Spacer()
-                .frame(height: 18) // Reduced from 30
+                .frame(height: 26) // Reduced from 30
         }
     }
     

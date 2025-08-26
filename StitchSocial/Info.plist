@@ -2,13 +2,131 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- REQUIRED: App Icon Configuration -->
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    
+    <!-- App Identity -->
+    <key>CFBundleDisplayName</key>
+    <string>Stitch Social</string>
+    <key>CFBundleName</key>
+    <string>StitchSocial</string>
+    <key>CFBundleIdentifier</key>
+    <string>coldharbor.StitchSocial</string>
+    <key>CFBundleVersion</key>
+    <string>1.0.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    
+    <!-- iOS Version Requirements -->
+    <key>LSMinimumSystemVersion</key>
+    <string>15.0</string>
+    
+    <!-- Privacy Permissions -->
+    <key>NSCameraUsageDescription</key>
+    <string>Stitch Social needs camera access to record and share videos with your community.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Stitch Social needs microphone access to record audio for your videos.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Stitch Social needs photo library access to save and share your recorded videos.</string>
     <key>NSUserNotificationsUsageDescription</key>
-    <string>CleanBeta sends notifications for new content and interactions</string>
+    <string>Stitch Social sends notifications for new content, hypes, and community interactions.</string>
+    
+    <!-- Background Modes -->
     <key>UIBackgroundModes</key>
     <array>
         <string>remote-notification</string>
     </array>
+    
+    <!-- Device Capabilities -->
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    
+    <!-- Interface Configuration -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    </array>
+    
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+        <string>UIInterfaceOrientationPortraitUpsideDown</string>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    
+    <!-- Status Bar Configuration -->
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleLightContent</string>
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <true/>
+    
+    <!-- Launch Configuration -->
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+    
+    <!-- App Transport Security -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <false/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>firebaseapp.com</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
+            <key>googleapis.com</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
+        </dict>
+    </dict>
+    
+    <!-- Firebase Configuration -->
     <key>FirebaseAppDelegateProxyEnabled</key>
     <false/>
+    
+    <!-- URL Schemes -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>coldharbor.StitchSocial</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>stitchsocial</string>
+            </array>
+        </dict>
+    </array>
+    
+    <!-- Scene Configuration -->
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+        <key>UISceneConfigurations</key>
+        <dict>
+            <key>UIWindowSceneSessionRoleApplication</key>
+            <array>
+                <dict>
+                    <key>UISceneConfigurationName</key>
+                    <string>Default Configuration</string>
+                    <key>UISceneDelegateClassName</key>
+                    <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+                </dict>
+            </array>
+        </dict>
+    </dict>
+    
+    <!-- App Category -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.social-networking</string>
 </dict>
 </plist>

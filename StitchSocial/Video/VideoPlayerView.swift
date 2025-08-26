@@ -432,15 +432,22 @@ class VideoPlayerManager: ObservableObject {
         
         cleanup()
         
-        let playerItem = AVPlayerItem(url: url)
-        player = AVPlayer(playerItem: playerItem)
-        currentVideoURL = url
-        
-        setupTimeObserver()
-        setupPublishers()
-        setupLooping()
-        
-        print("VIDEO: Player created for \(url.lastPathComponent)")
+        // FIXED: Move AVPlayer creation to background queue
+        Task.detached(priority: .userInitiated) {
+            let playerItem = AVPlayerItem(url: url)
+            let player = AVPlayer(playerItem: playerItem)
+            
+            await MainActor.run {
+                self.player = player
+                self.currentVideoURL = url
+                
+                self.setupTimeObserver()
+                self.setupPublishers()
+                self.setupLooping()
+                
+                print("VIDEO: Player created for \(url.lastPathComponent)")
+            }
+        }
     }
     
     private func setupTimeObserver() {

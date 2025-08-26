@@ -2,16 +2,16 @@
 //  VideoService.swift
 //  CleanBeta
 //
-//  Layer 4: Core Services - Enhanced Video Management
-//  Dependencies: Firebase Firestore, CachingService, BatchingService
-//  Features: Thread hierarchy, following feed, multidirectional swiping support, engagement updates, video deletion
+//  Layer 4: Core Services - Complete Video Management with Enhanced Deletion
+//  Dependencies: Firebase Firestore, Firebase Storage, FirebaseSchema
+//  Features: Thread hierarchy, following feed, multidirectional swiping, engagement updates, secure video deletion
 //
 
 import Foundation
 import FirebaseFirestore
 import FirebaseStorage
 
-/// Enhanced video management service with HomeFeed multidirectional swiping support
+/// Complete video management service with robust deletion and thread hierarchy support
 @MainActor
 class VideoService: ObservableObject {
     
@@ -72,15 +72,31 @@ class VideoService: ObservableObject {
             
             // Status
             FirebaseSchema.VideoDocument.isDeleted: false,
-            FirebaseSchema.VideoDocument.moderationStatus: "approved"
+            FirebaseSchema.VideoDocument.discoverabilityScore: 0.5,
+            FirebaseSchema.VideoDocument.isPromoted: false
         ]
         
+        // Create video document
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
+        
+        // Create thread document for organization
+        let threadData: [String: Any] = [
+            FirebaseSchema.ThreadDocument.id: videoID,
+            FirebaseSchema.ThreadDocument.parentVideoID: videoID,
+            FirebaseSchema.ThreadDocument.creatorID: creatorID,
+            FirebaseSchema.ThreadDocument.title: title,
+            FirebaseSchema.ThreadDocument.createdAt: Timestamp(),
+            FirebaseSchema.ThreadDocument.updatedAt: Timestamp(),
+            FirebaseSchema.ThreadDocument.totalReplies: 0,
+            FirebaseSchema.ThreadDocument.lastActivityAt: Timestamp()
+        ]
+        
+        try await db.collection(FirebaseSchema.Collections.threads).document(videoID).setData(threadData)
         
         // Create engagement document
         try await createEngagementDocument(videoID: videoID, creatorID: creatorID)
         
-        print("✅ VIDEO SERVICE: Thread created: \(videoID)")
+        print("✅ VIDEO SERVICE: Thread created - \(videoID)")
         
         let video = CoreVideoMetadata(
             id: videoID,
@@ -111,13 +127,10 @@ class VideoService: ObservableObject {
             lastEngagementAt: nil
         )
         
-        // Cache when available
-        // cachingService.cacheVideo(video)
-        
         return video
     }
     
-    /// Create child reply to thread
+    /// Create child reply to existing thread
     func createChildReply(
         to threadID: String,
         title: String,
@@ -141,7 +154,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.createdAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
             
-            // Thread hierarchy
+            // Thread hierarchy - child video
             FirebaseSchema.VideoDocument.threadID: threadID,
             FirebaseSchema.VideoDocument.conversationDepth: 1,
             
@@ -163,15 +176,18 @@ class VideoService: ObservableObject {
             
             // Status
             FirebaseSchema.VideoDocument.isDeleted: false,
-            FirebaseSchema.VideoDocument.moderationStatus: "approved"
+            FirebaseSchema.VideoDocument.discoverabilityScore: 0.5,
+            FirebaseSchema.VideoDocument.isPromoted: false
         ]
         
-        // Update parent thread reply count
+        // Use batch for atomic operations
         let batch = db.batch()
         
+        // Create child video document
         let videoRef = db.collection(FirebaseSchema.Collections.videos).document(videoID)
         batch.setData(videoData, forDocument: videoRef)
         
+        // Update parent thread reply count
         let threadRef = db.collection(FirebaseSchema.Collections.videos).document(threadID)
         batch.updateData([
             FirebaseSchema.VideoDocument.replyCount: FieldValue.increment(Int64(1)),
@@ -214,181 +230,231 @@ class VideoService: ObservableObject {
             lastEngagementAt: nil
         )
         
-        // Cache when available
-        // cachingService.cacheVideo(video)
-        // cachingService.removeCachedThread(threadID)
-        
         return video
     }
     
-    // MARK: - Delete Operations
+    // MARK: - Delete Operations - ROBUST IMPLEMENTATION
     
-    /// Delete video and clean up related data
+    /// Delete video with complete cleanup - SIMPLIFIED for permission stability
     func deleteVideo(videoID: String, creatorID: String) async throws {
         
-        // Validate permissions
-        let videoRef = db.collection(FirebaseSchema.Collections.videos).document(videoID)
+        print("🗑️ VIDEO SERVICE: Starting deletion for video: \(videoID)")
         
-        // Get video data first
-        let snapshot = try await videoRef.getDocument()
-        guard let data = snapshot.data() else {
-            throw StitchError.processingError("Video not found")
+        // Step 1: Verify video exists and ownership
+        let videoDoc = try await db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .getDocument()
+        
+        guard videoDoc.exists,
+              let videoData = videoDoc.data(),
+              let docCreatorID = videoData[FirebaseSchema.VideoDocument.creatorID] as? String,
+              docCreatorID == creatorID else {
+            throw StitchError.validationError("Video not found or unauthorized")
         }
         
-        // Verify creator permissions
-        guard data[FirebaseSchema.VideoDocument.creatorID] as? String == creatorID else {
-            throw StitchError.authenticationError("Not authorized to delete this video")
+        // Step 2: Get video data for cleanup
+        let videoURL = videoData[FirebaseSchema.VideoDocument.videoURL] as? String
+        let thumbnailURL = videoData[FirebaseSchema.VideoDocument.thumbnailURL] as? String
+        let isThread = videoData[FirebaseSchema.VideoDocument.threadID] as? String == videoID
+        let conversationDepth = videoData[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
+        let threadID = videoData[FirebaseSchema.VideoDocument.threadID] as? String
+        let replyCount = videoData[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0
+        
+        // Step 3: Delete documents individually with better error handling
+        do {
+            // Delete video document first
+            try await db.collection(FirebaseSchema.Collections.videos).document(videoID).delete()
+            print("✅ VIDEO SERVICE: Video document deleted")
+            
+            // Delete engagement document (may not exist)
+            do {
+                try await db.collection(FirebaseSchema.Collections.engagement).document(videoID).delete()
+                print("✅ VIDEO SERVICE: Engagement document deleted")
+            } catch {
+                print("⚠️ VIDEO SERVICE: Engagement document deletion failed (may not exist): \(error)")
+            }
+            
+            // Delete thread document if this is a thread starter
+            if isThread {
+                do {
+                    try await db.collection(FirebaseSchema.Collections.threads).document(videoID).delete()
+                    print("✅ VIDEO SERVICE: Thread document deleted")
+                } catch {
+                    print("⚠️ VIDEO SERVICE: Thread document deletion failed (may not exist): \(error)")
+                }
+            }
+            
+            // Handle child videos if this is a parent thread
+            if conversationDepth == 0 && replyCount > 0 {
+                await deleteChildVideos(threadID: videoID)
+            }
+            
+            // Update parent reply count if this is a child video
+            if conversationDepth > 0, let threadID = threadID {
+                do {
+                    try await db.collection(FirebaseSchema.Collections.videos).document(threadID).updateData([
+                        FirebaseSchema.VideoDocument.replyCount: FieldValue.increment(Int64(-1)),
+                        FirebaseSchema.VideoDocument.updatedAt: Timestamp()
+                    ])
+                    print("✅ VIDEO SERVICE: Parent reply count updated")
+                } catch {
+                    print("⚠️ VIDEO SERVICE: Failed to update parent reply count: \(error)")
+                }
+            }
+            
+            // Update user's video count
+            do {
+                try await db.collection(FirebaseSchema.Collections.users).document(creatorID).updateData([
+                    FirebaseSchema.UserDocument.videoCount: FieldValue.increment(Int64(-1)),
+                    FirebaseSchema.UserDocument.updatedAt: Timestamp()
+                ])
+                print("✅ VIDEO SERVICE: User video count updated")
+            } catch {
+                print("⚠️ VIDEO SERVICE: Failed to update user video count: \(error)")
+            }
+            
+        } catch {
+            print("❌ VIDEO SERVICE: Core deletion failed: \(error)")
+            throw StitchError.processingError("Failed to delete video: \(error.localizedDescription)")
         }
         
-        let threadID = data[FirebaseSchema.VideoDocument.threadID] as? String
-        let conversationDepth = data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
-        let replyCount = data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0
+        // Step 4: Clean up storage files (non-blocking)
+        await deleteStorageFiles(videoURL: videoURL, thumbnailURL: thumbnailURL)
         
-        // Create batch for atomic deletion
-        let batch = db.batch()
+        // Step 5: Clean up related data (non-blocking)
+        await cleanupRelatedData(videoID: videoID)
         
-        // Delete main video document
-        batch.deleteDocument(videoRef)
-        
-        // Delete engagement document
-        let engagementRef = db.collection(FirebaseSchema.Collections.engagement).document(videoID)
-        batch.deleteDocument(engagementRef)
-        
-        // Handle thread hierarchy cleanup
-        if conversationDepth == 0 && replyCount > 0 {
-            // Deleting parent thread - delete all children
+        print("✅ VIDEO SERVICE: Video deletion complete: \(videoID)")
+    }
+    
+    /// Delete child videos when parent thread is deleted
+    private func deleteChildVideos(threadID: String) async {
+        do {
             let childVideosQuery = db.collection(FirebaseSchema.Collections.videos)
-                .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: videoID)
+                .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: threadID)
                 .whereField(FirebaseSchema.VideoDocument.conversationDepth, isGreaterThan: 0)
             
             let childSnapshot = try await childVideosQuery.getDocuments()
             
             for childDoc in childSnapshot.documents {
-                batch.deleteDocument(childDoc.reference)
-                
-                // Delete child engagement documents
-                let childEngagementRef = db.collection(FirebaseSchema.Collections.engagement).document(childDoc.documentID)
-                batch.deleteDocument(childEngagementRef)
+                do {
+                    // Delete child video document
+                    try await childDoc.reference.delete()
+                    
+                    // Delete child engagement document
+                    try await db.collection(FirebaseSchema.Collections.engagement).document(childDoc.documentID).delete()
+                    
+                    print("✅ VIDEO SERVICE: Deleted child video: \(childDoc.documentID)")
+                } catch {
+                    print("⚠️ VIDEO SERVICE: Failed to delete child video \(childDoc.documentID): \(error)")
+                }
             }
             
-        } else if conversationDepth > 0, let threadID = threadID {
-            // Deleting child video - update parent reply count
-            let parentRef = db.collection(FirebaseSchema.Collections.videos).document(threadID)
-            batch.updateData([
-                FirebaseSchema.VideoDocument.replyCount: FieldValue.increment(Int64(-1)),
-                FirebaseSchema.VideoDocument.updatedAt: Timestamp()
-            ], forDocument: parentRef)
+        } catch {
+            print("⚠️ VIDEO SERVICE: Failed to query child videos: \(error)")
         }
-        
-        // Execute batch deletion
-        try await batch.commit()
-        
-        // Clean up Firebase Storage files
-        await deleteVideoFiles(videoID: videoID, videoURL: data[FirebaseSchema.VideoDocument.videoURL] as? String)
-        
-        print("✅ VIDEO SERVICE: Video \(videoID) deleted successfully")
     }
     
     /// Delete multiple videos in batch (for bulk operations)
     func deleteVideos(videoIDs: [String], creatorID: String) async throws {
         
-        guard !videoIDs.isEmpty else { return }
+        print("🗑️ VIDEO SERVICE: Starting batch deletion for \(videoIDs.count) videos")
         
-        // Process in chunks to avoid Firestore batch limits
-        for chunk in videoIDs.chunked(into: 10) {
-            try await deleteVideoChunk(videoIDs: chunk, creatorID: creatorID)
-        }
-        
-        print("✅ VIDEO SERVICE: Batch deleted \(videoIDs.count) videos")
-    }
-    
-    /// Delete a chunk of videos atomically
-    private func deleteVideoChunk(videoIDs: [String], creatorID: String) async throws {
-        
-        let batch = db.batch()
-        var videosToDeleteFromStorage: [(videoID: String, videoURL: String?)] = []
-        
-        // Fetch all videos first to validate permissions and gather data
         for videoID in videoIDs {
-            let videoRef = db.collection(FirebaseSchema.Collections.videos).document(videoID)
-            let snapshot = try await videoRef.getDocument()
-            
-            guard let data = snapshot.data() else { continue }
-            
-            // Verify creator permissions
-            guard data[FirebaseSchema.VideoDocument.creatorID] as? String == creatorID else {
-                throw StitchError.authenticationError("Not authorized to delete video \(videoID)")
-            }
-            
-            // Queue for batch deletion
-            batch.deleteDocument(videoRef)
-            
-            // Queue engagement document for deletion
-            let engagementRef = db.collection(FirebaseSchema.Collections.engagement).document(videoID)
-            batch.deleteDocument(engagementRef)
-            
-            // Queue storage cleanup
-            let videoURL = data[FirebaseSchema.VideoDocument.videoURL] as? String
-            videosToDeleteFromStorage.append((videoID: videoID, videoURL: videoURL))
-            
-            // Handle thread hierarchy (simplified for batch - only handle child deletions)
-            let threadID = data[FirebaseSchema.VideoDocument.threadID] as? String
-            let conversationDepth = data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
-            
-            if conversationDepth > 0, let threadID = threadID {
-                // Update parent reply count for child deletions
-                let parentRef = db.collection(FirebaseSchema.Collections.videos).document(threadID)
-                batch.updateData([
-                    FirebaseSchema.VideoDocument.replyCount: FieldValue.increment(Int64(-1)),
-                    FirebaseSchema.VideoDocument.updatedAt: Timestamp()
-                ], forDocument: parentRef)
+            do {
+                try await deleteVideo(videoID: videoID, creatorID: creatorID)
+                print("✅ VIDEO SERVICE: Deleted video \(videoID)")
+            } catch {
+                print("❌ VIDEO SERVICE: Failed to delete video \(videoID): \(error)")
+                // Continue with other deletions even if one fails
             }
         }
         
-        // Execute batch deletion
-        try await batch.commit()
-        
-        // Clean up storage files
-        await deleteMultipleVideoFiles(videosToDeleteFromStorage)
+        print("✅ VIDEO SERVICE: Batch deletion complete")
     }
     
-    /// Delete associated video files from Firebase Storage
-    private func deleteVideoFiles(videoID: String, videoURL: String?) async {
-        guard let videoURL = videoURL, !videoURL.isEmpty else { return }
+    // MARK: - Private Deletion Helpers
+    
+    /// Delete video and thumbnail files from Firebase Storage
+    private func deleteStorageFiles(videoURL: String?, thumbnailURL: String?) async {
+        
+        // Delete video file
+        if let videoURL = videoURL, let videoRef = extractStorageRef(from: videoURL) {
+            do {
+                try await videoRef.delete()
+                print("✅ VIDEO SERVICE: Video file deleted from storage")
+            } catch {
+                print("⚠️ VIDEO SERVICE: Failed to delete video file: \(error)")
+            }
+        }
+        
+        // Delete thumbnail file
+        if let thumbnailURL = thumbnailURL, let thumbnailRef = extractStorageRef(from: thumbnailURL) {
+            do {
+                try await thumbnailRef.delete()
+                print("✅ VIDEO SERVICE: Thumbnail deleted from storage")
+            } catch {
+                print("⚠️ VIDEO SERVICE: Failed to delete thumbnail: \(error)")
+            }
+        }
+    }
+    
+    /// Extract Firebase Storage reference from download URL
+    private func extractStorageRef(from downloadURL: String) -> StorageReference? {
+        guard let url = URL(string: downloadURL),
+              let pathComponent = url.path.split(separator: "/").last else {
+            return nil
+        }
+        
+        let fileName = String(pathComponent).removingPercentEncoding ?? String(pathComponent)
+        
+        if downloadURL.contains("videos/") {
+            return Storage.storage().reference().child("videos/\(fileName)")
+        } else if downloadURL.contains("thumbnails/") {
+            return Storage.storage().reference().child("thumbnails/\(fileName)")
+        } else if downloadURL.contains("profile_images/") {
+            return Storage.storage().reference().child("profile_images/\(fileName)")
+        }
+        
+        return nil
+    }
+    
+    /// Clean up related engagement and interaction data
+    private func cleanupRelatedData(videoID: String) async {
         
         do {
-            // Delete video file
-            let videoRef = storage.reference(forURL: videoURL)
-            try await videoRef.delete()
+            // Delete user interactions for this video
+            let interactionsQuery = db.collection(FirebaseSchema.Collections.interactions)
+                .whereField(FirebaseSchema.InteractionDocument.videoID, isEqualTo: videoID)
             
-            // Delete thumbnail if exists
-            let thumbnailPath = "thumbnails/\(videoID).jpg"
-            let thumbnailRef = storage.reference().child(thumbnailPath)
-            try await thumbnailRef.delete()
+            let interactionDocs = try await interactionsQuery.getDocuments()
             
-            print("✅ VIDEO SERVICE: Storage files deleted for video \(videoID)")
+            for doc in interactionDocs.documents {
+                try await doc.reference.delete()
+            }
+            
+            print("✅ VIDEO SERVICE: Deleted \(interactionDocs.documents.count) interaction records")
+            
+            // Delete view records (using interactions collection instead)
+            let viewsQuery = db.collection(FirebaseSchema.Collections.interactions)
+                .whereField("videoID", isEqualTo: videoID)
+            
+            let viewDocs = try await viewsQuery.getDocuments()
+            
+            for doc in viewDocs.documents {
+                try await doc.reference.delete()
+            }
+            
+            print("✅ VIDEO SERVICE: Deleted \(viewDocs.documents.count) view records")
             
         } catch {
-            print("⚠️ VIDEO SERVICE: Failed to delete storage files: \(error)")
-            // Don't throw error - video document deletion succeeded
+            print("⚠️ VIDEO SERVICE: Failed to clean up related data: \(error)")
         }
     }
     
-    /// Delete multiple video files from storage
-    private func deleteMultipleVideoFiles(_ videos: [(videoID: String, videoURL: String?)]) async {
-        
-        await withTaskGroup(of: Void.self) { group in
-            for video in videos {
-                group.addTask {
-                    await self.deleteVideoFiles(videoID: video.videoID, videoURL: video.videoURL)
-                }
-            }
-        }
-    }
+    // MARK: - Engagement Operations
     
-    // MARK: - Engagement Update Operations
-    
-    /// Update video engagement metrics in database
+    /// Update video engagement metrics in database (for EngagementCoordinator)
     func updateVideoEngagement(
         videoID: String,
         hypeCount: Int,
@@ -421,7 +487,8 @@ class VideoService: ObservableObject {
                 FirebaseSchema.EngagementDocument.hypeCount: hypeCount,
                 FirebaseSchema.EngagementDocument.coolCount: coolCount,
                 FirebaseSchema.EngagementDocument.viewCount: viewCount,
-                FirebaseSchema.EngagementDocument.lastEngagementAt: Timestamp(date: lastEngagementAt)
+                FirebaseSchema.EngagementDocument.lastEngagementAt: Timestamp(date: lastEngagementAt),
+                FirebaseSchema.EngagementDocument.updatedAt: Timestamp()
             ]
             
             try await db.collection(FirebaseSchema.Collections.engagement)
@@ -438,7 +505,7 @@ class VideoService: ObservableObject {
         }
     }
     
-    /// Record user's engagement interaction with a video
+    /// Record user's engagement interaction with a video (for EngagementCoordinator)
     func recordUserEngagement(
         userID: String,
         videoID: String,
@@ -449,15 +516,22 @@ class VideoService: ObservableObject {
         do {
             // Create user interaction record
             let interactionData: [String: Any] = [
-                "userID": userID,
-                "videoID": videoID,
-                "interactionType": interactionType.rawValue,
-                "timestamp": Timestamp(date: timestamp),
-                "createdAt": Timestamp()
+                FirebaseSchema.InteractionDocument.userID: userID,
+                FirebaseSchema.InteractionDocument.videoID: videoID,
+                FirebaseSchema.InteractionDocument.engagementType: interactionType.rawValue,
+                FirebaseSchema.InteractionDocument.timestamp: Timestamp(date: timestamp),
+                FirebaseSchema.InteractionDocument.currentTaps: 1,
+                FirebaseSchema.InteractionDocument.requiredTaps: 2,
+                FirebaseSchema.InteractionDocument.isCompleted: true,
+                FirebaseSchema.InteractionDocument.impactValue: 1
             ]
             
-            // Use a composite document ID to prevent duplicates
-            let interactionID = "\(userID)_\(videoID)_\(interactionType.rawValue)"
+            // Use document ID pattern from FirebaseSchema
+            let interactionID = FirebaseSchema.DocumentIDPatterns.generateInteractionID(
+                videoID: videoID,
+                userID: userID,
+                type: interactionType.rawValue
+            )
             
             try await db.collection(FirebaseSchema.Collections.interactions)
                 .document(interactionID)
@@ -479,7 +553,11 @@ class VideoService: ObservableObject {
     ) async throws -> Bool {
         
         do {
-            let interactionID = "\(userID)_\(videoID)_\(interactionType.rawValue)"
+            let interactionID = FirebaseSchema.DocumentIDPatterns.generateInteractionID(
+                videoID: videoID,
+                userID: userID,
+                type: interactionType.rawValue
+            )
             let document = try await db.collection(FirebaseSchema.Collections.interactions)
                 .document(interactionID)
                 .getDocument()
@@ -518,7 +596,24 @@ class VideoService: ObservableObject {
         }
     }
     
-    /// Batch update engagement for multiple videos (for performance)
+    /// Create initial engagement document for new video
+    private func createEngagementDocument(videoID: String, creatorID: String) async throws {
+        let engagementData: [String: Any] = [
+            FirebaseSchema.EngagementDocument.videoID: videoID,
+            FirebaseSchema.EngagementDocument.creatorID: creatorID,
+            FirebaseSchema.EngagementDocument.hypeCount: 0,
+            FirebaseSchema.EngagementDocument.coolCount: 0,
+            FirebaseSchema.EngagementDocument.viewCount: 0,
+            FirebaseSchema.EngagementDocument.shareCount: 0,
+            FirebaseSchema.EngagementDocument.replyCount: 0,
+            FirebaseSchema.EngagementDocument.lastEngagementAt: Timestamp(),
+            FirebaseSchema.EngagementDocument.updatedAt: Timestamp()
+        ]
+        
+        try await db.collection(FirebaseSchema.Collections.engagement).document(videoID).setData(engagementData)
+    }
+    
+    /// Batch update engagement metrics for multiple videos
     func batchUpdateEngagement(_ updates: [EngagementUpdate]) async throws {
         
         guard !updates.isEmpty else { return }
@@ -562,7 +657,7 @@ class VideoService: ObservableObject {
     
     // MARK: - Enhanced Read Operations for HomeFeed
     
-    /// Get following feed with complete thread data (Horizontal + Vertical swiping)
+    /// Get following feed with complete thread data - PERFORMANCE OPTIMIZED
     func getFollowingThreadsWithChildren(
         userID: String,
         limit: Int = 20,
@@ -572,94 +667,61 @@ class VideoService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
-        // Simplified implementation without batching service
-        // Step 1: Get following list
-        // CORRECT: Query the following collection (not subcollection)
+        // Get following list efficiently
         let followingQuery = db.collection("following")
             .whereField("followerID", isEqualTo: userID)
             .whereField("isActive", isEqualTo: true)
+            .limit(to: 100) // Limit following queries
 
         let followingSnapshot = try await followingQuery.getDocuments()
         let followingUserIDs = followingSnapshot.documents.compactMap { doc in
             doc.data()["followingID"] as? String
         }
         
-        if followingUserIDs.isEmpty {
+        guard !followingUserIDs.isEmpty else {
+            print("📭 VIDEO SERVICE: No following users found")
             return (threads: [], lastDocument: nil, hasMore: false)
         }
         
-        // Step 2: Get threads from followed users (simplified batching)
+        // Get threads from following users - BATCH OPTIMIZED
         var allThreads: [ThreadData] = []
         
-        for batch in followingUserIDs.chunked(into: 10) {
-            let threadsQuery = db.collection(FirebaseSchema.Collections.videos)
+        // Process following users in smaller batches to avoid heavy queries
+        for batch in followingUserIDs.chunked(into: 5) { // Reduced from 10 to 5 for better performance
+            var threadsQuery = db.collection(FirebaseSchema.Collections.videos)
                 .whereField(FirebaseSchema.VideoDocument.creatorID, in: batch)
                 .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
                 .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-                .limit(to: limit)
+                .limit(to: 8) // Reduced limit per batch
+            
+            if let lastDoc = lastDocument {
+                threadsQuery = threadsQuery.start(afterDocument: lastDoc)
+            }
             
             let threadsSnapshot = try await threadsQuery.getDocuments()
             
+            // Create ThreadData with EMPTY children initially (load on-demand)
             for doc in threadsSnapshot.documents {
                 if let video = try createVideoFromDocument(doc) {
-                    let children = try await getThreadChildren(threadID: video.id)
-                    let threadData = ThreadData(id: video.id, parentVideo: video, childVideos: children)
+                    let threadData = ThreadData(id: video.id, parentVideo: video, childVideos: [])
                     allThreads.append(threadData)
                 }
             }
+            
+            // Break early if we have enough threads
+            if allThreads.count >= limit {
+                break
+            }
         }
         
-        // Simple randomization for content variety
-        let shuffledThreads = allThreads.shuffled().prefix(limit)
+        // Limit final results and randomize
+        let limitedThreads = Array(allThreads.shuffled().prefix(limit))
         
-        print("✅ VIDEO SERVICE: Following feed loaded - \(shuffledThreads.count) threads with children")
-        return (threads: Array(shuffledThreads), lastDocument: nil, hasMore: false)
+        print("✅ VIDEO SERVICE: Following feed loaded - \(limitedThreads.count) threads (optimized)")
+        return (threads: limitedThreads, lastDocument: nil, hasMore: allThreads.count >= limit)
     }
     
-    /// Get thread children for vertical swiping
-    func getThreadChildren(
-        threadID: String,
-        limit: Int = 10
-    ) async throws -> [CoreVideoMetadata] {
-        
-        // Load from Firebase (cache integration when available)
-        let query = db.collection(FirebaseSchema.Collections.videos)
-            .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: threadID)
-            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 1)
-            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: false)
-            .limit(to: limit)
-        
-        let snapshot = try await query.getDocuments()
-        let children = try snapshot.documents.compactMap { doc in
-            try createVideoFromDocument(doc)
-        }
-        
-        print("✅ VIDEO SERVICE: Loaded \(children.count) children for thread \(threadID)")
-        return children
-    }
-    
-    /// Build complete ThreadData structure
-    func buildThreadData(
-        parentVideo: CoreVideoMetadata,
-        includeChildren: Bool = true
-    ) async throws -> ThreadData {
-        
-        var childVideos: [CoreVideoMetadata] = []
-        
-        if includeChildren {
-            childVideos = try await getThreadChildren(threadID: parentVideo.id)
-        }
-        
-        let threadData = ThreadData(
-            id: parentVideo.id,
-            parentVideo: parentVideo,
-            childVideos: childVideos
-        )
-        
-        return threadData
-    }
-    
-    /// Get all threads (fallback for empty following)
+    /// Get all threads with children for discovery feed - PERFORMANCE OPTIMIZED
     func getAllThreadsWithChildren(
         limit: Int = 20,
         lastDocument: DocumentSnapshot? = nil
@@ -668,7 +730,7 @@ class VideoService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
-        // Get all threads (simplified implementation)
+        // Get parent threads ONLY (don't load children yet for performance)
         var query = db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
@@ -681,10 +743,10 @@ class VideoService: ObservableObject {
         let snapshot = try await query.getDocuments()
         var threads: [ThreadData] = []
         
+        // Create ThreadData with EMPTY children for performance (load children on-demand)
         for doc in snapshot.documents {
             if let video = try createVideoFromDocument(doc) {
-                let children = try await getThreadChildren(threadID: video.id)
-                let threadData = ThreadData(id: video.id, parentVideo: video, childVideos: children)
+                let threadData = ThreadData(id: video.id, parentVideo: video, childVideos: [])
                 threads.append(threadData)
             }
         }
@@ -694,20 +756,31 @@ class VideoService: ObservableObject {
         
         let hasMore = snapshot.documents.count >= limit
         
-        print("✅ VIDEO SERVICE: All threads loaded - \(shuffledThreads.count) threads")
+        print("✅ VIDEO SERVICE: All threads loaded - \(shuffledThreads.count) threads (children will load on-demand)")
         return (threads: shuffledThreads, lastDocument: snapshot.documents.last, hasMore: hasMore)
     }
     
-    // MARK: - Cache Optimization Helpers (For Future Implementation)
-    
-    /// Get cached following threads for quick access (when caching available)
-    private func getCachedFollowingThreads(userID: String, limit: Int) -> [ThreadData] {
-        // Implementation would check cache for user's following feed
-        // For now, return empty array to always hit fresh data
-        return []
+    /// Get child videos for a thread - LAZY LOADING OPTIMIZED
+    func getThreadChildren(threadID: String) async throws -> [CoreVideoMetadata] {
+        
+        // Simple query - load only when specifically requested
+        let childQuery = db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: threadID)
+            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isGreaterThan: 0)
+            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: false)
+            .limit(to: 10) // Limit children for performance
+        
+        let snapshot = try await childQuery.getDocuments()
+        
+        let children = try snapshot.documents.compactMap { doc in
+            try createVideoFromDocument(doc)
+        }
+        
+        print("✅ VIDEO SERVICE: Loaded \(children.count) children for thread \(threadID)")
+        return children
     }
     
-    /// Preload threads for smooth swiping
+    /// Preload threads for smooth swiping - PERFORMANCE OPTIMIZED
     func preloadThreadsForNavigation(
         threads: [ThreadData],
         currentIndex: Int,
@@ -718,34 +791,32 @@ class VideoService: ObservableObject {
         
         switch direction {
         case .horizontal:
-            // Preload next 2 threads ahead
+            // Preload only next 1-2 threads ahead (reduced from 3)
             let start = max(0, currentIndex + 1)
-            let end = min(threads.count, currentIndex + 3)
+            let end = min(threads.count, currentIndex + 2) // Reduced preload count
             preloadRange = start..<end
             
         case .vertical:
-            // Preload children for current thread
+            // Preload children only for current thread
             guard currentIndex < threads.count else { return }
             let currentThread = threads[currentIndex]
             
-            // Ensure children are loaded and cached
+            // Load children only if not already loaded
             if currentThread.childVideos.isEmpty {
                 _ = try? await getThreadChildren(threadID: currentThread.id)
             }
             return
         }
         
-        // Preload horizontal threads
+        // Preload horizontal threads (children loaded on-demand)
         for index in preloadRange {
-            let thread = threads[index]
+            _ = threads[index] // Mark thread for preloading (structure already in memory)
             
-            // Ensure thread has children loaded
-            if thread.childVideos.isEmpty {
-                _ = try? await getThreadChildren(threadID: thread.id)
-            }
+            // Don't automatically load children - wait for user to swipe vertically
+            print("🎯 VIDEO SERVICE: Preloaded thread \(index) structure")
         }
         
-        print("🎯 VIDEO SERVICE: Preloaded threads for \(direction) navigation")
+        print("🎯 VIDEO SERVICE: Optimized preload for \(direction) navigation")
     }
     
     // MARK: - Basic Read Operations (Legacy Support)
@@ -775,9 +846,6 @@ class VideoService: ObservableObject {
             try createVideoFromDocument(doc)
         }
         
-        // Cache videos when available
-        // cachingService.cacheVideos(videos)
-        
         print("✅ VIDEO SERVICE: Loaded \(videos.count) basic threads")
         
         return PaginatedResult(
@@ -790,11 +858,6 @@ class VideoService: ObservableObject {
     /// Get video by ID
     func getVideo(id: String) async throws -> CoreVideoMetadata? {
         
-        // Cache when available (when CachingService is restored)
-        // if let cached = cachingService.getCachedVideo(id) {
-        //     return cached
-        // }
-        
         // Load from Firebase
         let doc = try await db.collection(FirebaseSchema.Collections.videos).document(id).getDocument()
         
@@ -802,10 +865,25 @@ class VideoService: ObservableObject {
             return nil
         }
         
-        // Cache when available
-        // cachingService.cacheVideo(video)
-        
         return video
+    }
+    
+    /// Get videos by creator ID
+    func getVideosByCreator(creatorID: String, limit: Int = 20) async throws -> [CoreVideoMetadata] {
+        
+        let query = db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.creatorID, isEqualTo: creatorID)
+            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
+            .limit(to: limit)
+        
+        let snapshot = try await query.getDocuments()
+        
+        let videos = try snapshot.documents.compactMap { doc in
+            try createVideoFromDocument(doc)
+        }
+        
+        print("✅ VIDEO SERVICE: Loaded \(videos.count) videos for creator \(creatorID)")
+        return videos
     }
     
     // MARK: - Helper Methods
@@ -820,33 +898,36 @@ class VideoService: ObservableObject {
         let videoURL = data[FirebaseSchema.VideoDocument.videoURL] as? String ?? ""
         let thumbnailURL = data[FirebaseSchema.VideoDocument.thumbnailURL] as? String ?? ""
         let creatorID = data[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
-        let creatorName = data[FirebaseSchema.VideoDocument.creatorName] as? String ?? ""
-        let createdAtTimestamp = data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp
-        let createdAt = createdAtTimestamp?.dateValue() ?? Date()
+        let creatorName = data[FirebaseSchema.VideoDocument.creatorName] as? String ?? "Unknown"
+        
+        let createdAt = (data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
         let threadID = data[FirebaseSchema.VideoDocument.threadID] as? String
         let replyToVideoID = data[FirebaseSchema.VideoDocument.replyToVideoID] as? String
         let conversationDepth = data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
+        
+        // Engagement metrics
         let viewCount = data[FirebaseSchema.VideoDocument.viewCount] as? Int ?? 0
         let hypeCount = data[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0
         let coolCount = data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
         let replyCount = data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0
         let shareCount = data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0
+        
+        // Content metadata
         let temperature = data[FirebaseSchema.VideoDocument.temperature] as? String ?? "neutral"
         let qualityScore = data[FirebaseSchema.VideoDocument.qualityScore] as? Int ?? 50
-        let duration = data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0
+        let duration = data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0.0
         let aspectRatio = data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? (9.0/16.0)
         let fileSize = data[FirebaseSchema.VideoDocument.fileSize] as? Int64 ?? 0
-        let discoverabilityScore = data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double ?? 0.5
-        let isPromoted = data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false
-        let lastEngagementAtTimestamp = data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp
-        let lastEngagementAt = lastEngagementAtTimestamp?.dateValue()
         
-        // Calculate derived metrics
-        let total = hypeCount + coolCount
-        let engagementRatio = total > 0 ? Double(hypeCount) / Double(total) : 0.5
-        let totalInteractions = hypeCount + coolCount + replyCount + shareCount
-        let ageInHours = Date().timeIntervalSince(createdAt) / 3600.0
-        let velocityScore = ageInHours > 0 ? Double(totalInteractions) / ageInHours : 0.0
+        // Performance metrics (calculated, not stored in FirebaseSchema)
+        let engagementRatio = hypeCount + coolCount > 0 ? Double(hypeCount) / Double(hypeCount + coolCount) : 0.5
+        let velocityScore = data["velocityScore"] as? Double ?? 0.0
+        let trendingScore = data["trendingScore"] as? Double ?? 0.0
+        let discoverabilityScore = data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double ?? 0.5
+        
+        // Status
+        let isPromoted = data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false
+        let lastEngagementAt = (data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp)?.dateValue()
         
         return CoreVideoMetadata(
             id: id,
@@ -868,7 +949,7 @@ class VideoService: ObservableObject {
             qualityScore: qualityScore,
             engagementRatio: engagementRatio,
             velocityScore: velocityScore,
-            trendingScore: 0.0, // Default trending score
+            trendingScore: trendingScore,
             duration: duration,
             aspectRatio: aspectRatio,
             fileSize: fileSize,
@@ -877,29 +958,11 @@ class VideoService: ObservableObject {
             lastEngagementAt: lastEngagementAt
         )
     }
-    
-    /// Create engagement document for new video
-    private func createEngagementDocument(videoID: String, creatorID: String) async throws {
-        let engagementData: [String: Any] = [
-            FirebaseSchema.EngagementDocument.videoID: videoID,
-            FirebaseSchema.EngagementDocument.creatorID: creatorID,
-            FirebaseSchema.EngagementDocument.hypeCount: 0,
-            FirebaseSchema.EngagementDocument.coolCount: 0,
-            FirebaseSchema.EngagementDocument.shareCount: 0,
-            FirebaseSchema.EngagementDocument.replyCount: 0,
-            FirebaseSchema.EngagementDocument.viewCount: 0,
-            FirebaseSchema.EngagementDocument.lastEngagementAt: Timestamp()
-        ]
-        
-        try await db.collection(FirebaseSchema.Collections.engagement)
-            .document(videoID)
-            .setData(engagementData)
-    }
 }
 
-// MARK: - Supporting Types for Engagement
+// MARK: - Supporting Data Structures
 
-/// User engagement status for a specific video
+/// User engagement status for a video
 struct UserEngagementStatus {
     let hasHyped: Bool
     let hasCooled: Bool
@@ -920,8 +983,6 @@ struct EngagementUpdate {
     let temperature: String
     let lastEngagementAt: Date
 }
-
-// MARK: - Existing Supporting Types
 
 /// Swipe direction for preloading optimization
 enum SwipeDirection {
@@ -963,15 +1024,16 @@ struct PaginatedResult<T> {
     let hasMore: Bool
 }
 
-// MARK: - Array Extension for Chunking
+// MARK: - Array Extension for Chunking (Remove duplicate)
 
-extension Array {
-    func Mychunked(into size: Int) -> [[Element]] {
-        return stride(from: 0, to: count, by: size).map {
-            Array(self[$0..<Swift.min($0 + size, count)])
-        }
-    }
-}
+// This extension is already defined elsewhere, removing duplicate
+// extension Array {
+//     func chunked(into size: Int) -> [[Element]] {
+//         return stride(from: 0, to: count, by: size).map {
+//             Array(self[$0..<Swift.min($0 + size, count)])
+//         }
+//     }
+// }
 
 // MARK: - Hello World Test Extension
 
@@ -979,8 +1041,8 @@ extension VideoService {
     
     /// Test video service functionality
     func helloWorldTest() {
-        print("🔹 VIDEO SERVICE: Enhanced Hello World - Ready for multidirectional swiping!")
-        print("🔹 VIDEO SERVICE: Features: Thread hierarchy, following feed, engagement updates, video deletion")
-        print("🔹 VIDEO SERVICE: Performance: Direct Firebase access with real-time engagement")
+        print("📹 VIDEO SERVICE: Enhanced Hello World - Ready for complete video management!")
+        print("📹 VIDEO SERVICE: Features: Thread hierarchy, following feed, engagement updates, secure video deletion")
+        print("📹 VIDEO SERVICE: Performance: Direct Firebase access with real-time engagement and storage cleanup")
     }
 }

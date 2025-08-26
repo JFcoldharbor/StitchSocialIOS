@@ -1,5 +1,13 @@
 //
 //  NotificationView.swift
+//  StitchSocial
+//
+//  Created by James Garmon on 8/25/25.
+//
+
+
+//
+//  NotificationView.swift
 //  CleanBeta
 //
 //  Layer 8: Views - Complete User Notifications with Service Integration
@@ -14,7 +22,7 @@ struct NotificationView: View {
     
     // MARK: - Dependencies
     
-    @StateObject private var viewModel = NotificationViewModel()
+    @StateObject private var viewModel: NotificationViewModel
     @EnvironmentObject private var authService: AuthService
     
     // MARK: - UI State
@@ -24,8 +32,14 @@ struct NotificationView: View {
     
     // MARK: - Initialization
     
-    init() {
-        // Default initialization - services will be injected or created as needed
+    init(
+        notificationService: NotificationService = NotificationService(),
+        authService: AuthService? = nil
+    ) {
+        self._viewModel = StateObject(wrappedValue: NotificationViewModel(
+            notificationService: notificationService,
+            authService: authService
+        ))
     }
     
     // MARK: - Main Body
@@ -214,7 +228,7 @@ struct NotificationView: View {
     // MARK: - Helper Methods
     
     private func handleNotificationTap(_ notification: NotificationData) async {
-        print("📧 NOTIFICATION VIEW: Handling tap for \(notification.type.rawValue)")
+        print("NOTIFICATION VIEW: Handling tap for \(notification.type.rawValue)")
         
         // Navigate based on notification type and payload
         switch notification.type {
@@ -238,21 +252,33 @@ struct NotificationView: View {
     }
     
     private func navigateToVideo(videoID: String) async {
-        // TODO: Implement navigation to specific video
-        print("📧 NAVIGATE: To video \(videoID)")
-        // This would typically use a navigation coordinator or deep link system
+        // Navigate to video using NotificationCenter pattern like DiscoveryView
+        NotificationCenter.default.post(
+            name: NSNotification.Name("NavigateToVideo"),
+            object: nil,
+            userInfo: ["videoID": videoID]
+        )
+        print("NOTIFICATION NAV: Navigating to video \(videoID)")
     }
     
     private func navigateToProfile(userID: String) async {
-        // TODO: Implement navigation to user profile
-        print("📧 NAVIGATE: To profile \(userID)")
-        // This would typically use a navigation coordinator
+        // Navigate to profile using NotificationCenter pattern like DiscoveryView
+        NotificationCenter.default.post(
+            name: NSNotification.Name("NavigateToProfile"),
+            object: nil,
+            userInfo: ["userID": userID]
+        )
+        print("NOTIFICATION NAV: Navigating to profile \(userID)")
     }
     
     private func navigateToThread(threadID: String) async {
-        // TODO: Implement navigation to thread conversation
-        print("📧 NAVIGATE: To thread \(threadID)")
-        // This would typically use a navigation coordinator
+        // Navigate to thread using NotificationCenter pattern like DiscoveryView
+        NotificationCenter.default.post(
+            name: NSNotification.Name("NavigateToThread"),
+            object: nil,
+            userInfo: ["threadID": threadID]
+        )
+        print("NOTIFICATION NAV: Navigating to thread \(threadID)")
     }
 }
 

@@ -41,7 +41,7 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
     }
     
     // MARK: - Session Management (FIXED - Background Thread)
-    
+
     @MainActor
     func startSession() async {
         return await withCheckedContinuation { continuation in
@@ -58,7 +58,7 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
                     self.sessionQueue.async {
                         let session = self.captureSession
                         if !session.isRunning {
-                            session.startRunning() // Now properly on background thread
+                            session.startRunning()
                         }
                         
                         Task { @MainActor in
@@ -70,7 +70,7 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
             }
         }
     }
-    
+
     @MainActor
     func stopSession() async {
         return await withCheckedContinuation { continuation in
@@ -83,7 +83,7 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
                 // FIXED: Move session.stopRunning() to background thread
                 let session = self.captureSession
                 if session.isRunning {
-                    session.stopRunning() // Now properly on background thread
+                    session.stopRunning()
                 }
                 
                 Task { @MainActor in

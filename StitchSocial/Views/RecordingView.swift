@@ -1,14 +1,19 @@
 //
-//  RecordingView.swift - Updated with VideoCoordinator Progress Display
-//  Shows detailed progress during post-processing workflow
+//  RecordingView.swift
+//  CleanBeta
+//
+//  Layer 8: Views - Instagram/TikTok Style Recording Interface
+//  Standard social media camera layout with bottom controls
 //
 
 import SwiftUI
 import AVFoundation
+import PhotosUI
 
 struct RecordingView: View {
     @StateObject private var controller: RecordingController
     @StateObject private var permissionsManager = CameraPermissionsManager()
+    @State private var selectedPhotoItem: PhotosPickerItem?
     
     let onVideoCreated: (CoreVideoMetadata) -> Void
     let onCancel: () -> Void
@@ -25,457 +30,373 @@ struct RecordingView: View {
     
     var body: some View {
         ZStack {
-            // Background
             Color.black.ignoresSafeArea()
             
-            // Main content
-            recordingContent
+            switch controller.currentPhase {
+            case .ready, .recording, .stopping:
+                cameraInterface
+                
+            case .aiProcessing:
+                processingInterface
+                
+            case .complete:
+                if let videoURL = controller.recordedVideoURL {
+                    ThreadComposer(
+                        recordedVideoURL: videoURL,
+                        recordingContext: controller.recordingContext,
+                        aiResult: controller.aiAnalysisResult,
+                        onVideoCreated: onVideoCreated,
+                        onCancel: onCancel
+                    )
+                }
+                
+            case .error(let message):
+                errorInterface(message)
+            }
         }
         .navigationBarHidden(true)
         .onAppear {
-            print("🔍 DEBUG: RecordingView appeared")
-            print("🔍 DEBUG: Permissions manager can record: \(permissionsManager.canRecord)")
-            permissionsManager.checkPermissionStatus()
-            
-            // Start camera immediately if permissions already granted
-            if permissionsManager.canRecord {
-                Task {
-                    await controller.startCameraSession()
-                }
-            }
+            setupCamera()
         }
         .onDisappear {
-            // Camera cleanup handled by controller
+            cleanupCamera()
+        }
+        .onChange(of: selectedPhotoItem) { item in
             Task {
-                await controller.stopCameraSession()
-            }
-        }
-    }
-    
-    // MARK: - Recording Content
-    
-    private var recordingContent: some View {
-        Group {
-            switch controller.currentPhase {
-            case .ready, .recording, .stopping:
-                cameraView
-                
-            case .aiProcessing:
-                // UPDATED: Show VideoCoordinator progress instead of simple AI processing
-                videoProcessingView
-                
-            case .complete:
-                metadataView
-                
-            case .error(let message):
-                ErrorView(message: message) {
-                    controller.clearError()
+                if let data = try? await item?.loadTransferable(type: Data.self) {
+                    await handleSelectedVideo(data)
                 }
             }
         }
     }
     
-    // MARK: - Camera View
+    // MARK: - Camera Interface
     
-    private var cameraView: some View {
+    private var cameraInterface: some View {
         ZStack {
-            // Camera preview
-            CameraPreview(controller: controller)
-                .ignoresSafeArea(.all)
+            // Full screen camera preview - FIXED: Use ProfessionalCameraPreview
+            ProfessionalCameraPreview(controller: controller)
+                .ignoresSafeArea()
             
-            // Camera controls overlay
+            // Top overlay
             VStack {
-                // Top bar
                 HStack {
-                    Button("Cancel") {
-                        onCancel()
-                    }
-                    .foregroundColor(.white)
-                    .padding()
+                    contextBadge
                     
                     Spacer()
                     
-                    Text(controller.recordingContext.displayTitle)
-                        .foregroundColor(.white)
-                        .font(.headline)
-                    
-                    Spacer()
-                    
-                    // Recording indicator
                     if controller.currentPhase.isRecording {
-                        HStack {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 8, height: 8)
-                            Text("REC")
-                                .foregroundColor(.red)
-                                .font(.caption.bold())
-                        }
-                        .padding()
-                    } else {
-                        Color.clear.frame(width: 50, height: 30)
+                        recordingIndicator
                     }
+                    
+                    Spacer()
+                    
+                    closeButton
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 60)
                 
                 Spacer()
-                
-                // Recording button
-                RecordingButton(controller: controller)
-                    .padding(.bottom, 100)
+            }
+            
+            // Bottom controls - absolute positioning at screen bottom
+            GeometryReader { geometry in
+                HStack(alignment: .center, spacing: 0) {
+                    // Left: Gallery/Image picker - FIXED
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .videos) {
+                        Image(systemName: "photo.stack")
+                            .font(.system(size: 24, weight: .medium))
+                            .foregroundColor(.white)
+                            .frame(width: 50, height: 50)
+                            .background(Circle().fill(.ultraThinMaterial))
+                    }
+                    
+                    Spacer()
+                    
+                    // Center: Recording button
+                    CinematicRecordingButton(controller: controller)
+                    
+                    Spacer()
+                    
+                    // Right: Camera flip - FIXED
+                    Button {
+                        Task {
+                            await controller.cameraManager.switchCamera()
+                        }
+                    } label: {
+                        Image(systemName: "camera.rotate.fill")
+                            .font(.system(size: 24, weight: .medium))
+                            .foregroundColor(.white)
+                            .frame(width: 50, height: 50)
+                            .background(Circle().fill(.ultraThinMaterial))
+                    }
+                }
+                .padding(.horizontal, 50)
+                .position(x: geometry.size.width / 2, y: geometry.size.height - 80)
             }
         }
     }
     
-    // MARK: - Video Processing View (UPDATED)
+    // MARK: - UI Components
     
-    private var videoProcessingView: some View {
+    private var contextBadge: some View {
+        Text(getContextName())
+            .font(.system(size: 14, weight: .medium))
+            .foregroundColor(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        Capsule().stroke(getContextColor(), lineWidth: 1)
+                    )
+            )
+    }
+    
+    private var recordingIndicator: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(.red)
+                .frame(width: 8, height: 8)
+                .scaleEffect(1.2)
+                .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: controller.currentPhase.isRecording)
+            
+            Text("REC")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            Capsule().fill(.ultraThinMaterial)
+        )
+    }
+    
+    private var closeButton: some View {
+        Button(action: onCancel) {
+            Image(systemName: "xmark")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundColor(.white)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(.ultraThinMaterial))
+        }
+    }
+    
+    // MARK: - Processing Interface
+    
+    private var processingInterface: some View {
         ZStack {
             // Background gradient
-            LinearGradient(
-                colors: [
-                    Color.black,
-                    StitchColors.primary.opacity(0.3),
-                    Color.black
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            backgroundGradient
             
-            VStack(spacing: 30) {
-                // Processing icon with animation
-                ZStack {
-                    Circle()
-                        .stroke(StitchColors.primary.opacity(0.3), lineWidth: 4)
-                        .frame(width: 100, height: 100)
-                    
-                    Circle()
-                        .trim(from: 0.0, to: controller.coordinatorProgress)
-                        .stroke(StitchColors.primary, lineWidth: 4)
-                        .frame(width: 100, height: 100)
-                        .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut(duration: 0.5), value: controller.coordinatorProgress)
-                    
-                    Image(systemName: "waveform")
-                        .font(.system(size: 30))
-                        .foregroundColor(StitchColors.primary)
-                        .scaleEffect(controller.coordinatorIsProcessing ? 1.2 : 1.0)
-                        .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: controller.coordinatorIsProcessing)
-                }
+            // Content
+            processingContent
+        }
+    }
+    
+    private var backgroundGradient: some View {
+        LinearGradient(
+            colors: [Color.black, StitchColors.primary.opacity(0.2), Color.black],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+    }
+    
+    private var processingContent: some View {
+        VStack(spacing: 30) {
+            // AI Processing animation
+            processingAnimation
+            
+            VStack(spacing: 12) {
+                Text("AI is analyzing your video...")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
                 
-                VStack(spacing: 16) {
-                    // Phase indicator
-                    Text(controller.coordinatorCurrentPhase.displayName)
-                        .font(.title2.bold())
+                Text("Processing your video...")
+                    .font(.subheadline)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+        }
+    }
+    
+    private var processingAnimation: some View {
+        ZStack {
+            ForEach(0..<3) { index in
+                Circle()
+                    .stroke(StitchColors.primary.opacity(0.6), lineWidth: 2)
+                    .frame(width: 80 + CGFloat(index * 30), height: 80 + CGFloat(index * 30))
+                    .scaleEffect(1.0)
+                    .animation(
+                        .easeInOut(duration: 1.5 + Double(index) * 0.3)
+                        .repeatForever(autoreverses: true),
+                        value: controller.currentPhase
+                    )
+            }
+            
+            Circle()
+                .fill(StitchColors.primary)
+                .frame(width: 60, height: 60)
+                .overlay(
+                    Image(systemName: "brain.head.profile")
+                        .font(.title)
                         .foregroundColor(.white)
-                    
-                    // Current task
-                    Text(controller.coordinatorCurrentTask)
-                        .font(.body)
-                        .foregroundColor(StitchColors.textSecondary)
-                        .multilineTextAlignment(.center)
-                    
-                    // Progress percentage
-                    Text("\(Int(controller.coordinatorProgress * 100))%")
-                        .font(.headline.bold())
-                        .foregroundColor(StitchColors.primary)
-                }
+                )
+        }
+    }
+    
+    private func errorInterface(_ message: String) -> some View {
+        ZStack {
+            StitchColors.background.ignoresSafeArea()
+            
+            VStack(spacing: 24) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(.orange)
                 
-                // Progress bar
-                VStack(spacing: 8) {
-                    ProgressView(value: controller.coordinatorProgress)
-                        .progressViewStyle(LinearProgressViewStyle(tint: StitchColors.primary))
-                        .scaleEffect(x: 1, y: 2, anchor: .center)
-                        .frame(maxWidth: 300)
-                    
-                    // Phase breakdown
-                    HStack(spacing: 4) {
-                        ForEach(["analyzing", "compressing", "uploading", "integrating"], id: \.self) { phaseKey in
-                            Rectangle()
-                                .fill(isCurrentOrPastPhase(phaseKey) ?
-                                      StitchColors.primary : StitchColors.surface)
-                                .frame(height: 4)
-                                .animation(.easeInOut(duration: 0.3), value: controller.coordinatorCurrentPhase.displayName)
-                        }
-                    }
-                    .frame(maxWidth: 300)
-                }
+                Text("Recording Error")
+                    .font(.title)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
                 
-                // Processing details
-                VStack(spacing: 8) {
-                    HStack {
-                        Image(systemName: "brain")
-                        Text("AI Analysis")
-                        Spacer()
-                        if controller.coordinatorCurrentPhase.displayName == "AI Analysis" {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: StitchColors.primary))
-                                .scaleEffect(0.8)
-                        } else if controller.coordinatorProgress > 0.3 {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                        } else {
-                            Image(systemName: "circle")
-                                .foregroundColor(StitchColors.textSecondary)
-                        }
-                    }
-                    
-                    HStack {
-                        Image(systemName: "arrow.down.circle")
-                        Text("Compression")
-                        Spacer()
-                        if controller.coordinatorCurrentPhase.displayName == "Compression" {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: StitchColors.primary))
-                                .scaleEffect(0.8)
-                        } else if controller.coordinatorProgress > 0.6 {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                        } else {
-                            Image(systemName: "circle")
-                                .foregroundColor(StitchColors.textSecondary)
-                        }
-                    }
-                    
-                    HStack {
-                        Image(systemName: "icloud.and.arrow.up")
-                        Text("Upload")
-                        Spacer()
-                        if controller.coordinatorCurrentPhase.displayName == "Upload" {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: StitchColors.primary))
-                                .scaleEffect(0.8)
-                        } else if controller.coordinatorProgress > 0.85 {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                        } else {
-                            Image(systemName: "circle")
-                                .foregroundColor(StitchColors.textSecondary)
-                        }
-                    }
-                    
-                    HStack {
-                        Image(systemName: "link")
-                        Text("Feed Integration")
-                        Spacer()
-                        if controller.coordinatorCurrentPhase.displayName == "Integration" {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: StitchColors.primary))
-                                .scaleEffect(0.8)
-                        } else if controller.coordinatorProgress >= 1.0 {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                        } else {
-                            Image(systemName: "circle")
-                                .foregroundColor(StitchColors.textSecondary)
-                        }
-                    }
-                }
-                .font(.caption)
-                .foregroundColor(StitchColors.textSecondary)
-                .padding(.horizontal, 40)
+                Text(message)
+                    .font(.body)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
                 
-                // Cancel button
+            Button("Try Again") {
+                controller.clearError()
+            }
+                .font(.headline)
+                .foregroundColor(.white)
+                .frame(width: 200, height: 50)
+                .background(
+                    RoundedRectangle(cornerRadius: 25)
+                        .fill(StitchColors.primary)
+                )
+                
                 Button("Cancel") {
-                    controller.handleAIAnalysisCancel()
                     onCancel()
                 }
-                .font(.body)
-                .foregroundColor(StitchColors.textSecondary)
-                .padding(.top, 20)
+                .font(.subheadline)
+                .foregroundColor(.gray)
             }
-            .padding(.horizontal, 40)
         }
     }
     
-    // MARK: - Metadata View (Existing)
+    // MARK: - Setup and Cleanup
     
-    private var metadataView: some View {
-        VStack(spacing: 20) {
-            Text("Video Processing Complete!")
-                .font(.title.bold())
-                .foregroundColor(.white)
-            
-            if let aiResult = controller.aiAnalysisResult {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("AI Generated Content:")
-                        .font(.headline)
-                        .foregroundColor(StitchColors.primary)
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Title: \(aiResult.title)")
-                        Text("Description: \(aiResult.description)")
-                        Text("Hashtags: \(aiResult.hashtags.joined(separator: ", "))")
-                    }
-                    .font(.body)
-                    .foregroundColor(.white)
-                    .padding()
-                    .background(StitchColors.surface)
-                    .cornerRadius(12)
-                }
-            }
-            
-            Button("Continue to Post") {
-                // Handle continue to post
-                print("Continue to post tapped")
-            }
-            .font(.headline)
-            .foregroundColor(.white)
-            .padding()
-            .background(StitchColors.primary)
-            .cornerRadius(12)
-            
-            Button("Back to Recording") {
-                controller.handleBackToRecording()
-            }
-            .font(.body)
-            .foregroundColor(StitchColors.textSecondary)
-        }
-        .padding(.horizontal, 30)
-    }
-    
-    // Helper function to check if phase is current or past
-    private func isCurrentOrPastPhase(_ phaseKey: String) -> Bool {
-        let currentPhase = controller.coordinatorCurrentPhase.displayName
+    private func setupCamera() {
+        // Stop all background activity for camera priority
+        stopBackgroundActivity()
         
-        switch phaseKey {
-        case "analyzing":
-            return currentPhase == "AI Analysis" || controller.coordinatorProgress > 0.3
-        case "compressing":
-            return currentPhase == "Compression" || controller.coordinatorProgress > 0.6
-        case "uploading":
-            return currentPhase == "Upload" || controller.coordinatorProgress > 0.85
-        case "integrating":
-            return currentPhase == "Integration" || controller.coordinatorProgress >= 1.0
-        default:
-            return false
+        if permissionsManager.canRecord {
+            Task {
+                await controller.startCameraSession()
+            }
+        }
+    }
+    
+    private func cleanupCamera() {
+        Task {
+            await controller.stopCameraSession()
+        }
+        
+        // Resume background activity when leaving
+        resumeBackgroundActivity()
+    }
+    
+    // MARK: - Background Activity Management - FIXED
+    
+    private func stopBackgroundActivity() {
+        // Disable auto-refresh timers
+        NotificationCenter.default.post(name: .pauseBackgroundRefresh, object: nil)
+        
+        // Reduce animation frame rates
+        UIView.setAnimationsEnabled(false)
+        
+        // Stop location services if not critical
+        NotificationCenter.default.post(name: .pauseLocationServices, object: nil)
+        
+        // Suspend non-critical network requests
+        URLSession.shared.configuration.timeoutIntervalForRequest = 5.0
+        
+        print("📱 RECORDING: Background activity paused for camera priority")
+    }
+    
+    private func resumeBackgroundActivity() {
+        // Re-enable auto-refresh timers
+        NotificationCenter.default.post(name: .resumeBackgroundRefresh, object: nil)
+        
+        // Restore animation frame rates
+        UIView.setAnimationsEnabled(true)
+        
+        // Resume location services
+        NotificationCenter.default.post(name: .resumeLocationServices, object: nil)
+        
+        // Restore network timeouts
+        URLSession.shared.configuration.timeoutIntervalForRequest = 30.0
+        
+        print("📱 RECORDING: Background activity resumed")
+    }
+    
+    // MARK: - Gallery Video Handling - FIXED
+    
+    private func handleSelectedVideo(_ data: Data) async {
+        // Handle selected video from gallery
+        do {
+            let tempURL = URL.temporaryDirectory.appendingPathComponent("selected_video.mp4")
+            try data.write(to: tempURL)
+            
+            // Process selected video through the same pipeline
+            controller.recordedVideoURL = tempURL
+            
+            print("📱 RECORDING: Selected video from gallery")
+        } catch {
+            print("❌ RECORDING: Failed to handle selected video: \(error)")
+        }
+    }
+    
+    // MARK: - Context Helpers
+    
+    private func getContextName() -> String {
+        switch controller.recordingContext {
+        case .newThread: return "Thread"
+        case .stitchToThread: return "Stitch"
+        case .replyToVideo: return "Reply"
+        case .continueThread: return "Continue"
+        }
+    }
+    
+    private func getContextColor() -> Color {
+        switch controller.recordingContext {
+        case .newThread: return StitchColors.primary
+        case .stitchToThread: return .orange
+        case .replyToVideo: return .blue
+        case .continueThread: return .green
         }
     }
 }
 
-// MARK: - Recording Button
+// MARK: - Professional Camera Preview (Fixed Implementation)
 
-struct RecordingButton: View {
-    @ObservedObject var controller: RecordingController
-    @State private var liquidFillProgress: Double = 0.0
-    @State private var recordingTimer: Timer?
-    @State private var startTime: Date?
-    
-    private let maxRecordingDuration: TimeInterval = 30.0
-    
-    var body: some View {
-        ZStack {
-            // Background circle
-            Circle()
-                .stroke(Color.white, lineWidth: 4)
-                .frame(width: 80, height: 80)
-            
-            // Liquid fill effect
-            if controller.currentPhase.isRecording {
-                Circle()
-                    .trim(from: 0, to: liquidFillProgress)
-                    .stroke(StitchColors.primary, lineWidth: 4)
-                    .frame(width: 80, height: 80)
-                    .rotationEffect(.degrees(-90))
-                    .animation(.linear(duration: 0.1), value: liquidFillProgress)
-            }
-            
-            // Inner button
-            Button {
-                if controller.currentPhase.canStartRecording {
-                    startRecording()
-                } else if controller.currentPhase.isRecording {
-                    stopRecording()
-                }
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(controller.currentPhase.isRecording ? StitchColors.primary : Color.white)
-                        .frame(width: 60, height: 60)
-                    
-                    if controller.currentPhase.isRecording {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.white)
-                            .frame(width: 20, height: 20)
-                    }
-                }
-            }
-            .disabled(!controller.currentPhase.canStartRecording && !controller.currentPhase.isRecording)
-            
-            // Time remaining
-            if controller.currentPhase.isRecording {
-                VStack {
-                    Spacer()
-                    Text(formatTimeRemaining(getRemainingTime()))
-                        .font(.caption.bold())
-                        .foregroundColor(.white)
-                        .padding(.top, 100)
-                }
-            }
-        }
-    }
-    
-    private func startRecording() {
-        startTime = Date()
-        liquidFillProgress = 0.0
-        controller.startRecording()
-        
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            updateProgress()
-        }
-    }
-    
-    private func getRemainingTime() -> TimeInterval {
-        guard let startTime = startTime else { return maxRecordingDuration }
-        let elapsed = Date().timeIntervalSince(startTime)
-        return max(0, maxRecordingDuration - elapsed)
-    }
-    
-    private func updateProgress() {
-        guard let startTime = startTime else { return }
-        
-        let elapsed = Date().timeIntervalSince(startTime)
-        let timeRemaining = max(0, maxRecordingDuration - elapsed)
-        
-        liquidFillProgress = 1.0 - (timeRemaining / maxRecordingDuration)
-        
-        if timeRemaining <= 0 {
-            stopRecording()
-        }
-    }
-    
-    private func stopRecording() {
-        recordingTimer?.invalidate()
-        recordingTimer = nil
-        liquidFillProgress = 0.0
-        controller.stopRecording()
-    }
-    
-    private func formatTimeRemaining(_ time: TimeInterval) -> String {
-        let seconds = Int(max(0, time))
-        return "\(seconds)s"
-    }
-}
-
-// MARK: - Camera Preview
-
-struct CameraPreview: UIViewRepresentable {
+struct ProfessionalCameraPreview: UIViewRepresentable {
     @ObservedObject var controller: RecordingController
     
-    func makeUIView(context: Context) -> CameraPreviewUIView {
-        print("🔍 DEBUG: Creating CameraPreview UIView")
-        let view = CameraPreviewUIView()
+    func makeUIView(context: Context) -> ProfessionalPreviewUIView {
+        let view = ProfessionalPreviewUIView()
         
         let previewLayer = controller.cameraManager.previewLayer
-        print("🔍 DEBUG: Preview layer created: \(previewLayer)")
         previewLayer.videoGravity = .resizeAspectFill
         previewLayer.frame = view.bounds
         view.layer.addSublayer(previewLayer)
         view.previewLayer = previewLayer
         
-        print("🔍 DEBUG: Camera session running: \(controller.cameraManager.isSessionRunning)")
-        
-        // Add gestures
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap))
         let pinchGesture = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handlePinch))
         
@@ -485,7 +406,7 @@ struct CameraPreview: UIViewRepresentable {
         return view
     }
     
-    func updateUIView(_ uiView: CameraPreviewUIView, context: Context) {
+    func updateUIView(_ uiView: ProfessionalPreviewUIView, context: Context) {
         DispatchQueue.main.async {
             uiView.previewLayer?.frame = uiView.bounds
         }
@@ -496,10 +417,10 @@ struct CameraPreview: UIViewRepresentable {
     }
     
     class Coordinator: NSObject {
-        let parent: CameraPreview
+        let parent: ProfessionalCameraPreview
         private var initialZoom: CGFloat = 1.0
         
-        init(_ parent: CameraPreview) {
+        init(_ parent: ProfessionalCameraPreview) {
             self.parent = parent
         }
         
@@ -523,7 +444,7 @@ struct CameraPreview: UIViewRepresentable {
     }
 }
 
-class CameraPreviewUIView: UIView {
+class ProfessionalPreviewUIView: UIView {
     var previewLayer: AVCaptureVideoPreviewLayer?
     
     override func layoutSubviews() {
@@ -532,36 +453,11 @@ class CameraPreviewUIView: UIView {
     }
 }
 
-// MARK: - Error View
+// MARK: - Background Activity Notifications
 
-struct ErrorView: View {
-    let message: String
-    let onRetry: () -> Void
-    
-    var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 50))
-                .foregroundColor(.red)
-            
-            Text("Error")
-                .font(.title.bold())
-                .foregroundColor(.white)
-            
-            Text(message)
-                .font(.body)
-                .foregroundColor(StitchColors.textSecondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 30)
-            
-            Button("Retry") {
-                onRetry()
-            }
-            .font(.headline)
-            .foregroundColor(.white)
-            .padding()
-            .background(StitchColors.primary)
-            .cornerRadius(12)
-        }
-    }
+extension Notification.Name {
+    static let pauseBackgroundRefresh = Notification.Name("pauseBackgroundRefresh")
+    static let resumeBackgroundRefresh = Notification.Name("resumeBackgroundRefresh")
+    static let pauseLocationServices = Notification.Name("pauseLocationServices")
+    static let resumeLocationServices = Notification.Name("resumeLocationServices")
 }

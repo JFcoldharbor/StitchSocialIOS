@@ -3,9 +3,9 @@
 //  CleanBeta
 //
 //  Layer 8: Views - Main Tab Navigation with Service Injection
-//  Dependencies: Layer 4 (Services), Layer 1 (Foundation)
+//  Dependencies: Layer 4 (Services), Layer 6 (NavigationCoordinator), Layer 1 (Foundation)
 //  Central navigation container with custom dipped tab bar
-//  FIXED: Added VideoService for ProfileView initialization
+//  FIXED: Added NavigationCoordinator for notification navigation
 //
 
 import SwiftUI
@@ -18,6 +18,7 @@ struct MainTabContainer: View {
     @StateObject private var authService = AuthService()
     @StateObject private var userService = UserService()
     @StateObject private var videoService = VideoService()
+    @StateObject private var navigationCoordinator = NavigationCoordinator()
     
     // MARK: - Navigation State
     
@@ -31,26 +32,27 @@ struct MainTabContainer: View {
             
             // Tab Content
             tabContent
-            
-            // Custom Dipped Tab Bar
-            VStack {
-                Spacer()
-                
-                CustomDippedTabBar(
-                    selectedTab: $selectedTab,
-                    onTabSelected: { tab in
-                        selectedTab = tab
-                    },
-                    onCreateTapped: {
-                        showingRecording = true
-                    }
-                )
-                .padding(.bottom, 12) // Move tab bar down 15%
+            // Custom Dipped Tab Bar - Fixed to extend to screen bottom
+                        VStack {
+                            Spacer()
+                            
+                            CustomDippedTabBar(
+                                selectedTab: $selectedTab,
+                                onTabSelected: { tab in
+                                    selectedTab = tab
+                                    navigationCoordinator.selectTab(tab)
+                                },
+                                onCreateTapped: {
+                                    showingRecording = true
+                                }
+                            )
+                            .ignoresSafeArea(.all, edges: .bottom)
             }
         }
         .environmentObject(authService)
         .environmentObject(userService)
         .environmentObject(videoService)
+        .environmentObject(navigationCoordinator)
         .fullScreenCover(isPresented: $showingRecording) {
             RecordingView(
                 recordingContext: RecordingContext.newThread,
@@ -65,8 +67,50 @@ struct MainTabContainer: View {
                 }
             )
         }
+        .sheet(isPresented: $navigationCoordinator.showingProfileSheet) {
+            if let userID = navigationCoordinator.selectedUserID {
+                ProfileView(
+                    authService: authService,
+                    userService: userService,
+                    videoService: videoService
+                )
+                .onAppear {
+                    // Load specific user profile
+                    NotificationCenter.default.post(
+                        name: NSNotification.Name("LoadUserProfile"),
+                        object: nil,
+                        userInfo: ["userID": userID]
+                    )
+                }
+                .onDisappear {
+                    navigationCoordinator.dismissProfileSheet()
+                }
+            }
+        }
+        .sheet(isPresented: $navigationCoordinator.showingSettingsSheet) {
+            // TODO: Implement SettingsView when available
+            Text("Settings Coming Soon")
+                .font(.title)
+                .padding()
+                .onDisappear {
+                    navigationCoordinator.dismissSettingsSheet()
+                }
+        }
+        .fullScreenCover(isPresented: $navigationCoordinator.showingFullscreenVideo) {
+            if let video = navigationCoordinator.fullscreenVideo {
+                VideoPlayerView(video: video, isActive: true, onEngagement: nil)
+                    .onDisappear {
+                        navigationCoordinator.dismissVideo()
+                    }
+            }
+        }
         .task {
             try? await authService.initialize()
+            navigationCoordinator.setupNotificationObservers()
+        }
+        .onChange(of: navigationCoordinator.selectedTab) { oldTab, newTab in
+            // Sync navigation coordinator tab changes with local state
+            selectedTab = newTab
         }
     }
     

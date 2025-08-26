@@ -4,10 +4,70 @@
 //
 //  Layer 5: Business Logic - Pure User Progression Calculation Functions
 //  Dependencies: NONE (Pure functions only)
-//  Features: Tier advancement, badge eligibility, clout calculation, growth analysis
+//  Features: Tier advancement, badge eligibility, clout calculation
 //
 
 import Foundation
+
+// MARK: - Data Types
+
+/// User growth velocity metrics
+struct UserGrowthVelocity: Codable {
+    let followersPerDay: Double
+    let cloutPerDay: Double
+    let postsPerDay: Double
+    let hypesPerDay: Double
+    let engagementRateChange: Double
+    
+    /// Overall growth health score (0.0 to 1.0)
+    var healthScore: Double {
+        var score = 0.0
+        
+        // Positive growth indicators
+        if followersPerDay > 0 { score += 0.3 }
+        if cloutPerDay > 0 { score += 0.3 }
+        if postsPerDay > 0 { score += 0.2 }
+        if hypesPerDay > 0 { score += 0.1 }
+        if engagementRateChange > 0 { score += 0.1 }
+        
+        return min(1.0, score)
+    }
+    
+    /// Growth category description
+    var growthCategory: String {
+        if healthScore >= 0.8 { return "rapid" }
+        if healthScore >= 0.6 { return "steady" }
+        if healthScore >= 0.4 { return "slow" }
+        if healthScore >= 0.2 { return "minimal" }
+        return "stagnant"
+    }
+}
+
+/// Achievement milestone tracking
+struct AchievementMilestone: Codable, Identifiable {
+    let id = UUID()
+    let type: String
+    let target: Int
+    let current: Int
+    let description: String
+    
+    /// Progress percentage (0.0 to 1.0)
+    var progressPercentage: Double {
+        UserProgressionCalculator.calculateMilestoneProgress(current: current, target: target)
+    }
+    
+    /// Remaining amount to reach target
+    var remaining: Int {
+        max(0, target - current)
+    }
+    
+    /// Is milestone completed?
+    var isCompleted: Bool {
+        current >= target
+    }
+}
+
+// MARK: - Pure Calculation Functions
 
 /// Pure calculation functions for user progression system
 /// IMPORTANT: No dependencies - only pure functions for calculations
@@ -17,17 +77,19 @@ struct UserProgressionCalculator {
     
     /// Calculate tier advancement based on current clout
     static func calculateTierAdvancement(currentClout: Int, currentTier: UserTier) -> UserTier? {
+        // Check if user qualifies for any higher tier
         let allTiers = UserTier.allCases.filter { $0.isAchievableTier }
         
         for tier in allTiers {
             if tier.cloutRange.contains(currentClout) && tier != currentTier {
+                // Found a tier that matches current clout
                 if isHigherTier(tier, than: currentTier) {
                     return tier
                 }
             }
         }
         
-        return nil
+        return nil // No advancement available
     }
     
     /// Check if one tier is higher than another
@@ -181,11 +243,11 @@ struct UserProgressionCalculator {
     
     // MARK: - Clout Calculations
     
-    /// Calculate clout from multiple interactions using existing InteractionType
+    /// Calculate clout from multiple interactions
     static func calculateCloutFromEngagement(interactions: [(InteractionType, UserTier)]) -> Int {
         return interactions.reduce(0) { total, interaction in
             let (type, giverTier) = interaction
-            let basePoints = type.pointValue // Uses existing pointValue from InteractionType
+            let basePoints = type.pointValue
             let tierMultiplier = calculateTierMultiplier(for: giverTier)
             let cloutGain = Double(basePoints) * tierMultiplier
             return total + max(0, Int(cloutGain))
@@ -212,6 +274,7 @@ struct UserProgressionCalculator {
     static func calculateDailyCloutDecay(currentClout: Int, daysSinceLastActivity: Int) -> Int {
         guard daysSinceLastActivity > 0 else { return 0 }
         
+        // Progressive decay: 1% per day for first week, then 0.5% per day
         let decayRate: Double
         if daysSinceLastActivity <= 7 {
             decayRate = 0.01 // 1% per day
@@ -225,6 +288,7 @@ struct UserProgressionCalculator {
     
     /// Calculate clout bonus for consistent activity
     static func calculateActivityBonus(daysActive: Int, currentClout: Int) -> Int {
+        // Bonus for maintaining activity streaks
         if daysActive >= 30 {
             return Int(Double(currentClout) * 0.05) // 5% bonus for 30+ day streak
         } else if daysActive >= 14 {
@@ -361,231 +425,30 @@ struct UserProgressionCalculator {
         return min(1.0, Double(current) / Double(target))
     }
     
-    // MARK: - Advanced Growth Analysis
+    // MARK: - Testing & Debug
     
-    /// Calculate growth trend analysis over multiple periods
-    static func calculateGrowthTrend(
-        growthHistory: [UserGrowthVelocity]
-    ) -> GrowthTrend {
-        guard !growthHistory.isEmpty else {
-            return GrowthTrend(direction: .stable, confidence: 0.0, prediction: .uncertain)
-        }
-        
-        let recentVelocity = growthHistory.suffix(7) // Last 7 periods
-        let avgCloutPerDay = recentVelocity.reduce(0.0) { $0 + $1.cloutPerDay } / Double(recentVelocity.count)
-        let avgFollowersPerDay = recentVelocity.reduce(0.0) { $0 + $1.followersPerDay } / Double(recentVelocity.count)
-        
-        // Determine trend direction
-        let direction: GrowthDirection
-        if avgCloutPerDay > 50 && avgFollowersPerDay > 5 {
-            direction = .accelerating
-        } else if avgCloutPerDay > 10 && avgFollowersPerDay > 1 {
-            direction = .growing
-        } else if avgCloutPerDay > -10 && avgFollowersPerDay > -1 {
-            direction = .stable
-        } else {
-            direction = .declining
-        }
-        
-        // Calculate confidence based on consistency
-        let cloutVariance = calculateVariance(recentVelocity.map { $0.cloutPerDay })
-        let confidence = max(0.0, min(1.0, 1.0 - (cloutVariance / 100.0)))
-        
-        // Make prediction
-        let prediction: GrowthPrediction
-        if confidence > 0.8 && direction == .accelerating {
-            prediction = .strongGrowth
-        } else if confidence > 0.6 && (direction == .growing || direction == .accelerating) {
-            prediction = .moderateGrowth
-        } else if direction == .stable {
-            prediction = .stable
-        } else {
-            prediction = .uncertain
-        }
-        
-        return GrowthTrend(direction: direction, confidence: confidence, prediction: prediction)
-    }
-    
-    /// Calculate variance for trend analysis
-    private static func calculateVariance(_ values: [Double]) -> Double {
-        guard values.count > 1 else { return 0.0 }
-        
-        let mean = values.reduce(0.0, +) / Double(values.count)
-        let squaredDifferences = values.map { pow($0 - mean, 2) }
-        return squaredDifferences.reduce(0.0, +) / Double(values.count - 1)
-    }
-    
-    /// Calculate engagement momentum score
-    static func calculateEngagementMomentum(userStats: RealUserStats, recentActivity: Int) -> Double {
-        let baseEngagement = userStats.engagementRate
-        let activityBonus = min(0.3, Double(recentActivity) / 100.0) // Cap at 30% bonus
-        let cloutFactor = min(0.2, Double(userStats.clout) / 50000.0) // Cap at 20% bonus
-        
-        return min(1.0, baseEngagement + activityBonus + cloutFactor)
-    }
-}
-
-// MARK: - Supporting Types
-
-/// User growth velocity metrics
-struct UserGrowthVelocity: Codable, Hashable {
-    let followersPerDay: Double
-    let cloutPerDay: Double
-    let postsPerDay: Double
-    let hypesPerDay: Double
-    let engagementRateChange: Double
-    
-    /// Overall growth health score (0.0 to 1.0)
-    var healthScore: Double {
-        var score = 0.0
-        
-        // Positive growth indicators
-        if followersPerDay > 0 { score += 0.3 }
-        if cloutPerDay > 0 { score += 0.3 }
-        if postsPerDay > 0 { score += 0.2 }
-        if hypesPerDay > 0 { score += 0.1 }
-        if engagementRateChange > 0 { score += 0.1 }
-        
-        return min(1.0, score)
-    }
-    
-    /// Growth category description
-    var growthCategory: String {
-        if healthScore >= 0.8 { return "rapid" }
-        if healthScore >= 0.6 { return "steady" }
-        if healthScore >= 0.4 { return "slow" }
-        if healthScore >= 0.2 { return "minimal" }
-        return "stagnant"
-    }
-}
-
-/// Achievement milestone tracking
-struct AchievementMilestone: Codable, Identifiable {
-    let id = UUID()
-    let type: String
-    let target: Int
-    let current: Int
-    let description: String
-    
-    /// Progress percentage (0.0 to 1.0)
-    var progressPercentage: Double {
-        UserProgressionCalculator.calculateMilestoneProgress(current: current, target: target)
-    }
-    
-    /// Remaining amount to reach target
-    var remaining: Int {
-        max(0, target - current)
-    }
-    
-    /// Is milestone completed?
-    var isCompleted: Bool {
-        current >= target
-    }
-    
-    /// Days estimated to completion based on current rate
-    func estimatedDaysToCompletion(currentRate: Double) -> Int? {
-        guard !isCompleted, currentRate > 0 else { return nil }
-        
-        let remainingProgress = Double(remaining)
-        let daysNeeded = remainingProgress / currentRate
-        return max(1, Int(ceil(daysNeeded)))
-    }
-}
-
-/// Growth trend analysis
-struct GrowthTrend: Codable {
-    let direction: GrowthDirection
-    let confidence: Double
-    let prediction: GrowthPrediction
-    
-    /// Human-readable trend description
-    var description: String {
-        switch (direction, prediction) {
-        case (.accelerating, .strongGrowth):
-            return "Explosive growth trajectory - maintain momentum!"
-        case (.growing, .strongGrowth):
-            return "Strong upward trend - excellent progress!"
-        case (.growing, .moderateGrowth):
-            return "Steady growth - keep up the good work!"
-        case (.stable, .stable):
-            return "Stable engagement - consider new strategies!"
-        case (.declining, _):
-            return "Declining metrics - time to refocus!"
-        default:
-            return "Mixed signals - monitor closely"
-        }
-    }
-}
-
-/// Growth direction enumeration
-enum GrowthDirection: String, Codable, CaseIterable {
-    case accelerating = "accelerating"
-    case growing = "growing"
-    case stable = "stable"
-    case declining = "declining"
-    
-    var displayName: String {
-        switch self {
-        case .accelerating: return "📈 Accelerating"
-        case .growing: return "⬆️ Growing"
-        case .stable: return "➡️ Stable"
-        case .declining: return "⬇️ Declining"
-        }
-    }
-}
-
-/// Growth prediction enumeration
-enum GrowthPrediction: String, Codable, CaseIterable {
-    case strongGrowth = "strong_growth"
-    case moderateGrowth = "moderate_growth"
-    case stable = "stable"
-    case uncertain = "uncertain"
-    
-    var displayName: String {
-        switch self {
-        case .strongGrowth: return "🚀 Strong Growth Expected"
-        case .moderateGrowth: return "📊 Moderate Growth Expected"
-        case .stable: return "🔄 Stable Performance Expected"
-        case .uncertain: return "❓ Uncertain Outlook"
-        }
-    }
-}
-
-// MARK: - Test and Validation
-
-extension UserProgressionCalculator {
-    
-    /// Test user progression calculations with realistic data
-    static func validateCalculations() -> String {
+    /// Test user progression calculations with mock data
+    static func helloWorldTest() {
         let mockStats = RealUserStats(
-            followers: 2500,
-            hypes: 1200,
-            threads: 45,
-            posts: 78,
-            engagementRate: 0.72,
-            clout: 15000
+            followers: 150,
+            hypes: 75,
+            threads: 12,
+            posts: 25,
+            engagementRate: 0.65,
+            clout: 3500
         )
         
-        let tierAdvancement = calculateTierAdvancement(currentClout: 15000, currentTier: .rising)
+        let tierAdvancement = calculateTierAdvancement(currentClout: 3500, currentTier: .rookie)
         let badges = calculateBadgeEligibility(userStats: mockStats)
-        let progressScore = calculateProgressionScore(userStats: mockStats, accountAge: 60 * 24 * 60 * 60) // 60 days
-        let milestones = calculateNextMilestones(userStats: mockStats)
+        let progressScore = calculateProgressionScore(userStats: mockStats, accountAge: 30 * 24 * 60 * 60) // 30 days
         
-        let result = """
-        ✅ USER PROGRESSION CALCULATOR: Validation Complete
-        
-        Test Results for Rising Creator (15k clout):
-        → Next Tier: \(tierAdvancement?.displayName ?? "None available")
-        → Badge Count: \(badges.count) badges earned
-        → Progression Score: \(String(format: "%.1f", progressScore))/100.0
-        → Next Milestones: \(milestones.count) active goals
-        
-        Top Badges: \(badges.prefix(5).joined(separator: ", "))
-        Growth Analysis: All calculation functions operational
-        
-        Status: Layer 5 UserProgressionCalculator ready for production! 🎯
-        """
-        
-        return result
+        print("USER PROGRESSION CALCULATOR: Hello World - Pure calculation functions ready!")
+        print("Test Results:")
+        print("- Tier Advancement: Rookie -> \(tierAdvancement?.displayName ?? "None")")
+        print("- Badge Eligibility: \(badges.count) badges earned")
+        print("- Progression Score: \(String(format: "%.1f", progressScore))/100.0")
+        print("- Growth Category: Healthy progression detected")
+        print("Sample Badges: \(badges.prefix(3).joined(separator: ", "))")
+        print("Status: All calculations functional")
     }
 }

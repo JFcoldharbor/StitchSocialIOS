@@ -2,9 +2,9 @@
 //  ProfileView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Complete Profile Display with VideoPlayerView Integration
+//  Layer 8: Views - Enhanced Profile Display with EditProfileView Integration
 //  Dependencies: ProfileViewModel (Layer 7) ONLY
-//  Features: Instagram-style layout, VideoPlayerView grid, contextual overlays, engagement handling
+//  Features: Instagram-style layout, enhanced deletion UX, edit profile integration
 //  ARCHITECTURE COMPLIANT: No business logic, no service calls
 //
 
@@ -12,9 +12,10 @@ import SwiftUI
 
 struct ProfileView: View {
     
-    // MARK: - Single Dependency (Layer 7)
+    // MARK: - Dependencies (Layer 7 + Layer 4 for EditProfile)
     
     @StateObject private var viewModel: ProfileViewModel
+    private let userService: UserService
     
     // MARK: - UI State Only
     
@@ -28,10 +29,17 @@ struct ProfileView: View {
     @State private var selectedVideo: CoreVideoMetadata?
     @State private var selectedVideoIndex = 0
     
+    // MARK: - Video Deletion State
+    
+    @State private var showingDeleteConfirmation = false
+    @State private var videoToDelete: CoreVideoMetadata?
+    @State private var isDeletingVideo = false
+    
     // MARK: - Initialization
     
     init(authService: AuthService, userService: UserService, videoService: VideoService? = nil) {
         let videoSvc = videoService ?? VideoService()
+        self.userService = userService
         self._viewModel = StateObject(wrappedValue: ProfileViewModel(
             authService: authService,
             userService: userService,
@@ -72,6 +80,16 @@ struct ProfileView: View {
         }
         .fullScreenCover(isPresented: $showingVideoPlayer) {
             fullScreenVideoPlayer
+        }
+        .alert("Delete Video", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                Task { await performVideoDelete() }
+            }
+        } message: {
+            if let video = videoToDelete {
+                Text("Are you sure you want to delete '\(video.title)'? This action cannot be undone.")
+            }
         }
     }
     
@@ -150,7 +168,7 @@ struct ProfileView: View {
         .padding(.vertical, 20)
     }
     
-    // MARK: - Profile Image
+    // MARK: - Enhanced Profile Image
     
     private func enhancedProfileImage(user: BasicUserInfo) -> some View {
         ZStack {
@@ -335,7 +353,7 @@ struct ProfileView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(viewModel.selectedTab == index ? .cyan : .gray)
                     
-                    Text("(\(viewModel.getTabCount(index)))")
+                    Text("(\(viewModel.getTabCount(for: index)))")
                         .font(.system(size: 10))
                         .foregroundColor(viewModel.selectedTab == index ?
                             .cyan.opacity(0.8) : .gray.opacity(0.6))
@@ -381,7 +399,7 @@ struct ProfileView: View {
         .padding(.bottom, 100)
     }
     
-    // MARK: - Video Grid Item - Enhanced with VideoPlayerView and Contextual Overlay
+    // MARK: - Enhanced Video Grid Item
     
     private func videoGridItem(video: CoreVideoMetadata, index: Int) -> some View {
         GeometryReader { geometry in
@@ -403,6 +421,16 @@ struct ProfileView: View {
                     .onTapGesture {
                         openVideo(video: video, index: index)
                     }
+                
+                // Deletion loading overlay
+                if isDeletingVideo && videoToDelete?.id == video.id {
+                    Color.black.opacity(0.7)
+                        .overlay(
+                            ProgressView()
+                                .tint(.white)
+                                .scaleEffect(1.2)
+                        )
+                }
             }
         }
         .aspectRatio(1, contentMode: .fit)
@@ -411,23 +439,45 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Video Context Menu
+    // MARK: - Enhanced Video Context Menu
     
     private func videoContextMenu(video: CoreVideoMetadata) -> some View {
         Group {
-            Button("Delete Video") {
-                Task {
-                    let success = await viewModel.deleteVideo(video)
-                    if success {
-                        print("Video deleted successfully")
-                    }
+            if viewModel.isOwnProfile {
+                Button("Delete Video", role: .destructive) {
+                    videoToDelete = video
+                    showingDeleteConfirmation = true
+                }
+                
+                Button("Share") {
+                    shareVideo(video)
+                }
+            } else {
+                Button("Share") {
+                    shareVideo(video)
                 }
             }
-            
-            Button("Share") {
-                shareVideo(video)
-            }
         }
+    }
+    
+    // MARK: - Video Deletion Methods
+    
+    private func performVideoDelete() async {
+        guard let video = videoToDelete else { return }
+        
+        isDeletingVideo = true
+        
+        let success = await viewModel.deleteVideo(video)
+        if success {
+            print("Video deleted successfully: \(video.title)")
+            // Trigger haptic feedback
+            triggerHapticFeedback(.medium)
+        } else {
+            print("Video deletion failed")
+        }
+        
+        isDeletingVideo = false
+        videoToDelete = nil
     }
     
     // MARK: - Enhanced Engagement Handling
@@ -436,24 +486,20 @@ struct ProfileView: View {
         Task { @MainActor in
             switch interactionType {
             case .hype:
-                // Use VideoService directly since ProfileViewModel doesn't have hypeVideo
                 print("Hype video: \(video.title)")
                 triggerHapticFeedback(.light)
                 
             case .reply:
-                // Open replies for this video
                 openVideoReplies(video)
                 
             case .share:
                 shareVideo(video)
                 
             case .cool:
-                // Use VideoService directly since ProfileViewModel doesn't have coolVideo
                 print("Cool video: \(video.title)")
                 triggerHapticFeedback(.soft)
                 
             case .view:
-                // Handle view engagement
                 print("View engagement for video: \(video.title)")
             }
         }
@@ -471,7 +517,101 @@ struct ProfileView: View {
         print("Sharing video: \(video.title)")
     }
     
-    // MARK: - Helper Methods for Tier Colors and Icons
+    // MARK: - Sheet Views
+    
+    private var followingSheet: some View {
+        NavigationView {
+            UserListView(
+                title: "Following",
+                users: viewModel.followingList,
+                isLoading: viewModel.isLoadingFollowing
+            )
+            .navigationTitle("Following")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showingFollowingList = false }
+                        .foregroundColor(.cyan)
+                }
+            }
+        }
+        .onAppear {
+            Task { await viewModel.loadFollowing() }
+        }
+    }
+    
+    private var followersSheet: some View {
+        NavigationView {
+            UserListView(
+                title: "Followers",
+                users: viewModel.followersList,
+                isLoading: viewModel.isLoadingFollowers
+            )
+            .navigationTitle("Followers")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showingFollowersList = false }
+                        .foregroundColor(.cyan)
+                }
+            }
+        }
+        .onAppear {
+            Task { await viewModel.loadFollowers() }
+        }
+    }
+    
+    private var settingsSheet: some View {
+        NavigationView {
+            VStack {
+                Text("Settings")
+                    .font(.title)
+                    .foregroundColor(.white)
+                    .padding()
+                
+                Spacer()
+            }
+            .background(Color.black.ignoresSafeArea())
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showingSettings = false }
+                        .foregroundColor(.cyan)
+                }
+            }
+        }
+    }
+    
+    private var editProfileSheet: some View {
+        Group {
+            if let user = viewModel.currentUser {
+                EditProfileView(
+                    userService: userService,
+                    user: .constant(user)
+                )
+            } else {
+                // Fallback view if no user loaded
+                NavigationView {
+                    VStack {
+                        Text("Profile not loaded")
+                            .foregroundColor(.gray)
+                    }
+                    .background(Color.black.ignoresSafeArea())
+                    .navigationTitle("Edit Profile")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("Cancel") { showingEditProfile = false }
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Tier Colors and Icons
     
     private func getTierColors(_ tier: UserTier) -> [Color] {
         switch tier {
@@ -617,137 +757,12 @@ struct ProfileView: View {
                     video: video,
                     isActive: true, // Active in fullscreen
                     onEngagement: { interactionType in
-                        Task {
-                            await handleFullScreenEngagement(interactionType, video: video)
-                        }
+                        handleGridEngagement(interactionType, video: video)
                     }
                 )
-                .overlay(alignment: .topLeading) {
-                    Button(action: { showingVideoPlayer = false }) {
-                        Image(systemName: "xmark")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .padding(12)
-                            .background(Color.black.opacity(0.3))
-                            .clipShape(Circle())
-                    }
-                    .padding(.top, 50)
-                    .padding(.leading, 20)
-                }
-                .ignoresSafeArea(.all)
-            }
-        }
-    }
-    
-    private func handleFullScreenEngagement(_ interactionType: InteractionType, video: CoreVideoMetadata) async {
-        switch interactionType {
-        case .hype:
-            print("Fullscreen hype video: \(video.title)")
-            triggerHapticFeedback(.light)
-            
-        case .reply:
-            openVideoReplies(video)
-            
-        case .share:
-            shareVideo(video)
-            
-        case .cool:
-            print("Fullscreen cool video: \(video.title)")
-            triggerHapticFeedback(.soft)
-            
-        case .view:
-            print("Fullscreen view engagement for video: \(video.title)")
-        }
-    }
-    
-    // MARK: - Sheet Views
-    
-    private var followingSheet: some View {
-        NavigationView {
-            UserListView(
-                title: "Following",
-                users: viewModel.followingList,
-                isLoading: viewModel.isLoadingFollowing
-            )
-            .navigationTitle("Following")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showingFollowingList = false }
-                        .foregroundColor(.cyan)
-                }
-            }
-        }
-        .onAppear {
-            Task { await viewModel.loadFollowing() }
-        }
-    }
-    
-    private var followersSheet: some View {
-        NavigationView {
-            UserListView(
-                title: "Followers",
-                users: viewModel.followersList,
-                isLoading: viewModel.isLoadingFollowers
-            )
-            .navigationTitle("Followers")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showingFollowersList = false }
-                        .foregroundColor(.cyan)
-                }
-            }
-        }
-        .onAppear {
-            Task { await viewModel.loadFollowers() }
-        }
-    }
-    
-    private var settingsSheet: some View {
-        NavigationView {
-            VStack {
-                Text("Settings")
-                    .font(.title)
-                    .foregroundColor(.white)
-                    .padding()
-                
-                Spacer()
-            }
-            .background(Color.black.ignoresSafeArea())
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showingSettings = false }
-                        .foregroundColor(.cyan)
-                }
-            }
-        }
-    }
-    
-    private var editProfileSheet: some View {
-        NavigationView {
-            VStack {
-                Text("Edit Profile")
-                    .font(.title)
-                    .foregroundColor(.white)
-                    .padding()
-                
-                Spacer()
-            }
-            .background(Color.black.ignoresSafeArea())
-            .navigationTitle("Edit Profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { showingEditProfile = false }
-                        .foregroundColor(.gray)
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") { showingEditProfile = false }
-                        .foregroundColor(.cyan)
+                .background(Color.black)
+                .onTapGesture {
+                    showingVideoPlayer = false
                 }
             }
         }
@@ -824,20 +839,13 @@ struct UserRowView: View {
     
     var body: some View {
         HStack {
-            AsyncImage(url: URL(string: user.profileImageURL ?? "")) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Circle()
-                    .fill(Color.gray.opacity(0.3))
-                    .overlay(
-                        Image(systemName: "person.fill")
-                            .foregroundColor(.gray)
-                    )
-            }
-            .frame(width: 50, height: 50)
-            .clipShape(Circle())
+            AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
+                .frame(width: 50, height: 50)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                )
             
             VStack(alignment: .leading) {
                 Text(user.displayName)
@@ -855,7 +863,6 @@ struct UserRowView: View {
         .padding(.vertical, 8)
     }
 }
-
 // MARK: - Scroll Offset Preference Key
 
 struct ScrollOffsetPreferenceKey: PreferenceKey {
