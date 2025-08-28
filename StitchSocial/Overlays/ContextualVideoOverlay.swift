@@ -47,6 +47,9 @@ struct ContextualVideoOverlay: View {
     // Recording state
     @State private var showingStitchRecording = false
     
+    // Loading states
+    @State private var isFollowLoading = false
+    
     // MARK: - Computed Properties
     
     private var threadCreator: CoreVideoMetadata {
@@ -148,6 +151,10 @@ struct ContextualVideoOverlay: View {
         }
         .onAppear {
             setupOverlay()
+            setupNotificationObservers()
+        }
+        .onDisappear {
+            removeNotificationObservers()
         }
         .onChange(of: video.id) { oldVideoID, newVideoID in
             // Clear cached data when video changes
@@ -169,8 +176,13 @@ struct ContextualVideoOverlay: View {
         }
         .sheet(isPresented: $showingProfileSheet) {
             if let userID = selectedUserID {
-                // TODO: Replace with actual profile sheet
-                Text("Profile: \(userID)")
+                ProfileView(
+                    authService: authService,
+                    userService: userService,
+                    videoService: VideoService()
+                )
+                .environmentObject(authService)
+                .environmentObject(userService)
             }
         }
         .sheet(isPresented: $showingThreadView) {
@@ -315,12 +327,12 @@ struct ContextualVideoOverlay: View {
                     
                     Text(formatCount(videoEngagement?.coolCount ?? 0))
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.blue)
+                        .foregroundColor(.green)
                         .shadow(color: .black.opacity(0.5), radius: 1, x: 0, y: 1)
                 }
                 
-                // Reply (only on children, not parents)
-                if canReply && video.conversationDepth > 0 {
+                // Reply button (only if it can reply)
+                if canReply {
                     engagementButton(
                         type: .reply,
                         icon: "arrowshape.turn.up.left.fill",
@@ -412,43 +424,32 @@ struct ContextualVideoOverlay: View {
                         .frame(width: isThread ? 28 : 22, height: isThread ? 28 : 22)
                     
                     Text(displayName.prefix(2).uppercased())
-                        .font(.system(size: isThread ? 10 : 8, weight: .bold))
+                        .font(.system(size: isThread ? 12 : 9, weight: .bold))
                         .foregroundColor(.white)
                 }
                 
-                // Clean username display with outline
-                HStack(spacing: 4) {
-                    if isLoadingUserData {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(0.5)
-                        
-                        Text("loading...")
-                            .font(.system(size: isThread ? 12 : 10, weight: .medium))
-                            .foregroundColor(.white.opacity(0.6))
-                    } else {
-                        Text("@\(displayName)")
-                            .font(.system(size: isThread ? 12 : 10, weight: .semibold))
+                // Name with tier indicator
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(displayName)
+                            .font(.system(size: isThread ? 14 : 12, weight: .bold))
                             .foregroundColor(.white)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .animation(.easeInOut(duration: 0.3), value: displayName)
                         
-                        // Tier badge - clean star
-                        if isThread {
-                            Image(systemName: "star.fill")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundColor(.yellow)
-                        }
+                        tierBadge(isThread: isThread)
+                    }
+                    
+                    if isThread {
+                        Text("Thread")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(colors[0].opacity(0.8))
                     }
                 }
             }
             .padding(.horizontal, isThread ? 12 : 8)
-            .padding(.vertical, isThread ? 6 : 4)
+            .padding(.vertical, isThread ? 8 : 6)
             .background(
-                // Transparent background with outline only
                 RoundedRectangle(cornerRadius: isThread ? 16 : 12)
-                    .fill(Color.clear)
+                    .fill(Color.black.opacity(0.6))
                     .overlay(
                         RoundedRectangle(cornerRadius: isThread ? 16 : 12)
                             .stroke(
@@ -498,7 +499,6 @@ struct ContextualVideoOverlay: View {
         )
     }
     
-    // Follow button matching metadata style and size
     private var metadataStyleFollowButton: some View {
         SwiftUI.Button {
             Task {
@@ -506,11 +506,17 @@ struct ContextualVideoOverlay: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: isFollowing ? "checkmark" : "plus")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(isFollowing ? .green.opacity(0.7) : .blue.opacity(0.7))
+                if isFollowLoading {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                        .tint(.gray)
+                } else {
+                    Image(systemName: isFollowing ? "checkmark" : "plus")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(isFollowing ? .green.opacity(0.7) : .blue.opacity(0.7))
+                }
                 
-                Text(isFollowing ? "Following" : "Follow")
+                Text(isFollowLoading ? "Loading" : (isFollowing ? "Following" : "Follow"))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundColor(isFollowing ? .green.opacity(0.7) : .blue.opacity(0.7))
             }
@@ -521,6 +527,7 @@ struct ContextualVideoOverlay: View {
                     .fill(Color.black.opacity(0.2))
             )
         }
+        .disabled(isFollowLoading)
         .buttonStyle(ContextualScaleButtonStyle())
     }
     
@@ -819,6 +826,7 @@ struct ContextualVideoOverlay: View {
         Task {
             await loadRealUserData()
             await loadEngagementData()
+            await trackVideoView()
             await checkUserEngagementStatus()
             if shouldShowFollow {
                 await checkFollowingStatus()
@@ -901,6 +909,37 @@ struct ContextualVideoOverlay: View {
         print("ℹ️ CONTEXTUAL OVERLAY: Progressive buttons managing engagement state")
     }
     
+    private func trackVideoView() async {
+        guard let currentUserID = currentUserID else { return }
+        
+        do {
+            try await VideoService().incrementViewCount(
+                videoID: video.id,
+                userID: currentUserID,
+                watchTime: 0
+            )
+            print("CONTEXTUAL OVERLAY: View tracked for video \(video.id)")
+        } catch {
+            print("CONTEXTUAL OVERLAY: Failed to track view - \(error)")
+        }
+    }
+    
+    // MARK: - Notification Observers
+    
+    private func setupNotificationObservers() {
+        NotificationCenter.default.addObserver(
+            forName: .killAllVideoPlayers,
+            object: nil,
+            queue: .main
+        ) { _ in
+            print("CONTEXTUAL OVERLAY: Received killAllVideoPlayers notification")
+        }
+    }
+    
+    private func removeNotificationObservers() {
+        NotificationCenter.default.removeObserver(self, name: .killAllVideoPlayers, object: nil)
+    }
+    
     private func checkFollowingStatus() async {
         guard let currentUserID = currentUserID else { return }
         
@@ -947,8 +986,14 @@ struct ContextualVideoOverlay: View {
             onAction?(.reply)
             return
         case .stitch:
-            showingStitchRecording = true
-            onAction?(.stitch)
+            // CRITICAL: Stop current video and all background videos BEFORE opening recording
+            NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
+            
+            // Brief delay to ensure video stops before camera starts
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                showingStitchRecording = true
+                onAction?(.stitch)
+            }
             return
         }
         
@@ -994,23 +1039,32 @@ struct ContextualVideoOverlay: View {
             return
         }
         
+        // Set loading state
+        await MainActor.run {
+            isFollowLoading = true
+        }
+        
         // Optimistic UI update
         await MainActor.run {
             isFollowing.toggle()
         }
         
+        // Haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .medium)
+        impact.impactOccurred()
+        
         do {
             if isFollowing {
-                // Try to follow - if permissions fail, just log and continue
-                try? await userService.followUser(followerID: currentUserID, followingID: video.creatorID)
-                print("Follow action initiated for user: \(video.creatorID)")
+                // Properly handle follow with error checking
+                try await userService.followUser(followerID: currentUserID, followingID: video.creatorID)
+                print("Follow successful for user: \(video.creatorID)")
             } else {
-                // Try to unfollow - if permissions fail, just log and continue
-                try? await userService.unfollowUser(followerID: currentUserID, followingID: video.creatorID)
-                print("Unfollow action initiated for user: \(video.creatorID)")
+                // Properly handle unfollow with error checking
+                try await userService.unfollowUser(followerID: currentUserID, followingID: video.creatorID)
+                print("Unfollow successful for user: \(video.creatorID)")
             }
             
-            // Notify parent with specific follow/unfollow action
+            // Notify parent with specific follow/unfollow action ONLY on success
             if isFollowing {
                 onAction?(.follow)
             } else {
@@ -1022,8 +1076,13 @@ struct ContextualVideoOverlay: View {
             await MainActor.run {
                 isFollowing.toggle()
             }
-            print("Follow toggle failed (permissions): \(error.localizedDescription)")
+            print("Follow toggle failed: \(error.localizedDescription)")
             // Note: We're not throwing the error to avoid disrupting the UI
+        }
+        
+        // Clear loading state
+        await MainActor.run {
+            isFollowLoading = false
         }
     }
     

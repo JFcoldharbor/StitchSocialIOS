@@ -124,10 +124,20 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
         movieOutput.stopRecording()
     }
     
-    // MARK: - Camera Controls
+    // MARK: - Camera Controls (FIXED)
     
     func switchCamera() async {
+        print("🔄 CAMERA: Switching from \(currentCameraPosition == .back ? "back" : "front") camera")
+        
+        // Toggle camera position
+        await MainActor.run {
+            self.currentCameraPosition = self.currentCameraPosition == .back ? .front : .back
+        }
+        
+        // Reconfigure session with new camera
         await configureSessionOnBackground()
+        
+        print("✅ CAMERA: Switched to \(currentCameraPosition == .back ? "back" : "front") camera")
     }
     
     func setZoom(_ factor: CGFloat) async {
@@ -169,7 +179,7 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
         }
     }
     
-    // MARK: - Private Configuration
+    // MARK: - Private Configuration (FIXED)
     
     private func configureSessionOnBackground() async {
         captureSession.beginConfiguration()
@@ -183,15 +193,15 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
         captureSession.inputs.forEach { captureSession.removeInput($0) }
         captureSession.outputs.forEach { captureSession.removeOutput($0) }
         
-        // Add video input
-        if let backCamera = await getCamera(for: .back),
-           let videoInput = try? AVCaptureDeviceInput(device: backCamera) {
+        // Add video input - USE CURRENT CAMERA POSITION (FIXED)
+        if let camera = await getCamera(for: currentCameraPosition),
+           let videoInput = try? AVCaptureDeviceInput(device: camera) {
             if captureSession.canAddInput(videoInput) {
                 captureSession.addInput(videoInput)
                 
                 await MainActor.run { [weak self] in
                     self?.videoDeviceInput = videoInput
-                    self?.updateZoomCapabilities(for: backCamera)
+                    self?.updateZoomCapabilities(for: camera)
                 }
             }
         }

@@ -3,7 +3,7 @@
 //  CleanBeta
 //
 //  Layer 8: Views - Instagram/TikTok Style Recording Interface
-//  Standard social media camera layout with bottom controls
+//  COMPLETE FIX: Background video stopping + Camera flip + Image picker
 //
 
 import SwiftUI
@@ -14,6 +14,7 @@ struct RecordingView: View {
     @StateObject private var controller: RecordingController
     @StateObject private var permissionsManager = CameraPermissionsManager()
     @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var isProcessingSelectedVideo = false
     
     let onVideoCreated: (CoreVideoMetadata) -> Void
     let onCancel: () -> Void
@@ -61,11 +62,9 @@ struct RecordingView: View {
         .onDisappear {
             cleanupCamera()
         }
-        .onChange(of: selectedPhotoItem) { item in
-            Task {
-                if let data = try? await item?.loadTransferable(type: Data.self) {
-                    await handleSelectedVideo(data)
-                }
+        .onChange(of: selectedPhotoItem) { oldValue, newValue in
+            if newValue != nil {
+                handlePhotoSelection()
             }
         }
     }
@@ -74,9 +73,27 @@ struct RecordingView: View {
     
     private var cameraInterface: some View {
         ZStack {
-            // Full screen camera preview - FIXED: Use ProfessionalCameraPreview
+            // Full screen camera preview
             ProfessionalCameraPreview(controller: controller)
                 .ignoresSafeArea()
+            
+            // Processing overlay for selected video
+            if isProcessingSelectedVideo {
+                ZStack {
+                    Color.black.opacity(0.8)
+                        .ignoresSafeArea()
+                    
+                    VStack(spacing: 20) {
+                        ProgressView()
+                            .scaleEffect(1.5)
+                            .tint(.white)
+                        
+                        Text("Processing selected video...")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                    }
+                }
+            }
             
             // Top overlay
             VStack {
@@ -103,36 +120,59 @@ struct RecordingView: View {
             GeometryReader { geometry in
                 HStack(alignment: .center, spacing: 0) {
                     // Left: Gallery/Image picker - FIXED
-                    PhotosPicker(selection: $selectedPhotoItem, matching: .videos) {
-                        Image(systemName: "photo.stack")
-                            .font(.system(size: 24, weight: .medium))
-                            .foregroundColor(.white)
-                            .frame(width: 50, height: 50)
-                            .background(Circle().fill(.ultraThinMaterial))
+                    PhotosPicker(
+                        selection: $selectedPhotoItem,
+                        matching: .videos,
+                        photoLibrary: .shared()
+                    ) {
+                        VStack(spacing: 4) {
+                            Image(systemName: "photo.stack.fill")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundColor(.white)
+                            
+                            Text("Gallery")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .frame(width: 60, height: 60)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(.ultraThinMaterial)
+                        )
                     }
+                    .disabled(controller.currentPhase.isRecording || isProcessingSelectedVideo)
                     
                     Spacer()
                     
                     // Center: Recording button
                     CinematicRecordingButton(controller: controller)
+                        .disabled(isProcessingSelectedVideo)
                     
                     Spacer()
                     
-                    // Right: Camera flip - FIXED
+                    // Right: Camera flip - FIXED with proper async handling
                     Button {
-                        Task {
-                            await controller.cameraManager.switchCamera()
-                        }
+                        flipCamera()
                     } label: {
-                        Image(systemName: "camera.rotate.fill")
-                            .font(.system(size: 24, weight: .medium))
-                            .foregroundColor(.white)
-                            .frame(width: 50, height: 50)
-                            .background(Circle().fill(.ultraThinMaterial))
+                        VStack(spacing: 4) {
+                            Image(systemName: "camera.rotate.fill")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundColor(.white)
+                            
+                            Text("Flip")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .frame(width: 60, height: 60)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(.ultraThinMaterial)
+                        )
                     }
+                    .disabled(controller.currentPhase.isRecording || isProcessingSelectedVideo)
                 }
-                .padding(.horizontal, 50)
-                .position(x: geometry.size.width / 2, y: geometry.size.height - 80)
+                .padding(.horizontal, 40)
+                .position(x: geometry.size.width / 2, y: geometry.size.height - 100)
             }
         }
     }
@@ -159,7 +199,7 @@ struct RecordingView: View {
             Circle()
                 .fill(.red)
                 .frame(width: 8, height: 8)
-                .scaleEffect(1.2)
+                .scaleEffect(controller.currentPhase.isRecording ? 1.2 : 1.0)
                 .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: controller.currentPhase.isRecording)
             
             Text("REC")
@@ -269,9 +309,9 @@ struct RecordingView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
                 
-            Button("Try Again") {
-                controller.clearError()
-            }
+                Button("Try Again") {
+                    controller.clearError()
+                }
                 .font(.headline)
                 .foregroundColor(.white)
                 .frame(width: 200, height: 50)
@@ -289,31 +329,128 @@ struct RecordingView: View {
         }
     }
     
+    // MARK: - Camera Controls - FIXED
+    
+    private func flipCamera() {
+        // Provide immediate visual feedback
+        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+        impactFeedback.impactOccurred()
+        
+        Task {
+            print("🔄 RECORDING VIEW: Flipping camera...")
+            
+            // Use the cinematic camera manager if available, otherwise fall back to streamlined
+            if let cinematicManager = controller.cameraManager as? CinematicCameraManager {
+                await cinematicManager.switchCamera()
+                print("🔄 RECORDING VIEW: Used CinematicCameraManager to flip camera")
+            } else {
+                await controller.cameraManager.switchCamera()
+                print("🔄 RECORDING VIEW: Used StreamlinedCameraManager to flip camera")
+            }
+        }
+    }
+    
+    // MARK: - Photo Selection Handling - FIXED
+    
+    private func handlePhotoSelection() {
+        guard let selectedItem = selectedPhotoItem else { return }
+        
+        isProcessingSelectedVideo = true
+        print("📱 RECORDING VIEW: Processing selected video from gallery...")
+        
+        Task {
+            do {
+                // Load the video data
+                guard let videoData = try await selectedItem.loadTransferable(type: Data.self) else {
+                    throw VideoSelectionError.failedToLoadData
+                }
+                
+                // Create temporary file
+                let tempURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("selected_video_\(UUID().uuidString).mov")
+                
+                // Write data to temporary file
+                try videoData.write(to: tempURL)
+                
+                // Validate it's a video file
+                let asset = AVAsset(url: tempURL)
+                let tracks = try await asset.loadTracks(withMediaType: .video)
+                
+                guard !tracks.isEmpty else {
+                    throw VideoSelectionError.notAVideoFile
+                }
+                
+                // Get duration to validate
+                let duration = try await asset.load(.duration)
+                let durationSeconds = CMTimeGetSeconds(duration)
+                
+                // Check duration limits (e.g., 30 seconds max)
+                guard durationSeconds <= 30.0 else {
+                    throw VideoSelectionError.videoTooLong
+                }
+                
+                print("📱 RECORDING VIEW: Selected video validated - Duration: \(String(format: "%.1fs", durationSeconds))")
+                
+                // Process the selected video through the recording pipeline
+                await MainActor.run {
+                    controller.recordedVideoURL = tempURL
+                    controller.currentPhase = .aiProcessing
+                    controller.recordingPhase = .aiProcessing
+                    isProcessingSelectedVideo = false
+                    selectedPhotoItem = nil
+                    
+                    print("📱 RECORDING VIEW: Selected video sent to processing pipeline")
+                }
+                
+            } catch {
+                await MainActor.run {
+                    isProcessingSelectedVideo = false
+                    selectedPhotoItem = nil
+                    
+                    // Show error to user
+                    let errorMessage = (error as? VideoSelectionError)?.localizedDescription ??
+                                     "Failed to process selected video"
+                    controller.currentPhase = .error(errorMessage)
+                    
+                    print("❌ RECORDING VIEW: Video selection failed - \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
     // MARK: - Setup and Cleanup
     
     private func setupCamera() {
-        // Stop all background activity for camera priority
+        // Stop all background activity for camera priority - FIXED
         stopBackgroundActivity()
         
         if permissionsManager.canRecord {
             Task {
                 await controller.startCameraSession()
+                print("📷 RECORDING VIEW: Camera session started")
             }
+        } else {
+            print("❌ RECORDING VIEW: Camera permissions not granted")
         }
     }
     
     private func cleanupCamera() {
         Task {
             await controller.stopCameraSession()
+            print("📷 RECORDING VIEW: Camera session stopped")
         }
         
         // Resume background activity when leaving
         resumeBackgroundActivity()
     }
     
-    // MARK: - Background Activity Management - FIXED
+    // MARK: - Background Activity Management - COMPLETE FIX
     
     private func stopBackgroundActivity() {
+        // CRITICAL FIX: Stop all background video players via notifications
+        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
+        print("🎬 RECORDING: Sent signal to stop all background video players")
+        
         // Disable auto-refresh timers
         NotificationCenter.default.post(name: .pauseBackgroundRefresh, object: nil)
         
@@ -345,23 +482,6 @@ struct RecordingView: View {
         print("📱 RECORDING: Background activity resumed")
     }
     
-    // MARK: - Gallery Video Handling - FIXED
-    
-    private func handleSelectedVideo(_ data: Data) async {
-        // Handle selected video from gallery
-        do {
-            let tempURL = URL.temporaryDirectory.appendingPathComponent("selected_video.mp4")
-            try data.write(to: tempURL)
-            
-            // Process selected video through the same pipeline
-            controller.recordedVideoURL = tempURL
-            
-            print("📱 RECORDING: Selected video from gallery")
-        } catch {
-            print("❌ RECORDING: Failed to handle selected video: \(error)")
-        }
-    }
-    
     // MARK: - Context Helpers
     
     private func getContextName() -> String {
@@ -383,7 +503,29 @@ struct RecordingView: View {
     }
 }
 
-// MARK: - Professional Camera Preview (Fixed Implementation)
+// MARK: - Video Selection Error Handling
+
+enum VideoSelectionError: LocalizedError {
+    case failedToLoadData
+    case notAVideoFile
+    case videoTooLong
+    case unsupportedFormat
+    
+    var errorDescription: String? {
+        switch self {
+        case .failedToLoadData:
+            return "Failed to load selected video"
+        case .notAVideoFile:
+            return "Selected file is not a valid video"
+        case .videoTooLong:
+            return "Video is too long (max 30 seconds)"
+        case .unsupportedFormat:
+            return "Video format not supported"
+        }
+    }
+}
+
+// MARK: - Professional Camera Preview (Enhanced)
 
 struct ProfessionalCameraPreview: UIViewRepresentable {
     @ObservedObject var controller: RecordingController
@@ -397,8 +539,13 @@ struct ProfessionalCameraPreview: UIViewRepresentable {
         view.layer.addSublayer(previewLayer)
         view.previewLayer = previewLayer
         
+        // Add gesture recognizers
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap))
         let pinchGesture = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handlePinch))
+        
+        // Allow simultaneous gestures
+        tapGesture.delegate = context.coordinator
+        pinchGesture.delegate = context.coordinator
         
         view.addGestureRecognizer(tapGesture)
         view.addGestureRecognizer(pinchGesture)
@@ -416,7 +563,7 @@ struct ProfessionalCameraPreview: UIViewRepresentable {
         Coordinator(self)
     }
     
-    class Coordinator: NSObject {
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let parent: ProfessionalCameraPreview
         private var initialZoom: CGFloat = 1.0
         
@@ -424,20 +571,72 @@ struct ProfessionalCameraPreview: UIViewRepresentable {
             self.parent = parent
         }
         
+        // Allow simultaneous gestures
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            return true
+        }
+        
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended else { return }
+            
             let point = gesture.location(in: gesture.view)
+            
+            // Visual feedback for tap
+            if let view = gesture.view {
+                showFocusIndicator(at: point, in: view)
+            }
+            
             Task { @MainActor in
                 await parent.controller.cameraManager.focusAt(point: point, in: gesture.view!)
+                print("📷 PREVIEW: Focus set at \(point)")
             }
         }
         
         @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
             Task { @MainActor in
-                if gesture.state == .began {
+                switch gesture.state {
+                case .began:
                     initialZoom = parent.controller.cameraManager.currentZoomFactor
-                } else if gesture.state == .changed {
+                    
+                case .changed:
                     let newZoom = initialZoom * gesture.scale
                     await parent.controller.cameraManager.setZoom(newZoom)
+                    
+                case .ended, .cancelled:
+                    print("📷 PREVIEW: Zoom gesture ended at \(parent.controller.cameraManager.currentZoomFactor)x")
+                    
+                default:
+                    break
+                }
+            }
+        }
+        
+        private func showFocusIndicator(at point: CGPoint, in view: UIView) {
+            // Remove any existing focus indicators
+            view.subviews.filter { $0.tag == 999 }.forEach { $0.removeFromSuperview() }
+            
+            // Create focus indicator
+            let focusView = UIView(frame: CGRect(x: 0, y: 0, width: 80, height: 80))
+            focusView.center = point
+            focusView.tag = 999
+            focusView.layer.borderColor = UIColor.white.cgColor
+            focusView.layer.borderWidth = 2
+            focusView.layer.cornerRadius = 40
+            focusView.backgroundColor = UIColor.clear
+            focusView.alpha = 0
+            
+            view.addSubview(focusView)
+            
+            // Animate focus indicator
+            UIView.animate(withDuration: 0.2, animations: {
+                focusView.alpha = 1
+                focusView.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+            }) { _ in
+                UIView.animate(withDuration: 0.3, delay: 0.5, options: [], animations: {
+                    focusView.alpha = 0
+                    focusView.transform = CGAffineTransform(scaleX: 1.2, y: 1.2)
+                }) { _ in
+                    focusView.removeFromSuperview()
                 }
             }
         }
@@ -460,4 +659,5 @@ extension Notification.Name {
     static let resumeBackgroundRefresh = Notification.Name("resumeBackgroundRefresh")
     static let pauseLocationServices = Notification.Name("pauseLocationServices")
     static let resumeLocationServices = Notification.Name("resumeLocationServices")
+    static let killAllVideoPlayers = Notification.Name("killAllVideoPlayers") // NEW
 }

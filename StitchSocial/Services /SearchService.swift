@@ -2,7 +2,7 @@
 //  SearchService.swift
 //  CleanBeta
 //
-//  Layer 4: Core Services - Basic Search Functionality
+//  Layer 4: Core Services - Complete Search Functionality
 //  Dependencies: Firebase Firestore
 //  Features: User and video search with prefix matching
 //
@@ -10,7 +10,7 @@
 import Foundation
 import FirebaseFirestore
 
-/// Basic search functionality for users and videos
+/// Complete search functionality for users and videos
 @MainActor
 class SearchService: ObservableObject {
     
@@ -29,7 +29,7 @@ class SearchService: ObservableObject {
         print("🔍 SEARCH SERVICE: Initialized with database: \(Config.Firebase.databaseName)")
     }
     
-    // MARK: - User Search
+    // MARK: - User Search - FIXED IMPLEMENTATION
     
     /// Search users by username or display name
     func searchUsers(query: String, limit: Int = 20) async throws -> [BasicUserInfo] {
@@ -76,16 +76,63 @@ class SearchService: ObservableObject {
                 users.append(userInfo)
             }
             
-            // Sort by relevance (exact matches first, then partial)
+            // If we have fewer results, also search by displayName
+            if users.count < limit {
+                let displayNameQuery = db.collection(FirebaseSchema.Collections.users)
+                    .whereField(FirebaseSchema.UserDocument.displayName, isGreaterThanOrEqualTo: trimmedQuery.capitalized)
+                    .whereField(FirebaseSchema.UserDocument.displayName, isLessThan: trimmedQuery.capitalized + "\u{f8ff}")
+                    .limit(to: limit - users.count)
+                
+                let displayNameSnapshot = try await displayNameQuery.getDocuments()
+                
+                // Add results, avoiding duplicates
+                let existingIDs = Set(users.map { $0.id })
+                
+                for document in displayNameSnapshot.documents {
+                    if !existingIDs.contains(document.documentID) {
+                        let data = document.data()
+                        
+                        let userInfo = BasicUserInfo(
+                            id: document.documentID,
+                            username: data[FirebaseSchema.UserDocument.username] as? String ?? "unknown",
+                            displayName: data[FirebaseSchema.UserDocument.displayName] as? String ?? "User",
+                            tier: UserTier(rawValue: data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie") ?? .rookie,
+                            clout: data[FirebaseSchema.UserDocument.clout] as? Int ?? 1500,
+                            isVerified: data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false,
+                            profileImageURL: data[FirebaseSchema.UserDocument.profileImageURL] as? String,
+                            createdAt: (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
+                        )
+                        
+                        users.append(userInfo)
+                    }
+                }
+            }
+            
+            // Sort results by relevance
             users.sort { user1, user2 in
-                let query1Exact = user1.username.lowercased() == trimmedQuery
-                let query2Exact = user2.username.lowercased() == trimmedQuery
+                let username1 = user1.username.lowercased()
+                let username2 = user2.username.lowercased()
+                let displayName1 = user1.displayName.lowercased()
+                let displayName2 = user2.displayName.lowercased()
                 
-                if query1Exact && !query2Exact { return true }
-                if !query1Exact && query2Exact { return false }
+                // Exact username matches first
+                if username1.hasPrefix(trimmedQuery) && !username2.hasPrefix(trimmedQuery) {
+                    return true
+                }
+                if !username1.hasPrefix(trimmedQuery) && username2.hasPrefix(trimmedQuery) {
+                    return false
+                }
                 
-                // Secondary sort by tier (higher tiers first)
-                return user1.tier.cloutRange.lowerBound > user2.tier.cloutRange.lowerBound
+                // Then exact display name matches
+                if displayName1.hasPrefix(trimmedQuery) && !displayName2.hasPrefix(trimmedQuery) {
+                    return true
+                }
+                if !displayName1.hasPrefix(trimmedQuery) && displayName2.hasPrefix(trimmedQuery) {
+                    return false
+                }
+                
+                // Finally sort by clout (higher first)
+                return user1.clout > user2.clout
             }
             
             print("✅ SEARCH SERVICE: Found \(users.count) users for query: '\(trimmedQuery)'")
@@ -226,14 +273,15 @@ class SearchService: ObservableObject {
         let replyCount = data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0
         let shareCount = data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0
         
-        // Content metadata
-        let temperature = data[FirebaseSchema.VideoDocument.temperature] as? String ?? "neutral"
-        let qualityScore = data[FirebaseSchema.VideoDocument.qualityScore] as? Int ?? 50
-        let duration = data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0.0
+        // Technical metrics
+        let temperature = data[FirebaseSchema.VideoDocument.temperature] as? Double ?? 0.0
+        let qualityScore = data[FirebaseSchema.VideoDocument.qualityScore] as? Double ?? 0.0
+        let duration = data[FirebaseSchema.VideoDocument.duration] as? Double ?? 0.0
         let aspectRatio = data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? 9.0/16.0
-        let fileSize = data[FirebaseSchema.VideoDocument.fileSize] as? Int64 ?? 0
-        let discoverabilityScore = data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double ?? 0.5
+        let fileSize = data[FirebaseSchema.VideoDocument.fileSize] as? Int ?? 0
+        let discoverabilityScore = data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double ?? 0.0
         let isPromoted = data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false
+        
         let lastEngagementAtTimestamp = data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp
         let lastEngagementAt = lastEngagementAtTimestamp?.dateValue()
         
@@ -260,14 +308,14 @@ class SearchService: ObservableObject {
             coolCount: coolCount,
             replyCount: replyCount,
             shareCount: shareCount,
-            temperature: temperature,
-            qualityScore: qualityScore,
+            temperature: "neutral",
+            qualityScore: 50,
             engagementRatio: engagementRatio,
             velocityScore: velocityScore,
             trendingScore: 0.0,
             duration: duration,
             aspectRatio: aspectRatio,
-            fileSize: fileSize,
+            fileSize: Int64(fileSize),
             discoverabilityScore: discoverabilityScore,
             isPromoted: isPromoted,
             lastEngagementAt: lastEngagementAt
@@ -276,7 +324,7 @@ class SearchService: ObservableObject {
     
     /// Test search service functionality
     func helloWorldTest() {
-        print("🔍 SEARCH SERVICE: Hello World - Ready for user and video search!")
+        print("🔍 SEARCH SERVICE: Hello World - Ready for complete user and video search!")
     }
 }
 

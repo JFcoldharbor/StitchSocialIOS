@@ -78,15 +78,23 @@ class DiscoveryViewModel: ObservableObject {
     @Published var hasMore = true
     @Published var errorMessage: String?
     
+    // Search state
+    @Published var searchText = ""
+    @Published var searchResults: [CoreVideoMetadata] = []
+    @Published var isSearching = false
+    @Published var hasSearched = false
+    
     private let videoService = VideoService()
     private let searchService = SearchService()
     private var cancellables = Set<AnyCancellable>()
+    private var searchTask: Task<Void, Never>?
     
     init() {
         setupRealTimeUpdates()
+        setupSearchObserver()
     }
     
-    /// Load videos from Firebase using existing VideoService method
+    /// Load videos from Firebase - FIXED to use discovery method
     func loadContent() async {
         isLoading = true
         lastDocument = nil
@@ -94,8 +102,8 @@ class DiscoveryViewModel: ObservableObject {
         errorMessage = nil
         
         do {
-            let result = try await videoService.getThreadsForHomeFeed(limit: 50)
-            videos = result.items
+            let result = try await videoService.getAllThreadsWithChildren(limit: 50)
+            videos = result.threads.map { $0.parentVideo }
             
             // Sort by engagement for discovery
             videos.sort {
@@ -119,6 +127,57 @@ class DiscoveryViewModel: ObservableObject {
         }
         
         isLoading = false
+    }
+    
+    /// Perform search using SearchService
+    func performSearch() {
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            clearSearchResults()
+            return
+        }
+        
+        searchTask?.cancel()
+        
+        searchTask = Task {
+            await MainActor.run {
+                isSearching = true
+                hasSearched = true
+            }
+            
+            do {
+                let results = try await searchService.searchVideos(query: searchText, limit: 30)
+                
+                await MainActor.run {
+                    self.searchResults = results
+                    self.isSearching = false
+                }
+                
+                print("DISCOVERY: Search found \(results.count) videos for '\(searchText)'")
+                
+            } catch {
+                await MainActor.run {
+                    self.searchResults = []
+                    self.isSearching = false
+                }
+                print("DISCOVERY: Search failed - \(error)")
+            }
+        }
+    }
+    
+    /// Clear search results
+    func clearSearchResults() {
+        searchResults = []
+        hasSearched = false
+        searchText = ""
+    }
+    
+    /// Get current display results (search or filtered)
+    var displayResults: [CoreVideoMetadata] {
+        if !searchText.isEmpty && hasSearched {
+            return searchResults
+        } else {
+            return filteredVideos
+        }
     }
     
     /// Filter videos by category
@@ -169,6 +228,20 @@ class DiscoveryViewModel: ObservableObject {
         }
     }
     
+    /// Setup search text observer
+    private func setupSearchObserver() {
+        $searchText
+            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
+            .sink { [weak self] searchText in
+                if !searchText.isEmpty {
+                    self?.performSearch()
+                } else {
+                    self?.clearSearchResults()
+                }
+            }
+            .store(in: &cancellables)
+    }
+    
     /// Setup real-time video updates
     private func setupRealTimeUpdates() {
         Timer.publish(every: 30, on: .main, in: .common)
@@ -181,7 +254,6 @@ class DiscoveryViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 }
-
 // MARK: - Main Discovery View
 
 struct DiscoveryView: View {
@@ -240,6 +312,9 @@ struct DiscoveryView: View {
             if let video = selectedVideo {
                 FullscreenVideoView(video: video)
             }
+        }
+        .sheet(isPresented: $showingSearch) {
+            SearchView()
         }
         .task {
             await viewModel.loadContent()

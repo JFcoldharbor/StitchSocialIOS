@@ -87,14 +87,8 @@ class ThreadViewModel: ObservableObject {
             }
             
             do {
-                // Load thread starter video
-                guard let starterVideo = try await videoService.getVideo(id: threadID) else {
-                    await MainActor.run {
-                        self.errorMessage = "Thread not found"
-                        self.isLoading = false
-                    }
-                    return
-                }
+                // Load thread starter video - FIXED: Remove conditional binding
+                let starterVideo = try await videoService.getVideo(id: threadID)
                 
                 // Load all videos in this thread using available method
                 let allThreadVideos = try await loadThreadVideosManually(threadID: threadID)
@@ -170,15 +164,14 @@ class ThreadViewModel: ObservableObject {
     private func loadThreadVideosManually(threadID: String) async throws -> [CoreVideoMetadata] {
         var threadVideos: [CoreVideoMetadata] = []
         
-        // Load thread starter
-        if let starter = try await videoService.getVideo(id: threadID) {
-            threadVideos.append(starter)
-            
-            // Load children and stepchildren by querying Firebase directly
-            // This implementation uses the available methods to reconstruct thread hierarchy
-            let allVideos = try await getAllVideosInThread(threadID: threadID)
-            threadVideos.append(contentsOf: allVideos)
-        }
+        // Load thread starter - FIXED: Remove conditional binding
+        let starter = try await videoService.getVideo(id: threadID)
+        threadVideos.append(starter)
+        
+        // Load children and stepchildren by querying Firebase directly
+        // This implementation uses the available methods to reconstruct thread hierarchy
+        let allVideos = try await getAllVideosInThread(threadID: threadID)
+        threadVideos.append(contentsOf: allVideos)
         
         return threadVideos
     }

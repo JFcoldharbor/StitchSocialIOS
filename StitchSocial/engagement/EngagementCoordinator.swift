@@ -341,12 +341,13 @@ class EngagementCoordinator: ObservableObject {
             )
             
             // Record user's engagement interaction
-            try await videoService.recordUserEngagement(
-                userID: userID,
+            try await videoService.recordUserInteraction(
                 videoID: videoID,
+                userID: userID,
                 interactionType: engagementType,
-                timestamp: Date()
+                watchTime: 0
             )
+
             
             print("✅ DATABASE: Successfully updated engagement for video \(videoID)")
             
