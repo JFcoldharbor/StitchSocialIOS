@@ -17,7 +17,7 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - Dependencies
     
-    private let authService: AuthService
+    let authService: AuthService
     private let userService: UserService
     private let videoService: VideoService
     

@@ -394,7 +394,7 @@ class EngagementCoordinator: ObservableObject {
                         senderID: userID,
                         engagementCount: calculations.newHypeCount + calculations.newCoolCount,
                         streakCount: 1,
-                        rewardAmount: Double(calculations.cloutGain)
+                        rewardAmount: Double(Int(calculations.cloutGain))  // Convert to Int instead of Double
                     )
                 )
             } catch {

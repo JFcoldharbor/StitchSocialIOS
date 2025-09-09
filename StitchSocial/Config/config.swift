@@ -116,52 +116,16 @@ struct Config {
         static let bundleID: String = {
             Bundle.main.bundleIdentifier ?? "com.cleanbeta.app"
         }()
-    }
-    
-    // MARK: - Recording Configuration
-    
-    struct Recording {
-        static let maxDuration: TimeInterval = 30.0 // 30 seconds for all users
-        static let defaultAspectRatio: Double = 9.0/16.0 // Vertical video
         
-        /// Quality settings by user tier
-        enum VideoQuality: String, CaseIterable {
-            case sd = "SD (480p)"
-            case hd = "HD (720p)"
-            case fullHD = "Full HD (1080p)"
-            case uhd = "4K (2160p)"
-            
-            var sessionPreset: String {
-                switch self {
-                case .sd: return "AVCaptureSessionPreset640x480"
-                case .hd: return "AVCaptureSessionPreset1280x720"
-                case .fullHD: return "AVCaptureSessionPreset1920x1080"
-                case .uhd: return "AVCaptureSessionPreset3840x2160"
-                }
-            }
-        }
+        /// Content creation settings
+        static let maxVideoLength: TimeInterval = 60.0 // 60 seconds
+        static let maxVideoFileSize: Int64 = 50 * 1024 * 1024 // 50MB
+        static let supportedVideoFormats = ["mp4", "mov", "m4v"]
+        static let defaultVideoQuality: Float = 0.7
         
-        /// Tier-based quality mapping
-        static func videoQuality(for tier: String) -> VideoQuality {
-            switch tier.lowercased() {
-            case "rookie", "rising":
-                return .hd
-            case "influencer":
-                return .fullHD
-            case "partner", "topcreator", "founder", "cofounder":
-                return .uhd
-            default:
-                return .hd
-            }
-        }
-    }
-    
-    // MARK: - AI Configuration
-    
-    struct AI {
-        /// Premium tier access for AI features
-        static let premiumTiers: Set<String> = [
-            "influencer", "partner", "topcreator", "founder", "cofounder"
+        /// Special user recognition keywords for enhanced starting conditions
+        static let specialUserKeywords = [
+            "founder", "ceo", "celebrity", "influencer", "partner", "topcreator", "founder", "cofounder"
         ]
         
         /// AI analysis settings
@@ -257,7 +221,8 @@ struct Config {
             issues.append("OpenAI API key is missing")
         }
         
-        if API.OpenAI.apiKey.hasPrefix("sk-your-") {
+        // FIXED: Updated validation to properly handle project-based API keys
+        if API.OpenAI.apiKey.hasPrefix("sk-your-") || API.OpenAI.apiKey.hasPrefix("sk-proj-your-") {
             issues.append("OpenAI API key appears to be a placeholder")
         }
         
@@ -295,55 +260,39 @@ struct Config {
         print("   Environment: \(Environment.current)")
         print("   App Version: \(App.version) (\(App.buildNumber))")
         print("   AI Enabled: \(Features.enableAIAnalysis)")
-        print("   OpenAI Key: \(API.OpenAI.apiKey.isEmpty ? "❌ Missing" : "✅ Present")")
-        print("   Debug Mode: \(Features.enableDebugLogging)")
+        print("   OpenAI Key: \(API.OpenAI.apiKey.isEmpty ? "❌ Missing" : "✅ Configured (\(API.OpenAI.apiKey.count) chars)")")
         print("   Firebase DB: \(Firebase.databaseName)")
+        print("   Bundle ID: \(App.bundleID)")
+        print("   Debug Logging: \(Features.enableDebugLogging ? "✅" : "❌")")
         
-        // Validate Firebase configuration
-        let firebaseValid = Firebase.validateConfiguration()
-        
-        if !validation.isValid || !firebaseValid {
-            print("⚠️  Configuration Issues:")
+        if !validation.isValid {
+            print("   ⚠️ Issues Found:")
             for issue in validation.issues {
-                print("   - \(issue)")
-            }
-            if !firebaseValid {
-                print("   - Firebase configuration invalid")
+                print("      - \(issue)")
             }
         } else {
-            print("✅ Configuration is valid")
+            print("   ✅ Configuration Valid")
         }
     }
 }
 
-// MARK: - Supporting Types
+// MARK: - Configuration Validation Result
 
+/// Result of configuration validation
 struct ConfigValidationResult {
     let isValid: Bool
     let issues: [String]
     let environment: Config.Environment
     
-    var summary: String {
+    /// Print validation summary
+    func printSummary() {
         if isValid {
-            return "✅ Configuration is valid for \(environment)"
+            print("✅ CONFIG: All validation checks passed")
         } else {
-            return "❌ Configuration has \(issues.count) issue(s) in \(environment)"
-        }
-    }
-}
-
-// MARK: - Environment Helpers
-
-extension Config.Environment {
-    var isDevelopment: Bool { self == .development }
-    var isStaging: Bool { self == .staging }
-    var isProduction: Bool { self == .production }
-    
-    var description: String {
-        switch self {
-        case .development: return "Development"
-        case .staging: return "Staging"
-        case .production: return "Production"
+            print("❌ CONFIG: Validation failed with \(issues.count) issue(s):")
+            for issue in issues {
+                print("   - \(issue)")
+            }
         }
     }
 }

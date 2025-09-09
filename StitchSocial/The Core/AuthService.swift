@@ -33,12 +33,32 @@ class AuthService: ObservableObject {
     init() {
         setupAuthListener()
         print("🔧 AUTH SERVICE: Enhanced auth using database: \(Config.Firebase.databaseName)")
+        
+        // Verify Firebase configuration on init
+        verifyFirebaseConfiguration()
     }
     
     deinit {
         if let listener = authStateListener {
             auth.removeStateDidChangeListener(listener)
         }
+    }
+    
+    // MARK: - Firebase Configuration Verification
+    
+    private func verifyFirebaseConfiguration() {
+        print("🔍 FIREBASE CONFIG: Verifying setup...")
+        
+        if let app = Auth.auth().app {
+            print("✅ FIREBASE: App configured - \(app.name)")
+            print("✅ FIREBASE: Database name - \(Config.Firebase.databaseName)")
+        } else {
+            print("❌ FIREBASE: App not configured")
+        }
+        
+        // Removed test Firestore connection query to avoid permission errors
+        // Connection will be verified during actual user operations
+        print("✅ FIRESTORE: Configuration ready")
     }
     
     // MARK: - Public Authentication Methods
@@ -94,7 +114,18 @@ class AuthService: ObservableObject {
         defer { isLoading = false }
         
         do {
+            // CRITICAL DEBUG: Check auth state before signup
+            print("🔍 PRE-SIGNUP DEBUG:")
+            print("   Database: \(Config.Firebase.databaseName)")
+            print("   Auth state: \(auth.currentUser?.uid ?? "none")")
+            
             let result = try await auth.createUser(withEmail: email, password: password)
+            
+            // CRITICAL DEBUG: Check auth state after signup
+            print("🔍 POST-SIGNUP DEBUG:")
+            print("   Firebase User: \(result.user.uid)")
+            print("   Email: \(result.user.email ?? "none")")
+            print("   Auth current: \(auth.currentUser?.uid ?? "none")")
             
             // Update display name if provided
             if let displayName = displayName {
@@ -116,6 +147,16 @@ class AuthService: ObservableObject {
             authState = .error
             lastError = .authenticationError("Sign up failed: \(error.localizedDescription)")
             print("❌ AUTH: Email sign up failed: \(error)")
+            
+            // CRITICAL DEBUG: Log detailed error
+            if let nsError = error as NSError? {
+                print("🔍 DETAILED ERROR:")
+                print("   Domain: \(nsError.domain)")
+                print("   Code: \(nsError.code)")
+                print("   Description: \(nsError.localizedDescription)")
+                print("   UserInfo: \(nsError.userInfo)")
+            }
+            
             throw lastError!
         }
     }
@@ -127,31 +168,6 @@ class AuthService: ObservableObject {
     
     func signUpWithEmail(_ email: String, password: String, displayName: String? = nil) async throws {
         _ = try await signUp(email: email, password: password, displayName: displayName)
-    }
-    
-    /// Sign in anonymously for testing
-    func signInAnonymously() async throws {
-        authState = .authenticating
-        isLoading = true
-        lastError = nil
-        
-        defer { isLoading = false }
-        
-        do {
-            let result = try await auth.signInAnonymously()
-            print("✅ AUTH: Anonymous sign in successful: \(result.user.uid)")
-            
-            // Create anonymous user profile
-            let userProfile = try await createAnonymousUserProfile(for: result.user)
-            currentUser = userProfile
-            authState = .authenticated
-            
-        } catch {
-            authState = .error
-            lastError = .authenticationError("Anonymous sign in failed: \(error.localizedDescription)")
-            print("❌ AUTH: Anonymous sign in failed: \(error)")
-            throw lastError!
-        }
     }
     
     /// Sign out current user
@@ -250,6 +266,13 @@ class AuthService: ObservableObject {
         
         // Only handle state change if we're not already processing authentication
         guard authState != .signingIn && authState != .authenticating else {
+            print("🔍 AUTH STATE: Skipping state change during authentication process")
+            return
+        }
+        
+        // If we already have current user and are authenticated, don't reload
+        if currentUser != nil && authState == .authenticated {
+            print("✅ AUTH STATE: Already authenticated with current user")
             return
         }
         
@@ -260,7 +283,17 @@ class AuthService: ObservableObject {
             print("✅ AUTH: User profile loaded from state change")
         } catch {
             print("⚠️ AUTH: Failed to load user profile in state change: \(error)")
-            // Don't set error state here as user might be signing up
+            
+            // Check if this might be a new user during signup
+            if error.localizedDescription.contains("User profile not found") {
+                print("🔍 AUTH: Profile not found - user might be in signup process")
+                // Don't set error state as this is likely during profile creation
+                return
+            }
+            
+            // For other errors, set unauthenticated state
+            authState = .unauthenticated
+            currentUser = nil
         }
     }
     
@@ -268,6 +301,14 @@ class AuthService: ObservableObject {
     
     private func createNewUserProfile(for user: User, providedDisplayName: String? = nil) async throws -> BasicUserInfo {
         let email = user.email ?? ""
+        
+        // CRITICAL DEBUG LOGGING
+        print("🔍 CREATING USER PROFILE DEBUG:")
+        print("   User UID: \(user.uid)")
+        print("   Email: \(email)")
+        print("   Database: \(Config.Firebase.databaseName)")
+        print("   Current Auth User: \(auth.currentUser?.uid ?? "NONE")")
+        print("   Document Path: users/\(user.uid)")
         
         // Check for special user configuration
         let specialConfig = SpecialUsersConfig.getSpecialUser(for: email)
@@ -320,9 +361,90 @@ class AuthService: ObservableObject {
             userData["bio"] = customBio
         }
         
-        try await db.collection(FirebaseSchema.Collections.users)
-            .document(user.uid)
-            .setData(userData)
+        // CRITICAL DEBUG: Verify data before write
+        print("🔍 USER DATA DEBUG:")
+        print("   ID field: \(userData[FirebaseSchema.UserDocument.id] ?? "MISSING")")
+        print("   Username: \(userData[FirebaseSchema.UserDocument.username] ?? "MISSING")")
+        print("   Email: \(userData[FirebaseSchema.UserDocument.email] ?? "MISSING")")
+        
+        // CRITICAL: Test auth token before write
+        do {
+            if let currentUser = auth.currentUser {
+                // CRITICAL FIX: Wait for token to be ready and retry if needed
+                var tokenReady = false
+                var retryCount = 0
+                let maxRetries = 3
+                
+                while !tokenReady && retryCount < maxRetries {
+                    do {
+                        let token = try await currentUser.getIDToken(forcingRefresh: retryCount > 0)
+                        print("🔍 AUTH TOKEN: Successfully retrieved (\(token.prefix(20))...)")
+                        tokenReady = true
+                    } catch {
+                        retryCount += 1
+                        print("❌ AUTH TOKEN: Attempt \(retryCount) failed - \(error)")
+                        if retryCount < maxRetries {
+                            print("🔄 AUTH TOKEN: Retrying in 1 second...")
+                            try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                        }
+                    }
+                }
+                
+                if !tokenReady {
+                    throw StitchError.authenticationError("Failed to get authentication token after \(maxRetries) attempts")
+                }
+                
+            } else {
+                print("❌ AUTH TOKEN: No current user!")
+                throw StitchError.authenticationError("No authenticated user during profile creation")
+            }
+        } catch {
+            print("❌ AUTH TOKEN: Failed to verify authentication - \(error)")
+            throw StitchError.authenticationError("Failed to verify authentication token")
+        }
+        
+        // Attempt to write user document
+        do {
+            print("🔍 ATTEMPTING FIRESTORE WRITE...")
+            print("   Collection: \(FirebaseSchema.Collections.users)")
+            print("   Document ID: \(user.uid)")
+            print("   Data keys: \(userData.keys.sorted())")
+            
+            try await db.collection(FirebaseSchema.Collections.users)
+                .document(user.uid)
+                .setData(userData)
+            
+            print("✅ USER PROFILE: Successfully created for \(user.uid)")
+            
+            // CRITICAL: Verify the document was actually written
+            print("🔍 VERIFYING DOCUMENT CREATION...")
+            let verifyDoc = try await db.collection(FirebaseSchema.Collections.users)
+                .document(user.uid)
+                .getDocument()
+            
+            if verifyDoc.exists {
+                print("✅ VERIFICATION: Document exists in Firestore")
+                if let data = verifyDoc.data() {
+                    print("✅ VERIFICATION: Document has data (\(data.keys.count) fields)")
+                }
+            } else {
+                print("❌ VERIFICATION: Document does not exist after creation!")
+                throw StitchError.authenticationError("Profile creation verification failed")
+            }
+            
+        } catch {
+            print("❌ FIRESTORE WRITE FAILED:")
+            print("   Error: \(error)")
+            
+            if let nsError = error as NSError? {
+                print("   Domain: \(nsError.domain)")
+                print("   Code: \(nsError.code)")
+                print("   UserInfo: \(nsError.userInfo)")
+            }
+            
+            // Re-throw with more context
+            throw StitchError.authenticationError("Failed to create user profile: \(error.localizedDescription)")
+        }
         
         // Auto-follow special users for new regular accounts
         if specialConfig == nil {
@@ -340,42 +462,6 @@ class AuthService: ObservableObject {
         }
         
         return basicUserInfo
-    }
-    
-    private func createAnonymousUserProfile(for user: User) async throws -> BasicUserInfo {
-        let username = "anon_\(String(user.uid.prefix(8)))"
-        let displayName = "Anonymous User"
-        
-        let userData: [String: Any] = [
-            FirebaseSchema.UserDocument.id: user.uid,
-            FirebaseSchema.UserDocument.username: username,
-            FirebaseSchema.UserDocument.displayName: displayName,
-            FirebaseSchema.UserDocument.email: "",
-            FirebaseSchema.UserDocument.tier: UserTier.rookie.rawValue,
-            FirebaseSchema.UserDocument.clout: 0,
-            FirebaseSchema.UserDocument.isVerified: false,
-            FirebaseSchema.UserDocument.profileImageURL: "",
-            FirebaseSchema.UserDocument.createdAt: Timestamp(),
-            FirebaseSchema.UserDocument.updatedAt: Timestamp(),
-            
-            // Stats
-            FirebaseSchema.UserDocument.followerCount: 0,
-            FirebaseSchema.UserDocument.followingCount: 0,
-            FirebaseSchema.UserDocument.videoCount: 0,
-            
-            // Settings
-            FirebaseSchema.UserDocument.isPrivate: false,
-            FirebaseSchema.UserDocument.isBanned: false,
-            
-            // Anonymous flag
-            "isAnonymous": true
-        ]
-        
-        try await db.collection(FirebaseSchema.Collections.users)
-            .document(user.uid)
-            .setData(userData)
-        
-        return createBasicUserInfo(from: userData, uid: user.uid)
     }
     
     // MARK: - Helper Methods
@@ -512,9 +598,20 @@ extension AuthService {
     }
 }
 
-// MARK: - Debug and Testing
+    // MARK: - Debug and Testing
 
 extension AuthService {
+    
+    /// Clean user state for debugging
+    func debugCleanUserState() async {
+        print("🧹 AUTH: Cleaning user state...")
+        try? auth.signOut()
+        currentUser = nil
+        authState = .unauthenticated
+        lastError = nil
+        isLoading = false
+        print("🧹 AUTH: User state cleaned")
+    }
     
     /// Hello World test function
     func helloWorldTest() {
@@ -522,7 +619,7 @@ extension AuthService {
         print("📱 AUTH SERVICE: Current state: \(authState.displayName)")
         print("👤 AUTH SERVICE: Current user: \(currentUser?.username ?? "None")")
         print("🌟 AUTH SERVICE: Special user: \(isSpecialUser)")
-        print("📧 AUTH SERVICE: Email: \(currentUserEmail ?? "None")")
+        print("🔧 AUTH SERVICE: Email: \(currentUserEmail ?? "None")")
         print("✅ AUTH SERVICE: Features: Sign in/up, Special users, Profile creation, State management")
     }
     

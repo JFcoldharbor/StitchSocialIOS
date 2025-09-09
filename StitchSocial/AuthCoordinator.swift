@@ -147,69 +147,59 @@ class AuthCoordinator: ObservableObject {
     // MARK: - Phase 1: Authentication
     
     /// Perform Firebase authentication (login or signup)
-    private func performAuthentication(
-        email: String,
-        password: String,
-        isSignUp: Bool
-    ) async throws -> StitchUser {
-        
-        currentPhase = .authenticating
-        currentTask = isSignUp ? "Creating account..." : "Signing in..."
-        await updateProgress(0.1)
-        
-        print("🔐 AUTH: Starting \(isSignUp ? "signup" : "login") process")
-        
-        do {
-            let user: StitchUser
+        private func performAuthentication(
+            email: String,
+            password: String,
+            isSignUp: Bool
+        ) async throws -> StitchUser {
             
-            if isSignUp {
-                // Fixed: Use correct AuthService method name
-                try await authService.signUpWithEmail(email, password: password)
-                currentTask = "Account created successfully"
+            currentPhase = .authenticating
+            currentTask = isSignUp ? "Creating account..." : "Signing in..."
+            await updateProgress(0.1)
+            
+            print("🔐 AUTH: Starting \(isSignUp ? "signup" : "login") process")
+            
+            do {
+                let user: StitchUser
                 
-                // Get user info after signup
-                guard let currentUser = authService.currentUser else {
-                    throw AuthError.authenticationFailed("User not available after signup")
+                if isSignUp {
+                    // FIXED: Use correct AuthService method name
+                    let basicUser = try await authService.signUp(email: email, password: password)
+                    currentTask = "Account created successfully"
+                    
+                    user = StitchUser(
+                        id: basicUser.id,
+                        email: email,
+                        displayName: basicUser.displayName
+                    )
+                    
+                } else {
+                    // FIXED: Use correct AuthService method name
+                    let basicUser = try await authService.signIn(email: email, password: password)
+                    currentTask = "Signed in successfully"
+                    
+                    user = StitchUser(
+                        id: basicUser.id,
+                        email: email,
+                        displayName: basicUser.displayName
+                    )
                 }
                 
-                user = StitchUser(
-                    id: currentUser.id,
-                    email: email, // BasicUserInfo doesn't have email field, use parameter
-                    displayName: currentUser.displayName
-                )
+                await updateProgress(0.3)
                 
-            } else {
-                // Fixed: Use correct AuthService method name
-                try await authService.signInWithEmail(email, password: password)
-                currentTask = "Signed in successfully"
+                // Store authenticated user
+                authenticatedUser = user
                 
-                // Get user info after signin
-                guard let currentUser = authService.currentUser else {
-                    throw AuthError.authenticationFailed("User not available after signin")
-                }
+                print("🔐 AUTH: Authentication successful - User ID: \(user.id)")
+                print("🔐 AUTH: Email: \(user.email), Display Name: \(user.displayName)")
                 
-                user = StitchUser(
-                    id: currentUser.id,
-                    email: email, // BasicUserInfo doesn't have email field, use parameter
-                    displayName: currentUser.displayName
-                )
+                return user
+                
+            } catch {
+                print("❌ AUTH: Authentication failed - \(error.localizedDescription)")
+                throw AuthError.authenticationFailed(error.localizedDescription)
             }
-            
-            await updateProgress(0.3)
-            
-            // Store authenticated user
-            authenticatedUser = user
-            
-            print("🔐 AUTH: Authentication successful - User ID: \(user.id)")
-            print("🔐 AUTH: Email: \(user.email), Display Name: \(user.displayName)")
-            
-            return user
-            
-        } catch {
-            print("❌ AUTH: Authentication failed - \(error.localizedDescription)")
-            throw AuthError.authenticationFailed(error.localizedDescription)
         }
-    }
     
     // MARK: - Phase 2: Special User Detection
     

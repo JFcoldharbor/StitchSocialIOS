@@ -518,7 +518,7 @@ struct ProfileView: View {
     }
     
     // MARK: - Sheet Views
-    
+
     private var followingSheet: some View {
         NavigationView {
             UserListView(
@@ -539,7 +539,7 @@ struct ProfileView: View {
             Task { await viewModel.loadFollowing() }
         }
     }
-    
+
     private var followersSheet: some View {
         NavigationView {
             UserListView(
@@ -560,29 +560,12 @@ struct ProfileView: View {
             Task { await viewModel.loadFollowers() }
         }
     }
-    
+
     private var settingsSheet: some View {
-        NavigationView {
-            VStack {
-                Text("Settings")
-                    .font(.title)
-                    .foregroundColor(.white)
-                    .padding()
-                
-                Spacer()
-            }
-            .background(Color.black.ignoresSafeArea())
-            .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showingSettings = false }
-                        .foregroundColor(.cyan)
-                }
-            }
-        }
+        SettingsView()
+            .environmentObject(viewModel.authService)
     }
-    
+
     private var editProfileSheet: some View {
         Group {
             if let user = viewModel.currentUser {

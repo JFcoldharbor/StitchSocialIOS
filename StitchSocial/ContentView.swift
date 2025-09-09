@@ -3,7 +3,7 @@
 //  CleanBeta
 //
 //  Main app entry point with tab navigation and authentication flow
-//  FIXED: Removed placeholder components, using real DiscoveryView
+//  FIXED: Removed debug auth code and forced clean auth start
 //
 
 import SwiftUI
@@ -130,7 +130,7 @@ struct ContentView: View {
         )
     }
     
-    // MARK: - Main App View (FIXED)
+    // MARK: - Main App View
     
     private var mainAppView: some View {
         ZStack(alignment: .bottom) {
@@ -343,163 +343,6 @@ struct ContentView: View {
         errorMessage = nil
         showingError = false
         initializeApp()
-    }
-}
-
-// MARK: - Authentication View
-
-struct AuthenticationView: View {
-    @EnvironmentObject private var authService: AuthService
-    @State private var isSigningIn = false
-    @State private var errorMessage: String?
-    @State private var showingError = false
-    
-    var body: some View {
-        ZStack {
-            // Background gradient
-            LinearGradient(
-                colors: [
-                    Color.black,
-                    StitchColors.primary.opacity(0.3),
-                    Color.black
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-            
-            VStack(spacing: 40) {
-                Spacer()
-                
-                // App branding
-                VStack(spacing: 20) {
-                    ZStack {
-                        Circle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [StitchColors.primary, StitchColors.secondary],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(width: 120, height: 120)
-                        
-                        Image(systemName: "video.fill")
-                            .font(.system(size: 50, weight: .bold))
-                            .foregroundColor(.white)
-                    }
-                    
-                    Text("Stitch")
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                    
-                    Text("Where every video starts a conversation")
-                        .font(.title3)
-                        .foregroundColor(.white.opacity(0.8))
-                        .multilineTextAlignment(.center)
-                }
-                
-                Spacer()
-                
-                // Sign in options
-                VStack(spacing: 16) {
-                    Button(action: signInWithApple) {
-                        HStack {
-                            Image(systemName: "applelogo")
-                                .font(.system(size: 18, weight: .medium))
-                            Text("Continue with Apple")
-                                .font(.system(size: 16, weight: .medium))
-                        }
-                        .foregroundColor(.black)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(Color.white)
-                        .cornerRadius(8)
-                    }
-                    
-                    Button(action: signInWithGoogle) {
-                        HStack {
-                            Image(systemName: "globe")
-                                .font(.system(size: 18, weight: .medium))
-                            Text("Continue with Google")
-                                .font(.system(size: 16, weight: .medium))
-                        }
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(Color.white.opacity(0.1))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                        )
-                        .cornerRadius(8)
-                    }
-                    
-                    // Loading indicator
-                    if isSigningIn {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                            .scaleEffect(1.2)
-                            .padding(.top, 20)
-                    }
-                }
-                .padding(.horizontal, 32)
-                .padding(.bottom, 50)
-            }
-        }
-        .alert("Sign In Error", isPresented: $showingError) {
-            Button("OK") {
-                errorMessage = nil
-            }
-        } message: {
-            if let errorMessage = errorMessage {
-                Text(errorMessage)
-            }
-        }
-    }
-    
-    private func signInWithApple() {
-        Task {
-            await performSignIn {
-                // TODO: Implement Apple Sign In
-                throw StitchError.authenticationError("Apple Sign In not yet implemented")
-            }
-        }
-    }
-    
-    private func signInWithGoogle() {
-        Task {
-            await performSignIn {
-                // TODO: Implement Google Sign In
-                throw StitchError.authenticationError("Google Sign In not yet implemented")
-            }
-        }
-    }
-    
-    private func performSignIn(_ signInAction: @escaping () async throws -> Void) async {
-        await MainActor.run {
-            isSigningIn = true
-            errorMessage = nil
-        }
-        
-        do {
-            try await signInAction()
-            print("AUTH: Sign in successful")
-            
-        } catch {
-            print("AUTH: Sign in failed - \(error)")
-            
-            await MainActor.run {
-                if let stitchError = error as? StitchError {
-                    errorMessage = stitchError.localizedDescription
-                } else {
-                    errorMessage = "Sign in failed: \(error.localizedDescription)"
-                }
-                showingError = true
-            }
-        }
-        
-        await MainActor.run {
-            isSigningIn = false
-        }
     }
 }
 

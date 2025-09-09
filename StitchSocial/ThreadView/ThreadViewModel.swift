@@ -139,7 +139,7 @@ class ThreadViewModel: ObservableObject {
     /// Get stepchildren for specific parent video
     func getStepchildren(for parentID: String) -> [CoreVideoMetadata] {
         return threadVideos.filter {
-            $0.conversationDepth == 1 && $0.replyToVideoID == parentID
+            $0.conversationDepth == 2 && $0.replyToVideoID == parentID
         }
     }
     
@@ -176,16 +176,84 @@ class ThreadViewModel: ObservableObject {
         return threadVideos
     }
     
-    /// Get all videos in thread using Firebase query
+    /// Get all videos in thread using Firebase query - TEST DATA VERSION
     private func getAllVideosInThread(threadID: String) async throws -> [CoreVideoMetadata] {
-        // Use VideoService's available methods to query videos by threadID
-        // Since getThreadVideos doesn't exist, we'll load all videos and filter
-        // This is a workaround until VideoService.getThreadVideos is implemented
+        print("🧪 THREAD VIEWMODEL: Loading TEST DATA - 20 children + 10 stepchildren")
         
-        // For now, return empty array to prevent compilation error
-        // TODO: Implement proper thread video loading once VideoService.getThreadVideos is available
-        print("⚠️ THREAD VIEWMODEL: VideoService.getThreadVideos not available - using fallback")
-        return []
+        var testVideos: [CoreVideoMetadata] = []
+        
+        // Create 20 child videos (direct replies to thread starter)
+        for i in 1...20 {
+            let childVideo = CoreVideoMetadata(
+                id: "test_child_\(i)",
+                title: "Child Reply #\(i): Testing thread display",
+                videoURL: "https://sample-videos.com/zip/10/mp4/720/SampleVideo_720x480_1mb.mp4",
+                thumbnailURL: "",
+                creatorID: "test_creator_\(i)",
+                creatorName: "TestCreator\(i)",
+                createdAt: Date().addingTimeInterval(-Double(i) * 300), // Spaced 5 minutes apart
+                threadID: threadID,
+                replyToVideoID: nil, // Direct reply to thread starter
+                conversationDepth: 1, // Child level
+                viewCount: Int.random(in: 50...500),
+                hypeCount: Int.random(in: 5...50),
+                coolCount: Int.random(in: 0...10),
+                replyCount: Int.random(in: 0...5),
+                shareCount: Int.random(in: 0...10),
+                temperature: ["cold", "cool", "warm", "hot", "blazing"].randomElement() ?? "warm",
+                qualityScore: Int.random(in: 60...95),
+                engagementRatio: Double.random(in: 0.02...0.15),
+                velocityScore: Double.random(in: 0.1...0.8),
+                trendingScore: Double.random(in: 0.0...0.6),
+                duration: Double.random(in: 15...60),
+                aspectRatio: 9.0/16.0,
+                fileSize: Int64.random(in: 500000...2000000),
+                discoverabilityScore: Double.random(in: 0.3...0.9),
+                isPromoted: false,
+                lastEngagementAt: Date().addingTimeInterval(-Double.random(in: 60...3600))
+            )
+            testVideos.append(childVideo)
+        }
+        
+        // Create 10 stepchild videos (replies to first few children)
+        let parentChildIDs = Array(testVideos.prefix(5).map { $0.id }) // First 5 children can have stepchildren
+        
+        for i in 1...10 {
+            let parentChildID = parentChildIDs.randomElement() ?? "test_child_1"
+            
+            let stepchildVideo = CoreVideoMetadata(
+                id: "test_stepchild_\(i)",
+                title: "Stepchild Reply #\(i): Response to child",
+                videoURL: "https://sample-videos.com/zip/10/mp4/720/SampleVideo_720x480_1mb.mp4",
+                thumbnailURL: "",
+                creatorID: "test_stepchild_creator_\(i)",
+                creatorName: "StepCreator\(i)",
+                createdAt: Date().addingTimeInterval(-Double(i) * 180), // Spaced 3 minutes apart
+                threadID: threadID,
+                replyToVideoID: parentChildID, // Reply to specific child
+                conversationDepth: 2, // Stepchild level
+                viewCount: Int.random(in: 20...200),
+                hypeCount: Int.random(in: 2...25),
+                coolCount: Int.random(in: 0...5),
+                replyCount: 0, // Stepchildren can't have replies
+                shareCount: Int.random(in: 0...5),
+                temperature: ["cold", "cool", "warm", "hot"].randomElement() ?? "warm",
+                qualityScore: Int.random(in: 50...85),
+                engagementRatio: Double.random(in: 0.01...0.10),
+                velocityScore: Double.random(in: 0.05...0.5),
+                trendingScore: Double.random(in: 0.0...0.3),
+                duration: Double.random(in: 10...45),
+                aspectRatio: 9.0/16.0,
+                fileSize: Int64.random(in: 300000...1500000),
+                discoverabilityScore: Double.random(in: 0.2...0.7),
+                isPromoted: false,
+                lastEngagementAt: Date().addingTimeInterval(-Double.random(in: 30...1800))
+            )
+            testVideos.append(stepchildVideo)
+        }
+        
+        print("🧪 TEST DATA: Generated \(testVideos.count) videos (20 children + 10 stepchildren)")
+        return testVideos
     }
     
     /// Create ThreadContext from loaded videos

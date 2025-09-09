@@ -682,7 +682,7 @@ class VideoService: ObservableObject {
     
     // MARK: - Engagement Operations
     
-    /// Update video engagement metrics in database (for EngagementCoordinator)
+    /// Update video engagement metrics in database (for EngagementCoordinator) - FIXED
     func updateVideoEngagement(
         videoID: String,
         hypeCount: Int,
@@ -710,7 +710,7 @@ class VideoService: ObservableObject {
                 .document(videoID)
                 .updateData(videoUpdateData)
             
-            // Update engagement document
+            // Update engagement document - FIXED: Use setData(merge: true)
             let engagementUpdateData: [String: Any] = [
                 FirebaseSchema.EngagementDocument.hypeCount: hypeCount,
                 FirebaseSchema.EngagementDocument.coolCount: coolCount,
@@ -721,7 +721,7 @@ class VideoService: ObservableObject {
             
             try await db.collection(FirebaseSchema.Collections.engagement)
                 .document(videoID)
-                .updateData(engagementUpdateData)
+                .setData(engagementUpdateData, merge: true)
             
             print("VIDEO SERVICE: Updated engagement for video \(videoID)")
             print("VIDEO SERVICE: Hype: \(hypeCount), Cool: \(coolCount), Views: \(viewCount)")
@@ -783,7 +783,7 @@ class VideoService: ObservableObject {
         }
     }
     
-    /// Batch update engagement metrics for multiple videos
+    /// Batch update engagement metrics for multiple videos - FIXED
     func batchUpdateEngagement(_ updates: [EngagementUpdate]) async throws {
         
         guard !updates.isEmpty else { return }
@@ -804,7 +804,7 @@ class VideoService: ObservableObject {
                 ]
                 batch.updateData(videoUpdateData, forDocument: videoRef)
                 
-                // Update engagement document
+                // Update engagement document - FIXED: Use setData(merge: true)
                 let engagementRef = db.collection(FirebaseSchema.Collections.engagement).document(update.videoID)
                 let engagementUpdateData: [String: Any] = [
                     FirebaseSchema.EngagementDocument.hypeCount: update.hypeCount,
@@ -813,7 +813,7 @@ class VideoService: ObservableObject {
                     FirebaseSchema.EngagementDocument.lastEngagementAt: Timestamp(date: update.lastEngagementAt),
                     FirebaseSchema.EngagementDocument.updatedAt: Timestamp()
                 ]
-                batch.updateData(engagementUpdateData, forDocument: engagementRef)
+                batch.setData(engagementUpdateData, forDocument: engagementRef, merge: true)
             }
             
             try await batch.commit()

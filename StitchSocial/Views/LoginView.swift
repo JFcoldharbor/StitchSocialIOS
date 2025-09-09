@@ -1,6 +1,6 @@
 //
 //  LoginView.swift
-//  CleanBeta
+//  StitchSocial
 //
 //  Layer 8: Views - Authentication Interface
 //  Uses existing AuthService.swift (Layer 4) - Zero new dependencies
@@ -37,13 +37,11 @@ struct LoginView: View {
     enum AuthMode: CaseIterable {
         case signIn
         case signUp
-        case anonymous
         
         var title: String {
             switch self {
             case .signIn: return "Welcome Back"
-            case .signUp: return "Join CleanBeta"
-            case .anonymous: return "Try CleanBeta"
+            case .signUp: return "Join Stitch Social"
             }
         }
         
@@ -51,7 +49,6 @@ struct LoginView: View {
             switch self {
             case .signIn: return "Sign in to continue your journey"
             case .signUp: return "Create your video conversation account"
-            case .anonymous: return "Explore without signing up"
             }
         }
         
@@ -59,7 +56,6 @@ struct LoginView: View {
             switch self {
             case .signIn: return "Sign In"
             case .signUp: return "Create Account"
-            case .anonymous: return "Continue as Guest"
             }
         }
     }
@@ -84,10 +80,8 @@ struct LoginView: View {
                             .padding(.top, 40)
                         
                         // Authentication form
-                        if currentMode != .anonymous {
-                            authenticationForm
-                                .padding(.horizontal, 24)
-                        }
+                        authenticationForm
+                            .padding(.horizontal, 24)
                         
                         // Action buttons
                         actionButtons
@@ -167,66 +161,47 @@ struct LoginView: View {
     
     // MARK: - Header View
     private var headerView: some View {
-        HStack {
-            // CleanBeta logo
-            HStack(spacing: 12) {
-                // Logo Image - Replace with your actual logo
-                Group {
-                    if let logoImage = UIImage(named: "cleanBetaLogo") {
-                        Image(uiImage: logoImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 32, height: 32)
-                    } else if let logoImage = UIImage(named: "AppIcon") {
-                        Image(uiImage: logoImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 32, height: 32)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                    } else {
-                        // Fallback logo design
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(StitchColors.primary)
-                                .frame(width: 32, height: 32)
-                            
-                            Image(systemName: "video.and.waveform")
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundColor(.white)
-                        }
-                    }
-                }
+        VStack(spacing: 16) {
+            // App logo - Use your actual logo here
+            ZStack {
+                // Background circle for logo
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [StitchColors.primary, StitchColors.secondary],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 100, height: 100)
                 
-                Text("CleanBeta")
-                    .font(.system(size: 20, weight: .bold))
-                    .foregroundColor(StitchColors.textPrimary)
+                // Replace this with your actual logo image
+                // Image("stitch_logo") // Uncomment and use your logo asset
+                // For now, using system icon as placeholder
+                Image(systemName: "video.fill")
+                    .font(.system(size: 40, weight: .bold))
+                    .foregroundColor(.white)
             }
-            .opacity(animateWelcome ? 1.0 : 0.0)
-            .animation(.easeInOut(duration: 1.0).delay(0.3), value: animateWelcome)
+            .scaleEffect(animateWelcome ? 1.0 : 0.8)
+            .animation(.easeInOut(duration: 0.8), value: animateWelcome)
             
-            Spacer()
-            
-            // Beta badge
-            Text("BETA")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundColor(StitchColors.primary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(StitchColors.primary.opacity(0.2))
-                .cornerRadius(6)
+            // App name
+            Text("Stitch Social")
+                .font(.system(size: 36, weight: .bold, design: .rounded))
+                .foregroundColor(.white)
                 .opacity(animateWelcome ? 1.0 : 0.0)
-                .animation(.easeInOut(duration: 1.0).delay(0.5), value: animateWelcome)
+                .offset(y: animateWelcome ? 0 : 20)
+                .animation(.easeInOut(duration: 0.8).delay(0.2), value: animateWelcome)
         }
-        .padding(.horizontal, 24)
     }
     
     // MARK: - Welcome Section
     private var welcomeSection: some View {
         VStack(spacing: 16) {
-            // Main title
+            // Title
             Text(currentMode.title)
-                .font(.system(size: 32, weight: .bold))
-                .foregroundColor(StitchColors.textPrimary)
+                .font(.system(size: 28, weight: .bold))
+                .foregroundColor(.white)
                 .multilineTextAlignment(.center)
                 .opacity(animateWelcome ? 1.0 : 0.0)
                 .offset(y: animateWelcome ? 0 : 20)
@@ -322,21 +297,21 @@ struct LoginView: View {
                 )
         )
         .opacity(animateWelcome ? 1.0 : 0.0)
-        .offset(y: animateWelcome ? 0 : 30)
+        .offset(y: animateWelcome ? 0 : 20)
         .animation(.easeInOut(duration: 0.8).delay(0.6), value: animateWelcome)
     }
     
     // MARK: - Password Requirements View
     private var passwordRequirementsView: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Password Requirements:")
-                .font(.caption)
-                .foregroundColor(StitchColors.textSecondary)
-            
-            PasswordRequirement(text: "At least 8 characters", isMet: password.count >= 8)
-            PasswordRequirement(text: "Contains uppercase letter", isMet: password.contains { $0.isUppercase })
-            PasswordRequirement(text: "Contains lowercase letter", isMet: password.contains { $0.isLowercase })
-            PasswordRequirement(text: "Contains number", isMet: password.contains { $0.isNumber })
+            HStack {
+                Image(systemName: password.count >= 6 ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(password.count >= 6 ? StitchColors.success : StitchColors.textSecondary)
+                Text("At least 6 characters")
+                    .font(.caption)
+                    .foregroundColor(password.count >= 6 ? StitchColors.success : StitchColors.textSecondary)
+                Spacer()
+            }
         }
         .padding(.top, 8)
     }
@@ -353,14 +328,14 @@ struct LoginView: View {
                             .scaleEffect(0.8)
                     } else {
                         Text(currentMode.buttonText)
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: 18, weight: .semibold))
                     }
                 }
                 .foregroundColor(.white)
-                .frame(maxWidth: .infinity, minHeight: 50)
+                .frame(maxWidth: .infinity, minHeight: 56)
                 .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(isFormValid ? StitchColors.primary : StitchColors.border)
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(isFormValid && !isLoading ? StitchColors.primary : StitchColors.border)
                 )
             }
             .disabled(!isFormValid || isLoading)
@@ -388,7 +363,7 @@ struct LoginView: View {
                     .frame(height: 1)
             }
             
-            // Mode switch buttons
+            // Mode switch buttons - Only Sign In/Sign Up
             HStack(spacing: 16) {
                 if currentMode != .signUp {
                     Button("Sign Up") {
@@ -402,13 +377,6 @@ struct LoginView: View {
                         switchToMode(.signIn)
                     }
                     .foregroundColor(StitchColors.primary)
-                }
-                
-                if currentMode != .anonymous {
-                    Button("Guest Mode") {
-                        switchToMode(.anonymous)
-                    }
-                    .foregroundColor(StitchColors.secondary)
                 }
             }
             .font(.system(size: 16, weight: .medium))
@@ -438,56 +406,62 @@ struct LoginView: View {
                 
                 // Success message
                 VStack(spacing: 8) {
-                    Text("Welcome to CleanBeta!")
+                    Text("Welcome to Stitch Social!")
                         .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(StitchColors.textPrimary)
+                        .foregroundColor(.white)
                     
-                    Text("Ready to start creating video conversations")
+                    Text("Your account is ready to go")
                         .font(.system(size: 16))
                         .foregroundColor(StitchColors.textSecondary)
-                        .multilineTextAlignment(.center)
                 }
                 .opacity(showingSuccess ? 1.0 : 0.0)
-                .animation(.easeInOut(duration: 0.5).delay(0.3), value: showingSuccess)
+                .animation(.easeInOut(duration: 0.6).delay(0.3), value: showingSuccess)
             }
-            .padding(.horizontal, 32)
         }
     }
     
     // MARK: - Loading Overlay
     private var loadingOverlay: some View {
         ZStack {
-            Color.black.opacity(0.6)
+            Color.black.opacity(0.5)
                 .ignoresSafeArea()
             
             VStack(spacing: 16) {
                 ProgressView()
-                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .progressViewStyle(CircularProgressViewStyle(tint: StitchColors.primary))
                     .scaleEffect(1.5)
                 
                 Text("Authenticating...")
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(StitchColors.textPrimary)
+                    .foregroundColor(.white)
             }
+            .padding(32)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.black.opacity(0.8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+            )
         }
     }
     
-    // MARK: - Computed Properties
+    // MARK: - Form Validation
     private var isFormValid: Bool {
         switch currentMode {
         case .signIn:
-            return !email.isEmpty && !password.isEmpty && isValidEmail(email)
+            return isValidEmail(email) && password.count >= 6
         case .signUp:
-            return !email.isEmpty && !username.isEmpty && !password.isEmpty &&
-                   !displayName.isEmpty && password == confirmPassword &&
-                   isValidEmail(email) && isValidPassword(password)
-        case .anonymous:
-            return true
+            return isValidEmail(email) &&
+                   !username.isEmpty &&
+                   !displayName.isEmpty &&
+                   password.count >= 6 &&
+                   password == confirmPassword
         }
     }
     
     // MARK: - Actions
-    
     private func performPrimaryAction() {
         guard isFormValid && !isLoading else { return }
         
@@ -498,25 +472,41 @@ struct LoginView: View {
             do {
                 switch currentMode {
                 case .signIn:
-                    // Use Firebase Auth directly for sign in
-                    let _ = try await Auth.auth().signIn(withEmail: email, password: password)
+                    // Use AuthService directly for sign in
+                    _ = try await authService.signIn(email: email, password: password)
                     
                 case .signUp:
-                    // Use Firebase Auth directly for sign up
-                    let result = try await Auth.auth().createUser(withEmail: email, password: password)
-                    
-                    // Create user profile using UserService
-                    // This would be handled by AuthService listener
-                    
-                case .anonymous:
-                    // Use existing AuthService method
-                    try await authService.signInAnonymously()
+                    // Use AuthService directly for sign up
+                    _ = try await authService.signUp(email: email, password: password, displayName: displayName)
                 }
             } catch {
                 await MainActor.run {
                     errorMessage = error.localizedDescription
                     showingError = true
                     isLoading = false
+                }
+            }
+        }
+    }
+    
+    private func sendPasswordReset() {
+        guard !email.isEmpty && isValidEmail(email) else {
+            errorMessage = "Please enter a valid email address"
+            showingError = true
+            return
+        }
+        
+        Task {
+            do {
+                try await authService.resetPassword(email: email)
+                await MainActor.run {
+                    errorMessage = "Password reset email sent to \(email)"
+                    showingError = true
+                }
+            } catch {
+                await MainActor.run {
+                    errorMessage = "Failed to send password reset email: \(error.localizedDescription)"
+                    showingError = true
                 }
             }
         }
@@ -577,17 +567,9 @@ struct LoginView: View {
         let emailPredicate = NSPredicate(format:"SELF MATCHES %@", emailRegex)
         return emailPredicate.evaluate(with: email)
     }
-    
-    private func isValidPassword(_ password: String) -> Bool {
-        return password.count >= 8 &&
-               password.contains { $0.isUppercase } &&
-               password.contains { $0.isLowercase } &&
-               password.contains { $0.isNumber }
-    }
 }
 
-// MARK: - Custom TextField Component
-
+// MARK: - Custom Text Field
 struct CustomTextField: View {
     let title: String
     @Binding var text: String
@@ -595,107 +577,72 @@ struct CustomTextField: View {
     let keyboardType: UIKeyboardType
     let isSecure: Bool
     
-    @State private var isSecureVisible = false
-    @FocusState private var isFocused: Bool
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white.opacity(0.9))
+                .foregroundColor(StitchColors.textSecondary)
             
-            HStack {
-                if isSecure && !isSecureVisible {
-                    SecureField(placeholder, text: $text)
-                        .textFieldStyle(AuthTextFieldStyle())
-                        .keyboardType(keyboardType)
-                        .focused($isFocused)
-                } else {
-                    TextField(placeholder, text: $text)
-                        .textFieldStyle(AuthTextFieldStyle())
-                        .keyboardType(keyboardType)
-                        .focused($isFocused)
-                }
-                
-                if isSecure {
-                    Button(action: { isSecureVisible.toggle() }) {
-                        Image(systemName: isSecureVisible ? "eye.slash" : "eye")
-                            .foregroundColor(.white.opacity(0.7))
-                            .font(.system(size: 16))
-                    }
-                    .padding(.trailing, 12)
-                }
+            if isSecure {
+                SecureField(placeholder, text: $text)
+                    .textFieldStyle(StitchTextFieldStyle())
+                    .keyboardType(keyboardType)
+            } else {
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(StitchTextFieldStyle())
+                    .keyboardType(keyboardType)
+                    .autocapitalization(.none)
             }
         }
     }
 }
 
-// MARK: - Auth Text Field Style
-
-struct AuthTextFieldStyle: TextFieldStyle {
+// MARK: - Text Field Style
+struct StitchTextFieldStyle: TextFieldStyle {
     func _body(configuration: TextField<Self._Label>) -> some View {
         configuration
-            .font(.system(size: 16))
-            .foregroundColor(.white)
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.vertical, 12)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.black.opacity(0.4))
+                    .fill(Color.black.opacity(0.3))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
                     )
             )
-            .autocorrectionDisabled()
-            .textInputAutocapitalization(.never)
+            .foregroundColor(.white)
+            .font(.system(size: 16))
     }
 }
 
-// MARK: - Password Requirement Component
-
-struct PasswordRequirement: View {
-    let text: String
-    let isMet: Bool
-    
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: isMet ? "checkmark.circle.fill" : "circle")
-                .foregroundColor(isMet ? StitchColors.success : StitchColors.textTertiary)
-                .font(.system(size: 12))
-            
-            Text(text)
-                .font(.caption)
-                .foregroundColor(isMet ? StitchColors.success : StitchColors.textSecondary)
-            
-            Spacer()
-        }
-    }
-}
-
-// MARK: - Keyboard Adaptive Modifier (Simplified)
-
-struct KeyboardAdaptive: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                // Keyboard will show - content automatically adjusts with ScrollView
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                // Keyboard will hide - content automatically adjusts
-            }
-    }
-}
-
+// MARK: - Keyboard Adaptive Modifier
 extension View {
     func keyboardAdaptive() -> some View {
-        modifier(KeyboardAdaptive())
+        self.modifier(KeyboardAdaptive())
+    }
+}
+
+struct KeyboardAdaptive: ViewModifier {
+    @State private var keyboardHeight: CGFloat = 0
+    
+    func body(content: Content) -> some View {
+        content
+            .padding(.bottom, keyboardHeight)
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
+                if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue {
+                    keyboardHeight = keyboardFrame.cgRectValue.height
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keyboardHeight = 0
+            }
     }
 }
 
 // MARK: - Preview
-
 #Preview {
     LoginView()
         .environmentObject(AuthService())
+        .preferredColorScheme(.dark)
 }

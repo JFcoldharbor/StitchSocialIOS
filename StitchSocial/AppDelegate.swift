@@ -9,9 +9,13 @@
 import UIKit
 import FirebaseCore
 import FirebaseMessaging
+import FirebaseAuth
+import FirebaseFirestore
 import UserNotifications
 
 class AppDelegate: NSObject, UIApplicationDelegate {
+    
+    // MARK: - Application Lifecycle
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         
@@ -137,12 +141,26 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         print("📱 APP DELEGATE: 📨 Processing notification - Type: \(type)")
         
-        // Add your notification processing logic here
+        // Process notification based on type
         if let videoID = videoID {
             print("📱 APP DELEGATE: Video notification for: \(videoID)")
+            // TODO: Pre-load video data for faster navigation
         }
         if let userID = userID {
             print("📱 APP DELEGATE: User notification for: \(userID)")
+            // TODO: Pre-load user profile data
+        }
+        
+        // Update badge count or trigger local updates
+        updateAppBadge(from: userInfo)
+    }
+    
+    /// Update app badge count from notification
+    private func updateAppBadge(from userInfo: [AnyHashable: Any]) {
+        if let badgeCount = userInfo["badge"] as? Int {
+            DispatchQueue.main.async {
+                UIApplication.shared.applicationIconBadgeNumber = badgeCount
+            }
         }
     }
     
@@ -159,6 +177,11 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     func applicationDidEnterBackground(_ application: UIApplication) {
         print("📱 APP DELEGATE: App entered background")
     }
+    
+    /// Handle app termination
+    func applicationWillTerminate(_ application: UIApplication) {
+        print("📱 APP DELEGATE: App will terminate")
+    }
 }
 
 // MARK: - MessagingDelegate
@@ -174,18 +197,62 @@ extension AppDelegate: MessagingDelegate {
         
         print("📱 FCM: Token received: \(token.prefix(20))...")
         
-        // Store FCM token - you can integrate with your user service here
-        Task {
-            await storeFCMToken(token)
+        // Store FCM token locally and defer Firestore storage until user is authenticated
+        UserDefaults.standard.set(token, forKey: "fcm_token")
+        
+        // Only attempt to store in Firebase if user is authenticated
+        if Auth.auth().currentUser != nil {
+            Task {
+                await storeFCMToken(token)
+            }
+        } else {
+            print("📱 FCM: No authenticated user - token stored locally only")
         }
     }
     
-    /// Store FCM token for the current user
+    /// Store FCM token for the current user in Firebase
     private func storeFCMToken(_ token: String) async {
-        // Add your token storage logic here
-        // Example: Store in UserDefaults for now
-        UserDefaults.standard.set(token, forKey: "fcm_token")
-        print("📱 FCM: Token stored successfully")
+        // Verify user is still authenticated
+        guard let currentUserID = Auth.auth().currentUser?.uid else {
+            print("📱 FCM: No authenticated user to store token")
+            return
+        }
+        
+        do {
+            let db = Firestore.firestore(database: Config.Firebase.databaseName)
+            
+            // Store in userTokens collection for NotificationService compatibility
+            try await db.collection("userTokens").document(currentUserID).setData([
+                "fcmToken": token,
+                "updatedAt": FieldValue.serverTimestamp(),
+                "platform": "ios",
+                "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+            ], merge: true)
+            
+            // Also store in users collection
+            try await db.collection("users").document(currentUserID).updateData([
+                "fcmToken": token,
+                "fcmTokenUpdatedAt": FieldValue.serverTimestamp(),
+                "deviceInfo": [
+                    "platform": "iOS",
+                    "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0",
+                    "deviceModel": UIDevice.current.model,
+                    "systemVersion": UIDevice.current.systemVersion
+                ]
+            ])
+            
+            print("📱 FCM: Token stored in Firebase successfully")
+            
+        } catch {
+            print("📱 FCM: Failed to store token in Firebase: \(error)")
+        }
+    }
+    
+    /// Store FCM token after user authentication (called from auth flow)
+    func storeFCMTokenForAuthenticatedUser() async {
+        if let token = UserDefaults.standard.string(forKey: "fcm_token") {
+            await storeFCMToken(token)
+        }
     }
 }
 
@@ -200,6 +267,13 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         print("📱 NOTIFICATION: Received while app in foreground")
+        
+        let userInfo = notification.request.content.userInfo
+        
+        // Log notification details
+        if let type = userInfo["type"] as? String {
+            print("📱 NOTIFICATION: Type: \(type)")
+        }
         
         // Show notification even when app is active
         completionHandler([.alert, .badge, .sound])
@@ -216,14 +290,93 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         let userInfo = response.notification.request.content.userInfo
         
         // Handle navigation based on notification payload
-        if let videoID = userInfo["videoID"] as? String {
-            print("🎬 NOTIFICATION: Navigate to video \(videoID)")
-            // TODO: Navigate to specific video
-        } else if let userID = userInfo["userID"] as? String {
-            print("👤 NOTIFICATION: Navigate to user profile \(userID)")
-            // TODO: Navigate to user profile
-        }
+        handleNotificationTap(userInfo: userInfo)
         
         completionHandler()
+    }
+    
+    /// Handle notification tap navigation
+    private func handleNotificationTap(userInfo: [AnyHashable: Any]) {
+        let type = userInfo["type"] as? String ?? "general"
+        
+        switch type {
+        case "video", "engagement", "hype", "cool":
+            if let videoID = userInfo["videoID"] as? String {
+                print("🎬 NOTIFICATION: Navigate to video \(videoID)")
+                // TODO: Use deep linking to navigate to specific video
+                NotificationCenter.default.post(
+                    name: .navigateToVideo,
+                    object: nil,
+                    userInfo: ["videoID": videoID]
+                )
+            }
+            
+        case "follow", "user":
+            if let userID = userInfo["userID"] as? String {
+                print("👤 NOTIFICATION: Navigate to user profile \(userID)")
+                // TODO: Use deep linking to navigate to user profile
+                NotificationCenter.default.post(
+                    name: .navigateToProfile,
+                    object: nil,
+                    userInfo: ["userID": userID]
+                )
+            }
+            
+        case "thread", "reply":
+            if let threadID = userInfo["threadID"] as? String {
+                print("🧵 NOTIFICATION: Navigate to thread \(threadID)")
+                // TODO: Use deep linking to navigate to thread
+                NotificationCenter.default.post(
+                    name: .navigateToThread,
+                    object: nil,
+                    userInfo: ["threadID": threadID]
+                )
+            }
+            
+        default:
+            print("📱 NOTIFICATION: General notification tapped")
+            // Navigate to notifications tab
+            NotificationCenter.default.post(
+                name: .navigateToNotifications,
+                object: nil
+            )
+        }
+    }
+}
+
+// MARK: - Deep Linking Support
+
+extension Notification.Name {
+    static let navigateToVideo = Notification.Name("navigateToVideo")
+    static let navigateToProfile = Notification.Name("navigateToProfile")
+    static let navigateToThread = Notification.Name("navigateToThread")
+    static let navigateToNotifications = Notification.Name("navigateToNotifications")
+}
+
+// MARK: - Testing & Debug Methods
+
+extension AppDelegate {
+    
+    /// Get current FCM token (for debugging)
+    func getCurrentFCMToken() -> String? {
+        return UserDefaults.standard.string(forKey: "fcm_token")
+    }
+    
+    /// Check notification permission status
+    func checkNotificationPermissionStatus() async -> UNAuthorizationStatus {
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        return settings.authorizationStatus
+    }
+    
+    /// Log current notification settings
+    func logNotificationSettings() async {
+        let status = await checkNotificationPermissionStatus()
+        let token = getCurrentFCMToken()
+        
+        print("📱 NOTIFICATION DEBUG:")
+        print("  - Permission status: \(status)")
+        print("  - FCM token available: \(token != nil)")
+        print("  - Token: \(token?.prefix(20) ?? "None")...")
     }
 }
