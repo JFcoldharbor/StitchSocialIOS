@@ -3,7 +3,7 @@
 //  CleanBeta
 //
 //  Main app entry point with tab navigation and authentication flow
-//  FIXED: Removed debug auth code and forced clean auth start
+//  FIXED: Cleaned up duplicate declarations and forced clean auth start
 //
 
 import SwiftUI

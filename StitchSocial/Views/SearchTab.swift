@@ -2,7 +2,7 @@
 //  SearchView.swift
 //  StitchSocial
 //
-//  Simple search interface
+//  Simple search interface with "People You May Know" using centralized FollowManager
 //
 
 import SwiftUI
@@ -30,14 +30,36 @@ class SearchViewModel: ObservableObject {
     @Published var videoResults: [CoreVideoMetadata] = []
     @Published var selectedTab: SearchTab = .all
     @Published var hasSearched = false
-    @Published var followingStates: [String: Bool] = [:]
-    @Published var followingLoading: Set<String> = []
     @Published var selectedUser: BasicUserInfo?
     @Published var showingProfile = false
     
+    // UPDATED: People You May Know suggestions
+    @Published var suggestedUsers: [BasicUserInfo] = []
+    @Published var isLoadingSuggestions = false
+    
+    // UPDATED: Use centralized FollowManager instead of local follow logic
+    @StateObject var followManager = FollowManager()
+    
     private let searchService = SearchService()
-    private let userService = UserService()
     private var searchTask: Task<Void, Never>?
+    
+    init() {
+        setupFollowCallbacks()
+        Task {
+            await loadSuggestedUsers()
+        }
+    }
+    
+    // UPDATED: Setup follow callbacks for better integration
+    private func setupFollowCallbacks() {
+        followManager.onFollowStateChanged = { [weak self] userID, isFollowing in
+            print("🔗 SEARCH: User \(userID) follow state changed to \(isFollowing)")
+        }
+        
+        followManager.onFollowError = { [weak self] userID, error in
+            print("❌ SEARCH: Follow error for user \(userID): \(error)")
+        }
+    }
     
     func performSearch() {
         guard !searchText.isEmpty else {
@@ -63,7 +85,8 @@ class SearchViewModel: ObservableObject {
                     self.isSearching = false
                 }
                 
-                await loadFollowStates()
+                // UPDATED: Use FollowManager to load follow states
+                await followManager.loadFollowStatesForUsers(users)
                 
             } catch {
                 await MainActor.run {
@@ -74,55 +97,45 @@ class SearchViewModel: ObservableObject {
         }
     }
     
-    func loadFollowStates() async {
-        guard let currentUserID = Auth.auth().currentUser?.uid else { return }
-        
-        var states: [String: Bool] = [:]
-        for user in userResults {
-            do {
-                let isFollowing = try await userService.isFollowing(followerID: currentUserID, followingID: user.id)
-                states[user.id] = isFollowing
-            } catch {
-                states[user.id] = false
-            }
-        }
-        
+    // UPDATED: Load suggested users from special users config
+    func loadSuggestedUsers() async {
         await MainActor.run {
-            followingStates = states
-        }
-    }
-    
-    func toggleFollow(for userID: String) async {
-        guard let currentUserID = Auth.auth().currentUser?.uid else { return }
-        
-        await MainActor.run {
-            followingLoading.insert(userID)
+            isLoadingSuggestions = true
         }
         
         do {
-            let wasFollowing = followingStates[userID] ?? false
+            // Get special users sorted by priority (founders, celebrities, verified)
+            let specialUserEntries = SpecialUsersConfig.getUsersByPriority().prefix(10)
+            
+            var users: [BasicUserInfo] = []
+            for entry in specialUserEntries {
+                // Convert SpecialUserEntry to BasicUserInfo by searching Firebase
+                let emailPrefix = entry.email.components(separatedBy: "@").first ?? ""
+                if let foundUsers = try? await searchService.searchUsers(query: emailPrefix, limit: 1),
+                   let user = foundUsers.first {
+                    users.append(user)
+                }
+            }
             
             await MainActor.run {
-                followingStates[userID] = !wasFollowing
+                suggestedUsers = users
+                isLoadingSuggestions = false
             }
             
-            if wasFollowing {
-                try await userService.unfollowUser(followerID: currentUserID, followingID: userID)
-            } else {
-                try await userService.followUser(followerID: currentUserID, followingID: userID)
-            }
+            // UPDATED: Use FollowManager to load follow states for suggested users
+            await followManager.loadFollowStatesForUsers(users)
             
         } catch {
             await MainActor.run {
-                let wasFollowing = followingStates[userID] ?? false
-                followingStates[userID] = !wasFollowing
+                isLoadingSuggestions = false
             }
-        }
-        
-        await MainActor.run {
-            followingLoading.remove(userID)
+            print("Failed to load suggested users: \(error)")
         }
     }
+    
+    // REMOVED: toggleFollow - now handled by FollowManager
+    // REMOVED: loadFollowStates - now handled by FollowManager
+    // REMOVED: loadFollowStatesForSuggested - now handled by FollowManager
     
     func showProfile(for user: BasicUserInfo) {
         selectedUser = user
@@ -133,8 +146,7 @@ class SearchViewModel: ObservableObject {
         userResults = []
         videoResults = []
         hasSearched = false
-        followingStates = [:]
-        followingLoading = []
+        // Note: Don't clear FollowManager state as it's shared across the app
     }
 }
 
@@ -165,11 +177,7 @@ struct SearchView: View {
         }
         .sheet(isPresented: $viewModel.showingProfile) {
             if let user = viewModel.selectedUser {
-                ProfileView(
-                    authService: AuthService(),
-                    userService: UserService(),
-                    videoService: VideoService()
-                )
+                CreatorProfileView(userID: user.id)
             }
         }
     }
@@ -245,19 +253,14 @@ struct SearchView: View {
         }
     }
     
+    // UPDATED: Use FollowManager for user results
     private var userResultsSection: some View {
         ForEach(viewModel.userResults, id: \.id) { user in
             UserSearchRowView(
                 user: user,
-                isFollowing: viewModel.followingStates[user.id] ?? false,
-                isLoading: viewModel.followingLoading.contains(user.id),
+                followManager: viewModel.followManager,
                 onTap: {
                     viewModel.showProfile(for: user)
-                },
-                onFollowTap: {
-                    Task {
-                        await viewModel.toggleFollow(for: user.id)
-                    }
                 }
             )
         }
@@ -272,38 +275,86 @@ struct SearchView: View {
         .padding(.horizontal)
     }
     
+    // UPDATED: Enhanced empty state with "People You May Know" using FollowManager
     private var emptyState: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            
-            Image(systemName: "magnifyingglass.circle")
-                .font(.system(size: 64))
-                .foregroundColor(.gray)
-            
-            Text("Search Stitch Social")
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundColor(.white)
-            
-            Text("Find users, videos, and threads")
-                .font(.system(size: 16))
-                .foregroundColor(.gray)
-            
-            Spacer()
+        ScrollView {
+            VStack(spacing: 20) {
+                VStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass.circle")
+                        .font(.system(size: 64))
+                        .foregroundColor(.gray)
+                    
+                    Text("Search Stitch Social")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundColor(.white)
+                    
+                    Text("Find users, videos, and threads")
+                        .font(.system(size: 16))
+                        .foregroundColor(.gray)
+                }
+                .padding(.top, 40)
+                
+                // UPDATED: People You May Know section using FollowManager
+                if !viewModel.suggestedUsers.isEmpty {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Text("People You May Know")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundColor(.white)
+                            Spacer()
+                        }
+                        .padding(.horizontal)
+                        
+                        LazyVStack(spacing: 0) {
+                            ForEach(viewModel.suggestedUsers, id: \.id) { user in
+                                UserSearchRowView(
+                                    user: user,
+                                    followManager: viewModel.followManager,
+                                    onTap: {
+                                        viewModel.showProfile(for: user)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .padding(.top, 20)
+                } else if viewModel.isLoadingSuggestions {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .cyan))
+                        
+                        Text("Loading suggestions...")
+                            .font(.system(size: 14))
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.top, 40)
+                }
+                
+                Spacer()
+            }
         }
     }
 }
 
+// UPDATED: UserSearchRowView now uses FollowManager instead of local follow logic
 struct UserSearchRowView: View {
     let user: BasicUserInfo
-    let isFollowing: Bool
-    let isLoading: Bool
+    @ObservedObject var followManager: FollowManager
     let onTap: () -> Void
-    let onFollowTap: () -> Void
     
     @State private var currentUserID = Auth.auth().currentUser?.uid
     
     private var isCurrentUser: Bool {
         return currentUserID == user.id
+    }
+    
+    // UPDATED: Use FollowManager for all follow state
+    private var isFollowing: Bool {
+        followManager.isFollowing(user.id)
+    }
+    
+    private var isLoading: Bool {
+        followManager.isLoading(user.id)
     }
     
     var body: some View {
@@ -358,8 +409,11 @@ struct UserSearchRowView: View {
                 Spacer()
                 
                 if !isCurrentUser {
+                    // UPDATED: Use FollowManager for follow button
                     Button {
-                        onFollowTap()
+                        Task {
+                            await followManager.toggleFollow(for: user.id)
+                        }
                     } label: {
                         Group {
                             if isLoading {
@@ -367,7 +421,7 @@ struct UserSearchRowView: View {
                                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                                     .scaleEffect(0.8)
                             } else {
-                                Text(isFollowing ? "Following" : "Follow")
+                                Text(followManager.followButtonText(for: user.id))
                                     .font(.system(size: 14, weight: .semibold))
                             }
                         }
@@ -428,4 +482,4 @@ struct VideoSearchCardView: View {
             }
         }
     }
-}  
+}

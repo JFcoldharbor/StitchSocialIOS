@@ -3,7 +3,7 @@
 //  StitchSocial
 //
 //  Layer 8: Views - Universal Contextual Video Overlay with Fixed Engagement Updates
-//  Dependencies: EngagementService, UserService, AuthService
+//  Dependencies: EngagementService, UserService, AuthService, FollowManager
 //  Features: Context-aware design, real-time UI updates, proper engagement flow
 //
 
@@ -29,13 +29,13 @@ struct ContextualVideoOverlay: View {
     )
     @StateObject private var userService = UserService()
     @StateObject private var authService = AuthService()
+    @StateObject private var followManager = FollowManager()
     @State private var showingProfileSheet = false
     @State private var showingThreadView = false
     @State private var selectedUserID: String?
     
     // Engagement data
     @State private var videoEngagement: VideoEngagement?
-    @State private var isFollowing = false
     @State private var showingHypeParticles = false
     @State private var showingCoolParticles = false
     
@@ -46,9 +46,6 @@ struct ContextualVideoOverlay: View {
     
     // Recording state
     @State private var showingStitchRecording = false
-    
-    // Loading states
-    @State private var isFollowLoading = false
     
     // MARK: - Computed Properties
     
@@ -80,6 +77,15 @@ struct ContextualVideoOverlay: View {
         case .profileOwn:
             return false
         }
+    }
+    
+    // Follow state managed by FollowManager
+    private var isFollowing: Bool {
+        followManager.isFollowing(video.creatorID)
+    }
+    
+    private var isFollowLoading: Bool {
+        followManager.isLoading(video.creatorID)
     }
     
     /// Get display name with real-time user lookup fallback
@@ -176,16 +182,10 @@ struct ContextualVideoOverlay: View {
         }
         .sheet(isPresented: $showingProfileSheet) {
             if let userID = selectedUserID {
-                ProfileView(
-                    authService: authService,
-                    userService: userService,
-                    videoService: VideoService()
-                )
-                .environmentObject(authService)
-                .environmentObject(userService)
+                CreatorProfileView(userID: userID)
             }
         }
-        .sheet(isPresented: $showingThreadView) {
+        .fullScreenCover(isPresented: $showingThreadView) {
             ThreadView(
                 threadID: video.threadID ?? video.id,
                 videoService: VideoService(),
@@ -252,7 +252,7 @@ struct ContextualVideoOverlay: View {
                     )
                 }
                 
-                // Video Title
+                // Video Title - FIXED: Removed bubble/background
                 if !video.title.isEmpty {
                     videoTitleView
                 }
@@ -412,6 +412,7 @@ struct ContextualVideoOverlay: View {
         }
         
         return SwiftUI.Button {
+            print("🔍 CREATOR PILL: Tapped creator pill for userID: \(creator.creatorID)")
             selectedUserID = creator.creatorID
             showingProfileSheet = true
             onAction?(.profile(creator.creatorID))
@@ -687,22 +688,14 @@ struct ContextualVideoOverlay: View {
         .buttonStyle(ContextualScaleButtonStyle())
     }
     
+    // MARK: - FIXED: Video Title View - No Bubble/Background
     private var videoTitleView: some View {
         Text(video.title)
             .font(.system(size: 14, weight: .semibold))
             .foregroundColor(.white)
             .lineLimit(2)
             .multilineTextAlignment(.leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.black.opacity(0.3))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
-            )
+            .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
     }
     
     private var metadataRow: some View {
@@ -829,7 +822,7 @@ struct ContextualVideoOverlay: View {
             await trackVideoView()
             await checkUserEngagementStatus()
             if shouldShowFollow {
-                await checkFollowingStatus()
+                await loadFollowState()
             }
         }
     }
@@ -924,6 +917,10 @@ struct ContextualVideoOverlay: View {
         }
     }
     
+    private func loadFollowState() async {
+        await followManager.loadFollowState(for: video.creatorID)
+    }
+    
     // MARK: - Notification Observers
     
     private func setupNotificationObservers() {
@@ -940,22 +937,7 @@ struct ContextualVideoOverlay: View {
         NotificationCenter.default.removeObserver(self, name: .killAllVideoPlayers, object: nil)
     }
     
-    private func checkFollowingStatus() async {
-        guard let currentUserID = currentUserID else { return }
-        
-        do {
-            let followStatus = try await userService.isFollowing(followerID: currentUserID, followingID: video.creatorID)
-            await MainActor.run {
-                isFollowing = followStatus
-            }
-            print("🔄 CONTEXTUAL OVERLAY: Follow status for \(video.creatorID): \(followStatus)")
-        } catch {
-            print("❌ CONTEXTUAL OVERLAY: Failed to check follow status - \(error)")
-            // Keep default false state on error
-        }
-    }
-    
-    // MARK: - FIXED Engagement Handling with UI Updates
+    // MARK: - Engagement Handling with UI Updates
     
     private func handleEngagement(type: ContextualEngagementType) async {
         guard let currentUserID = currentUserID else { return }
@@ -1034,55 +1016,13 @@ struct ContextualVideoOverlay: View {
     }
     
     private func handleFollowToggle() async {
-        guard let currentUserID = currentUserID else {
-            print("No current user ID for follow action")
-            return
-        }
+        await followManager.toggleFollow(for: video.creatorID)
         
-        // Set loading state
-        await MainActor.run {
-            isFollowLoading = true
-        }
-        
-        // Optimistic UI update
-        await MainActor.run {
-            isFollowing.toggle()
-        }
-        
-        // Haptic feedback
-        let impact = UIImpactFeedbackGenerator(style: .medium)
-        impact.impactOccurred()
-        
-        do {
-            if isFollowing {
-                // Properly handle follow with error checking
-                try await userService.followUser(followerID: currentUserID, followingID: video.creatorID)
-                print("Follow successful for user: \(video.creatorID)")
-            } else {
-                // Properly handle unfollow with error checking
-                try await userService.unfollowUser(followerID: currentUserID, followingID: video.creatorID)
-                print("Unfollow successful for user: \(video.creatorID)")
-            }
-            
-            // Notify parent with specific follow/unfollow action ONLY on success
-            if isFollowing {
-                onAction?(.follow)
-            } else {
-                onAction?(.unfollow)
-            }
-            
-        } catch {
-            // If there's an error, revert the UI state
-            await MainActor.run {
-                isFollowing.toggle()
-            }
-            print("Follow toggle failed: \(error.localizedDescription)")
-            // Note: We're not throwing the error to avoid disrupting the UI
-        }
-        
-        // Clear loading state
-        await MainActor.run {
-            isFollowLoading = false
+        // Notify parent component
+        if followManager.isFollowing(video.creatorID) {
+            onAction?(.follow)
+        } else {
+            onAction?(.unfollow)
         }
     }
     

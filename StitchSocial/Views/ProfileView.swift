@@ -2,9 +2,9 @@
 //  ProfileView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Enhanced Profile Display with EditProfileView Integration
+//  Layer 8: Views - Optimized Profile Display with Prominent Hype Meter
 //  Dependencies: ProfileViewModel (Layer 7) ONLY
-//  Features: Instagram-style layout, enhanced deletion UX, edit profile integration
+//  Features: Reorganized layout, bio sections, prominent hype meter, red verified badge
 //  ARCHITECTURE COMPLIANT: No business logic, no service calls
 //
 
@@ -12,12 +12,12 @@ import SwiftUI
 
 struct ProfileView: View {
     
-    // MARK: - Dependencies (Layer 7 + Layer 4 for EditProfile)
+    // MARK: - Dependencies
     
     @StateObject private var viewModel: ProfileViewModel
     private let userService: UserService
     
-    // MARK: - UI State Only
+    // MARK: - UI State
     
     @State private var scrollOffset: CGFloat = 0
     @State private var showStickyTabBar = false
@@ -34,6 +34,10 @@ struct ProfileView: View {
     @State private var showingDeleteConfirmation = false
     @State private var videoToDelete: CoreVideoMetadata?
     @State private var isDeletingVideo = false
+    
+    // MARK: - Bio State
+    
+    @State private var isShowingFullBio = false
     
     // MARK: - Initialization
     
@@ -66,6 +70,13 @@ struct ProfileView: View {
         .task {
             await viewModel.loadProfile()
         }
+        .onAppear {
+            // Start profile animations when user is loaded
+            if let user = viewModel.currentUser {
+                let hypeProgress = CGFloat(viewModel.calculateHypeProgress())
+                viewModel.animationController.startEntranceSequence(hypeProgress: hypeProgress)
+            }
+        }
         .sheet(isPresented: $showingFollowingList) {
             followingSheet
         }
@@ -93,13 +104,13 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Main Profile Content
+    // MARK: - Profile Content
     
     private func profileContent(user: BasicUserInfo) -> some View {
         GeometryReader { geometry in
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 0) {
-                    profileHeader(user: user)
+                    optimizedProfileHeader(user: user)
                     tabBarSection
                     videoGridSection
                 }
@@ -117,16 +128,17 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Profile Header
+    // MARK: - Optimized Profile Header
     
-    private func profileHeader(user: BasicUserInfo) -> some View {
+    private func optimizedProfileHeader(user: BasicUserInfo) -> some View {
         VStack(spacing: 20) {
-            // Row 1: Profile Image & Basic Info
-            HStack(spacing: 20) {
+            // Section 1: Profile Image & Basic Info
+            HStack(spacing: 16) {
                 enhancedProfileImage(user: user)
                 
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
+                VStack(alignment: .leading, spacing: 8) {
+                    // Name and verification
+                    HStack(spacing: 8) {
                         Text(user.displayName)
                             .font(.title2)
                             .fontWeight(.bold)
@@ -135,21 +147,14 @@ struct ProfileView: View {
                         if user.isVerified {
                             Image(systemName: "checkmark.seal.fill")
                                 .font(.title3)
-                                .foregroundColor(.cyan)
+                                .foregroundColor(.red) // RED VERIFIED BADGE
                         }
                     }
                     
+                    // Username
                     Text("@\(user.username)")
                         .font(.subheadline)
                         .foregroundColor(.gray)
-                    
-                    // Bio from viewModel if available
-                    if let bio = viewModel.getBioForUser(user), !bio.isEmpty {
-                        Text(bio)
-                            .font(.body)
-                            .foregroundColor(.white)
-                            .lineLimit(3)
-                    }
                     
                     // Tier badge
                     tierBadge(user: user)
@@ -159,13 +164,144 @@ struct ProfileView: View {
             }
             .padding(.horizontal, 20)
             
-            // Row 2: Stats
+            // Section 2: Bio (Full Width)
+            if shouldShowBio(user: user) {
+                VStack(alignment: .leading, spacing: 8) {
+                    bioSection(user: user)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+            }
+            
+            // Section 3: PROMINENT HYPE METER (Full Width)
+            VStack(spacing: 12) {
+                hypeMeterSection(user: user)
+            }
+            .padding(.horizontal, 20)
+            
+            // Section 4: Stats Row
             statsRow(user: user)
             
-            // Row 3: Action Buttons
+            // Section 5: Action Buttons
             actionButtonsRow(user: user)
         }
         .padding(.vertical, 20)
+    }
+    
+    // MARK: - Hype Meter Section (PROMINENT)
+    
+    private func hypeMeterSection(user: BasicUserInfo) -> some View {
+        let hypeRating = calculateHypeRating(user: user)
+        let progress = CGFloat(hypeRating / 100.0)
+        
+        return VStack(spacing: 8) {
+            // Title and percentage
+            HStack {
+                HStack(spacing: 6) {
+                    Image(systemName: "flame.fill")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 14, weight: .medium))
+                    
+                    Text("Hype Rating")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+                
+                Spacer()
+                
+                Text("\(Int(hypeRating))%")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(.white)
+            }
+            
+            // Progress bar with shimmer
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    // Background
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.gray.opacity(0.2))
+                        .frame(height: 12)
+                    
+                    // Progress fill with gradient
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(
+                            LinearGradient(
+                                colors: [.green, .yellow, .orange, .red, .purple],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: geometry.size.width * progress, height: 12)
+                        .overlay(
+                            // Shimmer effect
+                            LinearGradient(
+                                colors: [.clear, .white.opacity(0.6), .clear],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .offset(x: viewModel.animationController.shimmerOffset)
+                        )
+                }
+            }
+            .frame(height: 12)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        )
+        .onAppear {
+            print("🔥 HYPE METER SECTION APPEARED: Rating \(Int(hypeRating))%")
+            viewModel.animationController.startEntranceSequence(hypeProgress: progress)
+        }
+    }
+    
+    // MARK: - Bio Section
+    
+    private func bioSection(user: BasicUserInfo) -> some View {
+        Group {
+            if let bio = getBioForUser(user), !bio.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(bio)
+                        .font(.body)
+                        .foregroundColor(.white)
+                        .lineLimit(isShowingFullBio ? nil : 2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    
+                    if bio.count > 80 {
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                isShowingFullBio.toggle()
+                            }
+                        }) {
+                            Text(isShowingFullBio ? "Show less" : "Show more")
+                                .font(.caption)
+                                .foregroundColor(.cyan)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+            } else if viewModel.isOwnProfile {
+                Button(action: { showingEditProfile = true }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle")
+                            .font(.caption)
+                            .foregroundColor(.gray.opacity(0.8))
+                        
+                        Text("Add bio")
+                            .font(.body)
+                            .foregroundColor(.gray.opacity(0.8))
+                    }
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
     }
     
     // MARK: - Enhanced Profile Image
@@ -177,7 +313,7 @@ struct ProfileView: View {
                 .stroke(Color.gray.opacity(0.3), lineWidth: 3)
                 .frame(width: 90, height: 90)
             
-            // Clout progress ring - using viewModel calculation
+            // Clout progress ring
             Circle()
                 .trim(from: 0, to: viewModel.calculateHypeProgress())
                 .stroke(
@@ -210,94 +346,6 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Stats Row
-    
-    private func statsRow(user: BasicUserInfo) -> some View {
-        HStack(spacing: 40) {
-            statItem(title: "Videos", value: "\(viewModel.userVideos.count)")
-            
-            Button(action: { showingFollowersList = true }) {
-                statItem(title: "Followers", value: "\(viewModel.followersList.count)")
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            Button(action: { showingFollowingList = true }) {
-                statItem(title: "Following", value: "\(viewModel.followingList.count)")
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            statItem(title: "Clout", value: viewModel.formatClout(user.clout))
-        }
-        .padding(.horizontal, 20)
-    }
-    
-    private func statItem(title: String, value: String) -> some View {
-        VStack(spacing: 4) {
-            Text(value)
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
-            Text(title)
-                .font(.caption)
-                .foregroundColor(.gray)
-        }
-    }
-    
-    // MARK: - Action Buttons
-    
-    private func actionButtonsRow(user: BasicUserInfo) -> some View {
-        HStack(spacing: 12) {
-            if viewModel.isOwnProfile {
-                // Edit Profile Button
-                Button(action: { showingEditProfile = true }) {
-                    Text("Edit Profile")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 32)
-                        .background(Color.gray.opacity(0.8))
-                        .cornerRadius(8)
-                }
-                
-                // Settings Button
-                Button(action: { showingSettings = true }) {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(width: 32, height: 32)
-                        .background(Color.gray.opacity(0.8))
-                        .cornerRadius(8)
-                }
-            } else {
-                // Follow/Following Button
-                Button(action: {
-                    Task { await viewModel.toggleFollow() }
-                }) {
-                    Text(viewModel.isFollowing ? "Following" : "Follow")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(viewModel.isFollowing ? .black : .white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 32)
-                        .background(viewModel.isFollowing ? Color.white : Color.cyan)
-                        .cornerRadius(8)
-                }
-                
-                // Message Button
-                Button(action: { /* Future implementation */ }) {
-                    Text("Message")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 32)
-                        .background(Color.gray.opacity(0.8))
-                        .cornerRadius(8)
-                }
-            }
-        }
-        .padding(.horizontal, 20)
-    }
-    
     // MARK: - Tier Badge
     
     private func tierBadge(user: BasicUserInfo) -> some View {
@@ -322,6 +370,263 @@ struct ProfileView: View {
         )
         .background(Color.black.opacity(0.5))
         .cornerRadius(10)
+    }
+    
+    // MARK: - Stats Row
+    
+    private func statsRow(user: BasicUserInfo) -> some View {
+        HStack(spacing: 30) {
+            statItem(title: "Videos", value: "\(viewModel.userVideos.count)")
+            
+            Button(action: { showingFollowersList = true }) {
+                statItem(title: "Followers", value: "\(viewModel.followersList.count)")
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Button(action: { showingFollowingList = true }) {
+                statItem(title: "Following", value: "\(viewModel.followingList.count)")
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            statItem(title: "Clout", value: viewModel.formatClout(user.clout))
+        }
+        .padding(.horizontal, 20)
+    }
+    
+    private func statItem(title: String, value: String) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.title3)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+    }
+    
+    // MARK: - Action Buttons
+    
+    private func actionButtonsRow(user: BasicUserInfo) -> some View {
+        HStack(spacing: 12) {
+            if viewModel.isOwnProfile {
+                Button(action: { showingEditProfile = true }) {
+                    Text("Edit Profile")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(Color.gray.opacity(0.8))
+                        .cornerRadius(8)
+                }
+                
+                Button(action: { showingSettings = true }) {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 32, height: 32)
+                        .background(Color.gray.opacity(0.8))
+                        .cornerRadius(8)
+                }
+            } else {
+                Button(action: {
+                    Task { await viewModel.toggleFollow() }
+                }) {
+                    Text(viewModel.isFollowing ? "Following" : "Follow")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(viewModel.isFollowing ? .black : .white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(viewModel.isFollowing ? Color.white : Color.cyan)
+                        .cornerRadius(8)
+                }
+                
+                Button(action: { /* Future implementation */ }) {
+                    Text("Message")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(Color.gray.opacity(0.8))
+                        .cornerRadius(8)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+    
+    // MARK: - Hype Rating Calculation
+    
+    private func calculateHypeRating(user: BasicUserInfo) -> Double {
+        let hypeRating = HypeRating(
+            userID: user.id,
+            baseRating: tierBaseRating(for: user.tier),
+            startingBonus: getUserStartingBonus(for: user)
+        )
+        
+        let userVideos = viewModel.userVideos
+        let engagementScore: Double = {
+            guard !userVideos.isEmpty else { return 0.0 }
+            
+            let totalHypes = userVideos.reduce(0) { $0 + $1.hypeCount }
+            let totalCools = userVideos.reduce(0) { $0 + $1.coolCount }
+            let totalViews = userVideos.reduce(0) { $0 + $1.viewCount }
+            let totalReplies = userVideos.reduce(0) { $0 + $1.replyCount }
+            
+            let totalReactions = totalHypes + totalCools
+            let engagementRatio = totalReactions > 0 ? Double(totalHypes) / Double(totalReactions) : 0.5
+            let engagementPoints = engagementRatio * Double(InteractionType.hype.pointValue) * 1.5
+            
+            let viewEngagementRatio = totalViews > 0 ? Double(totalReactions) / Double(totalViews) : 0.0
+            let viewPoints = min(10.0, viewEngagementRatio * 1000.0)
+            
+            let maxThreadChildren = Double(OptimizationConfig.Threading.maxChildrenPerThread)
+            let replyBonus = min(5.0, Double(totalReplies) / maxThreadChildren * 5.0)
+            
+            return engagementPoints + viewPoints + replyBonus
+        }()
+        
+        let activityScore: Double = {
+            let recentVideos = userVideos.filter {
+                Date().timeIntervalSince($0.createdAt) < OptimizationConfig.Threading.trendingWindowHours * 3600
+            }
+            return min(15.0, Double(recentVideos.count) * 2.5)
+        }()
+        
+        let cloutBaseline = Double(OptimizationConfig.User.defaultStartingClout)
+        let cloutBonus = min(10.0, Double(user.clout) / cloutBaseline * 10.0)
+        
+        let followerThreshold = Double(OptimizationConfig.Performance.maxBackgroundTasks)
+        let socialBonus = min(8.0, Double(viewModel.followersList.count) / followerThreshold * 8.0)
+        
+        let verificationBonus: Double = user.isVerified ? 5.0 : 0.0
+        
+        let baseRating = hypeRating.effectiveRating
+        let bonusPoints = engagementScore + activityScore + cloutBonus + socialBonus + verificationBonus
+        let finalRating = (baseRating / 100.0 * 50.0) + bonusPoints
+        
+        let clampedRating = min(100.0, max(0.0, finalRating))
+        
+        print("🔥 HYPE METER: \(user.username) = \(Int(clampedRating))%")
+        
+        return clampedRating
+    }
+    
+    // MARK: - Helper Functions
+    
+    private func shouldShowBio(user: BasicUserInfo) -> Bool {
+        return getBioForUser(user) != nil || viewModel.isOwnProfile
+    }
+    
+    private func getBioForUser(_ user: BasicUserInfo) -> String? {
+        if let bio = viewModel.getBioForUser(user) {
+            return bio
+        }
+        
+        if user.isVerified {
+            return generateContextualBio(for: user)
+        }
+        
+        if user.tier.isFounderTier {
+            return generateSampleBio(for: user)
+        }
+        
+        return nil
+    }
+    
+    private func generateContextualBio(for user: BasicUserInfo) -> String? {
+        let videoCount = viewModel.userVideos.count
+        let followerCount = viewModel.followersList.count
+        let clout = user.clout
+        
+        var bioComponents: [String] = []
+        
+        if clout > OptimizationConfig.User.defaultStartingClout * 5 {
+            bioComponents.append("🌟 High performer")
+        }
+        
+        if videoCount >= OptimizationConfig.Threading.maxChildrenPerThread {
+            bioComponents.append("📹 Active creator")
+        }
+        
+        if followerCount >= 100 {
+            bioComponents.append("👥 Community leader")
+        }
+        
+        if user.tier != .rookie {
+            bioComponents.append("🚀 \(user.tier.displayName)")
+        }
+        
+        if user.isVerified {
+            bioComponents.append("✅ Verified")
+        }
+        
+        let bio = bioComponents.joined(separator: " | ")
+        return bio.count <= OptimizationConfig.User.maxBioLength ? bio : nil
+    }
+    
+    private func generateSampleBio(for user: BasicUserInfo) -> String? {
+        switch user.tier {
+        case .founder:
+            return "Building the future of social video 🚀 | Creator of Stitch Social"
+        case .coFounder:
+            return "Co-founder at Stitch Social | Passionate about connecting creators 🎬"
+        case .topCreator:
+            return "Top creator with \(viewModel.formatClout(user.clout)) clout | Making viral content daily ✨"
+        case .partner:
+            return "Official partner creator | \(viewModel.userVideos.count) threads and counting 🔥"
+        default:
+            return nil
+        }
+    }
+    
+    private func tierBaseRating(for tier: UserTier) -> Double {
+        let baseClout = Double(OptimizationConfig.User.defaultStartingClout)
+        
+        switch tier {
+        case .founder, .coFounder: return baseClout * 0.063
+        case .topCreator: return baseClout * 0.057
+        case .partner: return baseClout * 0.050
+        case .influencer: return baseClout * 0.043
+        case .rising: return baseClout * 0.033
+        case .rookie: return baseClout * 0.023
+        default: return baseClout * 0.017
+        }
+    }
+    
+    private func getUserStartingBonus(for user: BasicUserInfo) -> UserStartingBonus {
+        if user.isVerified {
+            return .betaTester
+        } else if user.tier.isFounderTier {
+            return .earlyAdopter
+        } else {
+            return .newcomer
+        }
+    }
+    
+    private func getTierColors(_ tier: UserTier) -> [Color] {
+        switch tier {
+        case .founder, .coFounder: return [.yellow, .orange]
+        case .topCreator: return [.blue, .purple]
+        case .partner: return [.green, .mint]
+        case .influencer: return [.pink, .purple]
+        case .rising: return [.cyan, .blue]
+        case .rookie: return [.gray, .white]
+        default: return [.gray, .white]
+        }
+    }
+    
+    private func getTierIcon(_ tier: UserTier) -> String {
+        switch tier {
+        case .founder, .coFounder: return "crown.fill"
+        case .topCreator: return "star.fill"
+        case .partner: return "handshake.fill"
+        case .influencer: return "megaphone.fill"
+        case .rising: return "arrow.up.circle.fill"
+        case .rookie: return "person.circle.fill"
+        default: return "person.circle"
+        }
     }
     
     // MARK: - Tab Bar Section
@@ -358,7 +663,6 @@ struct ProfileView: View {
                         .foregroundColor(viewModel.selectedTab == index ?
                             .cyan.opacity(0.8) : .gray.opacity(0.6))
                 }
-                .foregroundColor(viewModel.selectedTab == index ? .cyan : .gray)
                 
                 RoundedRectangle(cornerRadius: 1)
                     .fill(viewModel.selectedTab == index ? Color.cyan : Color.clear)
@@ -399,15 +703,12 @@ struct ProfileView: View {
         .padding(.bottom, 100)
     }
     
-    // MARK: - Enhanced Video Grid Item
-    
     private func videoGridItem(video: CoreVideoMetadata, index: Int) -> some View {
         GeometryReader { geometry in
             ZStack {
-                // VideoPlayerView with contextual overlay support
                 VideoPlayerView(
                     video: video,
-                    isActive: false, // Grid mode - minimal overlay
+                    isActive: false,
                     onEngagement: { interactionType in
                         handleGridEngagement(interactionType, video: video)
                     }
@@ -415,14 +716,12 @@ struct ProfileView: View {
                 .frame(width: geometry.size.width, height: geometry.size.width)
                 .clipped()
                 
-                // Tap overlay to open fullscreen
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
                         openVideo(video: video, index: index)
                     }
                 
-                // Deletion loading overlay
                 if isDeletingVideo && videoToDelete?.id == video.id {
                     Color.black.opacity(0.7)
                         .overlay(
@@ -439,8 +738,6 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Enhanced Video Context Menu
-    
     private func videoContextMenu(video: CoreVideoMetadata) -> some View {
         Group {
             if viewModel.isOwnProfile {
@@ -448,39 +745,12 @@ struct ProfileView: View {
                     videoToDelete = video
                     showingDeleteConfirmation = true
                 }
-                
-                Button("Share") {
-                    shareVideo(video)
-                }
+                Button("Share") { shareVideo(video) }
             } else {
-                Button("Share") {
-                    shareVideo(video)
-                }
+                Button("Share") { shareVideo(video) }
             }
         }
     }
-    
-    // MARK: - Video Deletion Methods
-    
-    private func performVideoDelete() async {
-        guard let video = videoToDelete else { return }
-        
-        isDeletingVideo = true
-        
-        let success = await viewModel.deleteVideo(video)
-        if success {
-            print("Video deleted successfully: \(video.title)")
-            // Trigger haptic feedback
-            triggerHapticFeedback(.medium)
-        } else {
-            print("Video deletion failed")
-        }
-        
-        isDeletingVideo = false
-        videoToDelete = nil
-    }
-    
-    // MARK: - Enhanced Engagement Handling
     
     private func handleGridEngagement(_ interactionType: InteractionType, video: CoreVideoMetadata) {
         Task { @MainActor in
@@ -488,37 +758,176 @@ struct ProfileView: View {
             case .hype:
                 print("Hype video: \(video.title)")
                 triggerHapticFeedback(.light)
-                
             case .reply:
                 openVideoReplies(video)
-                
             case .share:
                 shareVideo(video)
-                
             case .cool:
                 print("Cool video: \(video.title)")
                 triggerHapticFeedback(.soft)
-                
             case .view:
                 print("View engagement for video: \(video.title)")
             }
         }
+    }
+    
+    private func performVideoDelete() async {
+        guard let video = videoToDelete else { return }
+        isDeletingVideo = true
         
-        print("GRID ENGAGEMENT: \(interactionType.rawValue) on '\(video.title)'")
+        let success = await viewModel.deleteVideo(video)
+        if success {
+            print("Video deleted successfully: \(video.title)")
+            triggerHapticFeedback(.medium)
+        }
+        
+        isDeletingVideo = false
+        videoToDelete = nil
     }
     
     private func openVideoReplies(_ video: CoreVideoMetadata) {
-        // Future implementation: Navigate to replies view
         print("Opening replies for video: \(video.title)")
     }
     
     private func shareVideo(_ video: CoreVideoMetadata) {
-        // Future implementation: Share sheet
         print("Sharing video: \(video.title)")
     }
     
+    private func openVideo(video: CoreVideoMetadata, index: Int) {
+        selectedVideo = video
+        selectedVideoIndex = index
+        showingVideoPlayer = true
+    }
+    
+    private func triggerHapticFeedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
+        let impactFeedback = UIImpactFeedbackGenerator(style: style)
+        impactFeedback.prepare()
+        impactFeedback.impactOccurred()
+    }
+    
+    // MARK: - Helper Views
+    
+    private var scrollTracker: some View {
+        GeometryReader { geometry in
+            Color.clear
+                .preference(key: ScrollOffsetPreferenceKey.self,
+                           value: geometry.frame(in: .named("scroll")).minY)
+        }
+    }
+    
+    private func handleScrollChange(_ offset: CGFloat) {
+        let shouldShow = -offset > 300
+        withAnimation(.easeInOut(duration: 0.2)) {
+            showStickyTabBar = shouldShow
+        }
+    }
+    
+    private var loadingView: some View {
+        VStack(spacing: 20) {
+            ProgressView()
+                .tint(.white)
+                .scaleEffect(1.5)
+            Text("Loading Profile...")
+                .font(.headline)
+                .foregroundColor(.gray)
+        }
+    }
+    
+    private func errorView(error: String) -> some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 50))
+                .foregroundColor(.red)
+            Text("Error")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            Text(error)
+                .font(.body)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            Button("Retry") {
+                Task { await viewModel.loadProfile() }
+            }
+            .font(.headline)
+            .foregroundColor(.black)
+            .padding(.horizontal, 30)
+            .padding(.vertical, 12)
+            .background(Color.white)
+            .cornerRadius(10)
+        }
+        .padding()
+    }
+    
+    private var noUserView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "person.slash")
+                .font(.system(size: 50))
+                .foregroundColor(.gray)
+            Text("No User Found")
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+        }
+    }
+    
+    private var loadingVideosView: some View {
+        VStack(spacing: 20) {
+            ProgressView()
+                .tint(.white)
+            Text("Loading Videos...")
+                .foregroundColor(.gray)
+        }
+        .frame(height: 200)
+    }
+    
+    private var emptyVideosView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "video.slash")
+                .font(.system(size: 40))
+                .foregroundColor(.gray)
+            Text("No \(viewModel.tabTitles[viewModel.selectedTab])")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(.white)
+        }
+        .frame(height: 400)
+    }
+    
+    private var stickyTabBar: some View {
+        VStack {
+            Rectangle()
+                .fill(Color.clear)
+                .frame(height: 44)
+            tabBarSection
+                .background(Color.black.opacity(0.9))
+                .background(.ultraThinMaterial)
+            Spacer()
+        }
+        .ignoresSafeArea(edges: .top)
+    }
+    
+    private var fullScreenVideoPlayer: some View {
+        Group {
+            if selectedVideoIndex < viewModel.filteredVideos(for: viewModel.selectedTab).count {
+                let video = viewModel.filteredVideos(for: viewModel.selectedTab)[selectedVideoIndex]
+                VideoPlayerView(
+                    video: video,
+                    isActive: true,
+                    onEngagement: { interactionType in
+                        handleGridEngagement(interactionType, video: video)
+                    }
+                )
+                .background(Color.black)
+                .onTapGesture {
+                    showingVideoPlayer = false
+                }
+            }
+        }
+    }
+    
     // MARK: - Sheet Views
-
+    
     private var followingSheet: some View {
         NavigationView {
             UserListView(
@@ -574,7 +983,6 @@ struct ProfileView: View {
                     user: .constant(user)
                 )
             } else {
-                // Fallback view if no user loaded
                 NavigationView {
                     VStack {
                         Text("Profile not loaded")
@@ -592,195 +1000,6 @@ struct ProfileView: View {
                 }
             }
         }
-    }
-    
-    // MARK: - Tier Colors and Icons
-    
-    private func getTierColors(_ tier: UserTier) -> [Color] {
-        switch tier {
-        case .founder, .coFounder:
-            return [.yellow, .orange]
-        case .topCreator:
-            return [.blue, .purple]
-        case .partner:
-            return [.green, .mint]
-        case .influencer:
-            return [.pink, .purple]
-        case .rising:
-            return [.cyan, .blue]
-        case .rookie:
-            return [.gray, .white]
-        default:
-            return [.gray, .white]
-        }
-    }
-    
-    private func getTierIcon(_ tier: UserTier) -> String {
-        switch tier {
-        case .founder, .coFounder:
-            return "crown.fill"
-        case .topCreator:
-            return "star.fill"
-        case .partner:
-            return "handshake.fill"
-        case .influencer:
-            return "megaphone.fill"
-        case .rising:
-            return "arrow.up.circle.fill"
-        case .rookie:
-            return "person.circle.fill"
-        default:
-            return "person.circle"
-        }
-    }
-    
-    // MARK: - Loading and Error Views
-    
-    private var loadingView: some View {
-        VStack(spacing: 20) {
-            ProgressView()
-                .tint(.white)
-                .scaleEffect(1.5)
-            
-            Text("Loading Profile...")
-                .font(.headline)
-                .foregroundColor(.gray)
-        }
-    }
-    
-    private func errorView(error: String) -> some View {
-        VStack(spacing: 20) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 50))
-                .foregroundColor(.red)
-            
-            Text("Error")
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
-            Text(error)
-                .font(.body)
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
-            Button("Retry") {
-                Task { await viewModel.loadProfile() }
-            }
-            .font(.headline)
-            .foregroundColor(.black)
-            .padding(.horizontal, 30)
-            .padding(.vertical, 12)
-            .background(Color.white)
-            .cornerRadius(10)
-        }
-        .padding()
-    }
-    
-    private var noUserView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "person.slash")
-                .font(.system(size: 50))
-                .foregroundColor(.gray)
-            
-            Text("No User Found")
-                .font(.title2)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-        }
-    }
-    
-    private var loadingVideosView: some View {
-        VStack(spacing: 20) {
-            ProgressView()
-                .tint(.white)
-            
-            Text("Loading Videos...")
-                .foregroundColor(.gray)
-        }
-        .frame(height: 200)
-    }
-    
-    private var emptyVideosView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "video.slash")
-                .font(.system(size: 40))
-                .foregroundColor(.gray)
-            
-            Text("No \(viewModel.tabTitles[viewModel.selectedTab])")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundColor(.white)
-        }
-        .frame(height: 400)
-    }
-    
-    private var stickyTabBar: some View {
-        VStack {
-            Rectangle()
-                .fill(Color.clear)
-                .frame(height: 44)
-            
-            tabBarSection
-                .background(Color.black.opacity(0.9))
-                .background(.ultraThinMaterial)
-            
-            Spacer()
-        }
-        .ignoresSafeArea(edges: .top)
-    }
-    
-    // MARK: - Full Screen Video Player
-    
-    private var fullScreenVideoPlayer: some View {
-        Group {
-            if selectedVideoIndex < viewModel.filteredVideos(for: viewModel.selectedTab).count {
-                let video = viewModel.filteredVideos(for: viewModel.selectedTab)[selectedVideoIndex]
-                VideoPlayerView(
-                    video: video,
-                    isActive: true, // Active in fullscreen
-                    onEngagement: { interactionType in
-                        handleGridEngagement(interactionType, video: video)
-                    }
-                )
-                .background(Color.black)
-                .onTapGesture {
-                    showingVideoPlayer = false
-                }
-            }
-        }
-    }
-    
-    // MARK: - Helper Methods
-    
-    private var scrollTracker: some View {
-        GeometryReader { geometry in
-            Color.clear
-                .preference(key: ScrollOffsetPreferenceKey.self,
-                           value: geometry.frame(in: .named("scroll")).minY)
-        }
-    }
-    
-    private func handleScrollChange(_ offset: CGFloat) {
-        let shouldShow = -offset > 300
-        
-        withAnimation(.easeInOut(duration: 0.2)) {
-            showStickyTabBar = shouldShow
-        }
-    }
-    
-    private func openVideo(video: CoreVideoMetadata, index: Int) {
-        selectedVideo = video
-        selectedVideoIndex = index
-        showingVideoPlayer = true
-    }
-    
-    // MARK: - Haptic Feedback
-    
-    private func triggerHapticFeedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
-        let impactFeedback = UIImpactFeedbackGenerator(style: style)
-        impactFeedback.prepare()
-        impactFeedback.impactOccurred()
     }
 }
 
@@ -846,7 +1065,6 @@ struct UserRowView: View {
         .padding(.vertical, 8)
     }
 }
-// MARK: - Scroll Offset Preference Key
 
 struct ScrollOffsetPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0

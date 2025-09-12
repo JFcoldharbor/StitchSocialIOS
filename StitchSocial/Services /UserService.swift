@@ -2,7 +2,7 @@
 //  UserService.swift
 //  StitchSocial
 //
-//  Layer 4: Core Services - User Management with REVERTED Following/Followers
+//  Layer 4: Core Services - User Management with Profile Editing Fix
 //  Dependencies: Firebase Firestore, SpecialUserEntry
 //  Features: User CRUD, subcollection-based following system, profiles, Firebase integration
 //
@@ -95,12 +95,29 @@ class UserService: ObservableObject {
         return user
     }
     
-    /// Update user profile
+    /// Get extended profile data for editing
+    func getExtendedProfile(id: String) async throws -> UserProfileData? {
+        let document = try await db.collection(FirebaseSchema.Collections.users).document(id).getDocument()
+        
+        guard document.exists, let data = document.data() else {
+            print("USER SERVICE: Extended profile not found: \(id)")
+            return nil
+        }
+        
+        let basicUser = createBasicUserInfo(from: data, id: id)
+        let profileData = UserProfileData(from: basicUser, extended: data)
+        
+        print("USER SERVICE: Loaded extended profile for \(basicUser.username)")
+        return profileData
+    }
+    
+    /// Update user profile - FIXED WITH USERNAME SUPPORT
     func updateProfile(
         userID: String,
         displayName: String? = nil,
         bio: String? = nil,
-        isPrivate: Bool? = nil
+        isPrivate: Bool? = nil,
+        username: String? = nil
     ) async throws {
         
         var updates: [String: Any] = [
@@ -117,6 +134,10 @@ class UserService: ObservableObject {
         
         if let isPrivate = isPrivate {
             updates[FirebaseSchema.UserDocument.isPrivate] = isPrivate
+        }
+        
+        if let username = username {
+            updates[FirebaseSchema.UserDocument.username] = username
         }
         
         try await db.collection(FirebaseSchema.Collections.users).document(userID).updateData(updates)
@@ -160,167 +181,102 @@ class UserService: ObservableObject {
             await checkTierUpgrade(userID: userID, newClout: newClout)
         }
         
-        print("USER SERVICE: Updated clout by \(cloutChange) for \(userID)")
+        print("USER SERVICE: Updated clout by \(cloutChange) for user \(userID)")
     }
     
-    // MARK: - Following System - REVERTED to match your existing Firebase structure
+    // MARK: - Following System (Subcollection-based)
     
-    /// Get following IDs - REVERTED to subcollection approach
-    func getFollowingIDs(userID: String) async throws -> [String] {
-        print("USER SERVICE: Loading following IDs for user: \(userID)")
-        
-        // Use your existing subcollection structure
-        let snapshot = try await db.collection("users")
-            .document(userID)
-            .collection("following")
-            .getDocuments()
-        
-        // Document IDs ARE the followed user IDs in your structure
-        let followingIDs = snapshot.documents.map { $0.documentID }
-        
-        print("USER SERVICE: Found \(followingIDs.count) following IDs")
-        return followingIDs
-    }
-    
-    /// Get following list - REVERTED for subcollection structure
-    func getFollowing(userID: String, limit: Int = 100) async throws -> [BasicUserInfo] {
-        print("USER SERVICE: Loading following for user: \(userID)")
-        
-        let followingIDs = try await getFollowingIDs(userID: userID)
-        var following: [BasicUserInfo] = []
-        
-        for followingUserID in followingIDs {
-            if let user = try await getUser(id: followingUserID) {
-                following.append(user)
-            }
-        }
-        
-        print("USER SERVICE: Loaded \(following.count) following users")
-        return following
-    }
-    
-    /// Get followers list - REVERTED to query subcollections
-    func getFollowers(userID: String, limit: Int = 100) async throws -> [BasicUserInfo] {
-        print("USER SERVICE: Loading followers for user: \(userID)")
-        
-        // Query all users' following subcollections for this userID
-        let usersSnapshot = try await db.collection("users").getDocuments()
-        var followers: [BasicUserInfo] = []
-        
-        for userDoc in usersSnapshot.documents {
-            let followerID = userDoc.documentID
-            
-            // Check if this user follows the target user
-            let followingDoc = try await db.collection("users")
-                .document(followerID)
-                .collection("following")
-                .document(userID)
-                .getDocument()
-            
-            if followingDoc.exists {
-                if let follower = try await getUser(id: followerID) {
-                    followers.append(follower)
-                }
-            }
-        }
-        
-        print("USER SERVICE: Found \(followers.count) followers")
-        return followers
-    }
-    
-    /// Follow a user - REVERTED to subcollection approach
+    /// Follow a user
     func followUser(followerID: String, followingID: String) async throws {
         guard followerID != followingID else {
             throw StitchError.validationError("Cannot follow yourself")
         }
         
-        // Check if already following
-        let followingDoc = try await db.collection("users")
-            .document(followerID)
-            .collection("following")
-            .document(followingID)
-            .getDocument()
-        
-        if followingDoc.exists {
-            print("USER SERVICE: Already following \(followingID)")
-            return
-        }
-        
-        // Use batch write for atomic operation
         let batch = db.batch()
         
-        // Create follow relationship in subcollection
-        let followRef = db.collection("users")
+        // Add to follower's following subcollection
+        let followingRef = db.collection(FirebaseSchema.Collections.users)
             .document(followerID)
             .collection("following")
             .document(followingID)
         
+        // Add to following user's followers subcollection
+        let followerRef = db.collection(FirebaseSchema.Collections.users)
+            .document(followingID)
+            .collection("followers")
+            .document(followerID)
+        
+        let timestamp = Timestamp()
+        
         batch.setData([
-            "createdAt": Timestamp(),
-            "isActive": true
-        ], forDocument: followRef)
+            "userId": followingID,
+            "followedAt": timestamp
+        ], forDocument: followingRef)
         
-        // Update follower count
-        let followingUserRef = db.collection(FirebaseSchema.Collections.users).document(followingID)
-        batch.updateData([
-            FirebaseSchema.UserDocument.followerCount: FieldValue.increment(Int64(1))
-        ], forDocument: followingUserRef)
+        batch.setData([
+            "userId": followerID,
+            "followedAt": timestamp
+        ], forDocument: followerRef)
         
-        // Update following count
+        // Update counts - FIXED WITH INT64
         let followerUserRef = db.collection(FirebaseSchema.Collections.users).document(followerID)
+        let followingUserRef = db.collection(FirebaseSchema.Collections.users).document(followingID)
+        
         batch.updateData([
-            FirebaseSchema.UserDocument.followingCount: FieldValue.increment(Int64(1))
+            FirebaseSchema.UserDocument.followingCount: FieldValue.increment(Int64(1)),
+            FirebaseSchema.UserDocument.updatedAt: timestamp
         ], forDocument: followerUserRef)
         
-        try await batch.commit()
+        batch.updateData([
+            FirebaseSchema.UserDocument.followerCount: FieldValue.increment(Int64(1)),
+            FirebaseSchema.UserDocument.updatedAt: timestamp
+        ], forDocument: followingUserRef)
         
+        try await batch.commit()
         print("USER SERVICE: \(followerID) followed \(followingID)")
     }
     
-    /// Unfollow a user - REVERTED to subcollection approach
+    /// Unfollow a user
     func unfollowUser(followerID: String, followingID: String) async throws {
-        // Check if actually following
-        let followingDoc = try await db.collection("users")
-            .document(followerID)
-            .collection("following")
-            .document(followingID)
-            .getDocument()
-        
-        if !followingDoc.exists {
-            print("USER SERVICE: Not following \(followingID)")
-            return
-        }
-        
-        // Use batch write for atomic operation
         let batch = db.batch()
         
-        // Delete follow relationship from subcollection
-        let followRef = db.collection("users")
+        // Remove from follower's following subcollection
+        let followingRef = db.collection(FirebaseSchema.Collections.users)
             .document(followerID)
             .collection("following")
             .document(followingID)
-        batch.deleteDocument(followRef)
         
-        // Update follower count
-        let followingUserRef = db.collection(FirebaseSchema.Collections.users).document(followingID)
-        batch.updateData([
-            FirebaseSchema.UserDocument.followerCount: FieldValue.increment(Int64(-1))
-        ], forDocument: followingUserRef)
+        // Remove from following user's followers subcollection
+        let followerRef = db.collection(FirebaseSchema.Collections.users)
+            .document(followingID)
+            .collection("followers")
+            .document(followerID)
         
-        // Update following count
+        batch.deleteDocument(followingRef)
+        batch.deleteDocument(followerRef)
+        
+        // Update counts - FIXED WITH INT64
+        let timestamp = Timestamp()
         let followerUserRef = db.collection(FirebaseSchema.Collections.users).document(followerID)
+        let followingUserRef = db.collection(FirebaseSchema.Collections.users).document(followingID)
+        
         batch.updateData([
-            FirebaseSchema.UserDocument.followingCount: FieldValue.increment(Int64(-1))
+            FirebaseSchema.UserDocument.followingCount: FieldValue.increment(Int64(-1)),
+            FirebaseSchema.UserDocument.updatedAt: timestamp
         ], forDocument: followerUserRef)
         
-        try await batch.commit()
+        batch.updateData([
+            FirebaseSchema.UserDocument.followerCount: FieldValue.increment(Int64(-1)),
+            FirebaseSchema.UserDocument.updatedAt: timestamp
+        ], forDocument: followingUserRef)
         
+        try await batch.commit()
         print("USER SERVICE: \(followerID) unfollowed \(followingID)")
     }
     
-    /// Check if user is following another user - REVERTED to subcollection
+    /// Check if user is following another user
     func isFollowing(followerID: String, followingID: String) async throws -> Bool {
-        let document = try await db.collection("users")
+        let document = try await db.collection(FirebaseSchema.Collections.users)
             .document(followerID)
             .collection("following")
             .document(followingID)
@@ -329,15 +285,75 @@ class UserService: ObservableObject {
         return document.exists
     }
     
+    /// Get following IDs for HomeFeedService
+    func getFollowingIDs(userID: String) async throws -> [String] {
+        print("USER SERVICE: Loading following IDs for user: \(userID)")
+        
+        let snapshot = try await db.collection(FirebaseSchema.Collections.users)
+            .document(userID)
+            .collection("following")
+            .getDocuments()
+        
+        let followingIDs = snapshot.documents.map { $0.documentID }
+        
+        print("USER SERVICE: Found \(followingIDs.count) following IDs")
+        return followingIDs
+    }
+    
+    /// Get users that the given user is following
+    func getFollowing(userID: String, limit: Int = 50) async throws -> [BasicUserInfo] {
+        let followingDocs = try await db.collection(FirebaseSchema.Collections.users)
+            .document(userID)
+            .collection("following")
+            .order(by: "followedAt", descending: true)
+            .limit(to: limit)
+            .getDocuments()
+        
+        var users: [BasicUserInfo] = []
+        
+        for doc in followingDocs.documents {
+            let followingUserID = doc.documentID
+            if let user = try await getUser(id: followingUserID) {
+                users.append(user)
+            }
+        }
+        
+        return users
+    }
+    
+    /// Get followers of the given user
+    func getFollowers(userID: String, limit: Int = 50) async throws -> [BasicUserInfo] {
+        let followerDocs = try await db.collection(FirebaseSchema.Collections.users)
+            .document(userID)
+            .collection("followers")
+            .order(by: "followedAt", descending: true)
+            .limit(to: limit)
+            .getDocuments()
+        
+        var users: [BasicUserInfo] = []
+        
+        for doc in followerDocs.documents {
+            let followerUserID = doc.documentID
+            if let user = try await getUser(id: followerUserID) {
+                users.append(user)
+            }
+        }
+        
+        return users
+    }
+    
     // MARK: - Helper Methods
     
     /// Create BasicUserInfo from Firestore data
     private func createBasicUserInfo(from data: [String: Any], id: String) -> BasicUserInfo {
+        let tierRawValue = data[FirebaseSchema.UserDocument.tier] as? String ?? UserTier.rookie.rawValue
+        let tier = UserTier(rawValue: tierRawValue) ?? .rookie
+        
         return BasicUserInfo(
             id: id,
             username: data[FirebaseSchema.UserDocument.username] as? String ?? "unknown",
             displayName: data[FirebaseSchema.UserDocument.displayName] as? String ?? "Unknown User",
-            tier: UserTier(rawValue: data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie") ?? .rookie,
+            tier: tier,
             clout: data[FirebaseSchema.UserDocument.clout] as? Int ?? 0,
             isVerified: data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false,
             profileImageURL: data[FirebaseSchema.UserDocument.profileImageURL] as? String,

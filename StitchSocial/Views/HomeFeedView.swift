@@ -1,20 +1,12 @@
-//
-//  HomeFeedView.swift
-//  StitchSocial
-//
-//  Layer 8: Views - Container-First Video Feed Architecture
-//  Dependencies: HomeFeedService, AuthService, ContextualVideoOverlay, CachingService
-//  Features: Fixed containers, viewport movement, proper TikTok-style scrolling
-//
-
 import SwiftUI
 import AVFoundation
-import AVKit
+import Combine
 
-/// Container-first video feed where videos stay in fixed containers and viewport moves
+// MARK: - HomeFeedView
+
 struct HomeFeedView: View {
     
-    // MARK: - Backend Services
+    // MARK: - Service Dependencies (Unchanged)
     
     @StateObject private var videoService: VideoService
     @StateObject private var userService: UserService
@@ -23,31 +15,27 @@ struct HomeFeedView: View {
     @StateObject private var videoPreloadingService: VideoPreloadingService
     @StateObject private var cachingService: CachingService
     
-    // MARK: - Feed State
-    @State private var currentFeed: [ThreadData] = []
-    @State private var hasLoadedInitialFeed: Bool = false
-    @State private var isShowingPlaceholder: Bool = true
+    // MARK: - Home Feed State (Unchanged)
     
-    // MARK: - Container-First Navigation State
+    @State private var currentFeed: [ThreadData] = []
     @State private var currentThreadIndex: Int = 0
     @State private var currentStitchIndex: Int = 0
+    @State private var isShowingPlaceholder: Bool = true
+    @State private var hasLoadedInitialFeed: Bool = false
+    @State private var loadingError: String? = nil
     
-    // MARK: - Viewport Control (Instead of Moving Videos)
-    @State private var verticalOffset: CGFloat = 0
-    @State private var horizontalOffset: CGFloat = 0
-    @State private var isAnimating: Bool = false
-    @State private var dragOffset: CGSize = .zero
+    // MARK: - Viewport State (Unchanged)
     
-    // MARK: - Container Grid State
     @State private var containerSize: CGSize = .zero
-    @State private var visibleContainers: Set<String> = []
+    @State private var horizontalOffset: CGFloat = 0
+    @State private var verticalOffset: CGFloat = 0
+    @State private var dragOffset: CGSize = .zero
+    @State private var isAnimating: Bool = false
     
-    // MARK: - Loading State
-    @State private var isLoading: Bool = false
-    @State private var loadingError: String?
-    @State private var isDebugging: Bool = true
+    // MARK: - Debug State REMOVED
+    // @State private var isDebugging: Bool = true  // REMOVED
     
-    // MARK: - Initialization
+    // MARK: - Initialization (Unchanged)
     
     init() {
         let videoService = VideoService()
@@ -68,7 +56,7 @@ struct HomeFeedView: View {
         self._cachingService = StateObject(wrappedValue: cachingService)
     }
 
-    // MARK: - Main UI
+    // MARK: - Main UI (Debug Overlay Removed)
     
     var body: some View {
         GeometryReader { geometry in
@@ -102,23 +90,24 @@ struct HomeFeedView: View {
         }
     }
     
-    // MARK: - Container Grid View (TikTok-Style Fixed Containers)
+    // MARK: - FIXED Container Grid View - Absolute Positioning (Debug Overlay Removed)
     
     private func containerGridView(geometry: GeometryProxy) -> some View {
         ZStack {
             Color.black.ignoresSafeArea()
             
-            // FIXED CONTAINER GRID - Videos stay in their containers
+            // FIXED: Absolute positioned container grid
             ZStack {
                 ForEach(Array(currentFeed.enumerated()), id: \.offset) { threadIndex, thread in
-                    threadContainerStack(
+                    // FIXED: Use absolute container positioning instead of HStack
+                    absolutePositionedThreadContainers(
                         thread: thread,
                         threadIndex: threadIndex,
                         geometry: geometry
                     )
                 }
             }
-            // VIEWPORT MOVEMENT - Move entire grid instead of individual videos
+            // Viewport movement - move entire grid
             .offset(
                 x: horizontalOffset + dragOffset.width,
                 y: verticalOffset + dragOffset.height
@@ -126,10 +115,7 @@ struct HomeFeedView: View {
             .animation(isAnimating ? .easeInOut(duration: 0.3) : nil, value: verticalOffset)
             .animation(isAnimating ? .easeInOut(duration: 0.25) : nil, value: horizontalOffset)
             
-            // Debug overlay
-            if isDebugging {
-                debugOverlay(geometry: geometry)
-            }
+            // DEBUG OVERLAY REMOVED - No longer showing debug information
         }
         .onAppear {
             containerSize = geometry.size
@@ -149,65 +135,193 @@ struct HomeFeedView: View {
         )
     }
     
-    // MARK: - Thread Container Stack (Horizontal Layout)
+    // MARK: - FIXED Absolute Positioned Thread Containers
     
-    private func threadContainerStack(
+    private func absolutePositionedThreadContainers(
         thread: ThreadData,
         threadIndex: Int,
         geometry: GeometryProxy
     ) -> some View {
-        HStack(spacing: 0) {
-            // Parent video container (always at position 0)
-            FixedVideoContainer(
+        ZStack {
+            // FIXED: Parent video container - absolute position
+            BoundedVideoContainer(
                 video: thread.parentVideo,
                 thread: thread,
                 isActive: threadIndex == currentThreadIndex && currentStitchIndex == 0,
-                containerID: "\(thread.id)-parent",
-                onVisibilityChange: { isVisible in
-                    updateContainerVisibility(containerID: "\(thread.id)-parent", isVisible: isVisible)
-                }
+                containerID: "\(thread.id)-parent"
             )
             .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped() // CRITICAL: Prevent overflow
+            .position(
+                x: geometry.size.width / 2, // Center horizontally
+                y: geometry.size.height / 2 + (CGFloat(threadIndex) * geometry.size.height) // Stack vertically
+            )
             
-            // Child video containers (horizontal layout)
+            // FIXED: Child video containers - horizontally positioned for swipe navigation
             ForEach(Array(thread.childVideos.enumerated()), id: \.offset) { childIndex, childVideo in
-                FixedVideoContainer(
+                BoundedVideoContainer(
                     video: childVideo,
                     thread: thread,
                     isActive: threadIndex == currentThreadIndex && currentStitchIndex == (childIndex + 1),
-                    containerID: "\(thread.id)-child-\(childIndex)",
-                    onVisibilityChange: { isVisible in
-                        updateContainerVisibility(containerID: "\(thread.id)-child-\(childIndex)", isVisible: isVisible)
-                    }
+                    containerID: "\(thread.id)-child-\(childIndex)"
                 )
                 .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped() // CRITICAL: Prevent overflow
+                .position(
+                    x: geometry.size.width / 2 + (CGFloat(childIndex + 1) * geometry.size.width), // Stack horizontally for left/right swipe
+                    y: geometry.size.height / 2 + (CGFloat(threadIndex) * geometry.size.height) // Same vertical level as parent
+                )
             }
         }
-        // FIXED POSITION - Each thread stack positioned in grid
-        .position(
-            x: geometry.size.width / 2, // Centered horizontally
-            y: geometry.size.height / 2 + (CGFloat(threadIndex) * geometry.size.height) // Stacked vertically
-        )
+        .id("\(thread.id)-\(thread.childVideos.count)") // Rebuild when children count changes
     }
     
-    // MARK: - Fixed Video Container (Videos Stay Put)
+    // MARK: - Loading and Data Management
     
-    private struct FixedVideoContainer: View {
+    private func loadInstantFeed() {
+        guard let currentUserID = authService.currentUserID else {
+            loadingError = "Please sign in to view your feed"
+            return
+        }
+        
+        isShowingPlaceholder = true
+        
+        Task {
+            do {
+                print("🚀 HOME FEED: Loading instant feed for user \(currentUserID)")
+                
+                // Load instant parent threads only
+                let threads = try await homeFeedService.loadFeed(userID: currentUserID)
+                
+                await MainActor.run {
+                    currentFeed = threads
+                    currentThreadIndex = 0
+                    currentStitchIndex = 0
+                    isShowingPlaceholder = false
+                    loadingError = nil
+                    
+                    // Reset viewport to first thread
+                    verticalOffset = 0
+                    horizontalOffset = 0
+                }
+                
+                // Start preloading for smooth playback
+                await preloadCurrentAndNext()
+                
+                print("✅ HOME FEED: Feed loaded with \(threads.count) threads")
+                
+            } catch {
+                await MainActor.run {
+                    loadingError = "Failed to load feed: \(error.localizedDescription)"
+                    isShowingPlaceholder = false
+                }
+                print("❌ HOME FEED: Feed loading failed: \(error)")
+            }
+        }
+    }
+    
+    private func refreshFeed() async {
+        guard let currentUserID = authService.currentUserID else { return }
+        
+        do {
+            let refreshedThreads = try await homeFeedService.refreshFeed(userID: currentUserID)
+            
+            await MainActor.run {
+                currentFeed = refreshedThreads
+                currentThreadIndex = 0
+                currentStitchIndex = 0
+                
+                // Reset viewport
+                verticalOffset = 0
+                horizontalOffset = 0
+            }
+            
+            await preloadCurrentAndNext()
+            
+        } catch {
+            await MainActor.run {
+                loadingError = "Failed to refresh feed: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    // MARK: - Preloading Support
+    
+    private func preloadCurrentAndNext() async {
+        if currentThreadIndex < currentFeed.count {
+            preloadThreadIfNeeded(index: currentThreadIndex)
+        }
+        
+        if currentThreadIndex + 1 < currentFeed.count {
+            preloadThreadIfNeeded(index: currentThreadIndex + 1)
+        }
+    }
+    
+    private func preloadThreadIfNeeded(index: Int) {
+        guard index >= 0 && index < currentFeed.count else { return }
+        
+        let thread = currentFeed[index]
+        if thread.childVideos.isEmpty {
+            print("🔍 PRELOAD: Thread \(thread.id) has no children, attempting to load...")
+            loadThreadChildren(threadID: thread.id)
+        } else {
+            print("✅ PRELOAD: Thread \(thread.id) already has \(thread.childVideos.count) children")
+        }
+    }
+    
+    private func loadThreadChildren(threadID: String) {
+        Task {
+            do {
+                let children = try await videoService.getThreadChildren(threadID: threadID)
+                
+                await MainActor.run {
+                    updateThreadWithChildren(threadID: threadID, children: children)
+                }
+            } catch {
+                print("❌ CHILD LOADING ERROR: \(error)")
+            }
+        }
+    }
+    
+    private func updateThreadWithChildren(threadID: String, children: [CoreVideoMetadata]) {
+        if let index = currentFeed.firstIndex(where: { $0.id == threadID }) {
+            currentFeed[index] = ThreadData(
+                id: threadID,
+                parentVideo: currentFeed[index].parentVideo,
+                childVideos: children
+            )
+            
+            print("✅ THREAD UPDATED: \(threadID) now has \(children.count) children")
+        }
+    }
+    
+    // MARK: - Helper Functions (Unchanged)
+    
+    private func getCurrentThread() -> ThreadData? {
+        guard currentThreadIndex >= 0 && currentThreadIndex < currentFeed.count else {
+            return nil
+        }
+        return currentFeed[currentThreadIndex]
+    }
+    
+    // MARK: - Bounded Video Container Components
+    
+    private struct BoundedVideoContainer: View {
         let video: CoreVideoMetadata
         let thread: ThreadData
         let isActive: Bool
         let containerID: String
-        let onVisibilityChange: (Bool) -> Void
         
         var body: some View {
             ZStack {
-                // FIXED VIDEO PLAYER - Stays in container
-                ContainerVideoPlayer(
+                // FIXED: Strictly bounded video player
+                BoundedContainerVideoPlayer(
                     video: video,
                     isActive: isActive,
                     shouldPlay: isActive
                 )
-                .clipped()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped() // CRITICAL: Strict bounds enforcement
                 
                 // Overlay only on active video
                 if isActive {
@@ -222,28 +336,25 @@ struct HomeFeedView: View {
                 }
             }
             .onAppear {
-                onVisibilityChange(true)
+                print("🎬 BOUNDED CONTAINER: \(video.id.prefix(8)) - isActive: \(isActive)")
             }
-            .onDisappear {
-                onVisibilityChange(false)
+            .onChange(of: isActive) { _, newValue in
+                print("🔄 BOUNDED CONTAINER: \(video.id.prefix(8)) - Active changed to: \(newValue)")
             }
         }
     }
     
-    // MARK: - Container Video Player (Fixed in Container)
-    
-    private struct ContainerVideoPlayer: UIViewRepresentable {
+    private struct BoundedContainerVideoPlayer: UIViewRepresentable {
         let video: CoreVideoMetadata
         let isActive: Bool
         let shouldPlay: Bool
         
-        func makeUIView(context: Context) -> ContainerVideoUIView {
-            let view = ContainerVideoUIView()
-            view.backgroundColor = .black
+        func makeUIView(context: Context) -> BoundedContainerVideoUIView {
+            let view = BoundedContainerVideoUIView()
             return view
         }
         
-        func updateUIView(_ uiView: ContainerVideoUIView, context: Context) {
+        func updateUIView(_ uiView: BoundedContainerVideoUIView, context: Context) {
             uiView.setupVideo(
                 video: video,
                 isActive: isActive,
@@ -252,7 +363,7 @@ struct HomeFeedView: View {
         }
     }
     
-    private class ContainerVideoUIView: UIView {
+    private class BoundedContainerVideoUIView: UIView {
         private var player: AVPlayer?
         private var playerLayer: AVPlayerLayer?
         private var notificationObserver: NSObjectProtocol?
@@ -260,22 +371,29 @@ struct HomeFeedView: View {
         
         override init(frame: CGRect) {
             super.init(frame: frame)
-            setupPlayerLayer()
+            setupStrictBounds()
             setupKillObserver()
         }
         
         required init?(coder: NSCoder) {
             super.init(coder: coder)
-            setupPlayerLayer()
+            setupStrictBounds()
             setupKillObserver()
         }
         
-        private func setupPlayerLayer() {
+        // FIXED: Strict bounds setup
+        private func setupStrictBounds() {
+            backgroundColor = .black
+            clipsToBounds = true // CRITICAL: Prevent view overflow
+            layer.masksToBounds = true // CRITICAL: Prevent layer overflow
+            
+            // Create player layer with strict bounds
             playerLayer = AVPlayerLayer()
             playerLayer?.videoGravity = .resizeAspectFill
-            playerLayer?.masksToBounds = true // STRICT CONTAINER BOUNDS
+            playerLayer?.masksToBounds = true // CRITICAL: Prevent player overflow
             layer.addSublayer(playerLayer!)
-            layer.masksToBounds = true // PREVENT VIEW OVERFLOW
+            
+            print("✅ BOUNDED VIDEO: Strict bounds setup complete")
         }
         
         private func setupKillObserver() {
@@ -290,11 +408,12 @@ struct HomeFeedView: View {
         @objc private func killPlayer() {
             player?.pause()
             player?.seek(to: .zero)
-            print("🛑 CONTAINER VIDEO: Killed player for \(currentVideoID ?? "unknown")")
+            print("🛑 BOUNDED VIDEO: Killed player for \(currentVideoID ?? "unknown")")
         }
         
         override func layoutSubviews() {
             super.layoutSubviews()
+            // FIXED: Ensure player layer exactly matches view bounds
             playerLayer?.frame = bounds
         }
         
@@ -304,7 +423,7 @@ struct HomeFeedView: View {
                 cleanupCurrentPlayer()
                 
                 guard let url = URL(string: video.videoURL) else {
-                    print("❌ CONTAINER VIDEO: Invalid URL for \(video.id)")
+                    print("❌ BOUNDED VIDEO: Invalid URL for \(video.id)")
                     return
                 }
                 
@@ -314,17 +433,17 @@ struct HomeFeedView: View {
                 currentVideoID = video.id
                 
                 setupLooping()
-                print("🎬 CONTAINER VIDEO: Created player for \(video.id) in fixed container")
+                print("🎬 BOUNDED VIDEO: Created bounded player for \(video.id)")
             }
             
             // Control playback based on active state
             if isActive && shouldPlay {
                 player?.play()
-                print("▶️ CONTAINER VIDEO: Playing \(video.id)")
+                print("▶️ BOUNDED VIDEO: Playing \(video.id)")
             } else {
                 player?.pause()
                 if currentVideoID == video.id {
-                    print("⏸️ CONTAINER VIDEO: Paused \(video.id)")
+                    print("⏸️ BOUNDED VIDEO: Paused \(video.id)")
                 }
             }
         }
@@ -358,7 +477,7 @@ struct HomeFeedView: View {
             playerLayer?.player = nil
             currentVideoID = nil
             
-            print("🗑️ CONTAINER VIDEO: Cleaned up player")
+            print("🗑️ BOUNDED VIDEO: Cleaned up bounded player")
         }
         
         deinit {
@@ -367,9 +486,14 @@ struct HomeFeedView: View {
         }
     }
     
-    // MARK: - Viewport Movement Gesture Handling
+    // MARK: - Viewport Movement Gesture Handling (Unchanged)
     
     private func handleDragChanged(value: DragGesture.Value) {
+        // Add debug logging for children count
+        if let thread = getCurrentThread() {
+            print("🔍 DRAG DEBUG: Thread \(thread.id.prefix(8)) has \(thread.childVideos.count) children")
+        }
+        
         // ONLY allow drag preview if children exist for horizontal movement
         let translation = value.translation
         let isHorizontalDrag = abs(translation.width) > abs(translation.height)
@@ -391,399 +515,164 @@ struct HomeFeedView: View {
     private func handleDragEnded(value: DragGesture.Value, geometry: GeometryProxy) {
         let translation = value.translation
         let velocity = value.velocity
-        let threshold: CGFloat = 80
+        let horizontalThreshold: CGFloat = 60  // INCREASED: More deliberate swipe needed
+        let verticalThreshold: CGFloat = 120   // INCREASED: More deliberate swipe needed
         
-        // Determine primary swipe direction
-        let isHorizontalSwipe = abs(translation.width) > abs(translation.height) && abs(translation.width) > threshold
-        let isVerticalSwipe = abs(translation.height) > abs(translation.width) && abs(translation.height) > threshold
+        // TIGHTENED: More restrictive direction detection
+        let isHorizontalSwipe = abs(translation.width) > horizontalThreshold && abs(translation.width) > abs(translation.height) * 1.3
+        let isVerticalSwipe = abs(translation.height) > verticalThreshold && abs(translation.height) > abs(translation.width) * 1.3
         
-        print("🎯 VIEWPORT SWIPE: dx=\(translation.width), dy=\(translation.height)")
-        print("🎯 DIRECTION: horizontal=\(isHorizontalSwipe), vertical=\(isVerticalSwipe)")
+        isAnimating = true
         
         if isHorizontalSwipe {
-            handleHorizontalViewportMove(translation: translation, velocity: velocity, geometry: geometry)
+            handleHorizontalSwipe(translation: translation, velocity: velocity, geometry: geometry)
         } else if isVerticalSwipe {
-            handleVerticalViewportMove(translation: translation, velocity: velocity, geometry: geometry)
+            handleVerticalSwipe(translation: translation, velocity: velocity, geometry: geometry)
         } else {
-            // Snap back to current position
+            // No clear swipe direction - snap back to current position
             snapToCurrentPosition()
         }
-    }
-    
-    // MARK: - Horizontal Viewport Movement (Child Navigation)
-    
-    private func handleHorizontalViewportMove(translation: CGSize, velocity: CGSize, geometry: GeometryProxy) {
-        let threshold: CGFloat = 80
-        let shouldMove = abs(translation.width) > threshold || abs(velocity.width) > 400
         
-        guard shouldMove else {
-            snapToCurrentPosition()
-            return
-        }
+        // Reset drag state
+        dragOffset = .zero
         
-        // Load children if needed
-        preloadCurrentThreadChildren()
-        
-        if translation.width > 0 {
-            // Swipe right - previous child
-            moveViewportToPreviousChild(geometry: geometry)
-        } else {
-            // Swipe left - next child
-            moveViewportToNextChild(geometry: geometry)
-        }
-    }
-    
-    private func moveViewportToNextChild(geometry: GeometryProxy) {
-        guard let thread = getCurrentThread() else {
-            snapToCurrentPosition()
-            return
-        }
-        
-        let maxChildIndex = thread.childVideos.count
-        guard currentStitchIndex < maxChildIndex else {
-            snapToCurrentPosition()
-            return
-        }
-        
-        let newStitchIndex = currentStitchIndex + 1
-        moveViewportToChild(index: newStitchIndex, geometry: geometry)
-    }
-    
-    private func moveViewportToPreviousChild(geometry: GeometryProxy) {
-        guard currentStitchIndex > 0 else {
-            snapToCurrentPosition()
-            return
-        }
-        
-        let newStitchIndex = currentStitchIndex - 1
-        moveViewportToChild(index: newStitchIndex, geometry: geometry)
-    }
-    
-    private func moveViewportToChild(index: Int, geometry: GeometryProxy) {
-        // Stop current video before moving
-        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
-        
-        isAnimating = true
-        currentStitchIndex = index
-        
-        // Move viewport horizontally to show the target container
-        // Parent at index 0 = position 0
-        // Child 1 at index 1 = position -390px
-        // Child 2 at index 2 = position -780px
-        let targetHorizontalOffset = -CGFloat(index) * geometry.size.width
-        
-        print("📍 VIEWPORT MOVE: Moving to index \(index), offset: \(targetHorizontalOffset)")
-        if index == 0 {
-            print("🏠 VIEWPORT: Returning to parent position")
-        } else {
-            print("👶 VIEWPORT: Moving to child \(index) position")
-        }
-        
-        withAnimation(.easeInOut(duration: 0.25)) {
-            horizontalOffset = targetHorizontalOffset
-            dragOffset = .zero
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-            isAnimating = false
-            let videoType = index == 0 ? "parent" : "child \(index)"
-            print("✅ VIEWPORT: Successfully moved to \(videoType)")
-        }
-    }
-    
-    // MARK: - Vertical Viewport Movement (Thread Navigation)
-    
-    private func handleVerticalViewportMove(translation: CGSize, velocity: CGSize, geometry: GeometryProxy) {
-        let threshold: CGFloat = 100
-        let shouldMove = abs(translation.height) > threshold || abs(velocity.height) > 500
-        
-        guard shouldMove else {
-            snapToCurrentPosition()
-            return
-        }
-        
-        if translation.height < 0 {
-            // Swipe up - next thread
-            moveViewportToNextThread(geometry: geometry)
-        } else {
-            // Swipe down - previous thread
-            moveViewportToPreviousThread(geometry: geometry)
-        }
-    }
-    
-    private func moveViewportToNextThread(geometry: GeometryProxy) {
-        guard currentThreadIndex < currentFeed.count - 1 else {
-            snapToCurrentPosition()
-            return
-        }
-        
-        moveViewportToThread(index: currentThreadIndex + 1, geometry: geometry)
-    }
-    
-    private func moveViewportToPreviousThread(geometry: GeometryProxy) {
-        guard currentThreadIndex > 0 else {
-            snapToCurrentPosition()
-            return
-        }
-        
-        moveViewportToThread(index: currentThreadIndex - 1, geometry: geometry)
-    }
-    
-    private func moveViewportToThread(index: Int, geometry: GeometryProxy) {
-        // Stop current video before moving
-        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
-        
-        isAnimating = true
-        currentThreadIndex = index
-        currentStitchIndex = 0 // Reset to parent when changing threads
-        
-        // Move viewport vertically to show the thread container
-        let targetVerticalOffset = -CGFloat(index) * geometry.size.height
-        let targetHorizontalOffset: CGFloat = 0 // Reset to parent
-        
-        withAnimation(.easeInOut(duration: 0.3)) {
-            verticalOffset = targetVerticalOffset
-            horizontalOffset = targetHorizontalOffset
-            dragOffset = .zero
-        }
-        
+        // End animation after duration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             isAnimating = false
-            print("⬆️⬇️ VIEWPORT: Moved to thread \(index)")
         }
     }
     
-    // MARK: - Viewport Helpers
-    
-    private func snapToCurrentPosition() {
-        withAnimation(.easeInOut(duration: 0.25)) {
-            dragOffset = .zero
-        }
-    }
-    
-    private func updateContainerVisibility(containerID: String, isVisible: Bool) {
-        if isVisible {
-            visibleContainers.insert(containerID)
-        } else {
-            visibleContainers.remove(containerID)
-        }
-    }
-    
-    // MARK: - Child Loading Integration
-    
-    private func preloadCurrentThreadChildren() {
-        guard let thread = getCurrentThread() else { return }
-        
-        if thread.childVideos.isEmpty {
-            loadThreadChildren(threadID: thread.id)
-        }
-    }
-    
-    private func loadThreadChildren(threadID: String) {
-        Task {
-            do {
-                let children = try await videoService.getThreadChildren(threadID: threadID)
-                
-                await MainActor.run {
-                    if let index = currentFeed.firstIndex(where: { $0.id == threadID }) {
-                        currentFeed[index] = ThreadData(
-                            id: threadID,
-                            parentVideo: currentFeed[index].parentVideo,
-                            childVideos: children
-                        )
-                        print("✅ CHILDREN: Loaded \(children.count) children for \(threadID)")
-                    }
-                }
-            } catch {
-                print("❌ CHILDREN: Failed to load for \(threadID) - \(error)")
-            }
-        }
-    }
-    
-    // MARK: - Helper Functions
-    
-    private func getCurrentThread() -> ThreadData? {
-        guard currentThreadIndex >= 0 && currentThreadIndex < currentFeed.count else {
-            return nil
-        }
-        return currentFeed[currentThreadIndex]
-    }
-    
-    private func getCurrentVideo() -> CoreVideoMetadata? {
-        guard let thread = getCurrentThread() else { return nil }
-        
-        if currentStitchIndex == 0 {
-            return thread.parentVideo
-        } else {
-            let childIndex = currentStitchIndex - 1
-            guard childIndex >= 0 && childIndex < thread.childVideos.count else {
-                return thread.parentVideo
-            }
-            return thread.childVideos[childIndex]
-        }
-    }
-    
-    // MARK: - Debug Overlay
-    
-    private func debugOverlay(geometry: GeometryProxy) -> some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                VStack(alignment: .trailing) {
-                    Text("CONTAINER-FIRST ARCHITECTURE")
-                        .font(.caption2)
-                        .foregroundColor(.yellow)
-                    Text("Thread: \(currentThreadIndex)/\(currentFeed.count-1)")
-                    Text("Child: \(currentStitchIndex)")
-                    Text("Viewport: (\(Int(verticalOffset + dragOffset.height)), \(Int(horizontalOffset + dragOffset.width)))")
-                    Text("Drag: dx=\(Int(dragOffset.width)), dy=\(Int(dragOffset.height))")
-                    Text("Animating: \(isAnimating)")
-                    if let thread = getCurrentThread() {
-                        Text("Children: \(thread.childVideos.count)")
-                        let videoType = currentStitchIndex == 0 ? "Parent" : "Child \(currentStitchIndex)"
-                        Text("Video: \(videoType)")
-                        Text("Active Container: \(thread.id)-\(currentStitchIndex == 0 ? "parent" : "child-\(currentStitchIndex-1)")")
-                        
-                        // DEBUG: Show which containers should be active
-                        Text("🎯 ACTIVE LOGIC:")
-                            .foregroundColor(.green)
-                        Text("threadIndex==currentThread: \(currentThreadIndex)==\(currentThreadIndex)")
-                        Text("stitchIndex==currentStitch: \(currentStitchIndex)==\(currentStitchIndex)")
-                    }
-                    Text("Visible: \(visibleContainers.count) containers")
-                }
-                .padding()
-                .background(Color.black.opacity(0.7))
-                .cornerRadius(8)
-                .foregroundColor(.white)
-                .font(.caption)
-            }
-        }
-    }
-    
-    // MARK: - Basic Loading Implementation (Unchanged)
-    
-    private func loadInstantFeed() {
-        guard let currentUserID = authService.currentUserID else {
-            loadingError = "Authentication required"
+    private func handleHorizontalSwipe(translation: CGSize, velocity: CGSize, geometry: GeometryProxy) {
+        guard let currentThread = getCurrentThread() else {
+            snapToCurrentPosition()
             return
         }
         
-        showPlaceholderFeed()
+        // FIRST check if current thread has children at all
+        if currentThread.childVideos.isEmpty {
+            print("🚫 HORIZONTAL BLOCKED: No children in current thread")
+            snapToCurrentPosition()
+            return
+        }
+        
+        let isSwipeLeft = translation.width < 0  // Left swipe = go to next child/forward
+        let isSwipeRight = translation.width > 0 // Right swipe = go to previous child/back
+        
+        if isSwipeLeft {
+            // Go to next child (forward in thread)
+            if currentStitchIndex < currentThread.childVideos.count {
+                let nextStitchIndex = currentStitchIndex + 1
+                moveToStitch(nextStitchIndex, geometry: geometry)
+                print("➡️ MOVED TO: Thread \(currentThreadIndex), Child \(nextStitchIndex)")
+            } else {
+                // At end of children - snap back
+                snapToCurrentPosition()
+                print("🔚 AT END: Cannot go further in thread")
+            }
+        } else if isSwipeRight {
+            // Go to previous child (backward in thread)
+            if currentStitchIndex > 0 {
+                let prevStitchIndex = currentStitchIndex - 1
+                moveToStitch(prevStitchIndex, geometry: geometry)
+                print("⬅️ MOVED TO: Thread \(currentThreadIndex), Child \(prevStitchIndex)")
+            } else {
+                // At parent - snap back
+                snapToCurrentPosition()
+                print("🏠 AT PARENT: Cannot go back further in thread")
+            }
+        }
+    }
+    
+    private func handleVerticalSwipe(translation: CGSize, velocity: CGSize, geometry: GeometryProxy) {
+        let isSwipeUp = translation.height < 0    // Up swipe = next thread/forward
+        let isSwipeDown = translation.height > 0  // Down swipe = previous thread/back
+        
+        if isSwipeUp {
+            // Move to next thread
+            if currentThreadIndex < currentFeed.count - 1 {
+                moveToThread(currentThreadIndex + 1, geometry: geometry)
+            } else {
+                // At end - try to load more content
+                loadMoreContentIfNeeded()
+                snapToCurrentPosition()
+            }
+        } else if isSwipeDown {
+            // Move to previous thread
+            if currentThreadIndex > 0 {
+                moveToThread(currentThreadIndex - 1, geometry: geometry)
+            } else {
+                // At beginning - snap back
+                snapToCurrentPosition()
+            }
+        }
+    }
+    
+    private func moveToThread(_ threadIndex: Int, geometry: GeometryProxy) {
+        guard threadIndex >= 0 && threadIndex < currentFeed.count else { return }
+        
+        currentThreadIndex = threadIndex
+        currentStitchIndex = 0 // Always start at parent when moving to new thread
+        
+        // Calculate viewport position
+        verticalOffset = -CGFloat(threadIndex) * geometry.size.height
+        horizontalOffset = 0 // Always start at parent (left edge)
+        
+        preloadThreadIfNeeded(index: threadIndex)
+        
+        print("🎬 MOVED TO THREAD: \(threadIndex)")
+    }
+    
+    private func moveToStitch(_ stitchIndex: Int, geometry: GeometryProxy) {
+        guard let currentThread = getCurrentThread() else { return }
+        
+        // Validate stitch index
+        let maxStitchIndex = currentThread.childVideos.count // 0 = parent, 1+ = children
+        guard stitchIndex >= 0 && stitchIndex <= maxStitchIndex else {
+            snapToCurrentPosition()
+            return
+        }
+        
+        currentStitchIndex = stitchIndex
+        
+        // Calculate horizontal offset
+        horizontalOffset = -CGFloat(stitchIndex) * geometry.size.width
+        
+        print("🎯 MOVED TO STITCH: \(stitchIndex) in thread \(currentThreadIndex)")
+    }
+    
+    private func snapToCurrentPosition() {
+        // No change needed - current offsets are correct
+        print("↩️ SNAPPED BACK: Staying at Thread \(currentThreadIndex), Child \(currentStitchIndex)")
+    }
+    
+    private func loadMoreContentIfNeeded() {
+        guard let currentUserID = authService.currentUserID else { return }
         
         Task {
-            await loadRealFeedInBackground(userID: currentUserID)
-        }
-    }
-    
-    private func showPlaceholderFeed() {
-        currentFeed = [
-            createPlaceholderThread(id: "placeholder_1", title: "Loading your feed..."),
-            createPlaceholderThread(id: "placeholder_2", title: "Almost ready..."),
-            createPlaceholderThread(id: "placeholder_3", title: "Getting latest videos...")
-        ]
-        isShowingPlaceholder = true
-    }
-    
-    private func createPlaceholderThread(id: String, title: String) -> ThreadData {
-        let placeholderVideo = CoreVideoMetadata(
-            id: id,
-            title: title,
-            videoURL: "https://sample-videos.com/zip/10/mp4/720/SampleVideo_720x480_1mb.mp4",
-            thumbnailURL: "",
-            creatorID: "placeholder_creator",
-            creatorName: "Loading...",
-            createdAt: Date(),
-            threadID: id,
-            replyToVideoID: nil,
-            conversationDepth: 0,
-            viewCount: 0,
-            hypeCount: 0,
-            coolCount: 0,
-            replyCount: 0,
-            shareCount: 0,
-            temperature: "neutral",
-            qualityScore: 50,
-            engagementRatio: 0.5,
-            velocityScore: 0.0,
-            trendingScore: 0.0,
-            duration: 10.0,
-            aspectRatio: 9.0/16.0,
-            fileSize: 1024000,
-            discoverabilityScore: 0.5,
-            isPromoted: false,
-            lastEngagementAt: nil
-        )
-        
-        return ThreadData(
-            id: id,
-            parentVideo: placeholderVideo,
-            childVideos: []
-        )
-    }
-    
-    private func loadRealFeedInBackground(userID: String) async {
-        do {
-            let realFeed = try await homeFeedService.loadFeed(userID: userID)
-            
-            await MainActor.run {
-                self.currentFeed = realFeed
-                self.currentThreadIndex = 0
-                self.currentStitchIndex = 0
-                self.isShowingPlaceholder = false
+            do {
+                let moreThreads = try await homeFeedService.loadMoreContent(userID: currentUserID)
                 
-                print("✅ FEED: Loaded \(realFeed.count) threads in container grid")
-            }
-            
-            cachingService.cacheFeed(realFeed, userID: userID)
-            
-        } catch {
-            await MainActor.run {
-                self.loadingError = error.localizedDescription
-                self.isShowingPlaceholder = false
+                await MainActor.run {
+                    currentFeed = moreThreads
+                }
+            } catch {
+                print("❌ LOAD MORE ERROR: \(error)")
             }
         }
     }
     
-    private func refreshFeed() async {
-        do {
-            guard let currentUserID = authService.currentUserID else { return }
-            
-            let refreshedFeed = try await homeFeedService.refreshFeed(userID: currentUserID)
-            
-            currentFeed = refreshedFeed
-            currentThreadIndex = 0
-            currentStitchIndex = 0
-            isShowingPlaceholder = false
-            
-            // Reset viewport to start
-            verticalOffset = 0
-            horizontalOffset = 0
-            
-            cachingService.cacheFeed(refreshedFeed, userID: currentUserID)
-            
-        } catch {
-            loadingError = error.localizedDescription
-        }
-    }
-    
-    // MARK: - Audio Session Setup (Unchanged)
+    // MARK: - Audio Session
     
     private func setupAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(
-                .playback,
-                mode: .moviePlayback,
-                options: [.allowAirPlay, .allowBluetoothA2DP]
-            )
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
-            print("❌ AUDIO SESSION: Failed to setup - \(error)")
+            print("Failed to setup audio session: \(error)")
         }
     }
     
-    // MARK: - Error & Empty Views (Unchanged)
+    // MARK: - Error Handling Views
     
     private func errorView(error: String) -> some View {
         VStack(spacing: 20) {

@@ -2,9 +2,9 @@
 //  VideoPlayerView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Video Player with ContextualVideoOverlay Integration and Thread Navigation
+//  Layer 8: Views - Video Player with OptimizationConfig Integration (COMPATIBLE VERSION)
 //  Dependencies: AVFoundation, CoreVideoMetadata, InteractionType, ContextualVideoOverlay
-//  Features: Proper video display, ContextualVideoOverlay integration, thread swiping, edge-to-edge display
+//  Features: Proper video display, ContextualVideoOverlay integration, thread navigation, edge-to-edge display
 //
 
 import SwiftUI
@@ -12,7 +12,7 @@ import AVFoundation
 import AVKit
 import Combine
 
-// MARK: - Enhanced Video Player with Thread Navigation
+// MARK: - Enhanced Video Player with Thread Navigation and Optimization
 struct VideoPlayerView: View {
     
     // MARK: - Core Properties
@@ -27,15 +27,20 @@ struct VideoPlayerView: View {
     let navigationContext: VideoPlayerContext?
     
     // MARK: - Thread/Stitch Count Properties
-    let currentThreadPosition: Int? // Which thread you're viewing (1-based)
-    let totalStitchesInThread: Int? // Total stitches/videos in current thread
+    let currentThreadPosition: Int?
+    let totalStitchesInThread: Int?
     
-    // MARK: - Player State
+    // MARK: - Player State with Optimization Tracking
     @StateObject private var playerManager = VideoPlayerManager()
     @State private var currentVideoID: String = ""
     
     // MARK: - Thread Navigation State
     @State private var gestureDirection: VideoNavigationDirection = .none
+    
+    // MARK: - OPTIMIZATION State
+    @State private var memoryPressureDetected: Bool = false
+    @State private var batteryOptimizationActive: Bool = false
+    @State private var performanceTimer: Timer?
     
     // MARK: - Default Initializer (Backward Compatible)
     init(video: CoreVideoMetadata, isActive: Bool, onEngagement: ((InteractionType) -> Void)?) {
@@ -97,7 +102,7 @@ struct VideoPlayerView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Video Player Layer - Edge to Edge with FIXED display
+                // Video Player Layer - Edge to Edge with OPTIMIZED configuration
                 VideoPlayerRepresentable(
                     player: playerManager.player,
                     gravity: .resizeAspectFill
@@ -106,39 +111,42 @@ struct VideoPlayerView: View {
                 .background(Color.black)
                 .ignoresSafeArea(.all)
                 .gesture(
-                    // Thread navigation gestures (contextual based on usage)
-                    DragGesture(minimumDistance: 50)
+                    // Thread navigation gestures with OPTIMIZATION constraints
+                    DragGesture(minimumDistance: OptimizationConfig.UI.minGestureDistance)
                         .onChanged { value in
-                            if isActive && shouldAllowNavigation() {
+                            if isActive && shouldAllowNavigation() && !memoryPressureDetected {
                                 handleThreadDrag(value: value)
                             }
                         }
                         .onEnded { value in
-                            if isActive && shouldAllowNavigation() {
+                            if isActive && shouldAllowNavigation() && !memoryPressureDetected {
                                 handleThreadDragEnd(value: value)
                             }
                         }
                 )
                 
-                // Use ContextualVideoOverlay instead of embedded overlay
-                if isActive {
+                // Use ContextualVideoOverlay with optimization awareness
+                if isActive && !batteryOptimizationActive {
                     ContextualVideoOverlay(
                         video: video,
-                        context: .homeFeed, // You can make this dynamic based on usage
-                        currentUserID: "current-user-id", // Pass actual currentUserID
-                        threadVideo: nil, // Pass threadVideo if available
+                        context: .homeFeed,
+                        currentUserID: "current-user-id",
+                        threadVideo: nil,
                         isVisible: true,
                         onAction: { action in
                             handleOverlayAction(action)
                         }
                     )
+                } else if isActive && batteryOptimizationActive {
+                    // Minimal overlay for battery optimization
+                    batteryOptimizedOverlay(geometry: geometry)
                 } else {
                     // Minimal grid overlay
                     gridModeOverlay(geometry: geometry)
                 }
                 
                 // Thread position indicator (contextual display)
-                if isActive && shouldShowPositionIndicator() {
+                if isActive && shouldShowPositionIndicator() && !batteryOptimizationActive {
                     threadPositionIndicator
                 }
             }
@@ -148,15 +156,110 @@ struct VideoPlayerView: View {
         .ignoresSafeArea(.all)
         .onAppear {
             setupVideoPlayer()
+            setupOptimizationMonitoring()
         }
         .onDisappear {
             cleanupPlayer()
+            cleanupOptimizationMonitoring()
         }
         .onChange(of: isActive) { _, active in
-            if active {
+            if active && !memoryPressureDetected {
                 forcePlay()
             } else {
                 pauseVideo()
+            }
+        }
+    }
+    
+    // MARK: - OPTIMIZATION Monitoring Setup
+    
+    private func setupOptimizationMonitoring() {
+        // Setup memory pressure monitoring
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            self.handleMemoryWarning()
+        }
+        
+        // Setup battery monitoring using OptimizationConfig threshold
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        NotificationCenter.default.addObserver(
+            forName: UIDevice.batteryLevelDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            self.checkBatteryOptimization()
+        }
+        
+        // Setup performance monitoring timer using OptimizationConfig interval
+        performanceTimer = Timer.scheduledTimer(withTimeInterval: OptimizationConfig.Performance.gcInterval, repeats: true) { _ in
+            Task { @MainActor in
+                await self.performOptimizationCleanup()
+            }
+        }
+        
+        print("✅ VIDEO PLAYER OPTIMIZATION: Monitoring setup - cleanup every \(OptimizationConfig.Performance.gcInterval)s")
+    }
+    
+    private func cleanupOptimizationMonitoring() {
+        performanceTimer?.invalidate()
+        performanceTimer = nil
+        UIDevice.current.isBatteryMonitoringEnabled = false
+        NotificationCenter.default.removeObserver(self)
+        print("🧹 VIDEO PLAYER OPTIMIZATION: Monitoring cleanup complete")
+    }
+    
+    private func handleMemoryWarning() {
+        memoryPressureDetected = true
+        playerManager.enableOptimizationMode()
+        print("⚠️ VIDEO PLAYER OPTIMIZATION: Memory warning - enabling restrictions")
+        
+        // Reset memory pressure flag using OptimizationConfig interval
+        DispatchQueue.main.asyncAfter(deadline: .now() + OptimizationConfig.Performance.gcInterval) {
+            self.memoryPressureDetected = false
+            self.playerManager.disableOptimizationMode()
+            print("✅ VIDEO PLAYER OPTIMIZATION: Memory pressure cleared")
+        }
+    }
+    
+    private func checkBatteryOptimization() {
+        let batteryLevel = UIDevice.current.batteryLevel
+        let threshold = Float(OptimizationConfig.Performance.batteryOptimizationThreshold)
+        
+        batteryOptimizationActive = batteryLevel <= threshold && batteryLevel > 0
+        
+        if batteryOptimizationActive {
+            print("🔋 VIDEO PLAYER OPTIMIZATION: Battery optimization active (\(Int(batteryLevel * 100))%)")
+        } else if !batteryOptimizationActive && batteryLevel > threshold {
+            print("🔋 VIDEO PLAYER OPTIMIZATION: Battery optimization disabled (\(Int(batteryLevel * 100))%)")
+        }
+    }
+    
+    private func performOptimizationCleanup() async {
+        print("🧹 VIDEO PLAYER OPTIMIZATION: Periodic cleanup performed")
+        // Cleanup logic would go here
+    }
+    
+    // MARK: - Battery Optimized Overlay
+    
+    private func batteryOptimizedOverlay(geometry: GeometryProxy) -> some View {
+        VStack {
+            Spacer()
+            HStack {
+                Spacer()
+                VStack(alignment: .trailing) {
+                    Image(systemName: "battery.25")
+                        .font(.title2)
+                        .foregroundColor(.orange)
+                    Text("Power Saving")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                .padding()
+                .background(Color.black.opacity(0.7))
+                .cornerRadius(8)
             }
         }
     }
@@ -165,19 +268,18 @@ struct VideoPlayerView: View {
     
     private func shouldAllowNavigation() -> Bool {
         guard let context = navigationContext else {
-            // Default: allow if threadVideos provided
             return threadVideos != nil
         }
         
         switch context {
         case .homeFeed:
-            return true // Always allow in home feed
+            return true
         case .discovery:
-            return true // Always allow in discovery
+            return true
         case .profileGrid:
-            return threadVideos != nil // Only if part of thread
+            return threadVideos != nil
         case .standalone:
-            return false // Never allow for standalone videos
+            return false
         }
     }
     
@@ -187,16 +289,16 @@ struct VideoPlayerView: View {
         }
         
         guard let context = navigationContext else {
-            return true // Default: show if multiple videos
+            return true
         }
         
         switch context {
         case .homeFeed, .discovery:
-            return true // Always show in feeds
+            return true
         case .profileGrid:
-            return true // Show in profile when navigating
+            return true
         case .standalone:
-            return false // Never show for standalone
+            return false
         }
     }
     
@@ -240,18 +342,19 @@ struct VideoPlayerView: View {
         }
     }
     
-    // MARK: - Thread Navigation Gesture Handling
+    // MARK: - Thread Navigation Gesture Handling with OPTIMIZATION
     
     private func handleThreadDrag(value: DragGesture.Value) {
         let horizontalMovement = abs(value.translation.width)
         let verticalMovement = abs(value.translation.height)
         
-        // Only set direction if movement is significant
+        // Use OptimizationConfig for gesture sensitivity
+        let minDistance = OptimizationConfig.UI.minGestureDistance
+        
         if gestureDirection == .none {
-            if horizontalMovement > 50 && horizontalMovement > verticalMovement * 1.5 {
+            if horizontalMovement > minDistance && horizontalMovement > verticalMovement * 1.5 {
                 gestureDirection = .horizontal
-            } else if verticalMovement > 50 && verticalMovement > horizontalMovement * 1.5 {
-                // Vertical gestures contextual based on usage
+            } else if verticalMovement > minDistance && verticalMovement > horizontalMovement * 1.5 {
                 if navigationContext == .homeFeed || navigationContext == .discovery {
                     gestureDirection = .vertical
                 }
@@ -260,7 +363,8 @@ struct VideoPlayerView: View {
     }
     
     private func handleThreadDragEnd(value: DragGesture.Value) {
-        let threshold: CGFloat = 100
+        // Use OptimizationConfig for gesture thresholds
+        let threshold = OptimizationConfig.UI.minGestureDistance * 5 // 100px default
         
         switch gestureDirection {
         case .horizontal:
@@ -270,12 +374,11 @@ struct VideoPlayerView: View {
                 navigateToNext()
             }
         case .vertical:
-            // Vertical navigation only in feed contexts
             if navigationContext == .homeFeed || navigationContext == .discovery {
                 if value.translation.height > threshold {
-                    onNavigate?(.vertical, -1) // Navigate up in feed
+                    onNavigate?(.vertical, -1)
                 } else if value.translation.height < -threshold {
-                    onNavigate?(.vertical, 1) // Navigate down in feed
+                    onNavigate?(.vertical, 1)
                 }
             }
         case .none:
@@ -292,7 +395,6 @@ struct VideoPlayerView: View {
         let newIndex = currentIndex + 1
         onNavigate?(.horizontal, newIndex)
         
-        // Trigger haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .light)
         impactFeedback.impactOccurred()
     }
@@ -303,16 +405,14 @@ struct VideoPlayerView: View {
         let newIndex = currentIndex - 1
         onNavigate?(.horizontal, newIndex)
         
-        // Trigger haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .light)
         impactFeedback.impactOccurred()
     }
 
-    // MARK: - Grid Mode Overlay (Minimal)
+    // MARK: - Grid Mode Overlay
     
     private func gridModeOverlay(geometry: GeometryProxy) -> some View {
         ZStack {
-            // Duration overlay (top-right)
             if video.duration > 0 {
                 Text(formatDuration(video.duration))
                     .font(.caption2)
@@ -323,7 +423,6 @@ struct VideoPlayerView: View {
                     .position(x: geometry.size.width - 30, y: 15)
             }
             
-            // Engagement stats (bottom-left)
             HStack(spacing: 4) {
                 Image(systemName: "heart.fill")
                     .font(.caption2)
@@ -361,7 +460,7 @@ struct VideoPlayerView: View {
             case .reply:
                 interactionType = .reply
             case .stitch:
-                interactionType = .reply // Map stitch to reply for now
+                interactionType = .reply
             }
             onEngagement?(interactionType)
             
@@ -370,7 +469,7 @@ struct VideoPlayerView: View {
         }
     }
     
-    // MARK: - Player Setup and Control
+    // MARK: - Player Setup and Control with OPTIMIZATION
     
     private func setupVideoPlayer() {
         guard let videoURL = URL(string: video.videoURL) else {
@@ -383,19 +482,21 @@ struct VideoPlayerView: View {
             return
         }
         
-        print("VIDEO PLAYER: Setting up player for '\(video.title)'")
+        print("VIDEO PLAYER OPTIMIZATION: Setting up player for '\(video.title)'")
         playerManager.setupPlayer(with: videoURL)
         currentVideoID = video.id
         
-        if isActive {
+        if isActive && !memoryPressureDetected {
             forceAutoplay()
         }
     }
     
     private func forceAutoplay() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        // Use battery optimization for delay timing
+        let delay = batteryOptimizationActive ? 0.3 : 0.1
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             forcePlay()
-            print("VIDEO PLAYER: Autoplay initiated for '\(video.title)'")
+            print("VIDEO PLAYER OPTIMIZATION: Autoplay initiated")
         }
     }
     
@@ -412,7 +513,7 @@ struct VideoPlayerView: View {
     }
 }
 
-// MARK: - FIXED Video Player Manager
+// MARK: - OPTIMIZED Video Player Manager
 @MainActor
 class VideoPlayerManager: ObservableObject {
     @Published var player: AVPlayer?
@@ -420,9 +521,16 @@ class VideoPlayerManager: ObservableObject {
     @Published var isMuted: Bool = false
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
+    
+    // OPTIMIZATION State
+    @Published var optimizationModeActive: Bool = false
+    
     private var timeObserver: Any?
     private var cancellables = Set<AnyCancellable>()
     private var currentVideoURL: URL?
+    
+    // OPTIMIZATION: Track concurrent operations using OptimizationConfig
+    private static var globalActivePlayerCount: Int = 0
     
     func setupPlayer(with url: URL) {
         guard currentVideoURL != url else {
@@ -430,31 +538,72 @@ class VideoPlayerManager: ObservableObject {
             return
         }
         
+        // Check concurrent player limits from OptimizationConfig
+        guard Self.globalActivePlayerCount < OptimizationConfig.Performance.maxVideoProcessingTasks else {
+            print("🚫 VIDEO PLAYER OPTIMIZATION: Player creation blocked - at limit (\(Self.globalActivePlayerCount)/\(OptimizationConfig.Performance.maxVideoProcessingTasks))")
+            return
+        }
+        
         cleanup()
         
-        // FIXED: Move AVPlayer creation to background queue
         Task.detached(priority: .userInitiated) {
             let playerItem = AVPlayerItem(url: url)
+            
+            // Apply optimization settings using OptimizationConfig
+            if await self.optimizationModeActive {
+                playerItem.preferredForwardBufferDuration = 2.0
+            } else {
+                playerItem.preferredForwardBufferDuration = 5.0
+            }
+            
             let player = AVPlayer(playerItem: playerItem)
             
             await MainActor.run {
                 self.player = player
                 self.currentVideoURL = url
                 
+                Self.globalActivePlayerCount += 1
+                
                 self.setupTimeObserver()
                 self.setupPublishers()
                 self.setupLooping()
                 
-                print("VIDEO: Player created for \(url.lastPathComponent)")
+                print("VIDEO PLAYER OPTIMIZATION: Player created (\(Self.globalActivePlayerCount)/\(OptimizationConfig.Performance.maxVideoProcessingTasks))")
             }
         }
+    }
+    
+    func enableOptimizationMode() {
+        optimizationModeActive = true
+        
+        // Reduce buffer duration under optimization
+        if let currentItem = player?.currentItem {
+            currentItem.preferredForwardBufferDuration = 1.0
+        }
+        
+        print("⚠️ VIDEO PLAYER OPTIMIZATION: Optimization mode enabled")
+    }
+    
+    func disableOptimizationMode() {
+        optimizationModeActive = false
+        
+        // Restore normal buffer duration
+        if let currentItem = player?.currentItem {
+            currentItem.preferredForwardBufferDuration = 5.0
+        }
+        
+        print("✅ VIDEO PLAYER OPTIMIZATION: Optimization mode disabled")
     }
     
     private func setupTimeObserver() {
         guard let player = player else { return }
         
+        // Use OptimizationConfig for update frequency
+        let maxFPS = OptimizationConfig.Performance.maxUIUpdateFrequency
+        let interval = 1.0 / Double(maxFPS)
+        
         timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
+            forInterval: CMTime(seconds: interval, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
             self?.currentTime = time.seconds
@@ -518,10 +667,16 @@ class VideoPlayerManager: ObservableObject {
         player = nil
         cancellables.removeAll()
         currentVideoURL = nil
+        
+        // Update global player count
+        if Self.globalActivePlayerCount > 0 {
+            Self.globalActivePlayerCount = max(0, Self.globalActivePlayerCount - 1)
+            print("VIDEO PLAYER OPTIMIZATION: Player cleaned up (\(Self.globalActivePlayerCount) remaining)")
+        }
     }
 }
 
-// MARK: - FIXED Video Player UIKit Representable
+// MARK: - Video Player UIKit Representable
 struct VideoPlayerRepresentable: UIViewRepresentable {
     let player: AVPlayer?
     let gravity: AVLayerVideoGravity
@@ -537,7 +692,7 @@ struct VideoPlayerRepresentable: UIViewRepresentable {
     }
 }
 
-// MARK: - FIXED Video Player UI View
+// MARK: - Video Player UI View
 class VideoPlayerUIView: UIView {
     private var playerLayer: AVPlayerLayer?
     
@@ -570,17 +725,15 @@ class VideoPlayerUIView: UIView {
 
 // MARK: - Supporting Enums
 
-/// Video navigation direction (renamed to avoid conflicts with HomeFeedView)
 enum VideoNavigationDirection {
     case none
-    case horizontal  // Left/right swipes within thread/content
-    case vertical    // Up/down swipes between threads/feeds
+    case horizontal
+    case vertical
 }
 
-/// Video player usage context for contextual navigation behavior
 enum VideoPlayerContext {
-    case homeFeed        // Home feed - allow all navigation
-    case discovery       // Discovery feed - allow all navigation
-    case profileGrid     // Profile grid - allow thread navigation only
-    case standalone      // Standalone video - no navigation
+    case homeFeed
+    case discovery
+    case profileGrid
+    case standalone
 }

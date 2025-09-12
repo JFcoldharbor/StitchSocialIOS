@@ -4,12 +4,111 @@
 //
 //  Layer 5: Business Logic - Recording Flow Controller
 //  Complete fix with VideoCoordinator integration and background thread handling
+//  FIXED: Added processSelectedVideo method for gallery video processing
 //
 
 import Foundation
 import SwiftUI
 @preconcurrency import AVFoundation
 import FirebaseStorage
+
+// MARK: - Data Models and Types (MUST BE FIRST)
+
+enum RecordingContext {
+    case newThread
+    case stitchToThread(threadID: String, threadInfo: ThreadInfo)
+    case replyToVideo(videoID: String, videoInfo: CameraVideoInfo)
+    case continueThread(threadID: String, threadInfo: ThreadInfo)
+    
+    var displayTitle: String {
+        switch self {
+        case .newThread: return "New Thread"
+        case .stitchToThread(_, let info): return "Stitching to \(info.creatorName)"
+        case .replyToVideo(_, let info): return "Replying to \(info.creatorName)"
+        case .continueThread(_, let info): return "Adding to \(info.creatorName)'s thread"
+        }
+    }
+    
+    var contextDescription: String {
+        switch self {
+        case .newThread: return "Start a new conversation"
+        case .stitchToThread(_, let info): return "Stitch to: \(info.title)"
+        case .replyToVideo(_, let info): return "Reply to: \(info.title)"
+        case .continueThread(_, let info): return "Continue: \(info.title)"
+        }
+    }
+}
+
+struct ThreadInfo {
+    let title: String
+    let creatorName: String
+    let creatorID: String
+    let thumbnailURL: String?
+    let participantCount: Int
+    let stitchCount: Int
+}
+
+struct CameraVideoInfo {
+    let title: String
+    let creatorName: String
+    let creatorID: String
+    let thumbnailURL: String?
+}
+
+enum RecordingPhase: Equatable {
+    case ready
+    case recording
+    case stopping
+    case aiProcessing
+    case complete
+    case error(String)
+    
+    static func == (lhs: RecordingPhase, rhs: RecordingPhase) -> Bool {
+        switch (lhs, rhs) {
+        case (.ready, .ready), (.recording, .recording), (.stopping, .stopping),
+             (.aiProcessing, .aiProcessing), (.complete, .complete):
+            return true
+        case (.error(let lhsMessage), .error(let rhsMessage)):
+            return lhsMessage == rhsMessage
+        default:
+            return false
+        }
+    }
+    
+    var isRecording: Bool {
+        switch self {
+        case .recording: return true
+        default: return false
+        }
+    }
+    
+    var canStartRecording: Bool {
+        switch self {
+        case .ready: return true
+        default: return false
+        }
+    }
+    
+    var displayName: String {
+        switch self {
+        case .ready: return "Ready"
+        case .recording: return "Recording"
+        case .stopping: return "Stopping"
+        case .aiProcessing: return "Processing"
+        case .complete: return "Complete"
+        case .error(_): return "Error"
+        }
+    }
+}
+
+struct VideoMetadata {
+    var title: String = ""
+    var description: String = ""
+    var hashtags: [String] = []
+    var aiAnalysisComplete: Bool = false
+    var aiSuggestedTitles: [String] = []
+    var aiSuggestedHashtags: [String] = []
+}
 
 // MARK: - Streamlined Camera Manager (Fixed)
 
@@ -98,169 +197,184 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
     
     @MainActor
     func startRecording(completion: @escaping (URL?) -> Void) {
-        guard let movieOutput = movieOutput else {
-            print("❌ CAMERA: Movie output not available")
+        guard !isRecording, isSessionRunning else {
             completion(nil)
             return
         }
         
-        // Generate unique filename
-        let fileName = "recorded_video_\(Date().timeIntervalSince1970).mov"
-        let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
-        
         recordingCompletion = completion
-        isRecording = true
-        movieOutput.startRecording(to: outputURL, recordingDelegate: self)
+        
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(UUID().uuidString).mov")
+            
+            self.movieOutput?.startRecording(to: tempURL, recordingDelegate: self)
+            
+            Task { @MainActor in
+                self.isRecording = true
+            }
+        }
     }
     
     @MainActor
     func stopRecording() {
-        guard let movieOutput = movieOutput, movieOutput.isRecording else {
-            print("❌ CAMERA: Not currently recording")
-            return
-        }
+        guard isRecording else { return }
         
-        isRecording = false
-        movieOutput.stopRecording()
+        sessionQueue.async { [weak self] in
+            self?.movieOutput?.stopRecording()
+            
+            Task { @MainActor in
+                self?.isRecording = false
+            }
+        }
     }
     
-    // MARK: - Camera Controls (FIXED)
+    // MARK: - Camera Controls
     
     func switchCamera() async {
-        print("🔄 CAMERA: Switching from \(currentCameraPosition == .back ? "back" : "front") camera")
-        
-        // Toggle camera position
-        await MainActor.run {
-            self.currentCameraPosition = self.currentCameraPosition == .back ? .front : .back
+        await withCheckedContinuation { continuation in
+            sessionQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume()
+                    return
+                }
+                
+                self.captureSession.beginConfiguration()
+                
+                // Remove current input
+                if let currentInput = self.videoDeviceInput {
+                    self.captureSession.removeInput(currentInput)
+                }
+                
+                // Get opposite camera
+                let newPosition: AVCaptureDevice.Position = self.currentCameraPosition == .back ? .front : .back
+                
+                // Configure new camera
+                if let newDevice = self.getCamera(for: newPosition),
+                   let newInput = try? AVCaptureDeviceInput(device: newDevice) {
+                    
+                    if self.captureSession.canAddInput(newInput) {
+                        self.captureSession.addInput(newInput)
+                        self.videoDeviceInput = newInput
+                        
+                        Task { @MainActor in
+                            self.currentCameraPosition = newPosition
+                            self.maxZoomFactor = newDevice.activeFormat.videoMaxZoomFactor
+                            self.currentZoomFactor = 1.0
+                        }
+                    }
+                }
+                
+                self.captureSession.commitConfiguration()
+                continuation.resume()
+            }
         }
-        
-        // Reconfigure session with new camera
-        await configureSessionOnBackground()
-        
-        print("✅ CAMERA: Switched to \(currentCameraPosition == .back ? "back" : "front") camera")
     }
     
     func setZoom(_ factor: CGFloat) async {
-        guard let device = videoDeviceInput?.device else { return }
-        
-        do {
-            try device.lockForConfiguration()
-            device.videoZoomFactor = min(max(factor, 1.0), device.maxAvailableVideoZoomFactor)
-            await MainActor.run {
-                currentZoomFactor = device.videoZoomFactor
+        await withCheckedContinuation { continuation in
+            sessionQueue.async { [weak self] in
+                guard let self = self,
+                      let device = self.videoDeviceInput?.device else {
+                    continuation.resume()
+                    return
+                }
+                
+                do {
+                    try device.lockForConfiguration()
+                    device.videoZoomFactor = min(max(factor, 1.0), device.activeFormat.videoMaxZoomFactor)
+                    device.unlockForConfiguration()
+                    
+                    Task { @MainActor in
+                        self.currentZoomFactor = device.videoZoomFactor
+                    }
+                } catch {
+                    print("Zoom failed: \(error)")
+                }
+                
+                continuation.resume()
             }
-            device.unlockForConfiguration()
-        } catch {
-            print("❌ CAMERA: Zoom failed - \(error)")
         }
     }
     
     func focusAt(point: CGPoint, in view: UIView) async {
-        guard let device = videoDeviceInput?.device else { return }
-        
-        let focusPoint = previewLayer.captureDevicePointConverted(fromLayerPoint: point)
-        
-        do {
-            try device.lockForConfiguration()
-            
-            if device.isFocusPointOfInterestSupported {
-                device.focusPointOfInterest = focusPoint
-                device.focusMode = .autoFocus
+        await withCheckedContinuation { continuation in
+            sessionQueue.async { [weak self] in
+                guard let self = self,
+                      let device = self.videoDeviceInput?.device,
+                      device.isFocusPointOfInterestSupported else {
+                    continuation.resume()
+                    return
+                }
+                
+                // Convert point to camera coordinates
+                let focusPoint = self.previewLayer.captureDevicePointConverted(fromLayerPoint: point)
+                
+                do {
+                    try device.lockForConfiguration()
+                    device.focusPointOfInterest = focusPoint
+                    device.focusMode = .autoFocus
+                    device.unlockForConfiguration()
+                } catch {
+                    print("Focus failed: \(error)")
+                }
+                
+                continuation.resume()
             }
-            
-            if device.isExposurePointOfInterestSupported {
-                device.exposurePointOfInterest = focusPoint
-                device.exposureMode = .autoExpose
-            }
-            
-            device.unlockForConfiguration()
-        } catch {
-            print("❌ CAMERA: Focus failed - \(error)")
         }
     }
     
-    // MARK: - Private Configuration (FIXED)
+    // MARK: - Background Configuration
     
     private func configureSessionOnBackground() async {
         captureSession.beginConfiguration()
+        captureSession.sessionPreset = .high
         
-        // Set session preset
-        if captureSession.canSetSessionPreset(.high) {
-            captureSession.sessionPreset = .high
-        }
-        
-        // Remove existing inputs
-        captureSession.inputs.forEach { captureSession.removeInput($0) }
-        captureSession.outputs.forEach { captureSession.removeOutput($0) }
-        
-        // Add video input - USE CURRENT CAMERA POSITION (FIXED)
-        if let camera = await getCamera(for: currentCameraPosition),
-           let videoInput = try? AVCaptureDeviceInput(device: camera) {
+        // Configure video input
+        if let videoDevice = getCamera(for: .back),
+           let videoInput = try? AVCaptureDeviceInput(device: videoDevice) {
+            
             if captureSession.canAddInput(videoInput) {
                 captureSession.addInput(videoInput)
+                videoDeviceInput = videoInput
                 
-                await MainActor.run { [weak self] in
-                    self?.videoDeviceInput = videoInput
-                    self?.updateZoomCapabilities(for: camera)
+                await MainActor.run {
+                    maxZoomFactor = videoDevice.activeFormat.videoMaxZoomFactor
                 }
             }
         }
         
-        // Add audio input
+        // Configure audio input
         if let audioDevice = AVCaptureDevice.default(for: .audio),
            let audioInput = try? AVCaptureDeviceInput(device: audioDevice) {
+            
             if captureSession.canAddInput(audioInput) {
                 captureSession.addInput(audioInput)
-                
-                await MainActor.run { [weak self] in
-                    self?.audioDeviceInput = audioInput
-                }
+                audioDeviceInput = audioInput
             }
         }
         
-        // Add movie output
+        // Configure movie output
         let movieOutput = AVCaptureMovieFileOutput()
         if captureSession.canAddOutput(movieOutput) {
             captureSession.addOutput(movieOutput)
-            
-            await MainActor.run { [weak self] in
-                self?.movieOutput = movieOutput
-            }
-            
-            if let connection = movieOutput.connection(with: .video) {
-                if connection.isVideoStabilizationSupported {
-                    connection.preferredVideoStabilizationMode = .auto
-                }
-            }
+            self.movieOutput = movieOutput
         }
         
         captureSession.commitConfiguration()
     }
     
-    private func getCamera(for position: AVCaptureDevice.Position) async -> AVCaptureDevice? {
-        return await Task.detached {
-            AVCaptureDevice.DiscoverySession(
-                deviceTypes: [.builtInWideAngleCamera, .builtInUltraWideCamera, .builtInTelephotoCamera],
-                mediaType: .video,
-                position: position
-            ).devices.first { $0.position == position }
-        }.value
-    }
-    
-    private func updateZoomCapabilities(for device: AVCaptureDevice) {
-        maxZoomFactor = device.maxAvailableVideoZoomFactor
-        currentZoomFactor = device.videoZoomFactor
+    private func getCamera(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
     }
 }
 
-// MARK: - Recording Delegate
+// MARK: - AVCaptureFileOutputRecordingDelegate
 
 extension StreamlinedCameraManager: AVCaptureFileOutputRecordingDelegate {
-    nonisolated func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
-        print("✅ CAMERA: Started recording")
-    }
-    
-    nonisolated func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
         Task { @MainActor [weak self] in
             guard let self = self else { return }
             
@@ -369,6 +483,22 @@ class RecordingController: ObservableObject {
         print("🎬 RECORDING: Stopping...")
     }
     
+    // MARK: - Gallery Video Processing - NEW METHOD
+    
+    /// Process video selected from gallery through VideoCoordinator workflow
+    func processSelectedVideo(_ videoURL: URL) async {
+        print("📱 RECORDING CONTROLLER: Processing gallery-selected video")
+        print("📱 VIDEO URL: \(videoURL)")
+        
+        // Set the recorded video URL and update states
+        recordedVideoURL = videoURL
+        currentPhase = .aiProcessing
+        recordingPhase = .aiProcessing
+        
+        // Trigger the same processing workflow as recorded videos
+        await handleRecordingCompleted(videoURL)
+    }
+    
     // MARK: - Post-Recording Processing (FIXED - Use VideoCoordinator)
     
     private func handleRecordingCompleted(_ videoURL: URL?) async {
@@ -425,6 +555,8 @@ class RecordingController: ObservableObject {
                 print("✅ AI RESULTS: Applied to metadata")
                 print("✅ TITLE: '\(aiResult.title)'")
                 print("✅ HASHTAGS: \(aiResult.hashtags)")
+            } else {
+                print("📝 MANUAL MODE: No AI results - user will create content manually")
             }
             
         } catch {
@@ -542,107 +674,4 @@ class RecordingController: ObservableObject {
     var coordinatorIsProcessing: Bool {
         videoCoordinator.isProcessing
     }
-}
-
-// MARK: - Data Models
-
-enum RecordingPhase: Equatable {
-    case ready
-    case recording
-    case stopping
-    case aiProcessing
-    case complete
-    case error(String)
-    
-    static func == (lhs: RecordingPhase, rhs: RecordingPhase) -> Bool {
-        switch (lhs, rhs) {
-        case (.ready, .ready), (.recording, .recording), (.stopping, .stopping),
-             (.aiProcessing, .aiProcessing), (.complete, .complete):
-            return true
-        case (.error(let lhsMessage), .error(let rhsMessage)):
-            return lhsMessage == rhsMessage
-        default:
-            return false
-        }
-    }
-    
-    var isRecording: Bool {
-        switch self {
-        case .recording: return true
-        default: return false
-        }
-    }
-    
-    var canStartRecording: Bool {
-        switch self {
-        case .ready: return true
-        default: return false
-        }
-    }
-    
-    var displayName: String {
-        switch self {
-        case .ready: return "Ready"
-        case .recording: return "Recording"
-        case .stopping: return "Stopping"
-        case .aiProcessing: return "Processing"
-        case .complete: return "Complete"
-        case .error(_): return "Error"
-        }
-    }
-}
-
-struct VideoMetadata {
-    var title: String = ""
-    var description: String = ""
-    var hashtags: [String] = []
-    var isPrivate: Bool = false
-    
-    // AI Analysis results
-    var aiSuggestedTitles: [String] = []
-    var aiSuggestedHashtags: [String] = []
-    var aiAnalysisComplete: Bool = false
-}
-
-// MARK: - Recording Context
-
-enum RecordingContext {
-    case newThread
-    case stitchToThread(threadID: String, threadInfo: ThreadInfo)
-    case replyToVideo(videoID: String, videoInfo: CameraVideoInfo)
-    case continueThread(threadID: String, threadInfo: ThreadInfo)
-    
-    var displayTitle: String {
-        switch self {
-        case .newThread: return "New Thread"
-        case .stitchToThread(_, let info): return "Stitching to \(info.creatorName)"
-        case .replyToVideo(_, let info): return "Replying to \(info.creatorName)"
-        case .continueThread(_, let info): return "Adding to \(info.creatorName)'s thread"
-        }
-    }
-    
-    var contextDescription: String {
-        switch self {
-        case .newThread: return "Start a new conversation"
-        case .stitchToThread(_, let info): return "Stitch to: \(info.title)"
-        case .replyToVideo(_, let info): return "Reply to: \(info.title)"
-        case .continueThread(_, let info): return "Continue: \(info.title)"
-        }
-    }
-}
-
-struct ThreadInfo {
-    let title: String
-    let creatorName: String
-    let creatorID: String
-    let thumbnailURL: String?
-    let participantCount: Int
-    let stitchCount: Int
-}
-
-struct CameraVideoInfo {
-    let title: String
-    let creatorName: String
-    let creatorID: String
-    let thumbnailURL: String?
 }

@@ -2,14 +2,6 @@
 //  EditProfileView.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 8/25/25.
-//
-
-
-//
-//  EditProfileView.swift
-//  StitchSocial
-//
 //  Layer 8: Views - Instagram-Style Profile Editor
 //  Dependencies: UserService (Layer 4), BasicUserInfo (Layer 1)
 //  Features: Image upload, form validation, real-time character counting
@@ -43,14 +35,16 @@ struct EditProfileView: View {
     @State private var errorMessage: String?
     @State private var usernameAvailable: Bool?
     @State private var isCheckingUsername = false
+    @State private var currentBio = ""
+    @State private var currentPrivacy = false
     
     // MARK: - Validation
     
     private var hasUnsavedChanges: Bool {
         displayName != user.displayName ||
-        bio != getCurrentBio() ||
+        bio != currentBio ||
         username != user.username ||
-        isPrivate != getCurrentPrivacy() ||
+        isPrivate != currentPrivacy ||
         profileImage != nil
     }
     
@@ -185,83 +179,68 @@ struct EditProfileView: View {
     // MARK: - Form Fields Section
     
     private var formFieldsSection: some View {
-        VStack(spacing: 20) {
-            // Display Name Field
+        VStack(spacing: 16) {
+            // Display Name
             VStack(alignment: .leading, spacing: 8) {
-                Text("Display Name")
-                    .font(.headline)
-                    .foregroundColor(.white)
+                HStack {
+                    Text("Display Name")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    Text("\(displayName.count)/30")
+                        .font(.caption)
+                        .foregroundColor(displayName.count > 30 ? .red : .gray)
+                }
                 
                 TextField("Enter display name", text: $displayName)
                     .textFieldStyle(ProfileTextFieldStyle())
-                    .onChange(of: displayName) { _, newValue in
-                        if newValue.count > 30 {
-                            displayName = String(newValue.prefix(30))
-                        }
-                    }
-                
-                HStack {
-                    Spacer()
-                    Text("\(displayName.count)/30")
-                        .font(.caption)
-                        .foregroundColor(displayName.count > 25 ? .orange : .gray)
-                }
             }
             
-            // Username Field
+            // Username
             VStack(alignment: .leading, spacing: 8) {
-                Text("Username")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                
                 HStack {
-                    TextField("Enter username", text: $username)
-                        .textFieldStyle(ProfileTextFieldStyle())
-                        .autocapitalization(.none)
-                        .onChange(of: username) { _, newValue in
-                            checkUsernameAvailability(newValue)
-                        }
+                    Text("Username")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Spacer()
                     
                     if isCheckingUsername {
                         ProgressView()
                             .scaleEffect(0.8)
+                            .tint(.cyan)
                     } else if let available = usernameAvailable {
                         Image(systemName: available ? "checkmark.circle.fill" : "xmark.circle.fill")
                             .foregroundColor(available ? .green : .red)
                     }
                 }
                 
-                if let available = usernameAvailable, !available {
-                    Text("Username not available")
-                        .font(.caption)
-                        .foregroundColor(.red)
-                }
+                TextField("Enter username", text: $username)
+                    .textFieldStyle(ProfileTextFieldStyle())
+                    .onChange(of: username) { _, newValue in
+                        Task { await checkUsernameAvailability(newValue) }
+                    }
             }
             
-            // Bio Field
+            // Bio
             VStack(alignment: .leading, spacing: 8) {
-                Text("Bio")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                
-                TextEditor(text: $bio)
-                    .frame(minHeight: 80)
-                    .padding(12)
-                    .background(Color.white.opacity(0.1))
-                    .cornerRadius(12)
-                    .foregroundColor(.white)
-                    .onChange(of: bio) { _, newValue in
-                        if newValue.count > 150 {
-                            bio = String(newValue.prefix(150))
-                        }
-                    }
-                
                 HStack {
+                    Text("Bio")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
                     Spacer()
+                    
                     Text("\(bio.count)/150")
                         .font(.caption)
-                        .foregroundColor(bio.count > 140 ? .orange : .gray)
+                        .foregroundColor(bio.count > 150 ? .red : .gray)
                 }
+                
+                TextField("Tell us about yourself", text: $bio, axis: .vertical)
+                    .textFieldStyle(ProfileTextFieldStyle())
+                    .lineLimit(3...6)
             }
         }
     }
@@ -316,60 +295,61 @@ struct EditProfileView: View {
         .cornerRadius(8)
     }
     
-    // MARK: - Helper Methods
-    
-    private func getCurrentBio() -> String {
-        // TODO: Load from current user profile
-        return ""
-    }
-    
-    private func getCurrentPrivacy() -> Bool {
-        // TODO: Load from current user profile  
-        return false
-    }
+    // MARK: - Helper Methods - FIXED IMPLEMENTATIONS
     
     private func loadCurrentProfileData() async {
-        // TODO: Load extended profile data including bio and privacy settings
+        do {
+            // Load extended profile data from Firebase
+            if let profileData = try await userService.getExtendedProfile(id: user.id) {
+                await MainActor.run {
+                    self.currentBio = profileData.bio
+                    self.currentPrivacy = profileData.isPrivate
+                    self.bio = profileData.bio
+                    self.isPrivate = profileData.isPrivate
+                }
+                print("EDIT PROFILE: Loaded current bio and privacy settings")
+            }
+        } catch {
+            print("EDIT PROFILE ERROR: Failed to load profile data - \(error)")
+            errorMessage = "Failed to load profile data"
+        }
     }
     
     private func loadSelectedImage(_ photoItem: PhotosPickerItem?) async {
         guard let photoItem = photoItem else { return }
         
         do {
-            if let data = try await photoItem.loadTransferable(type: Data.self),
-               let image = UIImage(data: data) {
+            if let imageData = try await photoItem.loadTransferable(type: Data.self),
+               let image = UIImage(data: imageData) {
                 
-                // Resize image to 512x512
-                let resizedImage = image.resized(to: CGSize(width: 512, height: 512))
                 await MainActor.run {
-                    self.profileImage = resizedImage
+                    // Resize image for efficiency
+                    let targetSize = CGSize(width: 400, height: 400)
+                    self.profileImage = image.resized(to: targetSize)
                 }
             }
         } catch {
             await MainActor.run {
-                errorMessage = "Failed to load image: \(error.localizedDescription)"
+                self.errorMessage = "Failed to load selected image"
             }
         }
     }
     
-    private func checkUsernameAvailability(_ newUsername: String) {
-        guard newUsername != user.username && newUsername.count >= 3 else {
+    private func checkUsernameAvailability(_ username: String) async {
+        guard username.count >= 3, username != user.username else {
             usernameAvailable = true
             return
         }
         
         isCheckingUsername = true
-        usernameAvailable = nil
         
-        Task {
-            // Simulate username check delay
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
-            
-            await MainActor.run {
-                isCheckingUsername = false
-                // TODO: Implement real username availability check via UserService
-                usernameAvailable = true // Placeholder
-            }
+        // Simulate check delay
+        try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+        
+        await MainActor.run {
+            isCheckingUsername = false
+            // TODO: Implement real username availability check via UserService
+            usernameAvailable = true // Placeholder
         }
     }
     
@@ -386,7 +366,7 @@ struct EditProfileView: View {
                     imageData: imageData
                 )
                 
-                // Update local user object
+                // Update local user object with new image
                 user = BasicUserInfo(
                     id: user.id,
                     username: username,
@@ -399,15 +379,16 @@ struct EditProfileView: View {
                 )
             }
             
-            // Update profile text fields
+            // Update profile text fields - FIXED WITH USERNAME SUPPORT
             try await userService.updateProfile(
                 userID: user.id,
                 displayName: displayName,
                 bio: bio,
-                isPrivate: isPrivate
+                isPrivate: isPrivate,
+                username: username
             )
             
-            // Update local user object
+            // Update local user object with all changes
             user = BasicUserInfo(
                 id: user.id,
                 username: username,
@@ -419,10 +400,12 @@ struct EditProfileView: View {
                 createdAt: user.createdAt
             )
             
+            print("EDIT PROFILE: Successfully saved profile changes")
             dismiss()
             
         } catch {
             errorMessage = "Failed to save profile: \(error.localizedDescription)"
+            print("EDIT PROFILE ERROR: \(error)")
         }
         
         isLoading = false
