@@ -4,7 +4,7 @@
 //
 //  Layer 7: ViewModels - Profile Data Management with Instant Loading
 //  Dependencies: AuthService, UserService, VideoService (Layer 4)
-//  Features: Instant profile display, lazy content loading, cached data
+//  Features: Instant profile display, lazy content loading, cached data, NotificationCenter integration
 //
 
 import Foundation
@@ -27,6 +27,10 @@ class ProfileViewModel: ObservableObject {
     @Published var isLoading = false // Changed to false for instant start
     @Published var errorMessage: String?
     @Published var isShowingPlaceholder = true
+    
+    // MARK: - Extended Profile Data
+    @Published var userBio: String?
+    @Published var isUserPrivate: Bool = false
     
     // MARK: - Social State
     
@@ -58,6 +62,65 @@ class ProfileViewModel: ObservableObject {
         self.userService = userService
         self.videoService = videoService
         self.animationController = ProfileAnimationController()
+        
+        // Setup NotificationCenter observers for profile refresh
+        setupNotificationObservers()
+    }
+    
+    // MARK: - NotificationCenter Integration
+    
+    /// Setup NotificationCenter observers for profile updates
+    private func setupNotificationObservers() {
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("RefreshProfile"),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                await self?.handleProfileRefreshNotification(notification)
+            }
+        }
+        
+        print("PROFILE VIEWMODEL: NotificationCenter observers setup complete")
+    }
+    
+    /// Handle profile refresh notifications from EditProfileView
+    private func handleProfileRefreshNotification(_ notification: Notification) async {
+        print("PROFILE VIEWMODEL: Received RefreshProfile notification - triggering refresh")
+        
+        // Clear cache and extended data to force fresh data load
+        cachedUserProfile = nil
+        profileCacheTime = nil
+        userBio = nil
+        isUserPrivate = false
+        
+        // Refresh profile data directly
+        await refreshProfile()
+        
+        // If userInfo contains specific user ID, validate it matches current user
+        if let userInfo = notification.userInfo,
+           let notificationUserID = userInfo["userID"] as? String,
+           let currentUserID = currentUser?.id {
+            
+            if notificationUserID == currentUserID {
+                print("PROFILE VIEWMODEL: Profile refresh confirmed for user \(currentUserID)")
+            } else {
+                print("PROFILE VIEWMODEL: Profile refresh notification for different user, ignoring")
+            }
+        }
+    }
+    
+    /// Cleanup NotificationCenter observers
+    private nonisolated func cleanupNotificationObservers() {
+        NotificationCenter.default.removeObserver(self)
+        print("PROFILE VIEWMODEL: NotificationCenter observers cleaned up")
+    }
+    
+    // MARK: - Deinitialization
+    
+    deinit {
+        cleanupNotificationObservers()
+        print("PROFILE VIEWMODEL: Deinitializing with proper cleanup")
     }
     
     // MARK: - INSTANT LOADING IMPLEMENTATION
@@ -120,22 +183,27 @@ class ProfileViewModel: ObservableObject {
                 await MainActor.run {
                     self.currentUser = userProfile
                     self.isShowingPlaceholder = false
+                    print("PROFILE BACKGROUND: UI updated with fresh profile data - \(userProfile.displayName)")
                 }
                 
                 // Cache for future instant loads
                 cacheProfile(userProfile)
+                
+                // Load extended profile data (bio, privacy settings)
+                await loadExtendedProfileData(userID: userID)
                 
                 // Load additional content in background
                 Task {
                     await loadEnhancementsInBackground(userID: userID)
                 }
                 
-                print("PROFILE BACKGROUND: Real profile loaded")
+                print("PROFILE BACKGROUND: Real profile loaded and cached")
             } else {
                 await MainActor.run {
                     self.errorMessage = "Profile not found"
                     self.isShowingPlaceholder = false
                 }
+                print("PROFILE BACKGROUND: Profile not found in database")
             }
             
         } catch {
@@ -147,18 +215,40 @@ class ProfileViewModel: ObservableObject {
         }
     }
     
-    /// Load enhancements without blocking UI
+    /// Load extended profile data (bio, privacy, etc.)
+    private func loadExtendedProfileData(userID: String) async {
+        do {
+            if let extendedProfile = try await userService.getExtendedProfile(id: userID) {
+                await MainActor.run {
+                    self.userBio = extendedProfile.bio.isEmpty ? nil : extendedProfile.bio
+                    self.isUserPrivate = extendedProfile.isPrivate
+                }
+                print("PROFILE EXTENDED: Loaded bio and privacy settings")
+            }
+        } catch {
+            print("PROFILE EXTENDED ERROR: Failed to load extended data - \(error.localizedDescription)")
+        }
+    }
+    
+    /// Load profile enhancements in background (videos, social data)
     private func loadEnhancementsInBackground(userID: String) async {
+        print("PROFILE ENHANCEMENTS: Loading additional data...")
+        
+        // Load all enhancements concurrently
         await withTaskGroup(of: Void.self) { group in
             
-            // Load user videos (limited initial set)
+            // Load user videos
             group.addTask {
                 await self.loadUserVideosLazily()
             }
             
-            // Load social data (following/followers)
+            // Load social connections
             group.addTask {
-                await self.loadSocialDataLazily()
+                await self.loadFollowingLazily(userID: userID, limit: 50)
+            }
+            
+            group.addTask {
+                await self.loadFollowersLazily(userID: userID, limit: 50)
             }
             
             // Start animations
@@ -167,12 +257,10 @@ class ProfileViewModel: ObservableObject {
             }
         }
         
-        print("PROFILE ENHANCEMENTS: All background tasks complete")
+        print("PROFILE ENHANCEMENTS: Background loading complete")
     }
     
-    // MARK: - Lazy Content Loading
-    
-    /// Load user videos lazily (NO LIMITS - show all creator content)
+    /// Load user videos with performance optimization
     private func loadUserVideosLazily() async {
         guard let user = currentUser else { return }
         
@@ -183,11 +271,12 @@ class ProfileViewModel: ObservableObject {
         do {
             let db = Firestore.firestore(database: Config.Firebase.databaseName)
             
-            // Load ALL user videos (no limit for profile view)
+            // Load user videos directly from Firestore
             let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
                 .whereField(FirebaseSchema.VideoDocument.creatorID, isEqualTo: user.id)
                 .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-                .getDocuments() // NO LIMIT - get all videos
+                .limit(to: 50)
+                .getDocuments()
             
             let videos = snapshot.documents.compactMap { doc -> CoreVideoMetadata? in
                 let data = doc.data()
@@ -209,13 +298,18 @@ class ProfileViewModel: ObservableObject {
                     shareCount: data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0,
                     temperature: data[FirebaseSchema.VideoDocument.temperature] as? String ?? "neutral",
                     qualityScore: data[FirebaseSchema.VideoDocument.qualityScore] as? Int ?? 50,
-                    engagementRatio: 0.0,
-                    velocityScore: 0.0,
-                    trendingScore: 0.0,
-                    duration: data[FirebaseSchema.VideoDocument.duration] as? Double ?? 0.0,
-                    aspectRatio: data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? (9.0/16.0),
+                    engagementRatio: {
+                        let hypes = data[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0
+                        let cools = data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
+                        let total = hypes + cools
+                        return total > 0 ? Double(hypes) / Double(total) : 0.5
+                    }(),
+                    velocityScore: data["velocityScore"] as? Double ?? 0.0,
+                    trendingScore: data["trendingScore"] as? Double ?? 0.0,
+                    duration: data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0.0,
+                    aspectRatio: data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? 9.0/16.0,
                     fileSize: data[FirebaseSchema.VideoDocument.fileSize] as? Int64 ?? 0,
-                    discoverabilityScore: 0.5,
+                    discoverabilityScore: data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double ?? 0.5,
                     isPromoted: data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false,
                     lastEngagementAt: (data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp)?.dateValue()
                 )
@@ -226,32 +320,13 @@ class ProfileViewModel: ObservableObject {
                 self.isLoadingVideos = false
             }
             
-            print("PROFILE VIDEOS: Loaded ALL \(videos.count) videos for creator")
+            print("PROFILE VIDEOS: Loaded \(videos.count) videos")
             
         } catch {
             await MainActor.run {
                 self.isLoadingVideos = false
             }
             print("PROFILE VIDEOS ERROR: \(error.localizedDescription)")
-        }
-    }
-    
-    /// Load social data lazily (following/followers)
-    private func loadSocialDataLazily() async {
-        guard let user = currentUser else { return }
-        
-        // Load following and followers in small batches
-        await withTaskGroup(of: Void.self) { group in
-            
-            // Load following (limit to 20 for speed)
-            group.addTask {
-                await self.loadFollowingLazily(userID: user.id, limit: 20)
-            }
-            
-            // Load followers (limit to 20 for speed)
-            group.addTask {
-                await self.loadFollowersLazily(userID: user.id, limit: 20)
-            }
         }
     }
     
@@ -358,12 +433,15 @@ class ProfileViewModel: ObservableObject {
     func refreshProfile() async {
         guard let currentUserID = authService.currentUserID else { return }
         
+        print("PROFILE: Manual refresh triggered - clearing cache")
+        
         // Clear cache to force fresh data
         cachedUserProfile = nil
         profileCacheTime = nil
         
+        // Reload profile completely
         await loadProfile()
-        print("PROFILE: Refreshed with fresh data")
+        print("PROFILE: Refresh complete with fresh data")
     }
     
     func deleteVideo(_ video: CoreVideoMetadata) async -> Bool {
@@ -416,11 +494,9 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - ProfileView Integration Methods
     
-    /// Get bio for user (ProfileView compatibility) - Returns Optional for conditional binding
+    /// Get bio for user (ProfileView compatibility) - Returns bio from extended profile data
     func getBioForUser(_ user: BasicUserInfo) -> String? {
-        // For now, return nil since BasicUserInfo doesn't have bio
-        // This would be implemented when UserProfileData is used
-        return nil
+        return userBio
     }
     
     /// Format clout for display
@@ -490,5 +566,6 @@ extension ProfileViewModel {
         print("PROFILE VIEW MODEL: Hello World - Ready for instant profile loading!")
         print("PROFILE Features: Instant display, lazy content loading, cached profiles")
         print("PROFILE Performance: <50ms profile display, background enhancements")
+        print("PROFILE Notifications: NotificationCenter integration active")
     }
 }

@@ -2,16 +2,16 @@
 //  UserService.swift
 //  StitchSocial
 //
-//  Layer 4: Core Services - User Management with Profile Editing Fix
-//  Dependencies: Firebase Firestore, SpecialUserEntry
-//  Features: User CRUD, subcollection-based following system, profiles, Firebase integration
+//  Layer 4: Core Services - User Management with Complete Profile Editing Support
+//  Dependencies: Firebase Firestore, Firebase Storage, SpecialUserEntry
+//  Features: User CRUD, following system, profile editing (bio, photo, username, display name)
 //
 
 import Foundation
 import FirebaseFirestore
 import FirebaseStorage
 
-/// Service for user management and operations
+/// Service for user management and operations with complete profile editing support
 @MainActor
 class UserService: ObservableObject {
     
@@ -95,7 +95,7 @@ class UserService: ObservableObject {
         return user
     }
     
-    /// Get extended profile data for editing
+    /// Get extended profile data for editing - COMPLETE IMPLEMENTATION
     func getExtendedProfile(id: String) async throws -> UserProfileData? {
         let document = try await db.collection(FirebaseSchema.Collections.users).document(id).getDocument()
         
@@ -111,7 +111,7 @@ class UserService: ObservableObject {
         return profileData
     }
     
-    /// Update user profile - FIXED WITH USERNAME SUPPORT
+    /// Update user profile - COMPLETE SUPPORT FOR ALL FIELDS
     func updateProfile(
         userID: String,
         displayName: String? = nil,
@@ -119,6 +119,14 @@ class UserService: ObservableObject {
         isPrivate: Bool? = nil,
         username: String? = nil
     ) async throws {
+        
+        // Validate username uniqueness if provided
+        if let newUsername = username {
+            let isUnique = try await isUsernameUnique(username: newUsername, excludeUserID: userID)
+            guard isUnique else {
+                throw StitchError.validationError("Username '\(newUsername)' is already taken")
+            }
+        }
         
         var updates: [String: Any] = [
             FirebaseSchema.UserDocument.updatedAt: Timestamp()
@@ -143,27 +151,64 @@ class UserService: ObservableObject {
         try await db.collection(FirebaseSchema.Collections.users).document(userID).updateData(updates)
         
         print("USER SERVICE: Updated profile for \(userID)")
+        print("USER SERVICE: Updated fields: \(updates.keys.sorted())")
     }
     
-    /// Upload profile image
+    /// Upload profile image - COMPLETE IMPLEMENTATION
     func uploadProfileImage(userID: String, imageData: Data) async throws -> String {
+        
+        // Validate image size
+        let maxSize = OptimizationConfig.User.maxProfileImageSize
+        guard Int64(imageData.count) <= maxSize else {
+            throw StitchError.validationError("Image too large. Maximum size is \(maxSize / (1024 * 1024))MB")
+        }
+        
         let storageRef = storage.reference().child("profile_images/\(userID).jpg")
         
         let metadata = StorageMetadata()
         metadata.contentType = "image/jpeg"
+        metadata.customMetadata = [
+            "userID": userID,
+            "uploadedAt": "\(Date().timeIntervalSince1970)"
+        ]
         
+        // Upload image
         _ = try await storageRef.putDataAsync(imageData, metadata: metadata)
         let url = try await storageRef.downloadURL()
         let urlString = url.absoluteString
         
-        // Update user document
+        // Update user document with new image URL
         try await db.collection(FirebaseSchema.Collections.users).document(userID).updateData([
             FirebaseSchema.UserDocument.profileImageURL: urlString,
             FirebaseSchema.UserDocument.updatedAt: Timestamp()
         ])
         
         print("USER SERVICE: Profile image uploaded for \(userID)")
+        print("USER SERVICE: New image URL: \(urlString)")
         return urlString
+    }
+    
+    /// Check if username is unique - HELPER FOR VALIDATION
+    func isUsernameUnique(username: String, excludeUserID: String? = nil) async throws -> Bool {
+        let query = db.collection(FirebaseSchema.Collections.users)
+            .whereField(FirebaseSchema.UserDocument.username, isEqualTo: username)
+            .limit(to: 1)
+        
+        let snapshot = try await query.getDocuments()
+        
+        // If no documents found, username is unique
+        guard !snapshot.documents.isEmpty else {
+            return true
+        }
+        
+        // If excluding a specific user ID (for updates), check if the found user is the excluded one
+        if let excludeID = excludeUserID {
+            let foundUserID = snapshot.documents.first?.documentID
+            return foundUserID == excludeID
+        }
+        
+        // Username is taken
+        return false
     }
     
     /// Update user clout
@@ -218,7 +263,7 @@ class UserService: ObservableObject {
             "followedAt": timestamp
         ], forDocument: followerRef)
         
-        // Update counts - FIXED WITH INT64
+        // Update counts
         let followerUserRef = db.collection(FirebaseSchema.Collections.users).document(followerID)
         let followingUserRef = db.collection(FirebaseSchema.Collections.users).document(followingID)
         
@@ -255,7 +300,7 @@ class UserService: ObservableObject {
         batch.deleteDocument(followingRef)
         batch.deleteDocument(followerRef)
         
-        // Update counts - FIXED WITH INT64
+        // Update counts
         let timestamp = Timestamp()
         let followerUserRef = db.collection(FirebaseSchema.Collections.users).document(followerID)
         let followingUserRef = db.collection(FirebaseSchema.Collections.users).document(followingID)

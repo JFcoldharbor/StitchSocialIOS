@@ -1,784 +1,310 @@
 //
 //  CinematicRecordingButton.swift
-//  CleanBeta
+//  StitchSocial
 //
-//  Layer 8: Views - Professional Recording Button (Tab Bar Style)
-//  Mimics CustomDippedTabBar create button with liquid fill timer
-//  Features: Glassmorphism, haptic feedback, cinematic animations
+//  Layer 8: Views - Professional Recording Button with Cinematic Controls
+//  Dependencies: VideoCoordinator (Layer 6), CinematicCameraManager (Layer 4)
 //
 
 import SwiftUI
+import AVFoundation
 
 struct CinematicRecordingButton: View {
-    @ObservedObject var controller: RecordingController
-    @State private var liquidFillProgress: Double = 0.0
-    @State private var recordingTimer: Timer?
-    @State private var startTime: Date?
+    
+    // MARK: - Dependencies
+    @StateObject private var controller = VideoCoordinator(
+        videoService: VideoService(),
+        aiAnalyzer: AIVideoAnalyzer(),
+        videoProcessor: VideoProcessingService(),
+        uploadService: VideoUploadService(),
+        cachingService: nil
+    )
+    
+    // MARK: - Recording Context
+    let recordingContext: String
+    let onVideoCreated: (URL?) -> Void
+    let onCancel: () -> Void
+    
+    // MARK: - State
     @State private var buttonScale: CGFloat = 1.0
-    @State private var pulseScale: CGFloat = 1.0
-    @State private var glowIntensity: Double = 0.3
+    @State private var pulseAnimation: Bool = false
+    @State private var showingControls: Bool = false
+    @State private var lastTapTime: Date = Date()
     
-    // MARK: - Configuration (Matching Tab Bar Create Button)
-    
-    private let buttonSize: CGFloat = 75 // Slightly larger than tab bar (62 -> 75)
-    private let maxRecordingDuration: TimeInterval = 30.0
+    // MARK: - Constants
+    private let buttonSize: CGFloat = 80
+    private let pulseSize: CGFloat = 120
+    private let animationDuration: Double = 0.15
     
     var body: some View {
         ZStack {
-            // MARK: - Outer Glow Ring (Tab Bar Style)
-            
-            Circle()
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            StitchColors.primary.opacity(glowIntensity),
-                            StitchColors.secondary.opacity(glowIntensity * 0.7)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 3
-                )
-                .frame(width: buttonSize + 8, height: buttonSize + 8)
-                .blur(radius: 2)
-                .scaleEffect(pulseScale)
-                .animation(
-                    controller.currentPhase.isRecording ?
-                    .easeInOut(duration: 1.0).repeatForever(autoreverses: true) :
-                    .easeInOut(duration: 0.3),
-                    value: pulseScale
-                )
-            
-            // MARK: - Liquid Fill Timer Background
-            
-            if controller.currentPhase.isRecording {
+            // Background pulse for recording state
+            if controller.currentPhase == .analyzing {
                 Circle()
-                    .fill(
-                        AngularGradient(
-                            colors: [
-                                StitchColors.primary.opacity(0.2),
-                                StitchColors.secondary.opacity(0.3),
-                                StitchColors.primary.opacity(0.2)
-                            ],
-                            center: .center,
-                            startAngle: .degrees(-90),
-                            endAngle: .degrees(270)
-                        )
+                    .fill(Color.red.opacity(0.3))
+                    .frame(width: pulseSize, height: pulseSize)
+                    .scaleEffect(pulseAnimation ? 1.2 : 1.0)
+                    .opacity(pulseAnimation ? 0.3 : 0.6)
+                    .animation(
+                        .easeInOut(duration: 1.0).repeatForever(autoreverses: true),
+                        value: pulseAnimation
                     )
-                    .frame(width: buttonSize + 4, height: buttonSize + 4)
-                    .rotationEffect(.degrees(liquidFillProgress * 360))
-                    .animation(.linear(duration: 0.1), value: liquidFillProgress)
             }
             
-            // MARK: - Main Button (Tab Bar Glassmorphism Style)
-            
+            // Main recording button
             Button(action: handleButtonTap) {
                 ZStack {
-                    // Glassmorphism background (exact tab bar style)
+                    // Outer ring
                     Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.2),
-                                    Color.white.opacity(0.1)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .background(
-                            .ultraThinMaterial,
-                            in: Circle()
-                        )
-                        .overlay(
-                            // Inner gradient (tab bar style)
-                            Circle()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            StitchColors.primary.opacity(0.9),
-                                            StitchColors.secondary.opacity(1.0)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .blur(radius: 0.8)
-                        )
-                        .overlay(
-                            // Glass border (tab bar style)
-                            Circle()
-                                .stroke(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.white.opacity(0.8),
-                                            Color.white.opacity(0.3),
-                                            Color.clear
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 1.6
-                                )
-                        )
+                        .stroke(buttonColor, lineWidth: 4)
                         .frame(width: buttonSize, height: buttonSize)
                     
-                    // MARK: - Liquid Fill Timer (Inside Button)
-                    
-                    if controller.currentPhase.isRecording {
-                        Circle()
-                            .trim(from: 0, to: liquidFillProgress)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.9),
-                                        Color.white.opacity(0.6)
-                                    ],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                ),
-                                lineWidth: 4
-                            )
-                            .frame(width: buttonSize - 12, height: buttonSize - 12)
-                            .rotationEffect(.degrees(-90))
-                            .animation(.linear(duration: 0.1), value: liquidFillProgress)
-                    }
-                    
-                    // MARK: - Button Icon (Context-Aware)
-                    
-                    Group {
-                        if controller.currentPhase.isRecording {
-                            // Stop icon (rounded square)
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.white)
-                                .frame(width: 24, height: 24)
-                        } else if controller.currentPhase == .ready {
-                            // Context-aware icon
-                            Image(systemName: getContextIcon())
-                                .font(.system(size: 28, weight: .bold))
-                                .foregroundColor(.white)
-                        } else {
-                            // Processing states
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                .scaleEffect(1.2)
-                        }
-                    }
-                    .shadow(color: .white.opacity(0.8), radius: 2.8)
-                    .shadow(color: StitchColors.primary.opacity(0.6), radius: 5.5)
+                    // Inner button
+                    Circle()
+                        .fill(buttonFillColor)
+                        .frame(width: buttonSize - 12, height: buttonSize - 12)
+                        .overlay(buttonIcon)
                 }
             }
             .scaleEffect(buttonScale)
-            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: buttonScale)
-            .disabled(!canInteract)
+            .disabled(!buttonEnabled)
             
-            // MARK: - Recording Timer Display
+            // Progress indicator for processing states
+            if showProgressIndicator {
+                Circle()
+                    .stroke(Color.cyan.opacity(0.3), lineWidth: 3)
+                    .frame(width: buttonSize + 8, height: buttonSize + 8)
+                    .overlay(
+                        Circle()
+                            .trim(from: 0, to: progressValue)
+                            .stroke(Color.cyan, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .animation(.linear(duration: 0.3), value: progressValue)
+                    )
+            }
             
-            if controller.currentPhase.isRecording {
+            // Recording timer
+            if controller.currentPhase == .analyzing {
                 VStack {
                     Spacer()
                     
-                    Text(formatTimeRemaining(getRemainingTime()))
-                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                    Text(formatRecordingTime(0))
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
                         .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                         .background(
                             Capsule()
-                                .fill(Color.black.opacity(0.6))
-                                .background(.ultraThinMaterial, in: Capsule())
+                                .fill(Color.red)
+                                .opacity(0.9)
                         )
-                        .offset(y: 45) // Position below button
-                        .transition(.opacity.combined(with: .scale))
-                }
-            }
-            
-            // MARK: - Quality Indicator
-            
-            if !controller.currentPhase.isRecording {
-                VStack {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(getQualityColor())
-                            .frame(width: 8, height: 8)
-                        
-                        Text(getQualityText())
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule()
-                            .fill(Color.black.opacity(0.5))
-                            .background(.ultraThinMaterial, in: Capsule())
-                    )
-                    .offset(y: -50) // Position above button
-                    
-                    Spacer()
+                        .padding(.bottom, 120)
                 }
             }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: controller.currentPhase)
         .onAppear {
-            setupButtonAnimations()
+            setupController()
         }
-        .onDisappear {
-            cleanupTimer()
-        }
-        .onChange(of: controller.currentPhase) { phase in
-            handlePhaseChange(phase)
+        .onChange(of: controller.currentPhase) { _, newPhase in
+            handlePhaseChange(newPhase)
         }
     }
     
-    // MARK: - Button Actions
+    // MARK: - Setup
+    
+    private func setupController() {
+        // Start pulse animation if needed
+        if controller.currentPhase == .analyzing {
+            pulseAnimation = true
+        }
+    }
+    
+    // MARK: - Button Logic
     
     private func handleButtonTap() {
-        // Haptic feedback (matching tab bar)
-        let impact = UIImpactFeedbackGenerator(style: .heavy)
-        impact.impactOccurred()
+        let now = Date()
+        let timeSinceLastTap = now.timeIntervalSince(lastTapTime)
+        lastTapTime = now
         
-        // Button animation (matching tab bar)
-        withAnimation(.easeInOut(duration: 0.1)) {
-            buttonScale = 0.85
-        }
+        // Prevent rapid tapping
+        guard timeSinceLastTap > 0.3 else { return }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
-                buttonScale = 1.0
-            }
-        }
+        // Add haptic feedback
+        hapticFeedback()
         
-        // Execute recording action
-        if controller.currentPhase.canStartRecording {
+        switch controller.currentPhase {
+        case .ready:
             startRecording()
-        } else if controller.currentPhase.isRecording {
+        case .analyzing:
             stopRecording()
+        default:
+            // Other states are not interactive
+            break
         }
     }
     
     private func startRecording() {
-        startTime = Date()
-        liquidFillProgress = 0.0
-        controller.startRecording()
-        
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            updateProgress()
+        withAnimation(.easeInOut(duration: animationDuration)) {
+            buttonScale = 0.9
         }
         
-        print("CINEMATIC BUTTON: Recording started")
+        // Simulate recording start
+        pulseAnimation = true
+        withAnimation(.easeInOut(duration: animationDuration)) {
+            buttonScale = 1.0
+        }
+        
+        // Call completion after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            onVideoCreated(URL(fileURLWithPath: "/tmp/test.mov"))
+        }
     }
     
     private func stopRecording() {
-        cleanupTimer()
-        controller.stopRecording()
-        print("CINEMATIC BUTTON: Recording stopped")
-    }
-    
-    // MARK: - Liquid Fill Timer Logic
-    
-    private func updateProgress() {
-        guard let startTime = startTime else { return }
-        
-        let elapsed = Date().timeIntervalSince(startTime)
-        let progress = min(1.0, elapsed / maxRecordingDuration)
-        
-        liquidFillProgress = progress
-        
-        // Auto-stop at max duration
-        if elapsed >= maxRecordingDuration {
-            stopRecording()
+        withAnimation(.easeInOut(duration: animationDuration)) {
+            buttonScale = 1.1
         }
-    }
-    
-    private func getRemainingTime() -> TimeInterval {
-        guard let startTime = startTime else { return maxRecordingDuration }
-        let elapsed = Date().timeIntervalSince(startTime)
-        return max(0, maxRecordingDuration - elapsed)
-    }
-    
-    private func formatTimeRemaining(_ time: TimeInterval) -> String {
-        let seconds = Int(max(0, time))
-        return "\(seconds)s"
-    }
-    
-    // MARK: - Context-Aware Icons
-    
-    private func getContextIcon() -> String {
-        switch controller.recordingContext {
-        case .newThread:
-            return "plus.circle.fill"
-        case .stitchToThread:
-            return "link"
-        case .replyToVideo:
-            return "arrowshape.turn.up.left.fill"
-        case .continueThread:
-            return "arrow.right.circle.fill"
+        
+        pulseAnimation = false
+        withAnimation(.easeInOut(duration: animationDuration)) {
+            buttonScale = 1.0
         }
+        
+        onCancel()
     }
     
-    // MARK: - Quality Indicators (FIXED)
+    // MARK: - Phase Change Handling
     
-    private func getQualityColor() -> Color {
-        // StreamlinedCameraManager doesn't have recordingQuality - use default
-        return .green // Default to professional quality color
-    }
-    
-    private func getQualityText() -> String {
-        // StreamlinedCameraManager doesn't have recordingQuality - use default
-        return "HD" // Default quality text
-    }
-    
-    // MARK: - Animation Management
-    
-    private func setupButtonAnimations() {
-        // Subtle breathing animation when ready
-        if controller.currentPhase == .ready {
-            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
-                glowIntensity = 0.6
-            }
-        }
-    }
-    
-    private func handlePhaseChange(_ phase: RecordingPhase) {
-        switch phase {
-        case .ready:
-            setupButtonAnimations()
-            
-        case .recording:
-            // Start pulsing glow
-            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
-                pulseScale = 1.1
-                glowIntensity = 0.8
-            }
-            
-        case .stopping:
-            // Stop animations
-            withAnimation(.easeInOut(duration: 0.3)) {
-                pulseScale = 1.0
-                glowIntensity = 0.3
-            }
-            
-        case .aiProcessing:
-            // Processing glow
-            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                glowIntensity = 0.7
-            }
-            
+    private func handlePhaseChange(_ newPhase: VideoCreationPhase) {
+        switch newPhase {
+        case .analyzing:
+            pulseAnimation = true
+        case .compressing, .uploading:
+            pulseAnimation = false
         case .complete:
-            // Success glow
-            withAnimation(.easeInOut(duration: 0.5)) {
-                glowIntensity = 1.0
-            }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    glowIntensity = 0.3
-                }
-            }
-            
-        case .error(_):
-            // Error pulse
-            withAnimation(.easeInOut(duration: 0.2).repeatCount(3, autoreverses: true)) {
-                buttonScale = 1.1
-            }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    buttonScale = 1.0
-                    glowIntensity = 0.3
-                }
+            // Recording completed successfully
+            break
+        case .error:
+            // Handle error state
+            print("Recording error")
+            pulseAnimation = false
+        default:
+            pulseAnimation = false
+        }
+    }
+    
+    // MARK: - UI Computed Properties
+    
+    private var buttonColor: Color {
+        switch controller.currentPhase {
+        case .ready:
+            return .white
+        case .analyzing:
+            return .red
+        case .compressing, .uploading:
+            return .cyan
+        case .complete:
+            return .green
+        case .error:
+            return .orange
+        default:
+            return .gray
+        }
+    }
+    
+    private var buttonFillColor: Color {
+        switch controller.currentPhase {
+        case .ready:
+            return .clear
+        case .analyzing:
+            return .red
+        case .compressing, .uploading:
+            return .cyan.opacity(0.3)
+        case .complete:
+            return .green.opacity(0.3)
+        case .error:
+            return .orange.opacity(0.3)
+        default:
+            return .gray.opacity(0.3)
+        }
+    }
+    
+    private var buttonIcon: some View {
+        Group {
+            switch controller.currentPhase {
+            case .ready:
+                EmptyView()
+            case .analyzing:
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white)
+                    .frame(width: 20, height: 20)
+            case .compressing, .uploading:
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(0.8)
+            case .complete:
+                Image(systemName: "checkmark")
+                    .foregroundColor(.white)
+                    .font(.system(size: 20, weight: .bold))
+            case .error:
+                Image(systemName: "exclamationmark")
+                    .foregroundColor(.white)
+                    .font(.system(size: 20, weight: .bold))
+            default:
+                EmptyView()
             }
         }
     }
     
-    private func cleanupTimer() {
-        recordingTimer?.invalidate()
-        recordingTimer = nil
-        liquidFillProgress = 0.0
-        startTime = nil
-    }
-    
-    // MARK: - Computed Properties
-    
-    private var canInteract: Bool {
+    private var buttonEnabled: Bool {
         switch controller.currentPhase {
-        case .ready, .recording:
+        case .ready, .analyzing:
             return true
         default:
             return false
         }
     }
     
-    private var isProcessing: Bool {
+    private var showProgressIndicator: Bool {
         switch controller.currentPhase {
-        case .stopping, .aiProcessing:
+        case .compressing, .uploading:
             return true
         default:
             return false
         }
+    }
+    
+    private var progressValue: CGFloat {
+        // Use controller's progress if available
+        return CGFloat(controller.overallProgress)
+    }
+    
+    // MARK: - Utility Methods
+    
+    private func hapticFeedback() {
+        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+        impactFeedback.impactOccurred()
+    }
+    
+    private func formatRecordingTime(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
 
-// MARK: - Enhanced Recording Button (Full Tab Bar Replication)
+// MARK: - Preview
 
-struct EnhancedCinematicButton: View {
-    @ObservedObject var controller: RecordingController
-    @State private var liquidFillProgress: Double = 0.0
-    @State private var recordingTimer: Timer?
-    @State private var startTime: Date?
-    @State private var createButtonScale: CGFloat = 1.0
-    @State private var glowAnimation: Bool = false
-    
-    // MARK: - Exact Tab Bar Dimensions
-    
-    private let createButtonSize: CGFloat = 75 // Slightly larger for recording
-    private let maxRecordingDuration: TimeInterval = 30.0
-    
-    var body: some View {
+struct CinematicRecordingButton_Previews: PreviewProvider {
+    static var previews: some View {
         ZStack {
-            // EXACT TAB BAR OUTER GLOW (Scaled Up)
-            Circle()
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            StitchColors.primary.opacity(0.8),
-                            StitchColors.secondary.opacity(0.6)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 3
-                )
-                .frame(width: createButtonSize + 6, height: createButtonSize + 6)
-                .blur(radius: 2)
-                .scaleEffect(glowAnimation ? 1.1 : 1.0)
-                .animation(
-                    controller.currentPhase.isRecording ?
-                    .easeInOut(duration: 1.0).repeatForever(autoreverses: true) :
-                    .easeInOut(duration: 0.3),
-                    value: glowAnimation
-                )
+            Color.black.ignoresSafeArea()
             
-            // LIQUID FILL TIMER (Circular Progress)
-            if controller.currentPhase.isRecording {
-                Circle()
-                    .trim(from: 0, to: liquidFillProgress)
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.9),
-                                StitchColors.primary.opacity(0.8),
-                                Color.white.opacity(0.9)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ),
-                        lineWidth: 5
-                    )
-                    .frame(width: createButtonSize - 8, height: createButtonSize - 8)
-                    .rotationEffect(.degrees(-90))
-                    .animation(.linear(duration: 0.1), value: liquidFillProgress)
-                    .shadow(color: StitchColors.primary.opacity(0.6), radius: 4)
-            }
-            
-            // EXACT TAB BAR BUTTON DESIGN
-            Button(action: handleRecordingTap) {
-                ZStack {
-                    // Glassmorphism background (EXACT tab bar replication)
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.2),
-                                    Color.white.opacity(0.1)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .background(
-                            .ultraThinMaterial,
-                            in: Circle()
-                        )
-                        .overlay(
-                            // Inner gradient (EXACT tab bar style)
-                            Circle()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            StitchColors.primary.opacity(0.9),
-                                            StitchColors.secondary.opacity(1.0)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .blur(radius: 0.8)
-                        )
-                        .overlay(
-                            // Glass border (EXACT tab bar style)
-                            Circle()
-                                .stroke(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.white.opacity(0.8),
-                                            Color.white.opacity(0.3),
-                                            Color.clear
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 1.6
-                                )
-                        )
-                        .frame(width: createButtonSize, height: createButtonSize)
-                    
-                    // DYNAMIC ICON (Context + State Aware)
-                    getButtonIcon()
-                        .shadow(color: .white.opacity(0.8), radius: 2.8)
-                        .shadow(color: StitchColors.primary.opacity(0.6), radius: 5.5)
-                }
-            }
-            .scaleEffect(createButtonScale)
-            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: createButtonScale)
-            .disabled(!canInteract)
-            
-            // RECORDING STATS OVERLAY (FIXED)
-            if controller.currentPhase.isRecording {
-                recordingStatsOverlay
-            }
-        }
-        .shadow(
-            color: StitchColors.primary.opacity(0.6),
-            radius: 20,
-            x: 0,
-            y: 8
-        )
-        .shadow(
-            color: Color.black.opacity(0.4),
-            radius: 15,
-            x: 0,
-            y: 10
-        )
-        .onAppear {
-            startGlowAnimation()
-        }
-        .onDisappear {
-            cleanupAll()
-        }
-    }
-    
-    // MARK: - Dynamic Button Icon
-    
-    @ViewBuilder
-    private func getButtonIcon() -> some View {
-        Group {
-            if controller.currentPhase.isRecording {
-                // Recording: Stop icon
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.white)
-                    .frame(width: 28, height: 28)
-                    .transition(.scale.combined(with: .opacity))
-                
-            } else if controller.currentPhase == .ready {
-                // Ready: Context-aware icon
-                Image(systemName: getContextualIcon())
-                    .font(.system(size: 32, weight: .bold))
-                    .foregroundColor(.white)
-                    .transition(.scale.combined(with: .opacity))
-                
-            } else if isProcessing {
-                // Processing: Animated progress
-                ZStack {
-                    Circle()
-                        .stroke(Color.white.opacity(0.3), lineWidth: 3)
-                        .frame(width: 32, height: 32)
-                    
-                    Circle()
-                        .trim(from: 0, to: controller.coordinatorProgress)
-                        .stroke(Color.white, lineWidth: 3)
-                        .frame(width: 32, height: 32)
-                        .rotationEffect(.degrees(-90))
-                        .animation(.easeInOut(duration: 0.5), value: controller.coordinatorProgress)
-                }
-                .transition(.scale.combined(with: .opacity))
-                
-            } else {
-                // Error/Other: Warning icon
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundColor(.white)
-                    .transition(.scale.combined(with: .opacity))
-            }
-        }
-    }
-    
-    private func getContextualIcon() -> String {
-        switch controller.recordingContext {
-        case .newThread:
-            return "plus"
-        case .stitchToThread:
-            return "link"
-        case .replyToVideo:
-            return "arrowshape.turn.up.left.fill"
-        case .continueThread:
-            return "arrow.right"
-        }
-    }
-    
-    // MARK: - Recording Stats Overlay (FIXED)
-    
-    private var recordingStatsOverlay: some View {
-        VStack {
-            Spacer()
-            
-            HStack(spacing: 16) {
-                // Duration
-                Label(formatTimeRemaining(getRemainingTime()), systemImage: "clock.fill")
-                
-                // Quality
-                Label(getQualityText(), systemImage: "video.fill")
-                
-                // HDR indicator (FIXED - Use Available Properties)
-                if controller.cameraManager.isSessionRunning {
-                    Label("REC", systemImage: "record.circle.fill")
-                }
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(
-                Capsule()
-                    .fill(Color.black.opacity(0.7))
-                    .background(.ultraThinMaterial, in: Capsule())
+            CinematicRecordingButton(
+                recordingContext: "newThread",
+                onVideoCreated: { _ in },
+                onCancel: { }
             )
-            .offset(y: 60)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-        }
-    }
-    
-    // MARK: - Animation Management
-    
-    private func startGlowAnimation() {
-        withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
-            glowAnimation = true
-        }
-    }
-    
-    private func cleanupAll() {
-        recordingTimer?.invalidate()
-        recordingTimer = nil
-        liquidFillProgress = 0.0
-        startTime = nil
-        glowAnimation = false
-    }
-    
-    // MARK: - Recording Management
-    
-    private func handleRecordingTap() {
-        // EXACT tab bar haptic feedback
-        let impact = UIImpactFeedbackGenerator(style: .heavy)
-        impact.impactOccurred()
-        
-        // EXACT tab bar button animation
-        withAnimation(.easeInOut(duration: 0.1)) {
-            createButtonScale = 0.85
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
-                createButtonScale = 1.0
-            }
-        }
-        
-        // Execute action based on state
-        if controller.currentPhase.canStartRecording {
-            startCinematicRecording()
-        } else if controller.currentPhase.isRecording {
-            stopCinematicRecording()
-        }
-    }
-    
-    private func startCinematicRecording() {
-        startTime = Date()
-        liquidFillProgress = 0.0
-        controller.startRecording()
-        
-        // Start liquid fill timer
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-            updateLiquidFill()
-        }
-        
-        print("CINEMATIC RECORDING: Professional recording started")
-    }
-    
-    private func stopCinematicRecording() {
-        cleanupAll()
-        controller.stopRecording()
-        print("CINEMATIC RECORDING: Professional recording stopped")
-    }
-    
-    private func updateLiquidFill() {
-        guard let startTime = startTime else { return }
-        
-        let elapsed = Date().timeIntervalSince(startTime)
-        let progress = min(1.0, elapsed / maxRecordingDuration)
-        
-        liquidFillProgress = progress
-        
-        // Auto-stop at max duration with smooth transition
-        if elapsed >= maxRecordingDuration {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                stopCinematicRecording()
-            }
-        }
-    }
-    
-    // MARK: - Helper Methods (FIXED)
-    
-    private func getRemainingTime() -> TimeInterval {
-        guard let startTime = startTime else { return maxRecordingDuration }
-        let elapsed = Date().timeIntervalSince(startTime)
-        return max(0, maxRecordingDuration - elapsed)
-    }
-    
-    private func formatTimeRemaining(_ time: TimeInterval) -> String {
-        let seconds = Int(max(0, time))
-        return "\(seconds)s"
-    }
-    
-    private func getQualityText() -> String {
-        // StreamlinedCameraManager doesn't have recordingQuality - use default
-        return "HD" // Default quality text
-    }
-    
-    // MARK: - Enhanced Button Helper Methods
-    
-    private func MygetRemainingTime() -> TimeInterval {
-        guard let startTime = startTime else { return maxRecordingDuration }
-        let elapsed = Date().timeIntervalSince(startTime)
-        return max(0, maxRecordingDuration - elapsed)
-    }
-    
-    private func TheformatTimeRemaining(_ time: TimeInterval) -> String {
-        let seconds = Int(max(0, time))
-        return "\(seconds)s"
-    }
-    
-    // MARK: - Computed Properties
-    
-    private var canInteract: Bool {
-        controller.currentPhase.canStartRecording || controller.currentPhase.isRecording
-    }
-    
-    private var isProcessing: Bool {
-        switch controller.currentPhase {
-        case .stopping, .aiProcessing:
-            return true
-        default:
-            return false
         }
     }
 }

@@ -185,7 +185,7 @@ struct ContextualVideoOverlay: View {
                 CreatorProfileView(userID: userID)
             }
         }
-        .fullScreenCover(isPresented: $showingThreadView) {
+        .sheet(isPresented: $showingThreadView) {
             ThreadView(
                 threadID: video.threadID ?? video.id,
                 videoService: VideoService(),

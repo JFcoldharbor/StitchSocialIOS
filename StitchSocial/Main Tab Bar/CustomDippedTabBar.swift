@@ -2,9 +2,9 @@
 //  CustomDippedTabBar.swift
 //  CleanBeta
 //
-//  Layer 8: Views - Custom Dipped Tab Bar
+//  Layer 8: Views - Custom Dipped Tab Bar (Compact Version)
 //  Dependencies: Layer 1 (Foundation)
-//  Custom tab bar with dipped center for create button
+//  Custom tab bar with dipped center for create button - 50% smaller with enhanced icons
 //
 
 import SwiftUI
@@ -54,9 +54,8 @@ enum MainAppTab: String, CaseIterable {
     }
 }
 
-/// Custom tab bar with dipped center for create button
-/// Matches CleanStitch design with smooth animations and haptic feedback
-/// Clean architecture with proper tab management and state handling
+/// Custom tab bar with dipped center for create button - COMPACT VERSION
+/// 50% smaller with enhanced icon visibility and detail
 struct CustomDippedTabBar: View {
     
     // MARK: - Properties
@@ -67,16 +66,16 @@ struct CustomDippedTabBar: View {
     
     // MARK: - Private State
     
-    @State private var tabBarHeight: CGFloat = 33 // Container 20% smaller (54 * 0.8)
+    @State private var tabBarHeight: CGFloat = 70 // Increased from 33 for better proportions
     @State private var tabBarOffset: CGFloat = 0
-    @State private var createButtonScale: CGFloat = 1.10
+    @State private var createButtonScale: CGFloat = 1.0
     
-    // MARK: - Tab Bar Configuration
+    // MARK: - COMPACT Tab Bar Configuration
     
-    private let tabBarCornerRadius: CGFloat = 11 // Container proportionally smaller (14 * 0.8)
-    private let dippedRadius: CGFloat = 0 // Container proportionally smaller (24 * 0.8)
-    private let createButtonSize: CGFloat = 68 // Keep create button same size
-    private let tabItemSize: CGFloat = 30 // Container proportionally smaller
+    private let tabBarCornerRadius: CGFloat = 18 // Slightly larger for better look
+    private let dippedRadius: CGFloat = 16 // Small dip for create button
+    private let createButtonSize: CGFloat = 56 // Smaller create button
+    private let tabItemSize: CGFloat = 40 // Larger icons for visibility
     
     var body: some View {
         ZStack {
@@ -122,15 +121,16 @@ struct CustomDippedTabBar: View {
                 
                 Spacer()
             }
-            .padding(.horizontal, 5) // Container proportionally smaller (11 * 0.8)
+            .padding(.horizontal, 16)
             .frame(height: tabBarHeight)
             
             // Floating create button
             createButton
         }
         .frame(height: tabBarHeight)
-        .offset(y: tabBarOffset)
+        .offset(y: tabBarOffset + 35) // Push much further down beyond screen edge
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: tabBarOffset)
+        .ignoresSafeArea(.all) // Flush to bottom, ignore safe area
     }
     
     // MARK: - Tab Bar Background
@@ -143,9 +143,9 @@ struct CustomDippedTabBar: View {
                     // Glassmorphism background
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(0.1),
-                            Color.white.opacity(0.05),
-                            Color.black.opacity(0.1)
+                            Color.white.opacity(0.12),
+                            Color.white.opacity(0.06),
+                            Color.black.opacity(0.15)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -162,14 +162,14 @@ struct CustomDippedTabBar: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.3),
-                                    Color.white.opacity(0.1),
+                                    Color.white.opacity(0.4),
+                                    Color.white.opacity(0.15),
                                     Color.clear
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 1
+                            lineWidth: 1.5
                         )
                 )
                 .clipShape(DippedTabBarShape(dippedRadius: dippedRadius))
@@ -177,25 +177,25 @@ struct CustomDippedTabBar: View {
             // Outer border with subtle glow
             DippedTabBarShape(dippedRadius: dippedRadius)
                 .stroke(
-                    Color.white.opacity(0.15),
-                    lineWidth: 0.5
+                    Color.white.opacity(0.2),
+                    lineWidth: 0.8
                 )
         }
         .shadow(
-            color: Color.black.opacity(0.3),
-            radius: 16, // Reduced from 20
+            color: Color.black.opacity(0.25),
+            radius: 12,
             x: 0,
-            y: 8 // Reduced from 10
+            y: 6
         )
         .shadow(
-            color: StitchColors.primary.opacity(0.2),
-            radius: 24, // Reduced from 30
+            color: StitchColors.primary.opacity(0.15),
+            radius: 18,
             x: 0,
-            y: 4 // Reduced from 5
+            y: 3
         )
     }
     
-    // MARK: - Create Button
+    // MARK: - Create Button (COMPACT)
     
     private var createButton: some View {
         VStack {
@@ -208,24 +208,24 @@ struct CustomDippedTabBar: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    StitchColors.primary.opacity(0.8),
-                                    StitchColors.secondary.opacity(0.6)
+                                    StitchColors.primary.opacity(0.9),
+                                    StitchColors.secondary.opacity(0.7)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 2.4 // Reduced from 3
+                            lineWidth: 2.5
                         )
-                        .frame(width: createButtonSize + 10, height: createButtonSize + 10) // Reduced from +6
-                        .blur(radius: 1.6) // Reduced from 2
+                        .frame(width: createButtonSize + 8, height: createButtonSize + 8)
+                        .blur(radius: 1.2)
                     
                     // Glassmorphism background
                     Circle()
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.2),
-                                    Color.white.opacity(0.1)
+                                    Color.white.opacity(0.25),
+                                    Color.white.opacity(0.12)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -241,14 +241,14 @@ struct CustomDippedTabBar: View {
                                 .fill(
                                     LinearGradient(
                                         colors: [
-                                            StitchColors.primary.opacity(0.9),
+                                            StitchColors.primary.opacity(0.95),
                                             StitchColors.secondary.opacity(1.0)
                                         ],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     )
                                 )
-                                .blur(radius: 0.8) // Reduced from 1
+                                .blur(radius: 0.6)
                         )
                         .overlay(
                             // Glass border
@@ -256,44 +256,44 @@ struct CustomDippedTabBar: View {
                                 .stroke(
                                     LinearGradient(
                                         colors: [
-                                            Color.white.opacity(0.8),
-                                            Color.white.opacity(0.3),
+                                            Color.white.opacity(0.9),
+                                            Color.white.opacity(0.4),
                                             Color.clear
                                         ],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     ),
-                                    lineWidth: 1 // Reduced from 2
+                                    lineWidth: 1.2
                                 )
                         )
                         .frame(width: createButtonSize, height: createButtonSize)
                     
                     // Plus icon with enhanced styling
                     Image(systemName: "plus")
-                        .font(.system(size: 24, weight: .bold)) // Create button icon bigger (21 * 1.15)
+                        .font(.system(size: 20, weight: .bold))
                         .foregroundColor(.white)
-                        .shadow(color: .white.opacity(0.8), radius: 2.8) // Proportionally bigger
-                        .shadow(color: StitchColors.primary.opacity(0.6), radius: 5.5) // Proportionally bigger
+                        .shadow(color: .white.opacity(0.9), radius: 2)
+                        .shadow(color: StitchColors.primary.opacity(0.7), radius: 4)
                 }
             }
             .scaleEffect(createButtonScale)
             .animation(.spring(response: 0.2, dampingFraction: 0.6), value: createButtonScale)
             .shadow(
-                color: StitchColors.primary.opacity(0.6),
-                radius: 16, // Reduced from 20
+                color: StitchColors.primary.opacity(0.7),
+                radius: 14,
                 x: 0,
-                y: 6 // Reduced from 8
+                y: 5
             )
             .shadow(
-                color: Color.black.opacity(0.4),
-                radius: 12, // Reduced from 15
+                color: Color.black.opacity(0.35),
+                radius: 10,
                 x: 0,
-                y: 25 // Reduced from 10
+                y: 8
             )
-            .offset(y: -10) // Reduced from -12
+            .offset(y: -25) // Push create button up more to stay visible
             
             Spacer()
-                .frame(height: 26) // Reduced from 30
+                .frame(height: 2) // Very minimal spacer
         }
     }
     
@@ -301,7 +301,7 @@ struct CustomDippedTabBar: View {
     
     private var createButtonSpace: some View {
         Spacer()
-            .frame(width: createButtonSize + 22) // Reduced from +20
+            .frame(width: createButtonSize + 16)
     }
     
     // MARK: - Actions
@@ -319,7 +319,7 @@ struct CustomDippedTabBar: View {
         
         // Animation feedback
         withAnimation(.easeInOut(duration: 0.1)) {
-            tabBarOffset = 2
+            tabBarOffset = 1.5
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -336,7 +336,7 @@ struct CustomDippedTabBar: View {
         
         // Button animation
         withAnimation(.easeInOut(duration: 0.1)) {
-            createButtonScale = 0.85
+            createButtonScale = 0.88
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -350,7 +350,7 @@ struct CustomDippedTabBar: View {
     }
 }
 
-// MARK: - Tab Bar Item
+// MARK: - Enhanced Tab Bar Item
 
 struct TabBarItem: View {
     let tab: MainAppTab
@@ -361,27 +361,37 @@ struct TabBarItem: View {
     
     var body: some View {
         Button(action: onTap) {
-            VStack(spacing: 3) { // Keep spacing larger for readability
+            VStack(spacing: 4) {
+                // Enhanced icon with better visibility
                 Image(systemName: isSelected ? tab.selectedIcon : tab.icon)
-                    .font(.system(size: 16, weight: .medium)) // Keep icons larger for visibility
+                    .font(.system(size: 22, weight: .medium)) // Much larger icons
                     .foregroundColor(isSelected ? .white : StitchColors.textSecondary)
+                    .shadow(
+                        color: isSelected ? .white.opacity(0.3) : .clear,
+                        radius: 2
+                    )
                 
+                // Larger, more readable text
                 Text(tab.title)
-                    .font(.system(size: 8, weight: .medium)) // Keep text readable
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(isSelected ? .white : StitchColors.textSecondary)
+                    .shadow(
+                        color: isSelected ? .black.opacity(0.3) : .clear,
+                        radius: 1
+                    )
             }
-            .padding(.horizontal, 10) // Keep padding larger for touch targets
-            .padding(.vertical, 6) // Keep padding larger for touch targets
+            .padding(.horizontal, 8) // Reduced padding
+            .padding(.vertical, 4) // Reduced padding
             .background(
                 Group {
                     if isSelected {
-                        // Glassmorphism background for selected tab
-                        RoundedRectangle(cornerRadius: 8) // Container proportionally smaller (10 * 0.8)
+                        // Enhanced glassmorphism background for selected tab
+                        RoundedRectangle(cornerRadius: 12)
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        Color.white.opacity(0.25),
-                                        Color.white.opacity(0.1)
+                                        Color.white.opacity(0.3),
+                                        Color.white.opacity(0.15)
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
@@ -389,56 +399,60 @@ struct TabBarItem: View {
                             )
                             .background(
                                 .ultraThinMaterial,
-                                in: RoundedRectangle(cornerRadius: 8)
+                                in: RoundedRectangle(cornerRadius: 12)
                             )
                             .overlay(
                                 // Inner glow
-                                RoundedRectangle(cornerRadius: 8)
+                                RoundedRectangle(cornerRadius: 12)
                                     .fill(
                                         LinearGradient(
                                             colors: [
-                                                StitchColors.primary.opacity(0.3),
-                                                StitchColors.secondary.opacity(0.2)
+                                                StitchColors.primary.opacity(0.4),
+                                                StitchColors.secondary.opacity(0.25)
                                             ],
                                             startPoint: .topLeading,
                                             endPoint: .bottomTrailing
                                         )
                                     )
-                                    .blur(radius: 0.8) // Reduced from 1
+                                    .blur(radius: 1)
                             )
                             .overlay(
-                                // Glass border
-                                RoundedRectangle(cornerRadius: 8)
+                                // Enhanced glass border
+                                RoundedRectangle(cornerRadius: 12)
                                     .stroke(
                                         LinearGradient(
                                             colors: [
-                                                Color.white.opacity(0.4),
-                                                Color.white.opacity(0.1),
+                                                Color.white.opacity(0.6),
+                                                Color.white.opacity(0.2),
                                                 Color.clear
                                             ],
                                             startPoint: .topLeading,
                                             endPoint: .bottomTrailing
                                         ),
-                                        lineWidth: 0.8 // Reduced from 1
+                                        lineWidth: 1.2
                                     )
                             )
                             .shadow(
-                                color: StitchColors.primary.opacity(0.3),
-                                radius: 6, // Reduced from 8
+                                color: StitchColors.primary.opacity(0.4),
+                                radius: 8,
                                 x: 0,
-                                y: 1.6 // Reduced from 2
+                                y: 2
                             )
                     } else if isPressed {
-                        // Subtle press effect
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.white.opacity(0.1))
+                        // Enhanced subtle press effect
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.15))
                             .background(.ultraThinMaterial)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 0.8)
+                            )
                     }
                 }
             )
         }
-        .frame(minWidth: 50) // Keep touch targets larger for usability
-        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .frame(minWidth: 65) // Larger touch targets
+        .scaleEffect(isPressed ? 0.96 : 1.0)
         .animation(.easeInOut(duration: 0.2), value: isSelected)
         .animation(.easeInOut(duration: 0.1), value: isPressed)
         .onTapGesture {
@@ -458,7 +472,7 @@ struct TabBarItem: View {
     }
 }
 
-// MARK: - Dipped Tab Bar Shape
+// MARK: - Enhanced Dipped Tab Bar Shape
 
 struct DippedTabBarShape: Shape {
     let dippedRadius: CGFloat
@@ -466,11 +480,11 @@ struct DippedTabBarShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
         
-        let cornerRadius: CGFloat = 9 // Container proportionally smaller (11 * 0.8)
+        let cornerRadius: CGFloat = 18
         let width = rect.width
         let height = rect.height
         let centerX = width / 2
-        let dippedWidth = dippedRadius * 2.5
+        let dippedWidth = dippedRadius * 2.8
         
         // Start from top-left
         path.move(to: CGPoint(x: cornerRadius, y: 0))
@@ -478,10 +492,10 @@ struct DippedTabBarShape: Shape {
         // Top edge to dip start
         path.addLine(to: CGPoint(x: centerX - dippedWidth/2, y: 0))
         
-        // Create the dip for center button
+        // Create the dip for center button (more pronounced)
         path.addQuadCurve(
             to: CGPoint(x: centerX + dippedWidth/2, y: 0),
-            control: CGPoint(x: centerX, y: dippedRadius)
+            control: CGPoint(x: centerX, y: dippedRadius * 1.2)
         )
         
         // Top edge to top-right corner

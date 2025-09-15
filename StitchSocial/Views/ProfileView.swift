@@ -2,13 +2,13 @@
 //  ProfileView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Optimized Profile Display with Prominent Hype Meter
-//  Dependencies: ProfileViewModel (Layer 7) ONLY
-//  Features: Reorganized layout, bio sections, prominent hype meter, red verified badge
-//  ARCHITECTURE COMPLIANT: No business logic, no service calls
+//  Layer 8: Views - Optimized Profile Display with Fixed Video Grid and Refresh
+//  Dependencies: ProfileViewModel (Layer 7), VideoThumbnailView, EditProfileView
+//  Features: Lightweight thumbnails, profile refresh, proper video playback, thumbnail caching
 //
 
 import SwiftUI
+import PhotosUI
 
 struct ProfileView: View {
     
@@ -50,6 +50,471 @@ struct ProfileView: View {
             videoService: videoSvc
         ))
     }
+
+// MARK: - Edit Profile View Implementation
+
+struct EditProfileView: View {
+    
+    // MARK: - Dependencies
+    
+    let userService: UserService
+    @Binding var user: BasicUserInfo
+    
+    // MARK: - Form State
+    
+    @State private var displayName: String = ""
+    @State private var username: String = ""
+    @State private var bio: String = ""
+    @State private var isPrivate: Bool = false
+    
+    // MARK: - Image Picker State
+    
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var profileImageData: Data?
+    @State private var profileImageURL: String?
+    
+    // MARK: - UI State
+    
+    @State private var isLoading = false
+    @State private var showingError = false
+    @State private var errorMessage = ""
+    @State private var hasChanges = false
+    
+    // MARK: - Environment
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    // MARK: - Body
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                
+                ScrollView {
+                    VStack(spacing: 24) {
+                        profileImageSection
+                        formSection
+                        privacySection
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+                }
+            }
+            .navigationTitle("Edit Profile")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        Task { await saveProfile() }
+                    }
+                    .foregroundColor(hasChanges ? .cyan : .gray)
+                    .fontWeight(.semibold)
+                    .disabled(!hasChanges || isLoading)
+                }
+            }
+        }
+        .onAppear {
+            loadCurrentProfile()
+        }
+        .onChange(of: selectedPhoto) { _, newPhoto in
+            loadSelectedPhoto(newPhoto)
+        }
+        .onChange(of: displayName) { _, _ in checkForChanges() }
+        .onChange(of: username) { _, _ in checkForChanges() }
+        .onChange(of: bio) { _, _ in checkForChanges() }
+        .onChange(of: isPrivate) { _, _ in checkForChanges() }
+        .alert("Error", isPresented: $showingError) {
+            Button("OK") { }
+        } message: {
+            Text(errorMessage)
+        }
+        .overlay {
+            if isLoading {
+                loadingOverlay
+            }
+        }
+    }
+    
+    // MARK: - Profile Image Section
+    
+    private var profileImageSection: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                // Profile image
+                if let profileImageURL = profileImageURL, !profileImageURL.isEmpty {
+                    AsyncImage(url: URL(string: profileImageURL)) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .overlay(
+                                ProgressView()
+                                    .tint(.white)
+                                    .scaleEffect(0.8)
+                            )
+                    }
+                } else if let originalURL = user.profileImageURL, !originalURL.isEmpty {
+                    AsyncImage(url: URL(string: originalURL)) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .overlay(
+                                Image(systemName: "person.fill")
+                                    .font(.title)
+                                    .foregroundColor(.gray)
+                            )
+                    }
+                } else {
+                    Circle()
+                        .fill(LinearGradient(
+                            colors: [.blue.opacity(0.3), .purple.opacity(0.1)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ))
+                        .overlay(
+                            Text(user.displayName.prefix(2).uppercased())
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                        )
+                }
+                
+                // Edit button overlay
+                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.black.opacity(0.7))
+                            .frame(width: 36, height: 36)
+                        
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.white)
+                    }
+                }
+                .offset(x: 40, y: 40)
+            }
+            .frame(width: 120, height: 120)
+            .clipShape(Circle())
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(0.2), lineWidth: 2)
+            )
+            
+            Text("Tap to change photo")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+    }
+    
+    // MARK: - Form Section
+    
+    private var formSection: some View {
+        VStack(spacing: 20) {
+            // Display Name
+            formField(
+                title: "Display Name",
+                text: $displayName,
+                placeholder: "Enter display name",
+                maxLength: 50
+            )
+            
+            // Username
+            formField(
+                title: "Username",
+                text: $username,
+                placeholder: "Enter username",
+                maxLength: 20,
+                prefix: "@"
+            )
+            
+            // Bio
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Bio")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    Text("\(bio.count)/150")
+                        .font(.caption)
+                        .foregroundColor(bio.count > 150 ? .red : .gray)
+                }
+                
+                ZStack(alignment: .topLeading) {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.1))
+                        .frame(height: 100)
+                    
+                    TextEditor(text: $bio)
+                        .font(.body)
+                        .foregroundColor(.white)
+                        .background(Color.clear)
+                        .padding(12)
+                        .scrollContentBackground(.hidden)
+                    
+                    if bio.isEmpty {
+                        Text("Tell people about yourself...")
+                            .font(.body)
+                            .foregroundColor(.gray)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 20)
+                            .allowsHitTesting(false)
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Privacy Section
+    
+    private var privacySection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Privacy")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            Toggle(isOn: $isPrivate) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Private Account")
+                        .font(.body)
+                        .foregroundColor(.white)
+                    
+                    Text("Only followers can see your videos")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+            .toggleStyle(SwitchToggleStyle(tint: .cyan))
+        }
+        .padding(.vertical, 8)
+    }
+    
+    // MARK: - Form Field Helper
+    
+    private func formField(
+        title: String,
+        text: Binding<String>,
+        placeholder: String,
+        maxLength: Int,
+        prefix: String = ""
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                Text("\(text.wrappedValue.count)/\(maxLength)")
+                    .font(.caption)
+                    .foregroundColor(text.wrappedValue.count > maxLength ? .red : .gray)
+            }
+            
+            HStack {
+                if !prefix.isEmpty {
+                    Text(prefix)
+                        .font(.body)
+                        .foregroundColor(.gray)
+                }
+                
+                TextField(placeholder, text: text)
+                    .font(.body)
+                    .foregroundColor(.white)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .onChange(of: text.wrappedValue) { _, newValue in
+                        if newValue.count > maxLength {
+                            text.wrappedValue = String(newValue.prefix(maxLength))
+                        }
+                    }
+            }
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.white.opacity(0.1))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(text.wrappedValue.count > maxLength ? .red : Color.clear, lineWidth: 1)
+            )
+        }
+    }
+    
+    // MARK: - Loading Overlay
+    
+    private var loadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.7)
+                .ignoresSafeArea()
+            
+            VStack(spacing: 16) {
+                ProgressView()
+                    .scaleEffect(1.2)
+                    .tint(.white)
+                
+                Text("Saving profile...")
+                    .font(.headline)
+                    .foregroundColor(.white)
+            }
+            .padding(32)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.black.opacity(0.8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+            )
+        }
+    }
+    
+    // MARK: - Methods
+    
+    private func loadCurrentProfile() {
+        displayName = user.displayName
+        username = user.username
+        profileImageURL = user.profileImageURL
+        
+        // Load extended profile data for bio and privacy
+        Task {
+            do {
+                if let profile = try await userService.getExtendedProfile(id: user.id) {
+                    await MainActor.run {
+                        bio = profile.bio
+                        isPrivate = profile.isPrivate
+                    }
+                }
+            } catch {
+                print("Failed to load extended profile: \(error)")
+            }
+        }
+    }
+    
+    private func loadSelectedPhoto(_ photoItem: PhotosPickerItem?) {
+        guard let photoItem = photoItem else { return }
+        
+        Task {
+            do {
+                if let data = try await photoItem.loadTransferable(type: Data.self) {
+                    await MainActor.run {
+                        profileImageData = data
+                        // Create temporary URL for preview
+                        profileImageURL = "data:image/jpeg;base64,\(data.base64EncodedString())"
+                        checkForChanges()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    showError("Failed to load selected photo: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    private func checkForChanges() {
+        let hasDisplayNameChanged = displayName != user.displayName
+        let hasUsernameChanged = username != user.username
+        let hasImageChanged = profileImageData != nil
+        
+        // Check bio changes by loading current bio and comparing
+        Task {
+            do {
+                if let profile = try await userService.getExtendedProfile(id: user.id) {
+                    await MainActor.run {
+                        let hasBioChanged = bio != profile.bio
+                        let hasPrivacyChanged = isPrivate != profile.isPrivate
+                        
+                        hasChanges = hasDisplayNameChanged || hasUsernameChanged ||
+                                   hasImageChanged || hasBioChanged || hasPrivacyChanged
+                    }
+                }
+            } catch {
+                // If we can't load profile, just check basic fields
+                await MainActor.run {
+                    hasChanges = hasDisplayNameChanged || hasUsernameChanged || hasImageChanged
+                }
+            }
+        }
+    }
+    
+    private func saveProfile() async {
+        guard hasChanges else { return }
+        
+        isLoading = true
+        
+        do {
+            // Upload new profile image if selected
+            var newImageURL: String? = nil
+            if let imageData = profileImageData {
+                newImageURL = try await userService.uploadProfileImage(
+                    userID: user.id,
+                    imageData: imageData
+                )
+                print("Profile image uploaded: \(newImageURL ?? "nil")")
+            }
+            
+            // Update profile data
+            try await userService.updateProfile(
+                userID: user.id,
+                displayName: displayName.isEmpty ? nil : displayName,
+                bio: bio.isEmpty ? nil : bio,
+                isPrivate: isPrivate,
+                username: username.isEmpty ? nil : username
+            )
+            
+            // Update local user object
+            await MainActor.run {
+                user = BasicUserInfo(
+                    id: user.id,
+                    username: username.isEmpty ? user.username : username,
+                    displayName: displayName.isEmpty ? user.displayName : displayName,
+                    tier: user.tier,
+                    clout: user.clout,
+                    isVerified: user.isVerified,
+                    profileImageURL: newImageURL ?? user.profileImageURL,
+                    createdAt: user.createdAt
+                )
+                
+                // Notify ProfileView to refresh its data
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("RefreshProfile"),
+                    object: nil,
+                    userInfo: ["userID": user.id]
+                )
+                
+                isLoading = false
+                dismiss()
+            }
+            
+            print("Profile updated successfully")
+            
+        } catch {
+            await MainActor.run {
+                isLoading = false
+                showError("Failed to save profile: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    private func showError(_ message: String) {
+        errorMessage = message
+        showingError = true
+    }
+}
     
     // MARK: - Main Body
     
@@ -75,6 +540,11 @@ struct ProfileView: View {
             if let user = viewModel.currentUser {
                 let hypeProgress = CGFloat(viewModel.calculateHypeProgress())
                 viewModel.animationController.startEntranceSequence(hypeProgress: hypeProgress)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RefreshProfile"))) { _ in
+            Task {
+                await viewModel.refreshProfile()
             }
         }
         .sheet(isPresented: $showingFollowingList) {
@@ -456,6 +926,190 @@ struct ProfileView: View {
         .padding(.horizontal, 20)
     }
     
+    // MARK: - Tab Bar Section
+    
+    private var tabBarSection: some View {
+        HStack(spacing: 0) {
+            ForEach(0..<viewModel.tabTitles.count, id: \.self) { index in
+                tabBarItem(index: index)
+            }
+        }
+        .background(Color.black)
+        .padding(.top, 20)
+    }
+    
+    private func tabBarItem(index: Int) -> some View {
+        Button(action: {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                viewModel.selectedTab = index
+            }
+        }) {
+            VStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    Image(systemName: viewModel.tabIcons[index])
+                        .font(.caption)
+                        .foregroundColor(viewModel.selectedTab == index ?
+                            .cyan.opacity(0.8) : .gray.opacity(0.6))
+                    
+                    Text(viewModel.tabTitles[index])
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(viewModel.selectedTab == index ? .cyan : .gray)
+                    
+                    Text("(\(viewModel.getTabCount(for: index)))")
+                        .font(.system(size: 10))
+                        .foregroundColor(viewModel.selectedTab == index ?
+                            .cyan.opacity(0.8) : .gray.opacity(0.6))
+                }
+                
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(viewModel.selectedTab == index ? Color.cyan : Color.clear)
+                    .frame(height: 2)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    // MARK: - Video Grid Section (FIXED WITH THUMBNAILS)
+    
+    private var videoGridSection: some View {
+        Group {
+            if viewModel.isLoadingVideos {
+                loadingVideosView
+            } else if viewModel.filteredVideos(for: viewModel.selectedTab).isEmpty {
+                emptyVideosView
+            } else {
+                videoGrid
+            }
+        }
+        .id(viewModel.selectedTab)
+    }
+    
+    private var videoGrid: some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 3),
+            spacing: 1
+        ) {
+            ForEach(Array(viewModel.filteredVideos(for: viewModel.selectedTab).enumerated()), id: \.element.id) { index, video in
+                videoGridItem(video: video, index: index)
+            }
+        }
+        .padding(.horizontal, 0)
+        .padding(.bottom, 100)
+    }
+    
+    // MARK: - FIXED Video Grid Item (Using VideoThumbnailView)
+    
+    private func videoGridItem(video: CoreVideoMetadata, index: Int) -> some View {
+        VideoThumbnailView(
+            video: video,
+            showEngagementBadge: true
+        ) {
+            openVideo(video: video, index: index)
+        }
+        .contextMenu {
+            videoContextMenu(video: video)
+        }
+        .overlay {
+            if isDeletingVideo && videoToDelete?.id == video.id {
+                Color.black.opacity(0.7)
+                    .overlay(
+                        ProgressView()
+                            .tint(.white)
+                            .scaleEffect(1.2)
+                    )
+            }
+        }
+    }
+    
+    private func videoContextMenu(video: CoreVideoMetadata) -> some View {
+        Group {
+            if viewModel.isOwnProfile {
+                Button("Delete Video", role: .destructive) {
+                    videoToDelete = video
+                    showingDeleteConfirmation = true
+                }
+                Button("Share") { shareVideo(video) }
+            } else {
+                Button("Share") { shareVideo(video) }
+            }
+        }
+    }
+    
+    private func handleGridEngagement(_ interactionType: InteractionType, video: CoreVideoMetadata) {
+        Task { @MainActor in
+            switch interactionType {
+            case .hype:
+                print("Hype video: \(video.title)")
+                triggerHapticFeedback(.light)
+            case .reply:
+                openVideoReplies(video)
+            case .share:
+                shareVideo(video)
+            case .cool:
+                print("Cool video: \(video.title)")
+                triggerHapticFeedback(.soft)
+            case .view:
+                print("View engagement for video: \(video.title)")
+            }
+        }
+    }
+    
+    private func performVideoDelete() async {
+        guard let video = videoToDelete else { return }
+        isDeletingVideo = true
+        
+        let success = await viewModel.deleteVideo(video)
+        if success {
+            print("Video deleted successfully: \(video.title)")
+            triggerHapticFeedback(.medium)
+        }
+        
+        isDeletingVideo = false
+        videoToDelete = nil
+    }
+    
+    private func openVideoReplies(_ video: CoreVideoMetadata) {
+        print("Opening replies for video: \(video.title)")
+    }
+    
+    private func shareVideo(_ video: CoreVideoMetadata) {
+        print("Sharing video: \(video.title)")
+    }
+    
+    private func openVideo(video: CoreVideoMetadata, index: Int) {
+        selectedVideo = video
+        selectedVideoIndex = index
+        showingVideoPlayer = true
+    }
+    
+    private func triggerHapticFeedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
+        let impactFeedback = UIImpactFeedbackGenerator(style: style)
+        impactFeedback.prepare()
+        impactFeedback.impactOccurred()
+    }
+    
+    private func preloadAdjacentVideos() {
+        let videos = viewModel.filteredVideos(for: viewModel.selectedTab)
+        let preloadIndices = [
+            selectedVideoIndex - 1,
+            selectedVideoIndex + 1
+        ].filter { $0 >= 0 && $0 < videos.count }
+        
+        // Preload thumbnails for adjacent videos
+        for index in preloadIndices {
+            let video = videos[index]
+            Task {
+                // Generate thumbnail in background for smooth grid return
+                if ThumbnailCacheManager.shared.getCachedThumbnail(for: video.id) == nil {
+                    print("PROFILE: Preloading thumbnail for video \(index)")
+                }
+            }
+        }
+    }
+    
     // MARK: - Hype Rating Calculation
     
     private func calculateHypeRating(user: BasicUserInfo) -> Double {
@@ -629,182 +1283,6 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Tab Bar Section
-    
-    private var tabBarSection: some View {
-        HStack(spacing: 0) {
-            ForEach(0..<viewModel.tabTitles.count, id: \.self) { index in
-                tabBarItem(index: index)
-            }
-        }
-        .background(Color.black)
-        .padding(.top, 20)
-    }
-    
-    private func tabBarItem(index: Int) -> some View {
-        Button(action: {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                viewModel.selectedTab = index
-            }
-        }) {
-            VStack(spacing: 8) {
-                HStack(spacing: 4) {
-                    Image(systemName: viewModel.tabIcons[index])
-                        .font(.caption)
-                        .foregroundColor(viewModel.selectedTab == index ?
-                            .cyan.opacity(0.8) : .gray.opacity(0.6))
-                    
-                    Text(viewModel.tabTitles[index])
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(viewModel.selectedTab == index ? .cyan : .gray)
-                    
-                    Text("(\(viewModel.getTabCount(for: index)))")
-                        .font(.system(size: 10))
-                        .foregroundColor(viewModel.selectedTab == index ?
-                            .cyan.opacity(0.8) : .gray.opacity(0.6))
-                }
-                
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(viewModel.selectedTab == index ? Color.cyan : Color.clear)
-                    .frame(height: 2)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PlainButtonStyle())
-    }
-    
-    // MARK: - Video Grid Section
-    
-    private var videoGridSection: some View {
-        Group {
-            if viewModel.isLoadingVideos {
-                loadingVideosView
-            } else if viewModel.filteredVideos(for: viewModel.selectedTab).isEmpty {
-                emptyVideosView
-            } else {
-                videoGrid
-            }
-        }
-        .id(viewModel.selectedTab)
-    }
-    
-    private var videoGrid: some View {
-        LazyVGrid(
-            columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 3),
-            spacing: 0
-        ) {
-            ForEach(Array(viewModel.filteredVideos(for: viewModel.selectedTab).enumerated()), id: \.element.id) { index, video in
-                videoGridItem(video: video, index: index)
-            }
-        }
-        .padding(.horizontal, 0)
-        .padding(.bottom, 100)
-    }
-    
-    private func videoGridItem(video: CoreVideoMetadata, index: Int) -> some View {
-        GeometryReader { geometry in
-            ZStack {
-                VideoPlayerView(
-                    video: video,
-                    isActive: false,
-                    onEngagement: { interactionType in
-                        handleGridEngagement(interactionType, video: video)
-                    }
-                )
-                .frame(width: geometry.size.width, height: geometry.size.width)
-                .clipped()
-                
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        openVideo(video: video, index: index)
-                    }
-                
-                if isDeletingVideo && videoToDelete?.id == video.id {
-                    Color.black.opacity(0.7)
-                        .overlay(
-                            ProgressView()
-                                .tint(.white)
-                                .scaleEffect(1.2)
-                        )
-                }
-            }
-        }
-        .aspectRatio(1, contentMode: .fit)
-        .contextMenu {
-            videoContextMenu(video: video)
-        }
-    }
-    
-    private func videoContextMenu(video: CoreVideoMetadata) -> some View {
-        Group {
-            if viewModel.isOwnProfile {
-                Button("Delete Video", role: .destructive) {
-                    videoToDelete = video
-                    showingDeleteConfirmation = true
-                }
-                Button("Share") { shareVideo(video) }
-            } else {
-                Button("Share") { shareVideo(video) }
-            }
-        }
-    }
-    
-    private func handleGridEngagement(_ interactionType: InteractionType, video: CoreVideoMetadata) {
-        Task { @MainActor in
-            switch interactionType {
-            case .hype:
-                print("Hype video: \(video.title)")
-                triggerHapticFeedback(.light)
-            case .reply:
-                openVideoReplies(video)
-            case .share:
-                shareVideo(video)
-            case .cool:
-                print("Cool video: \(video.title)")
-                triggerHapticFeedback(.soft)
-            case .view:
-                print("View engagement for video: \(video.title)")
-            }
-        }
-    }
-    
-    private func performVideoDelete() async {
-        guard let video = videoToDelete else { return }
-        isDeletingVideo = true
-        
-        let success = await viewModel.deleteVideo(video)
-        if success {
-            print("Video deleted successfully: \(video.title)")
-            triggerHapticFeedback(.medium)
-        }
-        
-        isDeletingVideo = false
-        videoToDelete = nil
-    }
-    
-    private func openVideoReplies(_ video: CoreVideoMetadata) {
-        print("Opening replies for video: \(video.title)")
-    }
-    
-    private func shareVideo(_ video: CoreVideoMetadata) {
-        print("Sharing video: \(video.title)")
-    }
-    
-    private func openVideo(video: CoreVideoMetadata, index: Int) {
-        selectedVideo = video
-        selectedVideoIndex = index
-        showingVideoPlayer = true
-    }
-    
-    private func triggerHapticFeedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
-        let impactFeedback = UIImpactFeedbackGenerator(style: style)
-        impactFeedback.prepare()
-        impactFeedback.impactOccurred()
-    }
-    
     // MARK: - Helper Views
     
     private var scrollTracker: some View {
@@ -907,10 +1385,13 @@ struct ProfileView: View {
         .ignoresSafeArea(edges: .top)
     }
     
+    // MARK: - ENHANCED Full Screen Video Player
+    
     private var fullScreenVideoPlayer: some View {
         Group {
             if selectedVideoIndex < viewModel.filteredVideos(for: viewModel.selectedTab).count {
                 let video = viewModel.filteredVideos(for: viewModel.selectedTab)[selectedVideoIndex]
+                
                 VideoPlayerView(
                     video: video,
                     isActive: true,
@@ -921,6 +1402,10 @@ struct ProfileView: View {
                 .background(Color.black)
                 .onTapGesture {
                     showingVideoPlayer = false
+                }
+                .onAppear {
+                    // Preload adjacent videos for smooth swiping
+                    preloadAdjacentVideos()
                 }
             }
         }
@@ -980,24 +1465,35 @@ struct ProfileView: View {
             if let user = viewModel.currentUser {
                 EditProfileView(
                     userService: userService,
-                    user: .constant(user)
+                    user: Binding(
+                        get: { user },
+                        set: { newUser in
+                            // Update the viewModel's currentUser when EditProfileView updates it
+                            Task {
+                                await viewModel.refreshProfile()
+                            }
+                        }
+                    )
                 )
             } else {
-                NavigationView {
-                    VStack {
-                        Text("Profile not loaded")
-                            .foregroundColor(.gray)
+                // Simple fallback without NavigationView to avoid toolbar conflicts
+                VStack(spacing: 20) {
+                    Text("Profile not loaded")
+                        .foregroundColor(.gray)
+                    
+                    Button("Retry") {
+                        Task { await viewModel.loadProfile() }
                     }
-                    .background(Color.black.ignoresSafeArea())
-                    .navigationTitle("Edit Profile")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Button("Cancel") { showingEditProfile = false }
-                                .foregroundColor(.gray)
-                        }
+                    .foregroundColor(.cyan)
+                    
+                    Button("Cancel") {
+                        showingEditProfile = false
                     }
+                    .foregroundColor(.gray)
+                    .padding(.top, 20)
                 }
+                .padding()
+                .background(Color.black.ignoresSafeArea())
             }
         }
     }
@@ -1041,13 +1537,24 @@ struct UserRowView: View {
     
     var body: some View {
         HStack {
-            AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
-                .frame(width: 50, height: 50)
-                .clipShape(Circle())
-                .overlay(
-                    Circle()
-                        .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                )
+            AsyncImage(url: URL(string: user.profileImageURL ?? "")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Circle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        Image(systemName: "person.fill")
+                            .foregroundColor(.gray)
+                    )
+            }
+            .frame(width: 50, height: 50)
+            .clipShape(Circle())
+            .overlay(
+                Circle()
+                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+            )
             
             VStack(alignment: .leading) {
                 Text(user.displayName)

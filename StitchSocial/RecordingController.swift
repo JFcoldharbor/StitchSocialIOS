@@ -5,6 +5,7 @@
 //  Layer 5: Business Logic - Recording Flow Controller
 //  Complete fix with VideoCoordinator integration and background thread handling
 //  FIXED: Added processSelectedVideo method for gallery video processing
+//  FIXED: Added public accessors for videoCoordinator properties
 //
 
 import Foundation
@@ -282,16 +283,18 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
                     return
                 }
                 
+                let validZoom = min(max(factor, 1.0), device.maxAvailableVideoZoomFactor)
+                
                 do {
                     try device.lockForConfiguration()
-                    device.videoZoomFactor = min(max(factor, 1.0), device.activeFormat.videoMaxZoomFactor)
+                    device.videoZoomFactor = validZoom
                     device.unlockForConfiguration()
                     
                     Task { @MainActor in
-                        self.currentZoomFactor = device.videoZoomFactor
+                        self.currentZoomFactor = validZoom
                     }
                 } catch {
-                    print("Zoom failed: \(error)")
+                    print("❌ CAMERA: Zoom failed - \(error)")
                 }
                 
                 continuation.resume()
@@ -303,22 +306,29 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
         await withCheckedContinuation { continuation in
             sessionQueue.async { [weak self] in
                 guard let self = self,
-                      let device = self.videoDeviceInput?.device,
-                      device.isFocusPointOfInterestSupported else {
+                      let device = self.videoDeviceInput?.device else {
                     continuation.resume()
                     return
                 }
                 
-                // Convert point to camera coordinates
                 let focusPoint = self.previewLayer.captureDevicePointConverted(fromLayerPoint: point)
                 
                 do {
                     try device.lockForConfiguration()
-                    device.focusPointOfInterest = focusPoint
-                    device.focusMode = .autoFocus
+                    
+                    if device.isFocusPointOfInterestSupported {
+                        device.focusPointOfInterest = focusPoint
+                        device.focusMode = .autoFocus
+                    }
+                    
+                    if device.isExposurePointOfInterestSupported {
+                        device.exposurePointOfInterest = focusPoint
+                        device.exposureMode = .autoExpose
+                    }
+                    
                     device.unlockForConfiguration()
                 } catch {
-                    print("Focus failed: \(error)")
+                    print("❌ CAMERA: Focus failed - \(error)")
                 }
                 
                 continuation.resume()
@@ -326,14 +336,14 @@ class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable 
         }
     }
     
-    // MARK: - Background Configuration
+    // MARK: - Configuration
     
     private func configureSessionOnBackground() async {
         captureSession.beginConfiguration()
         captureSession.sessionPreset = .high
         
         // Configure video input
-        if let videoDevice = getCamera(for: .back),
+        if let videoDevice = getCamera(for: currentCameraPosition),
            let videoInput = try? AVCaptureDeviceInput(device: videoDevice) {
             
             if captureSession.canAddInput(videoInput) {
@@ -657,21 +667,25 @@ class RecordingController: ObservableObject {
         videoMetadata = VideoMetadata()
     }
     
-    // MARK: - VideoCoordinator State Access
+    // MARK: - VideoCoordinator Public Access (ADDED - Fix for compilation errors)
     
-    var coordinatorCurrentPhase: VideoCreationPhase {
-        videoCoordinator.currentPhase
+    /// Access to videoCoordinator's current task for UI display
+    var currentTask: String {
+        videoCoordinator.currentTask
     }
     
+    /// Access to videoCoordinator's progress for UI display
     var coordinatorProgress: Double {
         videoCoordinator.overallProgress
     }
     
-    var coordinatorCurrentTask: String {
-        videoCoordinator.currentTask
-    }
-    
+    /// Access to videoCoordinator's processing state
     var coordinatorIsProcessing: Bool {
         videoCoordinator.isProcessing
+    }
+    
+    /// Access to videoCoordinator's current phase
+    var coordinatorCurrentPhase: VideoCreationPhase {
+        videoCoordinator.currentPhase
     }
 }
