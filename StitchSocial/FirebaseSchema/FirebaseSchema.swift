@@ -57,31 +57,33 @@ struct FirebaseSchema {
         static let comments = "comments"
         static let reports = "reports"
         static let cache = "cache"
+        static let system = "system"
         
         /// Get full collection path for stitchfin database
-        static func fullPath(for collection: String) -> String {
-            return "projects/stitchbeta-8bbfe/databases/\(databaseName)/documents/\(collection)"
-        }
-        
-        /// Validate all collection names
-        static func validateCollections() -> [String] {
-            let collections = [
-                videos, users, threads, engagement, interactions,
-                tapProgress, notifications, following, userBadges,
-                progression, analytics, comments, reports, cache
-            ]
-            
-            let invalidCollections = collections.filter { $0.isEmpty }
-            
-            if invalidCollections.isEmpty {
-                print("✅ FIREBASE SCHEMA: All \(collections.count) collections validated for \(databaseName)")
-            } else {
-                print("❌ FIREBASE SCHEMA: Invalid collections found: \(invalidCollections)")
-            }
-            
-            return invalidCollections
-        }
-    }
+           static func fullPath(for collection: String) -> String {
+               return "projects/stitchbeta-8bbfe/databases/\(databaseName)/documents/\(collection)"
+           }
+           
+           /// Validate all collection names
+           static func validateCollections() -> [String] {
+               let collections = [
+                   videos, users, threads, engagement, interactions,
+                   tapProgress, notifications, following, userBadges,
+                   progression, analytics, comments, reports, cache,
+                   system  // ← ADD THIS TO THE VALIDATION ARRAY TOO
+               ]
+               
+               let invalidCollections = collections.filter { $0.isEmpty }
+               
+               if invalidCollections.isEmpty {
+                   print("✅ FIREBASE SCHEMA: All \(collections.count) collections validated for \(databaseName)")
+               } else {
+                   print("❌ FIREBASE SCHEMA: Invalid collections found: \(invalidCollections)")
+               }
+               
+               return invalidCollections
+           }
+       }
     
     // MARK: - Video Document Schema
     

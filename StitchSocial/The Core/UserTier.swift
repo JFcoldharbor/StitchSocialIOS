@@ -3,7 +3,7 @@
 //  CleanBeta
 //
 //  Created by James Garmon on 7/11/25.
-//  FIXED: Removed BadgeType dependency - using String badges instead
+//  REVERTED: Removed duplicate notification types - they exist elsewhere
 //
 
 import Foundation
@@ -78,6 +78,183 @@ enum UserTier: String, CaseIterable, Codable {
         case .topCreator: return 5_000_000
         case .founder, .coFounder: return 0 // Special assignment only
         }
+    }
+    
+    /// Check if this tier has founder privileges
+    var isFounderTier: Bool {
+        return self == .founder || self == .coFounder
+    }
+    
+    /// Check if this tier is achievable through normal progression
+    var isAchievableTier: Bool {
+        return !isFounderTier
+    }
+    
+    /// Get the next achievable tier
+    var nextTier: UserTier? {
+        switch self {
+        case .rookie: return .rising
+        case .rising: return .veteran
+        case .veteran: return .influencer
+        case .influencer: return .elite
+        case .elite: return .partner
+        case .partner: return .legendary
+        case .legendary: return .topCreator
+        case .topCreator: return nil // Max achievable tier
+        case .founder, .coFounder: return nil // Special tiers
+        }
+    }
+    
+    /// Calculate progress toward next tier (0.0 to 1.0)
+    func progressToNext(currentFollowers: Int) -> Double {
+        guard let next = nextTier else { return 1.0 }
+        
+        let currentRequired = self.requiredFollowers
+        let nextRequired = next.requiredFollowers
+        let progressRange = nextRequired - currentRequired
+        let currentProgress = currentFollowers - currentRequired
+        
+        return max(0.0, min(1.0, Double(currentProgress) / Double(progressRange)))
+    }
+}
+
+// MARK: - Notification System Types (ADDED BACK - NEEDED BY SERVICES)
+
+/// Primary notification type enum for the Stitch Social app
+enum StitchNotificationType: String, CaseIterable, Codable {
+    case hype = "hype"
+    case cool = "cool"
+    case follow = "follow"
+    case reply = "reply"
+    case mention = "mention"
+    case milestone = "milestone"
+    case tierUpgrade = "tier_upgrade"
+    case system = "system"
+    
+    var displayName: String {
+        switch self {
+        case .hype: return "Hype"
+        case .cool: return "Cool"
+        case .follow: return "Follow"
+        case .reply: return "Reply"
+        case .mention: return "Mention"
+        case .milestone: return "Milestone"
+        case .tierUpgrade: return "Tier Upgrade"
+        case .system: return "System"
+        }
+    }
+    
+    var iconName: String {
+        switch self {
+        case .hype: return "heart.fill"
+        case .cool: return "hand.thumbsdown.fill"
+        case .follow: return "person.badge.plus.fill"
+        case .reply: return "bubble.left.fill"
+        case .mention: return "at"
+        case .milestone: return "trophy.fill"
+        case .tierUpgrade: return "arrow.up.circle.fill"
+        case .system: return "gear.circle.fill"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .hype: return .red
+        case .cool: return .blue
+        case .follow: return .green
+        case .reply: return .purple
+        case .mention: return .orange
+        case .milestone: return .yellow
+        case .tierUpgrade: return .pink
+        case .system: return .gray
+        }
+    }
+    
+    var actionText: String {
+        switch self {
+        case .hype: return "hyped your video"
+        case .cool: return "cooled your video"
+        case .follow: return "started following you"
+        case .reply: return "replied to your thread"
+        case .mention: return "mentioned you"
+        case .milestone: return "milestone reached"
+        case .tierUpgrade: return "tier upgraded"
+        case .system: return "system notification"
+        }
+    }
+}
+
+/// Core notification document for Firebase
+struct StitchNotification: Codable, Identifiable {
+    let id: String
+    let recipientID: String
+    let senderID: String
+    let type: StitchNotificationType
+    let title: String
+    let message: String
+    let payload: [String: String]
+    let isRead: Bool
+    let createdAt: Date
+    let readAt: Date?
+    let expiresAt: Date?
+    
+    init(
+        id: String = UUID().uuidString,
+        recipientID: String,
+        senderID: String,
+        type: StitchNotificationType,
+        title: String,
+        message: String,
+        payload: [String: String] = [:],
+        isRead: Bool = false,
+        createdAt: Date = Date(),
+        readAt: Date? = nil,
+        expiresAt: Date? = nil
+    ) {
+        self.id = id
+        self.recipientID = recipientID
+        self.senderID = senderID
+        self.type = type
+        self.title = title
+        self.message = message
+        self.payload = payload
+        self.isRead = isRead
+        self.createdAt = createdAt
+        self.readAt = readAt
+        self.expiresAt = expiresAt
+    }
+}
+
+/// Toast notification for in-app display
+struct NotificationToast: Codable, Identifiable {
+    let id: String
+    let type: StitchNotificationType
+    let title: String
+    let message: String
+    let senderUsername: String
+    let payload: [String: String]
+    let createdAt: Date
+    
+    var color: Color { type.color }
+    var iconName: String { type.iconName }
+    var senderName: String { senderUsername }
+    
+    init(
+        id: String = UUID().uuidString,
+        type: StitchNotificationType,
+        title: String,
+        message: String,
+        senderUsername: String = "",
+        payload: [String: String] = [:],
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.message = message
+        self.senderUsername = senderUsername
+        self.payload = payload
+        self.createdAt = createdAt
     }
 }
 
@@ -168,99 +345,6 @@ enum Temperature: String, CaseIterable, Codable {
         case .warm: return 0.6
         case .hot: return 0.8
         case .blazing: return 0.95
-        }
-    }
-}
-
-// MARK: - Creation Mode Types
-
-/// Creation flow modes
-enum CreationMode: Codable, Hashable {
-    case newThread
-    case replyToThread(threadID: String)
-    case respondToChild(childID: String, threadID: String)
-    
-    var displayTitle: String {
-        switch self {
-        case .newThread:
-            return "New Thread"
-        case .replyToThread:
-            return "Reply to Thread"
-        case .respondToChild:
-            return "Respond to Child"
-        }
-    }
-    
-    var contentType: ContentType {
-        switch self {
-        case .newThread:
-            return .thread
-        case .replyToThread:
-            return .child
-        case .respondToChild:
-            return .stepchild
-        }
-    }
-}
-
-/// User interaction types
-enum InteractionType: String, CaseIterable, Codable {
-    case hype = "hype"        // Like/upvote
-    case cool = "cool"        // Dislike/downvote
-    case reply = "reply"      // Video response
-    case share = "share"      // External sharing
-    case view = "view"        // Watch video
-    
-    var displayName: String {
-        switch self {
-        case .hype: return "Hype"
-        case .cool: return "Cool"
-        case .reply: return "Reply"
-        case .share: return "Share"
-        case .view: return "View"
-        }
-    }
-    
-    var pointValue: Int {
-        switch self {
-        case .hype: return 10
-        case .cool: return -5
-        case .reply: return 50
-        case .share: return 25
-        case .view: return 1
-        }
-    }
-}
-
-// MARK: - Video System Types
-
-/// Video quality settings
-enum RecordingQuality: String, CaseIterable, Codable {
-    case standard = "standard"
-    case high = "high"
-    case premium = "premium"
-    
-    var displayName: String {
-        switch self {
-        case .standard: return "Standard"
-        case .high: return "High"
-        case .premium: return "Premium"
-        }
-    }
-    
-    var resolution: CGSize {
-        switch self {
-        case .standard: return CGSize(width: 720, height: 1280)
-        case .high: return CGSize(width: 1080, height: 1920)
-        case .premium: return CGSize(width: 1440, height: 2560)
-        }
-    }
-    
-    var bitrate: Int {
-        switch self {
-        case .standard: return 2_000_000  // 2 Mbps
-        case .high: return 5_000_000      // 5 Mbps
-        case .premium: return 10_000_000  // 10 Mbps
         }
     }
 }
@@ -376,153 +460,6 @@ enum StitchError: LocalizedError {
     }
 }
 
-// MARK: - User Stats for Badge/Tier System
-
-/// User statistics for tier calculation and badge awards
-struct RealUserStats: Codable, Hashable {
-    let followers: Int
-    let hypes: Int
-    let threads: Int
-    let posts: Int
-    let engagementRate: Double
-    let clout: Int
-    
-    init(followers: Int = 0, hypes: Int = 0, threads: Int = 0, posts: Int = 0, engagementRate: Double = 0.0, clout: Int = 0) {
-        self.followers = followers
-        self.hypes = hypes
-        self.threads = threads
-        self.posts = posts
-        self.engagementRate = engagementRate
-        self.clout = clout
-    }
-}
-
-// MARK: - Basic Data Structures
-
-/// Simple user information - FIXED to work without badge system
-struct BasicUserInfo: Codable, Hashable {
-    let id: String
-    let username: String
-    let displayName: String
-    let tier: UserTier
-    let clout: Int
-    let isVerified: Bool
-    let profileImageURL: String?
-    let createdAt: Date
-    
-    init(id: String, username: String, displayName: String, tier: UserTier, clout: Int, isVerified: Bool = false, profileImageURL: String? = nil, createdAt: Date = Date()) {
-        self.id = id
-        self.username = username
-        self.displayName = displayName
-        self.tier = tier
-        self.clout = clout
-        self.isVerified = isVerified
-        self.profileImageURL = profileImageURL
-        self.createdAt = createdAt
-    }
-}
-
-/// Basic video information
-struct BasicVideoInfo: Codable, Hashable {
-    let id: String
-    let title: String
-    let videoURL: String
-    let thumbnailURL: String
-    let duration: TimeInterval
-    let createdAt: Date
-    let contentType: ContentType
-    let temperature: Temperature
-}
-
-/// Engagement metrics
-struct EngagementMetrics: Codable, Hashable {
-    let hypeCount: Int
-    let coolCount: Int
-    let replyCount: Int
-    let shareCount: Int
-    let viewCount: Int
-    
-    var netScore: Int {
-        return hypeCount - coolCount
-    }
-    
-    var engagementRatio: Double {
-        let total = hypeCount + coolCount
-        return total > 0 ? Double(hypeCount) / Double(total) : 0.0
-    }
-}
-
-// MARK: - Constants
-
-/// App-wide constants
-struct AppConstants {
-    // Thread Limits
-    static let maxChildrenPerThread = 60
-    static let maxStepchildrenPerChild = 10
-    static let maxThreadDepth = 2
-    
-    // Video Limits
-    static let maxVideoDuration: TimeInterval = 60.0 // 60 seconds
-    static let minVideoDuration: TimeInterval = 1.0  // 1 second
-    static let maxVideoFileSize: Int64 = 100 * 1024 * 1024 // 100MB
-    
-    // User Limits
-    static let maxUsernameLength = 20
-    static let minUsernameLength = 3
-    static let maxDisplayNameLength = 50
-    static let maxBioLength = 150
-    
-    // Cache Limits
-    static let maxCacheSize: Int64 = 500 * 1024 * 1024 // 500MB
-    static let cacheExpirationTime: TimeInterval = 24 * 60 * 60 // 24 hours
-    
-    // Performance
-    static let maxConcurrentUploads = 3
-    static let maxConcurrentDownloads = 5
-    static let networkTimeout: TimeInterval = 30.0
-}
-
-// MARK: - Badge Integration Extensions
-
-extension UserTier {
-    /// Check if this tier has founder privileges
-    var isFounderTier: Bool {
-        return self == .founder || self == .coFounder
-    }
-    
-    /// Check if this tier is achievable through normal progression
-    var isAchievableTier: Bool {
-        return !isFounderTier
-    }
-    
-    /// Get the next achievable tier
-    var nextTier: UserTier? {
-        switch self {
-        case .rookie: return .rising
-        case .rising: return .veteran
-        case .veteran: return .influencer
-        case .influencer: return .elite
-        case .elite: return .partner
-        case .partner: return .legendary
-        case .legendary: return .topCreator
-        case .topCreator: return nil // Max achievable tier
-        case .founder, .coFounder: return nil // Special tiers
-        }
-    }
-    
-    /// Calculate progress toward next tier (0.0 to 1.0)
-    func progressToNext(currentFollowers: Int) -> Double {
-        guard let next = nextTier else { return 1.0 }
-        
-        let currentRequired = self.requiredFollowers
-        let nextRequired = next.requiredFollowers
-        let progressRange = nextRequired - currentRequired
-        let currentProgress = currentFollowers - currentRequired
-        
-        return max(0.0, min(1.0, Double(currentProgress) / Double(progressRange)))
-    }
-}
-
 // MARK: - Engagement System Types
 
 /// User starting bonus for new user onboarding and rewards
@@ -602,56 +539,242 @@ struct HypeRating: Codable {
     }
 }
 
-/// Engagement data for community interaction tracking
-struct MyEngagementData: Codable {
-    let userID: String
-    let lastPostDate: Date?
-    let lastEngagementDate: Date?
-    let communityInteractions: Int
-    let followerCount: Int
-    let averageEngagementRate: Double
+// MARK: - Creation Mode Types
+
+/// Creation flow modes
+enum CreationMode: Codable, Hashable {
+    case newThread
+    case replyToThread(threadID: String)
+    case respondToChild(childID: String, threadID: String)
     
-    init(userID: String, lastPostDate: Date? = nil, lastEngagementDate: Date? = nil, communityInteractions: Int = 0, followerCount: Int = 0, averageEngagementRate: Double = 0.0) {
-        self.userID = userID
-        self.lastPostDate = lastPostDate
-        self.lastEngagementDate = lastEngagementDate
-        self.communityInteractions = communityInteractions
-        self.followerCount = followerCount
-        self.averageEngagementRate = averageEngagementRate
+    var displayTitle: String {
+        switch self {
+        case .newThread:
+            return "New Thread"
+        case .replyToThread:
+            return "Reply to Thread"
+        case .respondToChild:
+            return "Respond to Child"
+        }
     }
     
-    /// Check if user is actively engaged (posted or interacted recently)
-    var isActivelyEngaged: Bool {
-        let now = Date()
-        let dayAgo = now.addingTimeInterval(-24 * 60 * 60)
-        
-        if let lastPost = lastPostDate, lastPost > dayAgo {
-            return true
+    var contentType: ContentType {
+        switch self {
+        case .newThread:
+            return .thread
+        case .replyToThread:
+            return .child
+        case .respondToChild:
+            return .stepchild
         }
-        
-        if let lastEngagement = lastEngagementDate, lastEngagement > dayAgo {
-            return true
+    }
+}
+
+/// User interaction types
+enum InteractionType: String, CaseIterable, Codable {
+    case hype = "hype"        // Like/upvote
+    case cool = "cool"        // Dislike/downvote
+    case reply = "reply"      // Video response
+    case share = "share"      // External sharing
+    case view = "view"        // Watch video
+    
+    var displayName: String {
+        switch self {
+        case .hype: return "Hype"
+        case .cool: return "Cool"
+        case .reply: return "Reply"
+        case .share: return "Share"
+        case .view: return "View"
         }
-        
-        return false
     }
     
-    /// Calculate engagement health score (0.0 to 1.0)
-    var engagementHealthScore: Double {
-        var score = 0.0
-        
-        // Recent activity weight (40%)
-        if isActivelyEngaged {
-            score += 0.4
+    var pointValue: Int {
+        switch self {
+        case .hype: return 10
+        case .cool: return -5
+        case .reply: return 50
+        case .share: return 25
+        case .view: return 1
         }
-        
-        // Community interactions weight (30%)
-        let normalizedInteractions = min(1.0, Double(communityInteractions) / 100.0)
-        score += normalizedInteractions * 0.3
-        
-        // Engagement rate weight (30%)
-        score += averageEngagementRate * 0.3
-        
-        return min(1.0, score)
+    }
+}
+
+// MARK: - Video System Types
+
+/// Video quality settings
+enum RecordingQuality: String, CaseIterable, Codable {
+    case standard = "standard"
+    case high = "high"
+    case premium = "premium"
+    
+    var displayName: String {
+        switch self {
+        case .standard: return "Standard"
+        case .high: return "High"
+        case .premium: return "Premium"
+        }
+    }
+    
+    var resolution: CGSize {
+        switch self {
+        case .standard: return CGSize(width: 720, height: 1280)
+        case .high: return CGSize(width: 1080, height: 1920)
+        case .premium: return CGSize(width: 1440, height: 2560)
+        }
+    }
+    
+    var bitrate: Int {
+        switch self {
+        case .standard: return 2_000_000  // 2 Mbps
+        case .high: return 5_000_000      // 5 Mbps
+        case .premium: return 10_000_000  // 10 Mbps
+        }
+    }
+}
+
+// MARK: - User Stats for Badge/Tier System
+
+/// User statistics for tier calculation and badge awards
+struct RealUserStats: Codable, Hashable {
+    let followers: Int
+    let hypes: Int
+    let threads: Int
+    let posts: Int
+    let engagementRate: Double
+    let clout: Int
+    
+    init(followers: Int = 0, hypes: Int = 0, threads: Int = 0, posts: Int = 0, engagementRate: Double = 0.0, clout: Int = 0) {
+        self.followers = followers
+        self.hypes = hypes
+        self.threads = threads
+        self.posts = posts
+        self.engagementRate = engagementRate
+        self.clout = clout
+    }
+}
+
+// MARK: - Basic Data Structures
+
+/// Simple user information - FIXED: Added bio and isPrivate fields to support ProfileViewModel
+struct BasicUserInfo: Codable, Hashable {
+    let id: String
+    let username: String
+    let displayName: String
+    let bio: String
+    let tier: UserTier
+    let clout: Int
+    let isVerified: Bool
+    let isPrivate: Bool
+    let profileImageURL: String?
+    let createdAt: Date
+    
+    init(id: String, username: String, displayName: String, bio: String = "", tier: UserTier, clout: Int, isVerified: Bool = false, isPrivate: Bool = false, profileImageURL: String? = nil, createdAt: Date = Date()) {
+        self.id = id
+        self.username = username
+        self.displayName = displayName
+        self.bio = bio
+        self.tier = tier
+        self.clout = clout
+        self.isVerified = isVerified
+        self.isPrivate = isPrivate
+        self.profileImageURL = profileImageURL
+        self.createdAt = createdAt
+    }
+}
+
+/// Basic video information
+struct BasicVideoInfo: Codable, Hashable {
+    let id: String
+    let title: String
+    let videoURL: String
+    let thumbnailURL: String
+    let duration: TimeInterval
+    let createdAt: Date
+    let contentType: ContentType
+    let temperature: Temperature
+}
+
+/// Engagement metrics
+struct EngagementMetrics: Codable, Hashable {
+    let hypeCount: Int
+    let coolCount: Int
+    let replyCount: Int
+    let shareCount: Int
+    let viewCount: Int
+    
+    var netScore: Int {
+        return hypeCount - coolCount
+    }
+    
+    var engagementRatio: Double {
+        let total = hypeCount + coolCount
+        return total > 0 ? Double(hypeCount) / Double(total) : 0.0
+    }
+}
+
+// MARK: - Video Processing Types
+
+/// Video processing states
+enum ProcessingState: String, Codable {
+    case pending = "pending"
+    case processing = "processing"
+    case completed = "completed"
+    case failed = "failed"
+    case cancelled = "cancelled"
+    
+    var displayName: String {
+        switch self {
+        case .pending: return "Pending"
+        case .processing: return "Processing"
+        case .completed: return "Completed"
+        case .failed: return "Failed"
+        case .cancelled: return "Cancelled"
+        }
+    }
+}
+
+/// Video upload metadata
+struct MyVideoUploadMetadata: Codable {
+    let originalSize: Int64
+    let processedSize: Int64?
+    let duration: TimeInterval
+    let resolution: CGSize
+    let compressionRatio: Double?
+    let processingTime: TimeInterval?
+    let uploadStarted: Date
+    let uploadCompleted: Date?
+    
+    var compressionPercentage: Double {
+        guard let processedSize = processedSize else { return 0 }
+        let ratio = 1.0 - (Double(processedSize) / Double(originalSize))
+        return max(0, min(100, ratio * 100))
+    }
+}
+
+// MARK: - Cache System Types Extended
+
+/// Cache policy for different content types
+enum CachePolicy: String, Codable {
+    case aggressive = "aggressive"    // Cache everything
+    case moderate = "moderate"        // Cache frequently accessed
+    case minimal = "minimal"          // Cache only critical items
+    case disabled = "disabled"        // No caching
+    
+    var maxItems: Int {
+        switch self {
+        case .aggressive: return 1000
+        case .moderate: return 500
+        case .minimal: return 100
+        case .disabled: return 0
+        }
+    }
+    
+    var ttlSeconds: TimeInterval {
+        switch self {
+        case .aggressive: return 86400 // 24 hours
+        case .moderate: return 43200   // 12 hours
+        case .minimal: return 21600    // 6 hours
+        case .disabled: return 0
+        }
     }
 }

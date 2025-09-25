@@ -207,6 +207,78 @@ class AIVideoAnalyzer: ObservableObject {
         }
     }
     
+    // MARK: - NEW: Pre-extracted Audio Analysis (FIXED: No Double Audio Extraction)
+    
+    /// Analyzes video using pre-extracted audio data - prevents double audio extraction
+    /// Use this when audio has already been extracted by AudioExtractionService
+    /// - Parameters:
+    ///   - audioData: Pre-extracted audio data from video
+    ///   - userID: User performing the analysis
+    /// - Returns: VideoAnalysisResult with generated content or nil if API unavailable
+    func analyzeWithExtractedAudio(audioData: Data, userID: String) async -> VideoAnalysisResult? {
+        print("🚨🚨🚨 ANALYZE WITH EXTRACTED AUDIO CALLED 🚨🚨🚨")
+        print("👤 USER: \(userID)")
+        print("🎵 AUDIO SIZE: \(audioData.count) bytes")
+        print("🔑 API KEY LENGTH: \(openAIAPIKey.count)")
+        print("🔗 CONNECTION STATUS: \(connectionStatus)")
+        
+        let startTime = Date()
+        
+        // Enhanced API key validation
+        guard !openAIAPIKey.isEmpty else {
+            print("❌ API KEY: Empty - returning nil for manual creation")
+            await updateDebugStatus("API key not configured - manual mode")
+            return nil
+        }
+        
+        guard !openAIAPIKey.hasPrefix("sk-your-") else {
+            print("❌ API KEY: Placeholder detected - returning nil for manual creation")
+            await updateDebugStatus("API key is placeholder - manual mode")
+            return nil
+        }
+        
+        // Check connection status and test if needed
+        if connectionStatus != .connected {
+            print("❌ CONNECTION: Not connected (\(connectionStatus)) - testing connection...")
+            await testConnection()
+            
+            if connectionStatus != .connected {
+                print("❌ CONNECTION: Failed to connect - returning nil for manual creation")
+                await updateDebugStatus("Connection failed - manual mode")
+                return nil
+            }
+            
+            print("✅ CONNECTION: Established during test - proceeding")
+        }
+        
+        print("✅ VALIDATION: All checks passed - proceeding with AI analysis")
+        
+        // Use timeout wrapper for the entire analysis process
+        return await withTaskGroup(of: VideoAnalysisResult?.self) { group in
+            
+            // Main analysis task
+            group.addTask {
+                return await self.performAnalysisWithExtractedAudio(audioData: audioData, userID: userID, startTime: startTime)
+            }
+            
+            // Timeout task
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(self.timeoutInterval * 1_000_000_000))
+                print("⏰ TIMEOUT: Analysis timed out after \(self.timeoutInterval) seconds")
+                await self.updateDebugStatus("Analysis timed out - manual mode")
+                return nil
+            }
+            
+            // Return first completed result
+            for await result in group {
+                group.cancelAll()
+                return result
+            }
+            
+            return nil
+        }
+    }
+    
     // MARK: - Analysis Implementation
     
     private func performAnalysisWithRetry(url videoURL: URL, userID: String, startTime: Date) async -> VideoAnalysisResult? {
@@ -218,6 +290,44 @@ class AIVideoAnalyzer: ObservableObject {
             do {
                 let result = try await performAnalysis(url: videoURL, userID: userID, startTime: startTime)
                 print("✅ SUCCESS: Analysis completed on attempt \(attempt)")
+                return result
+                
+            } catch {
+                lastError = error
+                print("❌ ATTEMPT \(attempt) FAILED: \(error.localizedDescription)")
+                
+                if attempt < maxRetries {
+                    let delay = TimeInterval(attempt * 2) // Exponential backoff
+                    print("⏳ RETRY: Waiting \(delay) seconds before attempt \(attempt + 1)")
+                    await updateDebugStatus("Attempt \(attempt) failed, retrying in \(Int(delay))s...")
+                    
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                }
+            }
+        }
+        
+        print("❌ ALL ATTEMPTS FAILED: Final error - \(lastError?.localizedDescription ?? "Unknown")")
+        await updateDebugStatus("All attempts failed - manual mode")
+        
+        await MainActor.run {
+            self.isAnalyzing = false
+            self.analysisError = lastError as? AIAnalysisError ?? .unknown(lastError?.localizedDescription ?? "Analysis failed")
+            self.showingError = false // Don't show error UI, just log and allow manual creation
+        }
+        
+        return nil
+    }
+    
+    // NEW: Analysis with pre-extracted audio (FIXED: No Double Audio Extraction)
+    private func performAnalysisWithExtractedAudio(audioData: Data, userID: String, startTime: Date) async -> VideoAnalysisResult? {
+        var lastError: Error?
+        
+        for attempt in 1...maxRetries {
+            print("🔄 ATTEMPT \(attempt)/\(maxRetries): Starting extracted audio analysis attempt")
+            
+            do {
+                let result = try await performAnalysisFromAudioData(audioData: audioData, userID: userID, startTime: startTime)
+                print("✅ SUCCESS: Extracted audio analysis completed on attempt \(attempt)")
                 return result
                 
             } catch {
@@ -295,6 +405,79 @@ class AIVideoAnalyzer: ObservableObject {
             )
             
             print("🎉 SUCCESS: Video analysis completed in \(Date().timeIntervalSince(startTime).formatted())s")
+            return result
+            
+        } catch {
+            print("💥 ANALYSIS ERROR: \(error)")
+            print("💥 ERROR TYPE: \(type(of: error))")
+            print("💥 DESCRIPTION: \(error.localizedDescription)")
+            
+            await MainActor.run {
+                self.isAnalyzing = false
+                self.analysisError = error as? AIAnalysisError ?? .unknown(error.localizedDescription)
+            }
+            
+            // Record failed analysis
+            recordAnalysisMetrics(
+                duration: Date().timeIntervalSince(startTime),
+                success: false,
+                transcriptLength: 0,
+                error: error
+            )
+            
+            throw error
+        }
+    }
+    
+    // NEW: Analysis using pre-extracted audio data (FIXED: No Double Audio Extraction)
+    private func performAnalysisFromAudioData(audioData: Data, userID: String, startTime: Date) async throws -> VideoAnalysisResult {
+        await MainActor.run {
+            self.isAnalyzing = true
+            self.analysisProgress = 0.0
+            self.analysisError = nil
+        }
+        
+        do {
+            // Step 1: Skip audio extraction (already done) - Start at 25%
+            await updateDebugStatus("Using pre-extracted audio...")
+            await updateProgress(0.25)
+            print("🎵 AUDIO: Using pre-extracted audio, size: \(audioData.count) bytes")
+            
+            // Step 2: Transcribe audio to text (60% progress)
+            await updateDebugStatus("Transcribing audio with Whisper...")
+            await updateProgress(0.6)
+            let transcript = try await transcribeAudio(audioData)
+            print("📝 TRANSCRIPT: Generated, length: \(transcript.count) characters")
+            print("📝 PREVIEW: '\(String(transcript.prefix(100)))...'")
+            
+            // Step 3: Generate content using GPT (90% progress)
+            await updateDebugStatus("Generating content with GPT...")
+            await updateProgress(0.9)
+            let result = try await generateContentFromTranscript(transcript)
+            print("🎯 CONTENT: Generated successfully")
+            print("🎯 TITLE: '\(result.title)'")
+            print("🎯 DESCRIPTION: '\(result.description)'")
+            print("🎯 HASHTAGS: \(result.hashtags)")
+            
+            // Step 4: Complete analysis (100% progress)
+            await updateDebugStatus("Analysis complete!")
+            await updateProgress(1.0)
+            
+            await MainActor.run {
+                self.lastAnalysisResult = result
+                self.isAnalyzing = false
+                self.totalAnalysesPerformed += 1
+            }
+            
+            // Record successful analysis
+            recordAnalysisMetrics(
+                duration: Date().timeIntervalSince(startTime),
+                success: true,
+                transcriptLength: transcript.count,
+                error: nil
+            )
+            
+            print("🎉 SUCCESS: Extracted audio analysis completed in \(Date().timeIntervalSince(startTime).formatted())s")
             return result
             
         } catch {

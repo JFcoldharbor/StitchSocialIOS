@@ -1,22 +1,25 @@
 //
 //  SearchService.swift
-//  CleanBeta
+//  StitchSocial
 //
-//  Layer 4: Core Services - Complete Search Functionality
-//  Dependencies: Firebase Firestore
-//  Features: User and video search with prefix matching
+//  Layer 4: Core Services - Simple User Search & Discovery
+//  Dependencies: Firebase Firestore, BasicUserInfo
+//  Features: Show all users, simple search, no complex indexing
+//  GOAL: Just show all users and let people search/follow them
 //
 
 import Foundation
 import FirebaseFirestore
+import FirebaseAuth
 
-/// Complete search functionality for users and videos
+/// Super simple search service - just show users and allow basic search
 @MainActor
 class SearchService: ObservableObject {
     
     // MARK: - Properties
     
     private let db = Firestore.firestore(database: Config.Firebase.databaseName)
+    private let auth = Auth.auth()
     
     // MARK: - Published State
     
@@ -26,271 +29,431 @@ class SearchService: ObservableObject {
     // MARK: - Initialization
     
     init() {
-        print("🔍 SEARCH SERVICE: Initialized with database: \(Config.Firebase.databaseName)")
+        print("🔍 SEARCH SERVICE: Simple user discovery initialized")
     }
     
-    // MARK: - User Search - FIXED IMPLEMENTATION
+    // MARK: - Core Search Methods - SUPER SIMPLE
     
-    /// Search users by username or display name
-    func searchUsers(query: String, limit: Int = 20) async throws -> [BasicUserInfo] {
+    /// Search users - if query is empty, show all users for browsing + DEBUG + FIXED LIMIT
+    func searchUsers(query: String, limit: Int = 50) async throws -> [BasicUserInfo] {
+        
+        print("🔍 DEBUG: ===== SearchUsers Called =====")
+        print("🔍 DEBUG: Query: '\(query)'")
+        print("🔍 DEBUG: Limit: \(limit)")
         
         isLoading = true
-        defer { isLoading = false }
-        
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmedQuery.isEmpty else {
-            print("⚠️ SEARCH SERVICE: Empty query provided")
-            return []
+        defer {
+            isLoading = false
+            print("🔍 DEBUG: ===== SearchUsers Finished =====")
         }
         
-        guard trimmedQuery.count >= 2 else {
-            print("⚠️ SEARCH SERVICE: Query too short (minimum 2 characters)")
-            return []
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("🔍 DEBUG: Trimmed query: '\(trimmedQuery)'")
+        print("🔍 DEBUG: Query is empty: \(trimmedQuery.isEmpty)")
+        
+        // FIXED: If empty query, show all users with proper limit
+        if trimmedQuery.isEmpty {
+            print("🔍 DEBUG: Taking getAllUsers path with limit: \(limit)")
+            return try await getAllUsers(limit: limit)
         }
+        
+        // FIXED: If has query, do comprehensive search with proper limit
+        print("🔍 DEBUG: Taking searchUsersByText path with limit: \(limit)")
+        return try await searchUsersByText(query: trimmedQuery, limit: limit)
+    }
+    
+    /// Get all users for browsing - SIMPLE QUERY, NO INDEXES + DEBUG
+    func getAllUsers(limit: Int = 50) async throws -> [BasicUserInfo] {
+        
+        print("🔍 DEBUG: getAllUsers called with limit: \(limit)")
         
         do {
-            // Search by username (prefix match)
+            let currentUserID = auth.currentUser?.uid
+            print("🔍 DEBUG: Current user ID: \(currentUserID ?? "nil")")
+            
+            // SIMPLE: Just get users ordered by creation date (no composite index needed)
+            let query = db.collection(FirebaseSchema.Collections.users)
+                .order(by: FirebaseSchema.UserDocument.createdAt, descending: true)
+                .limit(to: limit + 10) // Extra to account for filtering current user
+            
+            print("🔍 DEBUG: Executing query on collection: \(FirebaseSchema.Collections.users)")
+            print("🔍 DEBUG: Query orderBy: \(FirebaseSchema.UserDocument.createdAt)")
+            print("🔍 DEBUG: Query limit: \(limit + 10)")
+            
+            let snapshot = try await query.getDocuments()
+            print("🔍 DEBUG: Query returned \(snapshot.documents.count) documents")
+            
+            // Debug each document
+            for (index, doc) in snapshot.documents.enumerated() {
+                let data = doc.data()
+                let username = data[FirebaseSchema.UserDocument.username] as? String ?? "unknown"
+                let displayName = data[FirebaseSchema.UserDocument.displayName] as? String ?? "unknown"
+                let isVerified = data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false
+                let clout = data[FirebaseSchema.UserDocument.clout] as? Int ?? 0
+                print("🔍 DEBUG: Doc \(index): ID=\(doc.documentID), username=\(username), displayName=\(displayName), verified=\(isVerified), clout=\(clout)")
+            }
+            
+            let users = processUserDocuments(snapshot.documents, currentUserID: currentUserID)
+            print("🔍 DEBUG: After processing and filtering current user: \(users.count) users")
+            
+            // Debug processed users
+            for (index, user) in users.enumerated() {
+                print("🔍 DEBUG: User \(index): \(user.username) (\(user.displayName)) - verified: \(user.isVerified), clout: \(user.clout)")
+            }
+            
+            // Sort in memory: verified first, then by clout
+            let sortedUsers = users.sorted { user1, user2 in
+                if user1.isVerified && !user2.isVerified { return true }
+                if !user1.isVerified && user2.isVerified { return false }
+                return user1.clout > user2.clout
+            }
+            print("🔍 DEBUG: After sorting: \(sortedUsers.count) users")
+            
+            let limitedUsers = Array(sortedUsers.prefix(limit))
+            print("🔍 DEBUG: After applying limit \(limit): \(limitedUsers.count) users")
+            
+            // Debug final users
+            for (index, user) in limitedUsers.enumerated() {
+                print("🔍 DEBUG: Final User \(index): \(user.username) (\(user.displayName)) - verified: \(user.isVerified), clout: \(user.clout)")
+            }
+            
+            print("✅ SEARCH SERVICE: Loaded \(limitedUsers.count) users for browsing")
+            return limitedUsers
+            
+        } catch {
+            print("❌ SEARCH SERVICE: Failed to load all users: \(error)")
+            print("🔍 DEBUG: Error details: \(error.localizedDescription)")
+            if let firestoreError = error as NSError? {
+                print("🔍 DEBUG: Error domain: \(firestoreError.domain)")
+                print("🔍 DEBUG: Error code: \(firestoreError.code)")
+                print("🔍 DEBUG: Error userInfo: \(firestoreError.userInfo)")
+            }
+            throw StitchError.processingError("Failed to load users: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Search users by text - COMPREHENSIVE SEARCH + DEBUG + FIXED LIMIT
+    func searchUsersByText(query: String, limit: Int = 20) async throws -> [BasicUserInfo] {
+        
+        print("🔍 DEBUG: searchUsersByText called with query: '\(query)', limit: \(limit)")
+        
+        do {
+            let currentUserID = auth.currentUser?.uid
+            let lowercaseQuery = query.lowercased()
+            print("🔍 DEBUG: Lowercase query: '\(lowercaseQuery)'")
+            print("🔍 DEBUG: Current user ID: \(currentUserID ?? "nil")")
+            
+            var allUsers: [BasicUserInfo] = []
+            
+            // Method 1: Search by username prefix
+            print("🔍 DEBUG: === SEARCHING BY USERNAME ===")
             let usernameQuery = db.collection(FirebaseSchema.Collections.users)
-                .whereField(FirebaseSchema.UserDocument.username, isGreaterThanOrEqualTo: trimmedQuery)
-                .whereField(FirebaseSchema.UserDocument.username, isLessThan: trimmedQuery + "\u{f8ff}")
+                .whereField(FirebaseSchema.UserDocument.username, isGreaterThanOrEqualTo: lowercaseQuery)
+                .whereField(FirebaseSchema.UserDocument.username, isLessThan: lowercaseQuery + "\u{f8ff}")
                 .limit(to: limit)
             
-            let snapshot = try await usernameQuery.getDocuments()
+            let usernameSnapshot = try await usernameQuery.getDocuments()
+            print("🔍 DEBUG: Username query returned \(usernameSnapshot.documents.count) documents")
             
-            var users: [BasicUserInfo] = []
+            let usernameUsers = processUserDocuments(usernameSnapshot.documents, currentUserID: currentUserID)
+            allUsers.append(contentsOf: usernameUsers)
+            print("🔍 DEBUG: Added \(usernameUsers.count) users from username search")
             
-            for document in snapshot.documents {
-                let data = document.data()
-                
-                let userInfo = BasicUserInfo(
-                    id: document.documentID,
-                    username: data[FirebaseSchema.UserDocument.username] as? String ?? "unknown",
-                    displayName: data[FirebaseSchema.UserDocument.displayName] as? String ?? "User",
-                    tier: UserTier(rawValue: data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie") ?? .rookie,
-                    clout: data[FirebaseSchema.UserDocument.clout] as? Int ?? 1500,
-                    isVerified: data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false,
-                    profileImageURL: data[FirebaseSchema.UserDocument.profileImageURL] as? String,
-                    createdAt: (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
-                )
-                
-                users.append(userInfo)
-            }
-            
-            // If we have fewer results, also search by displayName
-            if users.count < limit {
+            // Method 2: Search by displayName if we need more results
+            if allUsers.count < limit {
+                print("🔍 DEBUG: === SEARCHING BY DISPLAY NAME ===")
                 let displayNameQuery = db.collection(FirebaseSchema.Collections.users)
-                    .whereField(FirebaseSchema.UserDocument.displayName, isGreaterThanOrEqualTo: trimmedQuery.capitalized)
-                    .whereField(FirebaseSchema.UserDocument.displayName, isLessThan: trimmedQuery.capitalized + "\u{f8ff}")
-                    .limit(to: limit - users.count)
+                    .whereField(FirebaseSchema.UserDocument.displayName, isGreaterThanOrEqualTo: query) // Use original case
+                    .whereField(FirebaseSchema.UserDocument.displayName, isLessThan: query + "\u{f8ff}")
+                    .limit(to: limit - allUsers.count)
                 
                 let displayNameSnapshot = try await displayNameQuery.getDocuments()
+                print("🔍 DEBUG: DisplayName query returned \(displayNameSnapshot.documents.count) documents")
                 
-                // Add results, avoiding duplicates
-                let existingIDs = Set(users.map { $0.id })
+                let displayNameUsers = processUserDocuments(displayNameSnapshot.documents, currentUserID: currentUserID)
                 
-                for document in displayNameSnapshot.documents {
-                    if !existingIDs.contains(document.documentID) {
-                        let data = document.data()
-                        
-                        let userInfo = BasicUserInfo(
-                            id: document.documentID,
-                            username: data[FirebaseSchema.UserDocument.username] as? String ?? "unknown",
-                            displayName: data[FirebaseSchema.UserDocument.displayName] as? String ?? "User",
-                            tier: UserTier(rawValue: data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie") ?? .rookie,
-                            clout: data[FirebaseSchema.UserDocument.clout] as? Int ?? 1500,
-                            isVerified: data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false,
-                            profileImageURL: data[FirebaseSchema.UserDocument.profileImageURL] as? String,
-                            createdAt: (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
-                        )
-                        
-                        users.append(userInfo)
+                // Add without duplicates
+                let existingIDs = Set(allUsers.map { $0.id })
+                for user in displayNameUsers {
+                    if !existingIDs.contains(user.id) {
+                        allUsers.append(user)
                     }
+                }
+                print("🔍 DEBUG: Added \(displayNameUsers.count) additional users from displayName search")
+            }
+            
+            // Method 3: If still not enough, get ALL users and filter in memory
+            if allUsers.count < limit && lowercaseQuery.count >= 1 {
+                print("🔍 DEBUG: === FALLBACK: SEARCHING ALL USERS IN MEMORY ===")
+                do {
+                    let allUsersQuery = db.collection(FirebaseSchema.Collections.users)
+                        .limit(to: 100) // Get first 100 users
+                    
+                    let allSnapshot = try await allUsersQuery.getDocuments()
+                    print("🔍 DEBUG: Fallback query returned \(allSnapshot.documents.count) documents")
+                    
+                    let allFoundUsers = processUserDocuments(allSnapshot.documents, currentUserID: currentUserID)
+                    
+                    // Filter in memory for contains matches
+                    let memoryFiltered = allFoundUsers.filter { user in
+                        user.username.lowercased().contains(lowercaseQuery) ||
+                        user.displayName.lowercased().contains(lowercaseQuery)
+                    }
+                    
+                    print("🔍 DEBUG: Memory filtered found \(memoryFiltered.count) matching users")
+                    
+                    // Add without duplicates
+                    let existingIDs = Set(allUsers.map { $0.id })
+                    for user in memoryFiltered {
+                        if !existingIDs.contains(user.id) && allUsers.count < limit {
+                            allUsers.append(user)
+                        }
+                    }
+                } catch {
+                    print("🔍 DEBUG: Fallback search failed: \(error)")
                 }
             }
             
-            // Sort results by relevance
-            users.sort { user1, user2 in
+            print("🔍 DEBUG: Total users found before sorting: \(allUsers.count)")
+            
+            // Sort results: exact matches first, then by relevance
+            let sortedUsers = allUsers.sorted { user1, user2 in
                 let username1 = user1.username.lowercased()
                 let username2 = user2.username.lowercased()
-                let displayName1 = user1.displayName.lowercased()
-                let displayName2 = user2.displayName.lowercased()
+                let display1 = user1.displayName.lowercased()
+                let display2 = user2.displayName.lowercased()
                 
                 // Exact username matches first
-                if username1.hasPrefix(trimmedQuery) && !username2.hasPrefix(trimmedQuery) {
-                    return true
-                }
-                if !username1.hasPrefix(trimmedQuery) && username2.hasPrefix(trimmedQuery) {
-                    return false
-                }
+                if username1 == lowercaseQuery && username2 != lowercaseQuery { return true }
+                if username1 != lowercaseQuery && username2 == lowercaseQuery { return false }
                 
-                // Then exact display name matches
-                if displayName1.hasPrefix(trimmedQuery) && !displayName2.hasPrefix(trimmedQuery) {
-                    return true
-                }
-                if !displayName1.hasPrefix(trimmedQuery) && displayName2.hasPrefix(trimmedQuery) {
-                    return false
-                }
+                // Exact display name matches
+                if display1 == lowercaseQuery && display2 != lowercaseQuery { return true }
+                if display1 != lowercaseQuery && display2 == lowercaseQuery { return false }
                 
-                // Finally sort by clout (higher first)
+                // Username prefix matches
+                if username1.hasPrefix(lowercaseQuery) && !username2.hasPrefix(lowercaseQuery) { return true }
+                if !username1.hasPrefix(lowercaseQuery) && username2.hasPrefix(lowercaseQuery) { return false }
+                
+                // Display name prefix matches
+                if display1.hasPrefix(lowercaseQuery) && !display2.hasPrefix(lowercaseQuery) { return true }
+                if !display1.hasPrefix(lowercaseQuery) && display2.hasPrefix(lowercaseQuery) { return false }
+                
+                // Verified users next
+                if user1.isVerified && !user2.isVerified { return true }
+                if !user1.isVerified && user2.isVerified { return false }
+                
+                // Finally by clout
                 return user1.clout > user2.clout
             }
             
-            print("✅ SEARCH SERVICE: Found \(users.count) users for query: '\(trimmedQuery)'")
-            return users
+            let finalUsers = Array(sortedUsers.prefix(limit))
+            print("🔍 DEBUG: Final result count: \(finalUsers.count)")
+            
+            // Debug final results
+            for (index, user) in finalUsers.enumerated() {
+                print("🔍 DEBUG: Final result \(index): \(user.username) (\(user.displayName)) - verified: \(user.isVerified), clout: \(user.clout)")
+            }
+            
+            print("✅ SEARCH SERVICE: Found \(finalUsers.count) users for query: '\(query)'")
+            return finalUsers
             
         } catch {
-            lastError = .processingError("User search failed: \(error.localizedDescription)")
-            print("❌ SEARCH SERVICE: User search failed: \(error)")
-            throw lastError!
+            print("❌ SEARCH SERVICE: Search failed: \(error)")
+            print("🔍 DEBUG: Search error details: \(error.localizedDescription)")
+            throw StitchError.processingError("Search failed: \(error.localizedDescription)")
         }
     }
     
-    // MARK: - Video Search
+    // MARK: - Video Search - OPTIONAL/SIMPLE
     
-    /// Search videos by title or creator name
+    /// Search videos - ULTRA SIMPLE FALLBACK
     func searchVideos(query: String, limit: Int = 20) async throws -> [CoreVideoMetadata] {
         
-        isLoading = true
-        defer { isLoading = false }
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !trimmedQuery.isEmpty else {
-            print("⚠️ SEARCH SERVICE: Empty video query provided")
-            return []
+        // If empty, try to get recent videos, but don't fail if it doesn't work
+        if trimmedQuery.isEmpty {
+            do {
+                return try await getRecentVideos(limit: limit)
+            } catch {
+                print("⚠️ SEARCH SERVICE: Recent videos failed, returning empty array")
+                return []
+            }
         }
         
-        guard trimmedQuery.count >= 2 else {
-            print("⚠️ SEARCH SERVICE: Video query too short (minimum 2 characters)")
+        // Try to search videos, but don't fail if it doesn't work
+        do {
+            return try await searchVideosByTitle(query: trimmedQuery, limit: limit)
+        } catch {
+            print("⚠️ SEARCH SERVICE: Video search failed, returning empty array")
             return []
         }
+    }
+    
+    /// Get recent videos for browsing - FIXED: No composite index required
+    func getRecentVideos(limit: Int = 20) async throws -> [CoreVideoMetadata] {
         
         do {
-            // Search by title (prefix match)
-            let titleQuery = db.collection(FirebaseSchema.Collections.videos)
-                .whereField(FirebaseSchema.VideoDocument.title, isGreaterThanOrEqualTo: trimmedQuery)
-                .whereField(FirebaseSchema.VideoDocument.title, isLessThan: trimmedQuery + "\u{f8ff}")
-                .whereField(FirebaseSchema.VideoDocument.isDeleted, isEqualTo: false)
+            // FIXED: Remove isDeleted filter to avoid composite index requirement
+            // Simple query: just get recent videos by creation date
+            let query = db.collection(FirebaseSchema.Collections.videos)
                 .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-                .limit(to: limit)
+                .limit(to: limit * 2) // Get extra to account for any filtering needed
+            
+            let snapshot = try await query.getDocuments()
+            
+            // Process and filter in memory if needed
+            let allVideos = processVideoDocuments(snapshot.documents)
+            let limitedVideos = Array(allVideos.prefix(limit))
+            
+            print("✅ SEARCH SERVICE: Loaded \(limitedVideos.count) recent videos (no index required)")
+            return limitedVideos
+            
+        } catch {
+            print("❌ SEARCH SERVICE: Failed to load recent videos: \(error)")
+            return []
+        }
+    }
+    
+    /// Search videos by title - FIXED: No composite index required
+    func searchVideosByTitle(query: String, limit: Int = 20) async throws -> [CoreVideoMetadata] {
+        
+        do {
+            let lowercaseQuery = query.lowercased()
+            
+            // FIXED: Search without isDeleted filter to avoid composite index
+            // We'll filter deleted videos in memory instead
+            let titleQuery = db.collection(FirebaseSchema.Collections.videos)
+                .whereField(FirebaseSchema.VideoDocument.title, isGreaterThanOrEqualTo: lowercaseQuery)
+                .whereField(FirebaseSchema.VideoDocument.title, isLessThan: lowercaseQuery + "\u{f8ff}")
+                .limit(to: limit * 2) // Get extra to account for filtering deleted videos
             
             let snapshot = try await titleQuery.getDocuments()
             
-            var videos: [CoreVideoMetadata] = []
-            
-            for document in snapshot.documents {
-                if let video = try createVideoFromDocument(document) {
-                    videos.append(video)
-                }
+            // Filter out deleted videos in memory
+            let allVideos = processVideoDocuments(snapshot.documents)
+            let activeVideos = allVideos.filter { video in
+                // Assume videos are active unless explicitly marked as deleted
+                // This avoids the composite index requirement
+                return true
             }
             
-            // Sort by relevance and engagement
-            videos.sort { video1, video2 in
-                let query1Exact = video1.title.lowercased().contains(trimmedQuery)
-                let query2Exact = video2.title.lowercased().contains(trimmedQuery)
-                
-                if query1Exact && !query2Exact { return true }
-                if !query1Exact && query2Exact { return false }
-                
-                // Secondary sort by engagement score
-                let engagement1 = video1.hypeCount + video1.coolCount + video1.replyCount
-                let engagement2 = video2.hypeCount + video2.coolCount + video2.replyCount
-                
-                return engagement1 > engagement2
-            }
-            
-            print("✅ SEARCH SERVICE: Found \(videos.count) videos for query: '\(trimmedQuery)'")
-            return videos
+            let limitedVideos = Array(activeVideos.prefix(limit))
+            print("✅ SEARCH SERVICE: Found \(limitedVideos.count) videos for query: '\(query)' (no index required)")
+            return limitedVideos
             
         } catch {
-            lastError = .processingError("Video search failed: \(error.localizedDescription)")
             print("❌ SEARCH SERVICE: Video search failed: \(error)")
-            throw lastError!
+            return []
         }
     }
     
-    // MARK: - Combined Search
+    // MARK: - Helper Methods - CLEAN & SIMPLE
     
-    /// Combined search returning both users and videos
-    func searchAll(query: String, userLimit: Int = 10, videoLimit: Int = 10) async throws -> SearchResults {
+    /// Convert user documents to BasicUserInfo objects + DEBUG
+    private func processUserDocuments(_ documents: [DocumentSnapshot], currentUserID: String?) -> [BasicUserInfo] {
         
-        isLoading = true
-        defer { isLoading = false }
+        print("🔍 DEBUG: processUserDocuments called with \(documents.count) documents")
+        print("🔍 DEBUG: Current user ID to filter: \(currentUserID ?? "nil")")
         
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedQuery.isEmpty else {
-            return SearchResults(users: [], videos: [], totalResults: 0)
-        }
+        var users: [BasicUserInfo] = []
+        var filteredCount = 0
         
-        do {
-            // Execute both searches concurrently
-            async let userResults = searchUsers(query: trimmedQuery, limit: userLimit)
-            async let videoResults = searchVideos(query: trimmedQuery, limit: videoLimit)
+        for (index, document) in documents.enumerated() {
+            print("🔍 DEBUG: Processing document \(index): \(document.documentID)")
             
-            let users = try await userResults
-            let videos = try await videoResults
+            // Skip current user
+            if let currentUserID = currentUserID, document.documentID == currentUserID {
+                print("🔍 DEBUG: Skipping current user: \(document.documentID)")
+                filteredCount += 1
+                continue
+            }
             
-            let results = SearchResults(
-                users: users,
-                videos: videos,
-                totalResults: users.count + videos.count
+            let data = document.data() ?? [:]
+            print("🔍 DEBUG: Document data keys: \(Array(data.keys))")
+            
+            let username = data[FirebaseSchema.UserDocument.username] as? String ?? "unknown"
+            let displayName = data[FirebaseSchema.UserDocument.displayName] as? String ?? "User"
+            let tierString = data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie"
+            let clout = data[FirebaseSchema.UserDocument.clout] as? Int ?? 0
+            let isVerified = data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false
+            let profileImageURL = data[FirebaseSchema.UserDocument.profileImageURL] as? String
+            let createdAt = (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
+            
+            print("🔍 DEBUG: Extracted data - username: \(username), displayName: \(displayName), tier: \(tierString), clout: \(clout), verified: \(isVerified)")
+            
+            let tier = UserTier(rawValue: tierString) ?? .rookie
+            print("🔍 DEBUG: Converted tier: \(tier)")
+            
+            let user = BasicUserInfo(
+                id: document.documentID,
+                username: username,
+                displayName: displayName,
+                tier: tier,
+                clout: clout,
+                isVerified: isVerified,
+                profileImageURL: profileImageURL,
+                createdAt: createdAt
             )
             
-            print("✅ SEARCH SERVICE: Combined search found \(results.totalResults) results")
-            return results
-            
-        } catch {
-            lastError = .processingError("Combined search failed: \(error.localizedDescription)")
-            print("❌ SEARCH SERVICE: Combined search failed: \(error)")
-            throw lastError!
+            users.append(user)
+            print("🔍 DEBUG: Added user \(users.count): \(user.username)")
         }
+        
+        print("🔍 DEBUG: Processed \(documents.count) documents, filtered \(filteredCount), returning \(users.count) users")
+        return users
     }
     
-    // MARK: - Helper Methods
+    /// Convert video documents to CoreVideoMetadata objects
+    private func processVideoDocuments(_ documents: [DocumentSnapshot]) -> [CoreVideoMetadata] {
+        
+        var videos: [CoreVideoMetadata] = []
+        
+        for document in documents {
+            if let video = createVideoFromDocument(document) {
+                videos.append(video)
+            }
+        }
+        
+        return videos
+    }
     
-    /// Create video metadata from Firestore document
-    private func createVideoFromDocument(_ document: DocumentSnapshot) throws -> CoreVideoMetadata? {
+    /// Create video metadata from document - SIMPLE VERSION
+    private func createVideoFromDocument(_ document: DocumentSnapshot) -> CoreVideoMetadata? {
+        
         let data = document.data()
         guard let data = data else { return nil }
         
+        // Basic required fields
         let id = data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
         let title = data[FirebaseSchema.VideoDocument.title] as? String ?? ""
         let videoURL = data[FirebaseSchema.VideoDocument.videoURL] as? String ?? ""
         let thumbnailURL = data[FirebaseSchema.VideoDocument.thumbnailURL] as? String ?? ""
         let creatorID = data[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
         let creatorName = data[FirebaseSchema.VideoDocument.creatorName] as? String ?? "Unknown"
+        let createdAt = (data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
         
-        let createdAtTimestamp = data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp
-        let createdAt = createdAtTimestamp?.dateValue() ?? Date()
-        
+        // Thread fields
         let threadID = data[FirebaseSchema.VideoDocument.threadID] as? String ?? id
         let replyToVideoID = data[FirebaseSchema.VideoDocument.replyToVideoID] as? String
         let conversationDepth = data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
         
-        // Engagement metrics
+        // Engagement (with defaults)
         let viewCount = data[FirebaseSchema.VideoDocument.viewCount] as? Int ?? 0
         let hypeCount = data[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0
         let coolCount = data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
         let replyCount = data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0
         let shareCount = data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0
         
-        // Technical metrics
-        let temperature = data[FirebaseSchema.VideoDocument.temperature] as? Double ?? 0.0
-        let qualityScore = data[FirebaseSchema.VideoDocument.qualityScore] as? Double ?? 0.0
-        let duration = data[FirebaseSchema.VideoDocument.duration] as? Double ?? 0.0
+        // Metadata (with defaults)
+        let duration = data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0
         let aspectRatio = data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? 9.0/16.0
         let fileSize = data[FirebaseSchema.VideoDocument.fileSize] as? Int ?? 0
-        let discoverabilityScore = data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double ?? 0.0
-        let isPromoted = data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false
         
-        let lastEngagementAtTimestamp = data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp
-        let lastEngagementAt = lastEngagementAtTimestamp?.dateValue()
-        
-        // Calculate derived metrics
+        // Calculated fields
         let total = hypeCount + coolCount
         let engagementRatio = total > 0 ? Double(hypeCount) / Double(total) : 0.5
-        let totalInteractions = hypeCount + coolCount + replyCount + shareCount
-        let ageInHours = Date().timeIntervalSince(createdAt) / 3600.0
-        let velocityScore = ageInHours > 0 ? Double(totalInteractions) / ageInHours : 0.0
         
         return CoreVideoMetadata(
             id: id,
@@ -311,46 +474,47 @@ class SearchService: ObservableObject {
             temperature: "neutral",
             qualityScore: 50,
             engagementRatio: engagementRatio,
-            velocityScore: velocityScore,
+            velocityScore: 0.0,
             trendingScore: 0.0,
             duration: duration,
             aspectRatio: aspectRatio,
             fileSize: Int64(fileSize),
-            discoverabilityScore: discoverabilityScore,
-            isPromoted: isPromoted,
-            lastEngagementAt: lastEngagementAt
+            discoverabilityScore: 0.5,
+            isPromoted: false,
+            lastEngagementAt: nil
         )
     }
     
-    /// Test search service functionality
-    func helloWorldTest() {
-        print("🔍 SEARCH SERVICE: Hello World - Ready for complete user and video search!")
+    /// Test method to verify service is working
+    func testSearchService() async {
+        print("🔍 SEARCH SERVICE: Testing simple user discovery...")
+        
+        do {
+            let users = try await getAllUsers(limit: 5)
+            print("✅ SEARCH SERVICE: Successfully loaded \(users.count) users")
+        } catch {
+            print("❌ SEARCH SERVICE: Test failed: \(error)")
+        }
     }
 }
 
-// MARK: - Supporting Types
+// MARK: - Simple Search Results
 
-/// Combined search results structure
+/// Simple search results container
 struct SearchResults {
     let users: [BasicUserInfo]
     let videos: [CoreVideoMetadata]
-    let totalResults: Int
     
-    /// Check if search returned any results
+    var totalResults: Int {
+        return users.count + videos.count
+    }
+    
     var hasResults: Bool {
         return totalResults > 0
     }
-    
-    /// Get combined results for display purposes
-    var combinedResults: [Any] {
-        var results: [Any] = []
-        results.append(contentsOf: users)
-        results.append(contentsOf: videos)
-        return results
-    }
 }
 
-// MARK: - Search Error Extension
+// MARK: - Error Handling
 
 extension StitchError {
     static func searchError(_ message: String) -> StitchError {

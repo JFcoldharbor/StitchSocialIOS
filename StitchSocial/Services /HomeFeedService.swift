@@ -55,7 +55,7 @@ class HomeFeedService: ObservableObject {
         print("🏠 HOME FEED: Initialized with lazy loading strategy")
     }
     
-    // MARK: - Primary Feed Operations - FIXED FOR INSTANT LOADING
+    // MARK: - Primary Feed Operations - FIXED FOR FULL FOLLOWING FEED
     
     /// Load initial following feed - PARENT THREADS ONLY for instant display
     func loadFeed(userID: String, limit: Int = 20) async throws -> [ThreadData] {
@@ -74,10 +74,10 @@ class HomeFeedService: ObservableObject {
         
         print("HOME FEED: Found \(followingIDs.count) following users")
         
-        // Step 2: Get PARENT THREADS ONLY with reduced limit for speed
+        // Step 2: Get PARENT THREADS ONLY - FIXED: Remove artificial limit
         let threads = try await getFollowingParentThreadsOnly(
             followingIDs: followingIDs,
-            limit: min(limit, 10) // Reduced initial load for speed
+            limit: limit // FIXED: Use full limit, not min(limit, 10)
         )
         
         // Step 3: Update state
@@ -155,38 +155,41 @@ class HomeFeedService: ObservableObject {
         return currentFeed
     }
     
-    // MARK: - LAZY LOADING IMPLEMENTATION - NEW
+    // MARK: - LAZY LOADING IMPLEMENTATION - FIXED FOR ALL FOLLOWING USERS
     
-    /// Get parent threads only (no children) for instant loading
+    /// Get parent threads only (no children) for instant loading - FIXED
     private func getFollowingParentThreadsOnly(
         followingIDs: [String],
         limit: Int,
         startAfter: DocumentSnapshot? = nil
     ) async throws -> [ThreadData] {
         
-        // Batch size for Firebase queries - reduced for speed
-        let batchSize = min(5, followingIDs.count) // Reduced from 10 to 5
+        // FIXED: Increased batch size for better user coverage
+        let batchSize = min(10, followingIDs.count) // FIXED: Increased from 5 to 10
         let batches = followingIDs.batchedChunks(into: batchSize)
         
         var allThreads: [ThreadData] = []
         
-        // Process only first 2 batches for instant loading
-        let limitedBatches = Array(batches.prefix(2))
-        
+        // FIXED: Process ALL batches, not just first 2
         // Process each batch of following users
-        for batch in limitedBatches {
+        for batch in batches { // FIXED: Removed .prefix(2) limitation
             let batchThreads = try await getParentThreadsBatch(
                 creatorIDs: batch,
                 limit: limit,
                 startAfter: startAfter
             )
             allThreads.append(contentsOf: batchThreads)
+            
+            // Stop if we have enough content for this load
+            if allThreads.count >= limit {
+                break
+            }
         }
         
         // Simple random shuffle - no complex algorithm
         let shuffledThreads = Array(allThreads.shuffled().prefix(limit))
         
-        print("🎲 HOME FEED: Shuffled \(allThreads.count) parent threads to \(shuffledThreads.count)")
+        print("🎲 HOME FEED: Shuffled \(allThreads.count) parent threads from \(batches.count) batches to \(shuffledThreads.count)")
         return shuffledThreads
     }
     
@@ -234,14 +237,14 @@ class HomeFeedService: ObservableObject {
         guard let data = data else { return nil }
         
         let id = data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
-        let title = data[FirebaseSchema.VideoDocument.title] as? String ?? ""
+        let creatorID = data[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
+        let title = data[FirebaseSchema.VideoDocument.title] as? String ?? "Untitled"
         let videoURL = data[FirebaseSchema.VideoDocument.videoURL] as? String ?? ""
         let thumbnailURL = data[FirebaseSchema.VideoDocument.thumbnailURL] as? String ?? ""
-        let creatorID = data[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
-        let creatorName = data[FirebaseSchema.VideoDocument.creatorName] as? String ?? ""
+        let creatorName = data[FirebaseSchema.VideoDocument.creatorName] as? String ?? "Unknown"
         let createdAt = (data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
         
-        // Create video metadata directly (no additional service calls)
+        // Create CoreVideoMetadata for parent video
         let parentVideo = CoreVideoMetadata(
             id: id,
             title: title,
@@ -260,9 +263,9 @@ class HomeFeedService: ObservableObject {
             shareCount: data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0,
             temperature: data[FirebaseSchema.VideoDocument.temperature] as? String ?? "neutral",
             qualityScore: data[FirebaseSchema.VideoDocument.qualityScore] as? Int ?? 50,
-            engagementRatio: (data["engagementRatio"] as? Double) ?? 0.0,
-            velocityScore: (data["velocityScore"] as? Double) ?? 0.0,
-            trendingScore: (data["trendingScore"] as? Double) ?? 0.0,
+            engagementRatio: 0.0,
+            velocityScore: 0.0,
+            trendingScore: 0.0,
             duration: data[FirebaseSchema.VideoDocument.duration] as? Double ?? 0.0,
             aspectRatio: data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? (9.0/16.0),
             fileSize: data[FirebaseSchema.VideoDocument.fileSize] as? Int64 ?? 0,
@@ -403,6 +406,55 @@ class HomeFeedService: ObservableObject {
     /// Check if should load more content based on current position
     func shouldLoadMoreContent(currentThreadIndex: Int) -> Bool {
         return currentThreadIndex >= preloadTriggerIndex && hasMoreContent && !isLoading
+    }
+    
+    // MARK: - RESHUFFLE FUNCTIONALITY - NEW
+    
+    /// Reshuffle current feed when reaching bottom
+    func reshuffleCurrentFeed() {
+        guard !currentFeed.isEmpty else { return }
+        
+        print("🔀 HOME FEED: Reshuffling \(currentFeed.count) threads")
+        
+        // Simple shuffle of existing content
+        currentFeed = currentFeed.shuffled()
+        
+        // Update stats
+        feedStats.refreshCount += 1
+        feedStats.lastRefreshTime = Date()
+        
+        print("✅ HOME FEED: Feed reshuffled - new order applied")
+    }
+    
+    /// Get reshuffled feed for bottom reach scenario
+    func getReshuffledFeed(userID: String) async throws -> [ThreadData] {
+        
+        print("🔄 HOME FEED: Creating reshuffled feed from existing content")
+        
+        // If we have no more content to load, reshuffle existing
+        if !hasMoreContent && !currentFeed.isEmpty {
+            reshuffleCurrentFeed()
+            return currentFeed
+        }
+        
+        // Otherwise try to load more content first, then reshuffle if needed
+        do {
+            let moreContent = try await loadMoreContent(userID: userID)
+            if moreContent.count > currentFeed.count - 5 { // Got new content
+                return moreContent
+            } else {
+                // No new content, reshuffle existing
+                reshuffleCurrentFeed()
+                return currentFeed
+            }
+        } catch {
+            // Failed to load more, reshuffle what we have
+            if !currentFeed.isEmpty {
+                reshuffleCurrentFeed()
+                return currentFeed
+            }
+            throw error
+        }
     }
     
     // MARK: - Cache Integration

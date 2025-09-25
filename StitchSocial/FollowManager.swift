@@ -5,21 +5,20 @@
 //  Created by James Garmon on 9/10/25.
 //
 
-
 //
 //  FollowManager.swift
 //  StitchSocial
 //
-//  Layer 4: Core Services - Centralized Follow/Unfollow Logic
-//  Dependencies: UserService (Layer 4), Firebase Auth
-//  Features: Optimistic UI updates, haptic feedback, error handling, loading states
+//  Layer 4: Core Services - Centralized Follow/Unfollow Logic with Auto-Follow Protection
+//  Dependencies: UserService (Layer 4), Firebase Auth, SpecialUserEntry
+//  Features: Optimistic UI updates, haptic feedback, error handling, loading states, unfollow protection
 //  Used by: All views that need follow functionality
 //
 
 import SwiftUI
 import FirebaseAuth
 
-/// Centralized manager for all follow/unfollow operations across the app
+/// Centralized manager for all follow/unfollow operations across the app with James Fortune protection
 @MainActor
 class FollowManager: ObservableObject {
     
@@ -49,12 +48,12 @@ class FollowManager: ObservableObject {
     // MARK: - Initialization
     
     init() {
-        print("🔗 FOLLOW MANAGER: Initialized")
+        print("🔗 FOLLOW MANAGER: Initialized with auto-follow protection")
     }
     
     // MARK: - Public Interface
     
-    /// Toggle follow state for a user with optimistic UI updates and error handling
+    /// Toggle follow state for a user with optimistic UI updates, error handling, and unfollow protection
     func toggleFollow(for userID: String) async {
         guard let currentUserID = Auth.auth().currentUser?.uid else {
             print("❌ FOLLOW MANAGER: No current user ID")
@@ -72,6 +71,21 @@ class FollowManager: ObservableObject {
         // Get current state before optimistic update
         let wasFollowing = followingStates[userID] ?? false
         let newFollowingState = !wasFollowing
+        
+        // CHECK FOR UNFOLLOW PROTECTION (James Fortune only)
+        if wasFollowing && !newFollowingState {
+            let isProtected = await isProtectedFromUnfollow(userID)
+            if isProtected {
+                print("🔒 FOLLOW MANAGER: Cannot unfollow protected account \(userID)")
+                lastError = "This official account cannot be unfollowed"
+                loadingStates.remove(userID)
+                
+                // Trigger haptic feedback for blocked action
+                triggerHapticFeedback()
+                
+                return
+            }
+        }
         
         // Optimistic UI update (immediate visual feedback)
         followingStates[userID] = newFollowingState
@@ -94,6 +108,17 @@ class FollowManager: ObservableObject {
             // Notify completion callback
             onFollowStateChanged?(userID, newFollowingState)
             
+            // REFRESH FOLLOWER COUNTS AFTER SUCCESSFUL FOLLOW/UNFOLLOW
+            Task {
+                do {
+                    try await userService.refreshFollowerCounts(userID: currentUserID)
+                    try await userService.refreshFollowerCounts(userID: userID)
+                    print("✅ FOLLOW MANAGER: Refreshed follower counts after follow action")
+                } catch {
+                    print("⚠️ FOLLOW MANAGER: Failed to refresh counts: \(error)")
+                }
+            }
+            
             // Clear any previous errors
             lastError = nil
             
@@ -113,6 +138,39 @@ class FollowManager: ObservableObject {
         // Clear loading state
         loadingStates.remove(userID)
     }
+    
+    // MARK: - Unfollow Protection for Special Users
+    
+    /// Check if user is protected from unfollowing (James Fortune only)
+    private func isProtectedFromUnfollow(_ userID: String) async -> Bool {
+        do {
+            print("🔒 FOLLOW MANAGER: Checking unfollow protection for user \(userID)")
+            
+            // Get user email to check against protected accounts
+            let userEmail = try await userService.getUserEmail(userID: userID)
+            let isProtected = SpecialUsersConfig.isProtectedFromUnfollow(userEmail ?? "")
+            
+            if isProtected {
+                print("🔒 FOLLOW MANAGER: User \(userID) (\(userEmail ?? "unknown")) IS PROTECTED from unfollowing")
+            } else {
+                print("✅ FOLLOW MANAGER: User \(userID) (\(userEmail ?? "unknown")) can be unfollowed")
+            }
+            
+            return isProtected
+            
+        } catch {
+            print("⚠️ FOLLOW MANAGER: Could not check protection status for \(userID): \(error)")
+            // If we can't check, allow the unfollow (fail open)
+            return false
+        }
+    }
+    
+    /// Public method to check if a user is protected from unfollowing
+    func isUserProtectedFromUnfollow(_ userID: String) async -> Bool {
+        return await isProtectedFromUnfollow(userID)
+    }
+    
+    // MARK: - State Management
     
     /// Check if currently following a user
     func isFollowing(_ userID: String) -> Bool {
@@ -196,6 +254,43 @@ class FollowManager: ObservableObject {
         }
     }
     
+    /// Refresh follow states for multiple users (batch refresh)
+    func refreshFollowStates(for userIDs: [String]) async {
+        print("🔄 FOLLOW MANAGER: Refreshing follow states for \(userIDs.count) users")
+        
+        guard let currentUserID = Auth.auth().currentUser?.uid else {
+            print("❌ FOLLOW MANAGER: No current user for refresh")
+            return
+        }
+        
+        do {
+            // Get fresh following data for current user
+            let (_, following) = try await userService.getFreshFollowData(userID: currentUserID)
+            
+            // Update local follow states based on fresh data
+            await MainActor.run {
+                for userID in userIDs {
+                    let isFollowing = following.contains(userID)
+                    followingStates[userID] = isFollowing
+                    print("🔄 FOLLOW MANAGER: Updated state for \(userID): \(isFollowing)")
+                }
+            }
+            
+            print("✅ FOLLOW MANAGER: Refreshed follow states for \(userIDs.count) users")
+            
+        } catch {
+            print("⚠️ FOLLOW MANAGER: Failed to refresh follow states: \(error)")
+        }
+    }
+    
+    /// Force refresh all cached follow states
+    func refreshAllFollowStates() async {
+        print("🔄 FOLLOW MANAGER: Refreshing ALL cached follow states")
+        
+        let userIDsToRefresh = Array(followingStates.keys)
+        await refreshFollowStates(for: userIDsToRefresh)
+    }
+    
     // MARK: - Statistics
     
     /// Get total number of users being followed (from cache)
@@ -253,6 +348,15 @@ extension FollowManager {
             return (foreground: .white, background: .cyan)
         }
     }
+    
+    /// Check if user can be unfollowed (not protected)
+    func canUnfollow(_ userID: String) async -> Bool {
+        if !isFollowing(userID) {
+            return true // Not following, so no need to unfollow
+        }
+        
+        return !(await isProtectedFromUnfollow(userID))
+    }
 }
 
 // MARK: - Debug Helpers
@@ -267,5 +371,12 @@ extension FollowManager {
         print("   Total following: \(totalFollowing)")
         print("   Pending operations: \(pendingOperations)")
         print("   Last error: \(lastError ?? "none")")
+    }
+    
+    /// Test follow manager functionality
+    func helloWorldTest() {
+        print("🔗 FOLLOW MANAGER: Hello World - Ready for complete follow management!")
+        print("🔗 Features: Follow/Unfollow, Optimistic UI, James Fortune protection, Batch operations")
+        print("🔗 Status: UserService integration, Haptic feedback, Error handling, State management")
     }
 }

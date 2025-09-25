@@ -1,10 +1,10 @@
 //
-//  SpecialUsersConfig.swift
-//  CleanBeta
+//  SpecialUserEntry.swift
+//  StitchSocial
 //
 //  Foundation layer - References existing UserTier and BadgeType
 //  Centralized configuration for all special users (founders, celebrities, ambassadors)
-//  Separated for easy maintenance and future expansion - REFERENCES existing types
+//  Updated: Complete list with all existing users, auto-follow James Fortune only
 //
 
 import Foundation
@@ -42,13 +42,14 @@ struct SpecialUserEntry: Codable, Hashable {
 /// Special user role categories
 enum SpecialUserRole: String, CaseIterable, Codable {
     case founder = "founder"
-    case coFounder = "co_founder" 
+    case coFounder = "co_founder"
     case employee = "employee"
     case celebrity = "celebrity"
     case ambassador = "ambassador"
     case affiliate = "affiliate"
     case influencer = "special_influencer"
     case partner = "special_partner"
+    case advisor = "advisor"
     
     var displayName: String {
         switch self {
@@ -58,8 +59,9 @@ enum SpecialUserRole: String, CaseIterable, Codable {
         case .celebrity: return "Celebrity"
         case .ambassador: return "Ambassador"
         case .affiliate: return "Affiliate"
-        case .influencer: return "Special Influencer"
+        case .influencer: return "Influencer"
         case .partner: return "Special Partner"
+        case .advisor: return "Advisor"
         }
     }
     
@@ -73,76 +75,111 @@ enum SpecialUserRole: String, CaseIterable, Codable {
         case .influencer: return 500
         case .partner: return 400
         case .affiliate: return 300
+        case .advisor: return 550
         }
     }
 }
 
 // MARK: - Special Users Registry
 
-/// Centralized registry of all special users - REFERENCES existing UserTier/BadgeType
+/// Centralized registry of all special users - COMPLETE LIST
 /// This is the master list that other systems can reference
 struct SpecialUsersConfig {
     
-    // MARK: - Special Users Database
+    // MARK: - Special Users Database - COMPLETE UPDATED LIST
     
-    /// Complete list of all special users - Easy to modify and expand
-    /// Uses raw values to reference existing UserTier and BadgeType enums
+    /// Complete list of all special users - Updated with all existing users
+    /// REMOVED: sandra@stitchsocial.me, justin@stitchsocial.me
+    /// ADDED: ironmanfitness662@yahoo.com, dpalance28@gmail.com, kiakallen@gmail.com, janpaulmedina@gmail.com
+    /// KEPT: All existing users (afterflashpoint, floyd sullivan, etc.)
     static let specialUsersList: [String: SpecialUserEntry] = [
         
-        // MARK: - FOUNDERS (Highest Priority)
+        // MARK: - FOUNDER (AUTO-FOLLOW ONLY)
         
         "james@stitchsocial.me": SpecialUserEntry(
             email: "james@stitchsocial.me",
             role: .founder,
-            tierRawValue: "founder", // References UserTier.founder.rawValue
+            tierRawValue: "founder",
             startingClout: 50000,
             customTitle: "Founder & CEO 👑",
             customBio: "Founder of Stitch Social 🎬 | Building the future of social video",
-            badgeRawValues: ["founder_crown", "verified", "early_adopter"], // References BadgeType raw values
-            specialPerks: ["auto_follow", "priority_support", "clout_per_new_user", "admin_access"],
+            badgeRawValues: ["founder_crown", "verified", "early_adopter"],
+            specialPerks: ["auto_follow", "unfollow_protection", "priority_support", "admin_access", "clout_per_new_user"],
             isAutoFollowed: true,
             priority: 1000
         ),
         
-        "justin@stitchsocial.me": SpecialUserEntry(
-            email: "justin@stitchsocial.me",
-            role: .founder,
-            tierRawValue: "founder",
-            startingClout: 35000,
-            customTitle: "Co-Founder 👑",
-            customBio: "Co-Founder of Stitch Social 🎬 | Creating authentic connections",
-            badgeRawValues: ["founder_crown", "verified", "early_adopter"],
-            specialPerks: ["priority_support", "admin_access"],
-            isAutoFollowed: false,
-            priority: 1000
-        ),
-        
-        // MARK: - CO-FOUNDERS
+        // MARK: - CO-FOUNDER (NO AUTO-FOLLOW)
         
         "bernadette@stitchsocial.me": SpecialUserEntry(
             email: "bernadette@stitchsocial.me",
             role: .coFounder,
-            tierRawValue: "co_founder", // References UserTier.coFounder.rawValue
+            tierRawValue: "co_founder",
             startingClout: 25000,
             customTitle: "Co-Founder 💎",
-            customBio: "Co-Founder of Stitch Social 🎬 | Building community",
+            customBio: "Co-Founder of Stitch Social 🎬 | Building community through authentic connections",
             badgeRawValues: ["cofounder_crown", "verified", "early_adopter"],
             specialPerks: ["priority_support", "exclusive_features", "leadership_access"],
             isAutoFollowed: false,
             priority: 900
         ),
         
-        "sandra@stitchsocial.me": SpecialUserEntry(
-            email: "sandra@stitchsocial.me",
-            role: .coFounder,
-            tierRawValue: "co_founder",
-            startingClout: 25000,
-            customTitle: "Co-Founder 💎",
-            customBio: "Co-Founder of Stitch Social 🎬 | Creative visionary",
-            badgeRawValues: ["cofounder_crown", "verified", "early_adopter"],
-            specialPerks: ["priority_support", "exclusive_features", "leadership_access"],
+        // MARK: - FITNESS INFLUENCER
+        
+        "ironmanfitness662@yahoo.com": SpecialUserEntry(
+            email: "ironmanfitness662@yahoo.com",
+            role: .influencer,
+            tierRawValue: "influencer",
+            startingClout: 15000,
+            customTitle: "Fitness Influencer 💪",
+            customBio: "Iron Man Fitness | Transforming lives through fitness and wellness content",
+            badgeRawValues: ["influencer_crown", "verified", "fitness"],
+            specialPerks: ["verified_badge", "exclusive_features", "fitness_content"],
             isAutoFollowed: false,
-            priority: 900
+            priority: 500
+        ),
+        
+        // MARK: - SOCIAL INFLUENCERS
+        
+        "dpalance28@gmail.com": SpecialUserEntry(
+            email: "dpalance28@gmail.com",
+            role: .influencer,
+            tierRawValue: "influencer",
+            startingClout: 15000,
+            customTitle: "Social Influencer ⭐",
+            customBio: "Social Media Influencer | Creating engaging content and authentic connections",
+            badgeRawValues: ["influencer_crown", "verified", "social"],
+            specialPerks: ["verified_badge", "exclusive_features", "social_content"],
+            isAutoFollowed: false,
+            priority: 500
+        ),
+        
+        "kiakallen@gmail.com": SpecialUserEntry(
+            email: "kiakallen@gmail.com",
+            role: .influencer,
+            tierRawValue: "influencer",
+            startingClout: 15000,
+            customTitle: "Social Influencer ⭐",
+            customBio: "Content Creator & Social Influencer | Authentic storytelling and community building",
+            badgeRawValues: ["influencer_crown", "verified", "social"],
+            specialPerks: ["verified_badge", "exclusive_features", "content_creation"],
+            isAutoFollowed: false,
+            priority: 500
+        ),
+        
+        // MARK: - STRATEGIC ADVISOR
+        
+        "janpaulmedina@gmail.com": SpecialUserEntry(
+            email: "janpaulmedina@gmail.com",
+            role: .advisor,
+            tierRawValue: "partner",
+            startingClout: 15000,
+            customTitle: "Strategic Advisor 🎯",
+            customBio: "Strategic Advisor | Helping shape the future of social video and community engagement",
+            badgeRawValues: ["advisor_crown", "verified", "strategic"],
+            specialPerks: ["advisor_access", "verified_badge", "strategic_input"],
+            isAutoFollowed: false,
+            priority: 550
         ),
         
         // MARK: - CELEBRITY AMBASSADORS
@@ -150,10 +187,10 @@ struct SpecialUsersConfig {
         "teddyruks@gmail.com": SpecialUserEntry(
             email: "teddyruks@gmail.com",
             role: .celebrity,
-            tierRawValue: "top_creator", // References UserTier.topCreator.rawValue
+            tierRawValue: "top_creator",
             startingClout: 20000,
             customTitle: "Celebrity Ambassador ⭐",
-            customBio: "Reality TV Star | Black Ink Crew 🖋️ | Ambassador for Stitch Social",
+            customBio: "Reality TV Star | Black Ink Crew 🖋️ | Celebrity Ambassador for Stitch Social",
             badgeRawValues: ["celebrity_crown", "verified", "early_adopter"],
             specialPerks: ["celebrity_support", "exclusive_features", "verified_badge"],
             isAutoFollowed: false,
@@ -173,7 +210,7 @@ struct SpecialUsersConfig {
             priority: 700
         ),
         
-        // MARK: - MUSIC INDUSTRY
+        // MARK: - MUSIC INDUSTRY / RAE SREMMURD FAMILY
         
         "afterflaspoint@icloud.com": SpecialUserEntry(
             email: "afterflaspoint@icloud.com",
@@ -188,12 +225,10 @@ struct SpecialUsersConfig {
             priority: 750
         ),
         
-        // MARK: - TECH AFFILIATES
-        
         "floydjrsullivan@yahoo.com": SpecialUserEntry(
             email: "floydjrsullivan@yahoo.com",
             role: .affiliate,
-            tierRawValue: "influencer", // References UserTier.influencer.rawValue
+            tierRawValue: "influencer",
             startingClout: 12000,
             customTitle: "Veteran, Boss, Gamer 🎵",
             customBio: "Brother of Rae Sremmurd 👑 | King of my own Destiny | Family First",
@@ -202,6 +237,8 @@ struct SpecialUsersConfig {
             isAutoFollowed: false,
             priority: 350
         ),
+        
+        // MARK: - TECH AFFILIATES
         
         "srbentleyga@gmail.com": SpecialUserEntry(
             email: "srbentleyga@gmail.com",
@@ -217,9 +254,9 @@ struct SpecialUsersConfig {
         )
     ]
     
-    // MARK: - Helper Methods - REFERENCE BRIDGE to existing UserTier system
+    // MARK: - Access Methods
     
-    /// Get special configuration for user by email
+    /// Get special user entry by email (case insensitive)
     static func getSpecialUser(for email: String) -> SpecialUserEntry? {
         return specialUsersList[email.lowercased()]
     }
@@ -244,7 +281,22 @@ struct SpecialUsersConfig {
         return specialUsersList.values.filter { $0.isCelebrity }
     }
     
-    /// Get auto-follow users (users that new users should automatically follow)
+    /// Get all influencers
+    static func getAllInfluencers() -> [SpecialUserEntry] {
+        return specialUsersList.values.filter { $0.role == .influencer }
+    }
+    
+    /// Get all advisors
+    static func getAllAdvisors() -> [SpecialUserEntry] {
+        return specialUsersList.values.filter { $0.role == .advisor }
+    }
+    
+    /// Get all affiliates
+    static func getAllAffiliates() -> [SpecialUserEntry] {
+        return specialUsersList.values.filter { $0.role == .affiliate }
+    }
+    
+    /// Get auto-follow users (ONLY JAMES FORTUNE)
     static func getAutoFollowUsers() -> [SpecialUserEntry] {
         return specialUsersList.values.filter { $0.isAutoFollowed }
     }
@@ -289,11 +341,11 @@ struct SpecialUsersConfig {
     }
 }
 
-// MARK: - Special User Categories
+// MARK: - Special User Categories & Statistics
 
 extension SpecialUsersConfig {
     
-    /// Statistics about special users
+    /// Statistics about special users (UPDATED)
     static var statistics: SpecialUserStatistics {
         let users = Array(specialUsersList.values)
         return SpecialUserStatistics(
@@ -303,16 +355,43 @@ extension SpecialUsersConfig {
             employeesCount: users.filter { $0.role == .employee }.count,
             celebritiesCount: users.filter { $0.role == .celebrity }.count,
             ambassadorsCount: users.filter { $0.role == .ambassador }.count,
+            influencersCount: users.filter { $0.role == .influencer }.count,
+            advisorsCount: users.filter { $0.role == .advisor }.count,
             affiliatesCount: users.filter { $0.role == .affiliate }.count,
             autoFollowCount: users.filter { $0.isAutoFollowed }.count,
             totalStartingClout: users.reduce(0) { $0 + $1.startingClout }
         )
     }
+    
+    /// Print current configuration summary
+    static func printConfigurationSummary() {
+        let stats = statistics
+        print("🌟 SPECIAL USERS CONFIG SUMMARY:")
+        print("   Total Special Users: \(stats.totalSpecialUsers)")
+        print("   Founders: \(stats.foundersCount)")
+        print("   Co-Founders: \(stats.coFoundersCount)")
+        print("   Influencers: \(stats.influencersCount)")
+        print("   Advisors: \(stats.advisorsCount)")
+        print("   Celebrities: \(stats.celebritiesCount)")
+        print("   Affiliates: \(stats.affiliatesCount)")
+        print("   Auto-Follow Users: \(stats.autoFollowCount)")
+        print("   Total Starting Clout: \(stats.totalStartingClout)")
+        print("   Average Starting Clout: \(Int(stats.averageStartingClout))")
+        print("   Music Industry Users: \(getAllUsers(containing: "sremmurd").count)")
+    }
+    
+    /// Get users containing specific text in bio/title
+    static func getAllUsers(containing text: String) -> [SpecialUserEntry] {
+        return specialUsersList.values.filter {
+            $0.customBio.lowercased().contains(text.lowercased()) ||
+            $0.customTitle.lowercased().contains(text.lowercased())
+        }
+    }
 }
 
 // MARK: - Supporting Types
 
-/// Statistics about the special users system
+/// Statistics about the special users system (UPDATED)
 struct SpecialUserStatistics: Codable {
     let totalSpecialUsers: Int
     let foundersCount: Int
@@ -320,6 +399,8 @@ struct SpecialUserStatistics: Codable {
     let employeesCount: Int
     let celebritiesCount: Int
     let ambassadorsCount: Int
+    let influencersCount: Int
+    let advisorsCount: Int
     let affiliatesCount: Int
     let autoFollowCount: Int
     let totalStartingClout: Int
@@ -328,40 +409,91 @@ struct SpecialUserStatistics: Codable {
         return totalSpecialUsers > 0 ? Double(totalStartingClout) / Double(totalSpecialUsers) : 0
     }
 }
+
+// MARK: - Auto-Follow Integration
+
+extension SpecialUsersConfig {
+    
+    static func detectSpecialUser(email: String) -> SpecialUserEntry? {
+        return getSpecialUser(for: email)
+    }
+    
+    /// Get James Fortune's user entry for auto-follow (ONLY AUTO-FOLLOW USER)
+    static func getJamesFortune() -> SpecialUserEntry? {
+        return getSpecialUser(for: "james@stitchsocial.me")
+    }
+    
+    /// Check if user should be protected from unfollowing
+    static func isProtectedFromUnfollow(_ email: String) -> Bool {
+        guard let user = getSpecialUser(for: email) else { return false }
+        return user.specialPerks.contains("unfollow_protection")
+    }
+    
+    /// Get all users with unfollow protection (currently only James)
+    static func getProtectedUsers() -> [SpecialUserEntry] {
+        return specialUsersList.values.filter { $0.specialPerks.contains("unfollow_protection") }
+    }
+    
+    /// Validate auto-follow configuration (should only be James)
+    static func validateAutoFollowConfig() -> Bool {
+        let autoFollowUsers = getAutoFollowUsers()
+        let isValid = autoFollowUsers.count == 1 && autoFollowUsers.first?.email == "james@stitchsocial.me"
+        
+        if !isValid {
+            print("⚠️ AUTO-FOLLOW CONFIG ERROR: Only James Fortune should have auto-follow enabled")
+        } else {
+            print("✅ AUTO-FOLLOW CONFIG: Correctly configured for James Fortune only")
+        }
+        
+        return isValid
+    }
+}
+
 // MARK: - Future Expansion Templates
 
 /*
  
- EASY EXPANSION GUIDE:
+ COMPLETE SPECIAL USERS LIST (11 total):
  
- 1. ADD NEW CELEBRITY:
-    - Copy template above
-    - Fill in email, title, bio
-    - Set appropriate clout (15k-30k for celebrities)
-    - Add to appropriate role category
-    - Set priority (700+ for celebrities)
+ ✅ james@stitchsocial.me - Founder (AUTO-FOLLOW ONLY)
+ ✅ bernadette@stitchsocial.me - Co-Founder
+ ✅ ironmanfitness662@yahoo.com - Fitness Influencer (15k) - NEW
+ ✅ dpalance28@gmail.com - Social Influencer (15k) - NEW
+ ✅ kiakallen@gmail.com - Social Influencer (15k) - NEW
+ ✅ janpaulmedina@gmail.com - Strategic Advisor (15k) - NEW
+ ✅ teddyruks@gmail.com - Celebrity Ambassador (20k)
+ ✅ chaneyvisionent@gmail.com - TV Legend Ambassador (20k)
+ ✅ afterflaspoint@icloud.com - Music Artist/Rae Sremmurd (25k)
+ ✅ floydjrsullivan@yahoo.com - Music Family/Brother (12k)
+ ✅ srbentleyga@gmail.com - Tech Developer (5k)
  
- 2. ADD NEW EMPLOYEE:
-    - Use employee template
-    - Set clout around 15k
-    - Add employee_crown badge
-    - Set priority around 800
+ TO ADD NEW USERS:
  
- 3. ADD NEW AMBASSADOR:
-    - Use ambassador template
-    - Set clout around 10k
-    - Add ambassador_crown badge
-    - Set priority around 600
+ 1. ADD NEW INFLUENCER (15k clout):
+    "email@domain.com": SpecialUserEntry(
+        email: "email@domain.com",
+        role: .influencer,
+        tierRawValue: "influencer",
+        startingClout: 15000,
+        customTitle: "Your Title Here ⭐",
+        customBio: "Your bio here",
+        badgeRawValues: ["influencer_crown", "verified"],
+        specialPerks: ["verified_badge", "exclusive_features"],
+        isAutoFollowed: false,  // NEVER true except for James
+        priority: 500
+    )
  
- 4. MODIFY EXISTING USER:
-    - Find user in list above
-    - Update any field (clout, title, bio, badges, perks)
-    - Save file - changes take effect immediately
+ 2. ADD NEW CELEBRITY (20k+ clout):
+    Similar to teddyruks@gmail.com template above
+    
+ 3. MODIFY EXISTING USER:
+    Find user in list, update fields, save file
  
- 5. DEACTIVATE USER:
-    - Comment out the user entry with /* */
-    - Or remove entirely
- 
- This file is designed to be easily modified without touching any other code!
+ CRITICAL RULES:
+ - ONLY james@stitchsocial.me should have isAutoFollowed: true
+ - New influencers/advisors get 15k starting clout
+ - All new users get isAutoFollowed: false
+ - Celebrities keep 20k+ clout, music industry gets higher amounts
+ - Family connections (Rae Sremmurd) get special perks
  
  */

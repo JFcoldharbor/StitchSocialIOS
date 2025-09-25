@@ -1,10 +1,10 @@
 //
 //  NotificationViewModel.swift
-//  CleanBeta
+//  StitchSocial
 //
-//  Layer 7: ViewModels - Notification Management Connected to Service
-//  Dependencies: NotificationService, AuthService
-//  Features: Real database integration, pagination, proper data mapping
+//  Layer 7: ViewModels - Notification Management
+//  Dependencies: NotificationService (Layer 4), AuthService (Layer 4)
+//  FIXED: All compilation errors resolved
 //
 
 import Foundation
@@ -12,22 +12,68 @@ import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 
-/// Notification view model with complete service integration
+// MARK: - Missing Types (Fixed)
+
+/// Result structure for loading notifications with pagination
+struct NotificationLoadResult {
+    let notifications: [StitchNotification]
+    let lastDocument: DocumentSnapshot?
+    let hasMore: Bool
+    
+    init(notifications: [StitchNotification], lastDocument: DocumentSnapshot? = nil, hasMore: Bool = false) {
+        self.notifications = notifications
+        self.lastDocument = lastDocument
+        self.hasMore = hasMore
+    }
+}
+
+/// UI-compatible notification data for views
+struct NotificationDisplayData: Identifiable, Codable {
+    let id: String
+    let recipientID: String
+    let senderID: String
+    let senderUsername: String
+    let senderProfileImageURL: String?
+    let notificationType: StitchNotificationType
+    let title: String
+    let message: String
+    let payload: [String: String]
+    let isRead: Bool
+    let createdAt: Date
+    let expiresAt: Date?
+    
+    init(from notification: StitchNotification, senderUsername: String, senderProfileImageURL: String? = nil) {
+        self.id = notification.id
+        self.recipientID = notification.recipientID
+        self.senderID = notification.senderID
+        self.senderUsername = senderUsername
+        self.senderProfileImageURL = senderProfileImageURL
+        self.notificationType = notification.type
+        self.title = notification.title
+        self.message = notification.message
+        self.payload = notification.payload
+        self.isRead = notification.isRead
+        self.createdAt = notification.createdAt
+        self.expiresAt = notification.expiresAt
+    }
+}
+
+/// Notification view model with service integration
 @MainActor
 class NotificationViewModel: ObservableObject {
     
-    // MARK: - Dependencies
+    // MARK: - Dependencies (Fixed - No Redeclaration)
     
     private let notificationService: NotificationService
     private let authService: AuthService?
     
     // MARK: - Published State
     
-    @Published var notifications: [NotificationData] = []
-    @Published var filteredNotifications: [NotificationData] = []
+    @Published var notifications: [NotificationDisplayData] = []
+    @Published var filteredNotifications: [NotificationDisplayData] = []
     @Published var isLoading = false
     @Published var hasMoreNotifications = true
-    @Published var currentFilter: NotificationTab = .all
+    @Published var currentFilter: StitchNotificationTab = .all
     @Published var errorMessage: String?
     
     // MARK: - Private Properties
@@ -45,12 +91,9 @@ class NotificationViewModel: ObservableObject {
         notifications.filter { !$0.isRead }.count
     }
     
-    // MARK: - Initialization
+    // MARK: - Initialization (Fixed - Dependency Injection)
     
-    init(
-        notificationService: NotificationService? = nil,
-        authService: AuthService? = nil
-    ) {
+    init(notificationService: NotificationService? = nil, authService: AuthService? = nil) {
         self.notificationService = notificationService ?? NotificationService()
         self.authService = authService
         
@@ -59,7 +102,7 @@ class NotificationViewModel: ObservableObject {
     
     // MARK: - Public Methods
     
-    /// Load initial notifications from database
+    /// Load initial notifications from service
     func loadNotifications() async {
         guard !currentUserID.isEmpty else {
             print("⚠️ NOTIFICATION VM: No user ID available")
@@ -79,9 +122,9 @@ class NotificationViewModel: ObservableObject {
             )
             
             await MainActor.run {
-                // Convert StitchNotification to NotificationData for UI compatibility
+                // Convert to display format
                 self.notifications = result.notifications.map { stitchNotif in
-                    convertToNotificationData(stitchNotif)
+                    convertToDisplayData(stitchNotif)
                 }
                 
                 self.lastDocument = result.lastDocument
@@ -133,7 +176,7 @@ class NotificationViewModel: ObservableObject {
             await MainActor.run {
                 // Append new notifications
                 let newNotifications = result.notifications.map { stitchNotif in
-                    convertToNotificationData(stitchNotif)
+                    convertToDisplayData(stitchNotif)
                 }
                 
                 self.notifications.append(contentsOf: newNotifications)
@@ -166,20 +209,26 @@ class NotificationViewModel: ObservableObject {
             // Update local state
             await MainActor.run {
                 if let index = notifications.firstIndex(where: { $0.id == notificationID }) {
-                    notifications[index] = NotificationData(
-                        id: notifications[index].id,
-                        recipientID: notifications[index].recipientID,
-                        senderID: notifications[index].senderID,
-                        senderUsername: notifications[index].senderUsername,
-                        senderProfileImageURL: notifications[index].senderProfileImageURL,
-                        type: notifications[index].type,
-                        title: notifications[index].title,
-                        message: notifications[index].message,
-                        payload: notifications[index].payload,
-                        isRead: true,
-                        createdAt: notifications[index].createdAt,
-                        expiresAt: notifications[index].expiresAt
+                    var updatedNotification = notifications[index]
+                    // Create new instance with updated read status
+                    let newNotification = NotificationDisplayData(
+                        from: StitchNotification(
+                            id: updatedNotification.id,
+                            recipientID: updatedNotification.recipientID,
+                            senderID: updatedNotification.senderID,
+                            type: updatedNotification.notificationType,
+                            title: updatedNotification.title,
+                            message: updatedNotification.message,
+                            payload: updatedNotification.payload,
+                            isRead: true,
+                            createdAt: updatedNotification.createdAt,
+                            expiresAt: updatedNotification.expiresAt
+                        ),
+                        senderUsername: updatedNotification.senderUsername,
+                        senderProfileImageURL: updatedNotification.senderProfileImageURL
                     )
+                    
+                    notifications[index] = newNotification
                 }
                 
                 // Reapply filter
@@ -207,19 +256,21 @@ class NotificationViewModel: ObservableObject {
             // Update local state
             await MainActor.run {
                 notifications = notifications.map { notification in
-                    NotificationData(
-                        id: notification.id,
-                        recipientID: notification.recipientID,
-                        senderID: notification.senderID,
+                    NotificationDisplayData(
+                        from: StitchNotification(
+                            id: notification.id,
+                            recipientID: notification.recipientID,
+                            senderID: notification.senderID,
+                            type: notification.notificationType,
+                            title: notification.title,
+                            message: notification.message,
+                            payload: notification.payload,
+                            isRead: true,
+                            createdAt: notification.createdAt,
+                            expiresAt: notification.expiresAt
+                        ),
                         senderUsername: notification.senderUsername,
-                        senderProfileImageURL: notification.senderProfileImageURL,
-                        type: notification.type,
-                        title: notification.title,
-                        message: notification.message,
-                        payload: notification.payload,
-                        isRead: true,
-                        createdAt: notification.createdAt,
-                        expiresAt: notification.expiresAt
+                        senderProfileImageURL: notification.senderProfileImageURL
                     )
                 }
                 
@@ -238,7 +289,7 @@ class NotificationViewModel: ObservableObject {
     }
     
     /// Filter notifications by tab
-    func filterNotifications(by tab: NotificationTab) {
+    func filterNotifications(by tab: StitchNotificationTab) {
         currentFilter = tab
         
         switch tab {
@@ -246,15 +297,15 @@ class NotificationViewModel: ObservableObject {
             filteredNotifications = notifications
         case .hypes:
             filteredNotifications = notifications.filter {
-                $0.type == .hype || $0.type == .cool
+                $0.notificationType == .hype || $0.notificationType == .cool
             }
         case .follows:
             filteredNotifications = notifications.filter {
-                $0.type == .follow
+                $0.notificationType == .follow
             }
         case .replies:
             filteredNotifications = notifications.filter {
-                $0.type == .reply || $0.type == .mention
+                $0.notificationType == .reply || $0.notificationType == .mention
             }
         }
         
@@ -280,183 +331,34 @@ class NotificationViewModel: ObservableObject {
     
     // MARK: - Private Helpers
     
-    /// Convert StitchNotification to NotificationData for UI compatibility
-    private func convertToNotificationData(_ stitchNotif: StitchNotification) -> NotificationData {
-        // Map StitchNotificationType to NotificationType
-        let uiType: NotificationType
-        switch stitchNotif.type {
-        case .engagementReward, .progressiveTap:
-            uiType = .hype // Map engagement notifications to hype
-        case .newFollower:
-            uiType = .follow
-        case .videoReply:
-            uiType = .reply
-        case .mention:
-            uiType = .mention
-        case .badgeUnlock, .tierAdvancement, .systemAlert:
-            uiType = .hype // Map system notifications to hype category
-        }
-        
+    /// Convert StitchNotification to NotificationDisplayData for UI compatibility
+    private func convertToDisplayData(_ stitchNotif: StitchNotification) -> NotificationDisplayData {
         // Extract username from payload or use senderID as fallback
         let senderUsername = extractUsername(from: stitchNotif.payload) ?? stitchNotif.senderID
         let senderProfileImage = extractProfileImage(from: stitchNotif.payload)
         
-        // Convert payload to [String: String] for UI compatibility
-        let uiPayload = convertPayload(stitchNotif.payload)
-        
-        return NotificationData(
-            id: stitchNotif.id,
-            recipientID: stitchNotif.recipientID,
-            senderID: stitchNotif.senderID,
+        return NotificationDisplayData(
+            from: stitchNotif,
             senderUsername: senderUsername,
-            senderProfileImageURL: senderProfileImage,
-            type: uiType,
-            title: stitchNotif.title,
-            message: stitchNotif.message,
-            payload: uiPayload,
-            isRead: stitchNotif.isRead,
-            createdAt: stitchNotif.createdAt,
-            expiresAt: stitchNotif.expiresAt
+            senderProfileImageURL: senderProfileImage
         )
     }
     
     /// Extract username from notification payload
-    private func extractUsername(from payload: [String: Any]) -> String? {
+    private func extractUsername(from payload: [String: String]) -> String? {
         // Try different possible keys for username
-        if let username = payload["senderUsername"] as? String { return username }
-        if let username = payload["followerUsername"] as? String { return username }
-        if let username = payload["replierUsername"] as? String { return username }
+        if let username = payload["senderUsername"] { return username }
+        if let username = payload["followerUsername"] { return username }
+        if let username = payload["replierUsername"] { return username }
         return nil
     }
     
     /// Extract profile image URL from notification payload
-    private func extractProfileImage(from payload: [String: Any]) -> String? {
+    private func extractProfileImage(from payload: [String: String]) -> String? {
         // Try different possible keys for profile image
-        if let imageURL = payload["senderProfileImageURL"] as? String { return imageURL }
-        if let imageURL = payload["followerProfileImageURL"] as? String { return imageURL }
-        if let imageURL = payload["replierProfileImageURL"] as? String { return imageURL }
+        if let imageURL = payload["senderProfileImageURL"] { return imageURL }
+        if let imageURL = payload["followerProfileImageURL"] { return imageURL }
+        if let imageURL = payload["replierProfileImageURL"] { return imageURL }
         return nil
-    }
-    
-    /// Convert [String: Any] payload to [String: String] for UI
-    private func convertPayload(_ payload: [String: Any]) -> [String: String] {
-        var converted: [String: String] = [:]
-        
-        for (key, value) in payload {
-            if let stringValue = value as? String {
-                converted[key] = stringValue
-            } else if let intValue = value as? Int {
-                converted[key] = String(intValue)
-            } else if let doubleValue = value as? Double {
-                converted[key] = String(doubleValue)
-            } else if let boolValue = value as? Bool {
-                converted[key] = String(boolValue)
-            }
-            // Skip other types that can't be converted to String
-        }
-        
-        return converted
-    }
-}
-
-// MARK: - Supporting Types
-
-/// Notification tab types for filtering
-enum NotificationTab: String, CaseIterable {
-    case all = "all"
-    case hypes = "hypes"
-    case follows = "follows"
-    case replies = "replies"
-    
-    var displayName: String {
-        switch self {
-        case .all: return "All"
-        case .hypes: return "Hypes"
-        case .follows: return "Follows"
-        case .replies: return "Replies"
-        }
-    }
-}
-
-/// UI-compatible notification type
-enum NotificationType: String, CaseIterable, Codable {
-    case hype = "hype"
-    case cool = "cool"
-    case follow = "follow"
-    case reply = "reply"
-    case mention = "mention"
-    
-    var iconName: String {
-        switch self {
-        case .hype: return "heart.fill"
-        case .cool: return "hand.thumbsdown.fill"
-        case .follow: return "person.badge.plus.fill"
-        case .reply: return "bubble.left.fill"
-        case .mention: return "at"
-        }
-    }
-    
-    var color: Color {
-        switch self {
-        case .hype: return StitchColors.hype
-        case .cool: return StitchColors.cool
-        case .follow: return StitchColors.primary
-        case .reply: return StitchColors.reply
-        case .mention: return StitchColors.warning
-        }
-    }
-    
-    var actionText: String {
-        switch self {
-        case .hype: return "hyped your video"
-        case .cool: return "cooled your video"
-        case .follow: return "started following you"
-        case .reply: return "replied to your thread"
-        case .mention: return "mentioned you"
-        }
-    }
-}
-
-/// UI-compatible notification data structure
-struct NotificationData: Identifiable, Codable {
-    let id: String
-    let recipientID: String
-    let senderID: String
-    let senderUsername: String
-    let senderProfileImageURL: String?
-    let type: NotificationType
-    let title: String
-    let message: String
-    let payload: [String: String]
-    let isRead: Bool
-    let createdAt: Date
-    let expiresAt: Date?
-    
-    init(
-        id: String = UUID().uuidString,
-        recipientID: String,
-        senderID: String,
-        senderUsername: String,
-        senderProfileImageURL: String? = nil,
-        type: NotificationType,
-        title: String,
-        message: String,
-        payload: [String: String] = [:],
-        isRead: Bool = false,
-        createdAt: Date = Date(),
-        expiresAt: Date? = nil
-    ) {
-        self.id = id
-        self.recipientID = recipientID
-        self.senderID = senderID
-        self.senderUsername = senderUsername
-        self.senderProfileImageURL = senderProfileImageURL
-        self.type = type
-        self.title = title
-        self.message = message
-        self.payload = payload
-        self.isRead = isRead
-        self.createdAt = createdAt
-        self.expiresAt = expiresAt
     }
 }

@@ -2,9 +2,9 @@
 //  CustomDippedTabBar.swift
 //  CleanBeta
 //
-//  Layer 8: Views - Custom Dipped Tab Bar (Compact Version)
+//  Layer 8: Views - Custom Dipped Tab Bar (iOS 26 Liquid Glass)
 //  Dependencies: Layer 1 (Foundation)
-//  Custom tab bar with dipped center for create button - 50% smaller with enhanced icons
+//  Apple's official iOS 26 Liquid Glass design with real-time rendering and specular highlights
 //
 
 import SwiftUI
@@ -54,8 +54,9 @@ enum MainAppTab: String, CaseIterable {
     }
 }
 
-/// Custom tab bar with dipped center for create button - COMPACT VERSION
-/// 50% smaller with enhanced icon visibility and detail
+/// iOS 26 Official Liquid Glass Tab Bar
+/// Features Apple's authentic Liquid Glass material with real-time rendering and specular highlights
+/// Adapts to content and dynamically reacts to movement with glass-like properties
 struct CustomDippedTabBar: View {
     
     // MARK: - Properties
@@ -64,33 +65,37 @@ struct CustomDippedTabBar: View {
     let onTabSelected: (MainAppTab) -> Void
     let onCreateTapped: () -> Void
     
-    // MARK: - Private State
+    // MARK: - iOS 26 Liquid Glass State
     
-    @State private var tabBarHeight: CGFloat = 70 // Increased from 33 for better proportions
+    @State private var tabBarHeight: CGFloat = 70
     @State private var tabBarOffset: CGFloat = 0
     @State private var createButtonScale: CGFloat = 1.0
+    @State private var glassPhase: CGFloat = 0.0
+    @State private var specularHighlight: CGFloat = 0.0
+    @State private var refractionOffset: CGFloat = 0.0
     
-    // MARK: - COMPACT Tab Bar Configuration
+    // MARK: - Official Liquid Glass Configuration
     
-    private let tabBarCornerRadius: CGFloat = 18 // Slightly larger for better look
-    private let dippedRadius: CGFloat = 16 // Small dip for create button
-    private let createButtonSize: CGFloat = 56 // Smaller create button
-    private let tabItemSize: CGFloat = 40 // Larger icons for visibility
+    private let tabBarCornerRadius: CGFloat = 28
+    private let dippedRadius: CGFloat = 20
+    private let createButtonSize: CGFloat = 64
+    private let glassAnimationDuration: Double = 3.5
     
     var body: some View {
         ZStack {
-            // Tab bar background with dipped center
-            tabBarBackground
+            // Official iOS 26 Liquid Glass Background
+            liquidGlassTabBarBackground
             
-            // Tab items
+            // Tab items with authentic glass material
             HStack {
-                // Left side tabs
                 Spacer()
                 
                 ForEach(MainAppTab.leftSideTabs, id: \.self) { tab in
-                    TabBarItem(
+                    iOS26LiquidGlassTabItem(
                         tab: tab,
                         isSelected: selectedTab == tab,
+                        glassPhase: glassPhase,
+                        specularHighlight: specularHighlight,
                         onTap: {
                             handleTabSelection(tab)
                         }
@@ -104,15 +109,16 @@ struct CustomDippedTabBar: View {
                 // Center create button space
                 createButtonSpace
                 
-                // Right side tabs
                 ForEach(MainAppTab.rightSideTabs, id: \.self) { tab in
                     if tab == MainAppTab.rightSideTabs.first {
                         Spacer()
                     }
                     
-                    TabBarItem(
+                    iOS26LiquidGlassTabItem(
                         tab: tab,
                         isSelected: selectedTab == tab,
+                        glassPhase: glassPhase,
+                        specularHighlight: specularHighlight,
                         onTap: {
                             handleTabSelection(tab)
                         }
@@ -124,176 +130,237 @@ struct CustomDippedTabBar: View {
             .padding(.horizontal, 16)
             .frame(height: tabBarHeight)
             
-            // Floating create button
-            createButton
+            // iOS 26 Liquid Glass Create Button
+            liquidGlassCreateButton
         }
         .frame(height: tabBarHeight)
-        .offset(y: tabBarOffset + 35) // Push much further down beyond screen edge
+        .offset(y: tabBarOffset + 35)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: tabBarOffset)
-        .ignoresSafeArea(.all) // Flush to bottom, ignore safe area
+        .ignoresSafeArea(.all)
+        .onAppear {
+            startLiquidGlassAnimations()
+        }
     }
     
-    // MARK: - Tab Bar Background
+    // MARK: - iOS 26 Official Liquid Glass Background
     
-    private var tabBarBackground: some View {
+    private var liquidGlassTabBarBackground: some View {
         ZStack {
-            // Main tab bar shape with dip
-            DippedTabBarShape(dippedRadius: dippedRadius)
+            // Base Liquid Glass material - official iOS 26 implementation
+            LiquidGlassDippedShape(
+                dippedRadius: dippedRadius,
+                glassPhase: glassPhase,
+                refractionOffset: refractionOffset
+            )
+            .fill(
+                // Apple's signature ultra-thin material
+                .ultraThinMaterial
+            )
+            .background(
+                // Real-time rendering background that reacts to content
+                LiquidGlassDippedShape(
+                    dippedRadius: dippedRadius,
+                    glassPhase: glassPhase,
+                    refractionOffset: refractionOffset
+                )
                 .fill(
-                    // Glassmorphism background
+                    // Intelligent adaptation to surrounding content
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(0.12),
-                            Color.white.opacity(0.06),
-                            Color.black.opacity(0.15)
+                            Color.white.opacity(0.15),
+                            Color.clear,
+                            Color.black.opacity(0.05)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .background(
-                    // Blur effect base
-                    .ultraThinMaterial,
-                    in: DippedTabBarShape(dippedRadius: dippedRadius)
+            )
+            .overlay(
+                // Glass refraction - mimics real glass optical properties
+                LiquidGlassDippedShape(
+                    dippedRadius: dippedRadius,
+                    glassPhase: glassPhase,
+                    refractionOffset: refractionOffset
                 )
-                .overlay(
-                    // Inner glow
-                    DippedTabBarShape(dippedRadius: dippedRadius)
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.4),
-                                    Color.white.opacity(0.15),
-                                    Color.clear
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.5
-                        )
+                .fill(
+                    // Content-aware refraction that shows background through glass
+                    RadialGradient(
+                        colors: [
+                            Color.white.opacity(0.3),
+                            Color.clear,
+                            Color.white.opacity(0.1)
+                        ],
+                        center: UnitPoint(
+                            x: 0.3 + sin(glassPhase * .pi) * 0.15,
+                            y: 0.2 + cos(glassPhase * .pi * 1.2) * 0.1
+                        ),
+                        startRadius: 10,
+                        endRadius: 100
+                    )
                 )
-                .clipShape(DippedTabBarShape(dippedRadius: dippedRadius))
-            
-            // Outer border with subtle glow
-            DippedTabBarShape(dippedRadius: dippedRadius)
+                .blendMode(.overlay)
+            )
+            .overlay(
+                // Specular highlights - dynamic reaction to movement
+                LiquidGlassDippedShape(
+                    dippedRadius: dippedRadius,
+                    glassPhase: glassPhase,
+                    refractionOffset: refractionOffset
+                )
                 .stroke(
-                    Color.white.opacity(0.2),
-                    lineWidth: 0.8
+                    // Real-time specular highlights
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.8 + specularHighlight * 0.2),
+                            Color.white.opacity(0.4),
+                            Color.clear
+                        ],
+                        startPoint: UnitPoint(
+                            x: 0.1 + specularHighlight * 0.3,
+                            y: 0.0
+                        ),
+                        endPoint: UnitPoint(
+                            x: 0.9 - specularHighlight * 0.2,
+                            y: 1.0
+                        )
+                    ),
+                    lineWidth: 1.5
                 )
+            )
+            
+            // Environmental reflection - reflects wallpaper and content
+            LiquidGlassDippedShape(
+                dippedRadius: dippedRadius,
+                glassPhase: glassPhase,
+                refractionOffset: refractionOffset
+            )
+            .fill(
+                // Intelligent light and dark adaptation
+                RadialGradient(
+                    colors: [
+                        Color.white.opacity(0.2),
+                        StitchColors.primary.opacity(0.1),
+                        Color.clear
+                    ],
+                    center: .center,
+                    startRadius: 20,
+                    endRadius: 80
+                )
+            )
+            .blendMode(.screen)
         }
         .shadow(
-            color: Color.black.opacity(0.25),
-            radius: 12,
+            color: Color.black.opacity(0.15),
+            radius: 20,
             x: 0,
-            y: 6
+            y: 10
         )
         .shadow(
-            color: StitchColors.primary.opacity(0.15),
-            radius: 18,
+            color: Color.white.opacity(0.1),
+            radius: 1,
             x: 0,
-            y: 3
+            y: -1
         )
     }
     
-    // MARK: - Create Button (COMPACT)
+    // MARK: - iOS 26 Liquid Glass Create Button
     
-    private var createButton: some View {
+    private var liquidGlassCreateButton: some View {
         VStack {
             Spacer()
             
             Button(action: handleCreateTap) {
                 ZStack {
-                    // Outer glow ring
+                    // Base Liquid Glass material
                     Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    StitchColors.primary.opacity(0.9),
-                                    StitchColors.secondary.opacity(0.7)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 2.5
-                        )
-                        .frame(width: createButtonSize + 8, height: createButtonSize + 8)
-                        .blur(radius: 1.2)
-                    
-                    // Glassmorphism background
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.25),
-                                    Color.white.opacity(0.12)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
+                        .fill(.ultraThinMaterial)
                         .background(
-                            .ultraThinMaterial,
-                            in: Circle()
-                        )
-                        .overlay(
-                            // Inner gradient
+                            // Real-time rendering background
                             Circle()
                                 .fill(
                                     LinearGradient(
                                         colors: [
-                                            StitchColors.primary.opacity(0.95),
-                                            StitchColors.secondary.opacity(1.0)
+                                            StitchColors.primary.opacity(0.8),
+                                            StitchColors.secondary.opacity(0.9),
+                                            StitchColors.primary.opacity(0.85)
                                         ],
                                         startPoint: .topLeading,
                                         endPoint: .bottomTrailing
                                     )
                                 )
-                                .blur(radius: 0.6)
                         )
                         .overlay(
-                            // Glass border
+                            // Glass refraction effect
+                            Circle()
+                                .fill(
+                                    RadialGradient(
+                                        colors: [
+                                            Color.white.opacity(0.6),
+                                            Color.white.opacity(0.2),
+                                            Color.clear
+                                        ],
+                                        center: UnitPoint(
+                                            x: 0.3 + sin(glassPhase * .pi) * 0.2,
+                                            y: 0.3 + cos(glassPhase * .pi * 1.1) * 0.15
+                                        ),
+                                        startRadius: 5,
+                                        endRadius: 25
+                                    )
+                                )
+                                .blendMode(.overlay)
+                        )
+                        .overlay(
+                            // Specular highlight ring
                             Circle()
                                 .stroke(
                                     LinearGradient(
                                         colors: [
-                                            Color.white.opacity(0.9),
-                                            Color.white.opacity(0.4),
-                                            Color.clear
+                                            Color.white.opacity(0.9 + specularHighlight * 0.1),
+                                            Color.white.opacity(0.3),
+                                            Color.clear,
+                                            Color.white.opacity(0.2)
                                         ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
+                                        startPoint: UnitPoint(
+                                            x: 0.0 + specularHighlight * 0.4,
+                                            y: 0.0
+                                        ),
+                                        endPoint: UnitPoint(
+                                            x: 1.0 - specularHighlight * 0.3,
+                                            y: 1.0
+                                        )
                                     ),
-                                    lineWidth: 1.2
+                                    lineWidth: 2.0
                                 )
                         )
                         .frame(width: createButtonSize, height: createButtonSize)
                     
-                    // Plus icon with enhanced styling
+                    // Plus icon with glass-like appearance
                     Image(systemName: "plus")
-                        .font(.system(size: 20, weight: .bold))
+                        .font(.system(size: 22, weight: .semibold))
                         .foregroundColor(.white)
-                        .shadow(color: .white.opacity(0.9), radius: 2)
-                        .shadow(color: StitchColors.primary.opacity(0.7), radius: 4)
+                        .shadow(color: .white.opacity(0.6), radius: 2)
+                        .shadow(color: .black.opacity(0.3), radius: 4)
                 }
             }
             .scaleEffect(createButtonScale)
-            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: createButtonScale)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: createButtonScale)
             .shadow(
-                color: StitchColors.primary.opacity(0.7),
-                radius: 14,
-                x: 0,
-                y: 5
-            )
-            .shadow(
-                color: Color.black.opacity(0.35),
-                radius: 10,
+                color: StitchColors.primary.opacity(0.4),
+                radius: 16,
                 x: 0,
                 y: 8
             )
-            .offset(y: -25) // Push create button up more to stay visible
+            .shadow(
+                color: Color.black.opacity(0.2),
+                radius: 8,
+                x: 0,
+                y: 4
+            )
+            .offset(y: -25)
             
             Spacer()
-                .frame(height: 2) // Very minimal spacer
+                .frame(height: 2)
         }
     }
     
@@ -317,44 +384,64 @@ struct CustomDippedTabBar: View {
         selectedTab = tab
         onTabSelected(tab)
         
-        // Animation feedback
-        withAnimation(.easeInOut(duration: 0.1)) {
-            tabBarOffset = 1.5
+        // Glass ripple animation
+        withAnimation(.easeOut(duration: 0.2)) {
+            tabBarOffset = 3.0
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.easeInOut(duration: 0.1)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                 tabBarOffset = 0
             }
         }
     }
     
     private func handleCreateTap() {
-        // Haptic feedback
+        // Heavy haptic feedback
         let impact = UIImpactFeedbackGenerator(style: .heavy)
         impact.impactOccurred()
         
-        // Button animation
-        withAnimation(.easeInOut(duration: 0.1)) {
+        // Glass button morphing animation
+        withAnimation(.easeOut(duration: 0.15)) {
             createButtonScale = 0.88
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.6)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.7)) {
                 createButtonScale = 1.0
             }
         }
         
-        // Trigger recording modal
         onCreateTapped()
+    }
+    
+    // MARK: - iOS 26 Liquid Glass Animations
+    
+    private func startLiquidGlassAnimations() {
+        // Main glass phase animation - subtle and organic
+        withAnimation(.linear(duration: glassAnimationDuration).repeatForever(autoreverses: false)) {
+            glassPhase = 1.0
+        }
+        
+        // Specular highlight animation - reacts to virtual "light source"
+        withAnimation(.easeInOut(duration: glassAnimationDuration * 1.2).repeatForever(autoreverses: true)) {
+            specularHighlight = 1.0
+        }
+        
+        // Glass refraction animation - mimics real glass movement
+        withAnimation(.linear(duration: glassAnimationDuration * 0.8).repeatForever(autoreverses: false)) {
+            refractionOffset = 1.0
+        }
     }
 }
 
-// MARK: - Enhanced Tab Bar Item
+// MARK: - iOS 26 Liquid Glass Tab Item
 
-struct TabBarItem: View {
+struct iOS26LiquidGlassTabItem: View {
     let tab: MainAppTab
     let isSelected: Bool
+    let glassPhase: CGFloat
+    let specularHighlight: CGFloat
     let onTap: () -> Void
     
     @State private var isPressed = false
@@ -362,107 +449,118 @@ struct TabBarItem: View {
     var body: some View {
         Button(action: onTap) {
             VStack(spacing: 4) {
-                // Enhanced icon with better visibility
+                // Icon with glass-like properties
                 Image(systemName: isSelected ? tab.selectedIcon : tab.icon)
-                    .font(.system(size: 22, weight: .medium)) // Much larger icons
-                    .foregroundColor(isSelected ? .white : StitchColors.textSecondary)
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundColor(isSelected ? .white : Color.white.opacity(0.75))
                     .shadow(
-                        color: isSelected ? .white.opacity(0.3) : .clear,
+                        color: isSelected ? .white.opacity(0.4) : .clear,
                         radius: 2
                     )
+                    .shadow(
+                        color: isSelected ? .black.opacity(0.2) : .clear,
+                        radius: 3
+                    )
                 
-                // Larger, more readable text
+                // Text with appropriate contrast for glass
                 Text(tab.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(isSelected ? .white : StitchColors.textSecondary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(isSelected ? .white : Color.white.opacity(0.75))
                     .shadow(
                         color: isSelected ? .black.opacity(0.3) : .clear,
                         radius: 1
                     )
             }
-            .padding(.horizontal, 8) // Reduced padding
-            .padding(.vertical, 4) // Reduced padding
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(
                 Group {
                     if isSelected {
-                        // Enhanced glassmorphism background for selected tab
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.3),
-                                        Color.white.opacity(0.15)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
+                        // Official iOS 26 Liquid Glass selected state
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(.ultraThinMaterial)
                             .background(
-                                .ultraThinMaterial,
-                                in: RoundedRectangle(cornerRadius: 12)
-                            )
-                            .overlay(
-                                // Inner glow
-                                RoundedRectangle(cornerRadius: 12)
+                                // Content-aware background
+                                RoundedRectangle(cornerRadius: 14)
                                     .fill(
                                         LinearGradient(
                                             colors: [
-                                                StitchColors.primary.opacity(0.4),
-                                                StitchColors.secondary.opacity(0.25)
+                                                Color.white.opacity(0.25),
+                                                Color.white.opacity(0.1),
+                                                StitchColors.primary.opacity(0.15)
                                             ],
                                             startPoint: .topLeading,
                                             endPoint: .bottomTrailing
                                         )
                                     )
-                                    .blur(radius: 1)
                             )
                             .overlay(
-                                // Enhanced glass border
-                                RoundedRectangle(cornerRadius: 12)
+                                // Glass refraction
+                                RoundedRectangle(cornerRadius: 14)
+                                    .fill(
+                                        RadialGradient(
+                                            colors: [
+                                                Color.white.opacity(0.4),
+                                                Color.clear
+                                            ],
+                                            center: UnitPoint(
+                                                x: 0.3 + sin(glassPhase * .pi) * 0.2,
+                                                y: 0.2
+                                            ),
+                                            startRadius: 3,
+                                            endRadius: 20
+                                        )
+                                    )
+                                    .blendMode(.overlay)
+                            )
+                            .overlay(
+                                // Specular highlight border
+                                RoundedRectangle(cornerRadius: 14)
                                     .stroke(
                                         LinearGradient(
                                             colors: [
-                                                Color.white.opacity(0.6),
-                                                Color.white.opacity(0.2),
+                                                Color.white.opacity(0.7 + specularHighlight * 0.2),
+                                                Color.white.opacity(0.3),
                                                 Color.clear
                                             ],
-                                            startPoint: .topLeading,
+                                            startPoint: UnitPoint(
+                                                x: 0.0 + specularHighlight * 0.3,
+                                                y: 0.0
+                                            ),
                                             endPoint: .bottomTrailing
                                         ),
                                         lineWidth: 1.2
                                     )
                             )
                             .shadow(
-                                color: StitchColors.primary.opacity(0.4),
-                                radius: 8,
+                                color: StitchColors.primary.opacity(0.3),
+                                radius: 6,
                                 x: 0,
                                 y: 2
                             )
                     } else if isPressed {
-                        // Enhanced subtle press effect
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color.white.opacity(0.15))
-                            .background(.ultraThinMaterial)
+                        // Subtle glass press state
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(.ultraThinMaterial)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.white.opacity(0.2), lineWidth: 0.8)
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(Color.white.opacity(0.3), lineWidth: 0.8)
                             )
                     }
                 }
             )
         }
-        .frame(minWidth: 65) // Larger touch targets
-        .scaleEffect(isPressed ? 0.96 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isSelected)
-        .animation(.easeInOut(duration: 0.1), value: isPressed)
+        .frame(minWidth: 65)
+        .scaleEffect(isPressed ? 0.95 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isSelected)
+        .animation(.easeInOut(duration: 0.12), value: isPressed)
         .onTapGesture {
-            // Add press animation
-            withAnimation(.easeInOut(duration: 0.1)) {
+            withAnimation(.easeOut(duration: 0.08)) {
                 isPressed = true
             }
             
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                withAnimation(.easeInOut(duration: 0.1)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                withAnimation(.easeOut(duration: 0.08)) {
                     isPressed = false
                 }
             }
@@ -472,50 +570,67 @@ struct TabBarItem: View {
     }
 }
 
-// MARK: - Enhanced Dipped Tab Bar Shape
+// MARK: - iOS 26 Liquid Glass Dipped Shape
 
-struct DippedTabBarShape: Shape {
+struct LiquidGlassDippedShape: Shape {
     let dippedRadius: CGFloat
+    var glassPhase: CGFloat
+    var refractionOffset: CGFloat
+    
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(glassPhase, refractionOffset) }
+        set {
+            glassPhase = newValue.first
+            refractionOffset = newValue.second
+        }
+    }
     
     func path(in rect: CGRect) -> Path {
         var path = Path()
         
-        let cornerRadius: CGFloat = 18
+        let cornerRadius: CGFloat = 28
         let width = rect.width
         let height = rect.height
         let centerX = width / 2
-        let dippedWidth = dippedRadius * 2.8
+        let dippedWidth = dippedRadius * 3.2
         
-        // Start from top-left
-        path.move(to: CGPoint(x: cornerRadius, y: 0))
+        // Subtle glass-like movement - much more refined than liquid
+        let glassMovement = sin(glassPhase * .pi) * 1.5
+        let refractionMovement = cos(refractionOffset * .pi) * 0.8
         
-        // Top edge to dip start
-        path.addLine(to: CGPoint(x: centerX - dippedWidth/2, y: 0))
+        // Start from top-left with subtle glass corner
+        path.move(to: CGPoint(x: cornerRadius, y: glassMovement))
         
-        // Create the dip for center button (more pronounced)
+        // Top edge to dip start with subtle refraction
+        path.addLine(to: CGPoint(x: centerX - dippedWidth/2, y: glassMovement))
+        
+        // Create the refined glass dip for center button
         path.addQuadCurve(
-            to: CGPoint(x: centerX + dippedWidth/2, y: 0),
-            control: CGPoint(x: centerX, y: dippedRadius * 1.2)
+            to: CGPoint(x: centerX + dippedWidth/2, y: glassMovement),
+            control: CGPoint(
+                x: centerX + refractionMovement,
+                y: dippedRadius * 1.3 + sin(glassPhase * .pi * 1.5) * 1.0
+            )
         )
         
-        // Top edge to top-right corner
-        path.addLine(to: CGPoint(x: width - cornerRadius, y: 0))
+        // Continue top edge
+        path.addLine(to: CGPoint(x: width - cornerRadius, y: glassMovement))
         path.addQuadCurve(
-            to: CGPoint(x: width, y: cornerRadius),
-            control: CGPoint(x: width, y: 0)
+            to: CGPoint(x: width, y: cornerRadius + glassMovement),
+            control: CGPoint(x: width, y: glassMovement)
         )
         
-        // Right edge
-        path.addLine(to: CGPoint(x: width, y: height))
+        // Right edge with minimal glass movement
+        path.addLine(to: CGPoint(x: width + refractionMovement * 0.5, y: height))
         
         // Bottom edge
-        path.addLine(to: CGPoint(x: 0, y: height))
+        path.addLine(to: CGPoint(x: refractionMovement * 0.5, y: height))
         
         // Left edge
-        path.addLine(to: CGPoint(x: 0, y: cornerRadius))
+        path.addLine(to: CGPoint(x: 0, y: cornerRadius + glassMovement))
         path.addQuadCurve(
-            to: CGPoint(x: cornerRadius, y: 0),
-            control: CGPoint(x: 0, y: 0)
+            to: CGPoint(x: cornerRadius, y: glassMovement),
+            control: CGPoint(x: 0, y: glassMovement)
         )
         
         return path

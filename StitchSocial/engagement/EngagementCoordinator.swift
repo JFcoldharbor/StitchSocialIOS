@@ -1,14 +1,15 @@
 //
 //  EngagementCoordinator.swift
-//  CleanBeta
+//  StitchSocial
 //
-//  Layer 6: Coordination - Complete Engagement Workflow Orchestration
+//  Layer 6: Coordination - Complete Engagement Workflow Orchestration WITH NOTIFICATIONS
 //  Dependencies: VideoService, EngagementCalculator, NotificationService
-//  Orchestrates: Tap UI → Calculations → Database → Rewards → Visual Feedback
+//  Orchestrates: Tap UI → Calculations → Database → Rewards → Notifications → Visual Feedback
 //
 
 import Foundation
 import SwiftUI
+import FirebaseAuth
 
 /// Video engagement structure for coordination layer
 struct VideoEngagement {
@@ -23,14 +24,14 @@ struct VideoEngagement {
 }
 
 /// Orchestrates complete engagement workflow with progressive tapping and visual feedback
-/// Coordinates between UI interactions, calculations, database updates, and reward processing
+/// Coordinates between UI interactions, calculations, database updates, rewards, and notifications
 @MainActor
 class EngagementCoordinator: ObservableObject {
     
     // MARK: - Dependencies
     
     private let videoService: VideoService
-    private let notificationService: NotificationService
+    private let notificationService: NotificationService // NEW: Added notification integration
     
     // MARK: - Progressive Tapping State
     
@@ -61,17 +62,17 @@ class EngagementCoordinator: ObservableObject {
     
     init(
         videoService: VideoService,
-        notificationService: NotificationService
+        notificationService: NotificationService // FIXED: lowercase parameter name
     ) {
         self.videoService = videoService
-        self.notificationService = notificationService
+        self.notificationService = notificationService // FIXED: Store notification service
         
-        print("🔥 ENGAGEMENT COORDINATOR: Initialized - Ready for progressive tapping workflow")
+        print("🔥 ENGAGEMENT COORDINATOR: Initialized with notifications - Ready for progressive tapping workflow")
     }
     
     // MARK: - Primary Engagement Workflow
     
-    /// Complete engagement workflow: Tap → Calculate → Update → Reward → Feedback
+    /// Complete engagement workflow: Tap → Calculate → Update → Reward → Notify → Feedback
     func processEngagement(
         videoID: String,
         engagementType: InteractionType,
@@ -114,7 +115,15 @@ class EngagementCoordinator: ObservableObject {
             calculations: calculations
         )
         
-        // Step 5: Process rewards and notifications
+        // Step 5: NEW - Send notifications to creator
+        await sendEngagementNotification(
+            videoID: videoID,
+            engagementType: engagementType,
+            userID: userID,
+            calculations: calculations
+        )
+        
+        // Step 6: Process rewards and notifications
         await processEngagementRewards(
             videoID: videoID,
             engagementType: engagementType,
@@ -122,7 +131,7 @@ class EngagementCoordinator: ObservableObject {
             calculations: calculations
         )
         
-        // Step 6: Update analytics
+        // Step 7: Update analytics
         await updateAnalytics(
             videoID: videoID,
             engagementType: engagementType,
@@ -176,19 +185,6 @@ class EngagementCoordinator: ObservableObject {
         if let milestone = milestone {
             showingMilestone[videoID] = milestone
             activeAnimations[videoID] = .tapMilestone
-            
-            // Send milestone notification
-            do {
-                try await notificationService.sendProgressiveTapMilestone(
-                    to: userID,
-                    videoID: videoID,
-                    currentTaps: currentTapCount,
-                    requiredTaps: requiredTapCount,
-                    milestone: milestone
-                )
-            } catch {
-                print("⚠️ ENGAGEMENT: Failed to send milestone notification - \(error)")
-            }
             
             print("🎯 MILESTONE: \(milestone.rawValue) reached - \(currentTapCount)/\(requiredTapCount) taps")
         }
@@ -347,7 +343,6 @@ class EngagementCoordinator: ObservableObject {
                 interactionType: engagementType,
                 watchTime: 0
             )
-
             
             print("✅ DATABASE: Successfully updated engagement for video \(videoID)")
             
@@ -355,6 +350,98 @@ class EngagementCoordinator: ObservableObject {
             print("❌ DATABASE: Failed to update engagement - \(error.localizedDescription)")
             throw StitchError.processingError("Failed to update engagement: \(error.localizedDescription)")
         }
+    }
+    
+    // MARK: - NEW: Notification Integration
+    
+    /// Send engagement notification to video creator
+    private func sendEngagementNotification(
+        videoID: String,
+        engagementType: InteractionType,
+        userID: String,
+        calculations: EngagementCalculations
+    ) async {
+        
+        // Only send notifications for hype and cool (limited)
+        switch engagementType {
+        case .hype:
+            await sendHypeNotification(videoID: videoID, userID: userID)
+            
+        case .cool:
+            // Limit cool notifications to first 3 to avoid spam
+            if calculations.newCoolCount <= 3 {
+                await sendCoolNotification(videoID: videoID, userID: userID)
+            }
+            
+        default:
+            // No notifications for other engagement types yet
+            break
+        }
+    }
+    
+    /// Send hype notification to video creator
+    private func sendHypeNotification(videoID: String, userID: String) async {
+        do {
+            if let video = try? await videoService.getVideo(id: videoID) {
+                let senderUsername = await getCurrentUsername(userID: userID)
+                
+                try await notificationService.notifyHype(
+                    videoID: videoID,
+                    videoTitle: video.title,
+                    recipientID: video.creatorID,
+                    senderID: userID,
+                    senderUsername: senderUsername
+                )
+                
+                print("🔔 NOTIFICATION: Sent hype notification for video \(videoID)")
+            }
+        } catch {
+            print("❌ NOTIFICATION ERROR: Failed to send hype notification - \(error)")
+        }
+    }
+    
+    /// Send cool notification to video creator (limited to avoid spam)
+    private func sendCoolNotification(videoID: String, userID: String) async {
+        do {
+            if let video = try? await videoService.getVideo(id: videoID) {
+                let senderUsername = await getCurrentUsername(userID: userID)
+                
+                try await notificationService.createNotification(
+                    recipientID: video.creatorID,
+                    senderID: userID,
+                    type: StitchNotificationType.cool,
+                    title: "❄️ Video cooled",
+                    message: "\(senderUsername) cooled your video",
+                    payload: [
+                        "videoID": videoID,
+                        "videoTitle": video.title,
+                        "senderUsername": senderUsername
+                    ]
+                )
+                
+                print("🔔 NOTIFICATION: Sent cool notification for video \(videoID)")
+            }
+        } catch {
+            print("❌ NOTIFICATION ERROR: Failed to send cool notification - \(error)")
+        }
+    }
+    
+    /// Get current username for notifications
+    private func getCurrentUsername(userID: String) async -> String {
+        // Try to get username from Auth first
+        if let currentUser = Auth.auth().currentUser {
+            if let displayName = currentUser.displayName, !displayName.isEmpty {
+                return displayName
+            }
+            if let email = currentUser.email, !email.isEmpty {
+                return email.components(separatedBy: "@").first ?? "Someone"
+            }
+        }
+        
+        // Fallback - try to get from UserService (if available)
+        // Note: UserService not injected to avoid circular dependency
+        
+        return "Someone"
     }
     
     // MARK: - Rewards & Notifications
@@ -384,22 +471,6 @@ class EngagementCoordinator: ObservableObject {
         if let reward = rewardType {
             showingReward[videoID] = reward
             activeAnimations[videoID] = .reward
-            
-            // Send engagement reward notification
-            do {
-                try await notificationService.sendEngagementRewardNotification(
-                    to: userID,
-                    type: reward,
-                    details: EngagementRewardDetails(
-                        senderID: userID,
-                        engagementCount: calculations.newHypeCount + calculations.newCoolCount,
-                        streakCount: 1,
-                        rewardAmount: Double(Int(calculations.cloutGain))  // Convert to Int instead of Double
-                    )
-                )
-            } catch {
-                print("⚠️ ENGAGEMENT: Failed to send reward notification - \(error)")
-            }
             
             print("🎁 REWARD: \(reward.rawValue) earned for video \(videoID)")
             print("🎁 REWARD: Engagement count: \(calculations.newHypeCount + calculations.newCoolCount)")
@@ -523,110 +594,6 @@ class EngagementCoordinator: ObservableObject {
     func hasActiveAnimation(videoID: String) -> AnimationType? {
         return activeAnimations[videoID]
     }
-}
-
-// MARK: - Supporting Types
-
-/// Result of progressive tapping interaction
-struct TapResult {
-    let isComplete: Bool
-    let milestone: TapMilestone?
-    let tapsRemaining: Int
-}
-
-/// Calculated engagement metrics
-struct EngagementCalculations {
-    let cloutGain: Int
-    let newHypeCount: Int
-    let newCoolCount: Int
-    let newViewCount: Int
-    let newTemperature: String
-    let newEngagementRatio: Double
-    let hypeScore: Double
-}
-
-/// Engagement interaction record
-struct EngagementInteraction: Identifiable {
-    let id: String
-    let videoID: String
-    let type: InteractionType
-    let timestamp: Date
-    let cloutGain: Int
-    let hypeScore: Double
-}
-
-/// Session engagement metrics
-struct SessionMetrics {
-    var totalInteractions: Int = 0
-    var totalCloutGained: Int = 0
-    var hypesGiven: Int = 0
-    var coolsGiven: Int = 0
-    var videosViewed: Int = 0
-    var repliesCreated: Int = 0
-    var sharesCompleted: Int = 0
-    var sessionStartTime: Date = Date()
-    
-    var sessionDuration: TimeInterval {
-        Date().timeIntervalSince(sessionStartTime)
-    }
-    
-    var interactionsPerMinute: Double {
-        let minutes = sessionDuration / 60.0
-        return minutes > 0 ? Double(totalInteractions) / minutes : 0.0
-    }
-}
-
-/// Overall engagement statistics
-struct EngagementStats {
-    var averageEngagementRatio: Double = 0.0
-    var mostActiveVideoID: String?
-    var totalEngagementsToday: Int = 0
-    var engagementStreak: Int = 0
-    var lastEngagementDate: Date?
-    
-    var engagementHealth: EngagementHealth {
-        if averageEngagementRatio >= 0.8 { return .excellent }
-        if averageEngagementRatio >= 0.6 { return .good }
-        if averageEngagementRatio >= 0.4 { return .fair }
-        return .poor
-    }
-}
-
-/// Animation types for visual feedback
-enum AnimationType: String, CaseIterable {
-    case tapProgress = "tap_progress"
-    case tapMilestone = "tap_milestone"
-    case tapComplete = "tap_complete"
-    case reward = "reward"
-    case engagementUpdate = "engagement_update"
-}
-
-/// Engagement health status
-enum EngagementHealth: String, CaseIterable {
-    case excellent = "excellent"
-    case good = "good"
-    case fair = "fair"
-    case poor = "poor"
-    
-    var emoji: String {
-        switch self {
-        case .excellent: return "🔥"
-        case .good: return "💚"
-        case .fair: return "👌"
-        case .poor: return "📉"
-        }
-    }
-}
-
-/// Engagement data for coordination layer
-struct EngagementData {
-    let videoID: String
-    let hypeCount: Int
-    let coolCount: Int
-    let viewCount: Int
-    let temperature: String
-    let engagementRatio: Double
-    let lastEngagementAt: Date
 }
 
 // MARK: - Extensions

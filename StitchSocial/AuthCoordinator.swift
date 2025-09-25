@@ -16,6 +16,7 @@
 
 import Foundation
 import SwiftUI
+import FirebaseFirestore
 
 /// Orchestrates complete authentication workflow with special user detection and setup
 /// Coordinates between authentication, user profile creation, and badge initialization
@@ -26,7 +27,8 @@ class AuthCoordinator: ObservableObject {
     
     private let authService: AuthService
     private let userService: UserService
-    private let notificationService: NotificationService
+    private let NotificationService: NotificationService
+    private let db = Firestore.firestore(database: Config.Firebase.databaseName)
     
     // MARK: - Authentication State
     
@@ -65,13 +67,18 @@ class AuthCoordinator: ObservableObject {
     init(
         authService: AuthService,
         userService: UserService,
-        notificationService: NotificationService
+        NotificationService: NotificationService
     ) {
         self.authService = authService
         self.userService = userService
-        self.notificationService = notificationService
+        self.NotificationService = NotificationService
         
         print("🔐 AUTH COORDINATOR: Initialized - Ready for authentication workflow")
+        
+        // Handle existing users migration on startup
+        Task {
+            await handleExistingUsersOnStartup()
+        }
     }
     
     // MARK: - Primary Authentication Workflow
@@ -309,9 +316,9 @@ class AuthCoordinator: ObservableObject {
         }
     }
     
-    // MARK: - Phase 4: Badge Initialization
+    // MARK: - Phase 4: Badge Initialization & Auto-Follow
     
-    /// Initialize badges for new users
+    /// Initialize badges for new users with auto-follow
     private func performBadgeInitialization(
         userID: String,
         specialUserInfo: SpecialUserInfo?,
@@ -362,6 +369,44 @@ class AuthCoordinator: ObservableObject {
             await awardBadge(userID: userID, badgeRawValue: badgeRawValue)
         }
         
+        // AUTO-FOLLOW JAMES FORTUNE FOR NEW USERS ONLY
+        if isNewUser && enableAutoFollow {
+            currentTask = "Following official accounts..."
+            await updateProgress(0.92)
+            
+            print("🔗 AUTO-FOLLOW: Starting auto-follow process for new user")
+            
+            // Get James Fortune's entry from special users config
+            if let jamesFortune = SpecialUsersConfig.getJamesFortune() {
+                do {
+                    print("🔍 AUTO-FOLLOW: Looking up James Fortune user ID...")
+                    
+                    // Find James Fortune's user ID by email
+                    if let jamesUserID = try await findUserIDByEmail(email: jamesFortune.email) {
+                        print("✅ AUTO-FOLLOW: Found James Fortune user ID: \(jamesUserID)")
+                        
+                        // Auto-follow James Fortune
+                        try await userService.followUser(followerID: userID, followingID: jamesUserID)
+                        
+                        print("✅ AUTO-FOLLOW: New user \(userID) automatically following James Fortune \(jamesUserID)")
+                        
+                        currentTask = "Following official account complete"
+                        
+                    } else {
+                        print("⚠️ AUTO-FOLLOW: James Fortune user ID not found")
+                        currentTask = "Official account not found"
+                    }
+                    
+                } catch {
+                    print("⚠️ AUTO-FOLLOW: Failed to follow James Fortune: \(error)")
+                    currentTask = "Auto-follow error - continuing signup"
+                    // Don't fail signup for auto-follow errors
+                }
+            }
+            
+            await updateProgress(0.95)
+        }
+        
         currentTask = "Badge initialization complete"
         await updateProgress(1.0)
         
@@ -375,7 +420,148 @@ class AuthCoordinator: ObservableObject {
         print("🏆 BADGE: Would award '\(badgeRawValue)' to \(userID)")
         
         // TODO: Send badge unlock notification
-        // await notificationService.sendBadgeUnlockNotification(...)
+        // await NotificationService.sendBadgeUnlockNotification(...)
+    }
+    
+    // MARK: - Auto-Follow Helper Methods
+    
+    /// Find user ID by email address
+    private func findUserIDByEmail(email: String) async throws -> String? {
+        print("🔍 AUTH: Looking up user ID for email: \(email)")
+        
+        let snapshot = try await db.collection(FirebaseSchema.Collections.users)
+            .whereField(FirebaseSchema.UserDocument.email, isEqualTo: email)
+            .limit(to: 1)
+            .getDocuments()
+        
+        let userID = snapshot.documents.first?.documentID
+        
+        if let userID = userID {
+            print("✅ AUTH: Found user ID \(userID) for email \(email)")
+        } else {
+            print("❌ AUTH: No user found for email \(email)")
+        }
+        
+        return userID
+    }
+    
+    /// Call this method in your app startup to handle existing users
+    func handleExistingUsersOnStartup() async {
+        await migrateExistingUsersToAutoFollow()
+    }
+    
+    /// Migrate existing users to auto-follow James Fortune (call this in init or app startup)
+    func migrateExistingUsersToAutoFollow() async {
+        print("📦 MIGRATION: Starting existing users auto-follow migration")
+        
+        guard let jamesFortune = SpecialUsersConfig.getJamesFortune() else {
+            print("❌ MIGRATION: James Fortune not found in config")
+            return
+        }
+        
+        // Check if migration already completed
+        if await hasAutoFollowMigrationBeenRun() {
+            print("✅ MIGRATION: Already completed, skipping")
+            return
+        }
+        
+        do {
+            // Find James Fortune's user ID
+            guard let jamesUserID = try await findUserIDByEmail(email: jamesFortune.email) else {
+                print("❌ MIGRATION: James Fortune account not found")
+                return
+            }
+            
+            print("✅ MIGRATION: Found James Fortune account: \(jamesUserID)")
+            
+            // Get all users who should follow James
+            let allUsersSnapshot = try await db.collection(FirebaseSchema.Collections.users)
+                .getDocuments()
+            
+            var successCount = 0
+            var errorCount = 0
+            
+            for userDoc in allUsersSnapshot.documents {
+                let userID = userDoc.documentID
+                
+                // Skip James himself
+                if userID == jamesUserID {
+                    continue
+                }
+                
+                // Skip if already following
+                let isAlreadyFollowing = try await userService.isFollowing(followerID: userID, followingID: jamesUserID)
+                if isAlreadyFollowing {
+                    continue
+                }
+                
+                // Check if user should be excluded (only founders/co-founders)
+                let userData = userDoc.data()
+                let userEmail = userData[FirebaseSchema.UserDocument.email] as? String ?? ""
+                
+                if let specialUser = SpecialUsersConfig.getSpecialUser(for: userEmail) {
+                    if specialUser.role == .founder || specialUser.role == .coFounder {
+                        print("⏭️ MIGRATION: Skipping founder/co-founder \(userEmail)")
+                        continue
+                    } else {
+                        print("✅ MIGRATION: Including special user \(userEmail) (\(specialUser.role.displayName))")
+                    }
+                }
+                
+                // Follow James Fortune
+                do {
+                    try await userService.followUser(followerID: userID, followingID: jamesUserID)
+                    successCount += 1
+                    print("✅ MIGRATION: User \(userID) now follows James Fortune")
+                } catch {
+                    errorCount += 1
+                    print("❌ MIGRATION: Failed to migrate user \(userID): \(error)")
+                }
+                
+                // Small delay to avoid overwhelming system
+                if (successCount + errorCount) % 10 == 0 {
+                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 seconds
+                }
+            }
+            
+            print("🎉 MIGRATION COMPLETE:")
+            print("   ✅ Successfully migrated: \(successCount) users")
+            print("   ❌ Errors encountered: \(errorCount) users")
+            
+            // Mark migration complete
+            try await markMigrationComplete()
+            
+        } catch {
+            print("❌ MIGRATION FAILED: \(error)")
+        }
+    }
+    
+    /// Check if migration has been completed
+    private func hasAutoFollowMigrationBeenRun() async -> Bool {
+        do {
+            let doc = try await db.collection("system")
+                .document("migrations")
+                .getDocument()
+            
+            return doc.data()?["autoFollowMigrationComplete"] as? Bool ?? false
+            
+        } catch {
+            print("⚠️ MIGRATION: Could not check status: \(error)")
+            return false
+        }
+    }
+    
+    /// Mark migration as complete
+    private func markMigrationComplete() async throws {
+        try await db.collection("system")
+            .document("migrations")
+            .setData([
+                "autoFollowMigrationComplete": true,
+                "autoFollowMigrationDate": Timestamp(),
+                "autoFollowMigrationVersion": "1.0"
+            ], merge: true)
+        
+        print("✅ MIGRATION: Marked as complete")
     }
     
     // MARK: - Completion
@@ -657,7 +843,7 @@ extension AuthCoordinator {
     /// Test authentication workflow with mock data
     func helloWorldTest() {
         print("🔐 AUTH COORDINATOR: Hello World - Ready for complete authentication workflow!")
-        print("🔐 Features: Login/Signup, Special user detection, Profile setup, Badge initialization")
-        print("🔐 Status: AuthService integration, Special user configuration, Badge system ready")
+        print("🔐 Features: Login/Signup, Special user detection, Profile setup, Badge initialization, Auto-follow")
+        print("🔐 Status: AuthService integration, Special user configuration, Auto-follow system ready")
     }
 }

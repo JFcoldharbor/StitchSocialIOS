@@ -296,14 +296,9 @@ class ProfileViewModel: ObservableObject {
                     coolCount: data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0,
                     replyCount: data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0,
                     shareCount: data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0,
-                    temperature: data[FirebaseSchema.VideoDocument.temperature] as? String ?? "neutral",
-                    qualityScore: data[FirebaseSchema.VideoDocument.qualityScore] as? Int ?? 50,
-                    engagementRatio: {
-                        let hypes = data[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0
-                        let cools = data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
-                        let total = hypes + cools
-                        return total > 0 ? Double(hypes) / Double(total) : 0.5
-                    }(),
+                    temperature: data[FirebaseSchema.VideoDocument.temperature] as? String ?? "Cold",
+                    qualityScore: data[FirebaseSchema.VideoDocument.qualityScore] as? Int ?? 0,
+                    engagementRatio: data["engagementRatio"] as? Double ?? 0.0,
                     velocityScore: data["velocityScore"] as? Double ?? 0.0,
                     trendingScore: data["trendingScore"] as? Double ?? 0.0,
                     duration: data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0.0,
@@ -337,16 +332,17 @@ class ProfileViewModel: ObservableObject {
         }
         
         do {
-            // Use getFollowing method directly instead of getFollowingIDs + individual getUser calls
-            let following = try await userService.getFollowing(userID: userID)
-            let limitedFollowing = Array(following.prefix(limit))
+            // Get following IDs and convert to BasicUserInfo objects
+            let followingIDs = try await userService.getFollowingIDs(userID: userID)
+            let limitedFollowingIDs = Array(followingIDs.prefix(limit))
+            let followingUsers = try await userService.getUsers(ids: limitedFollowingIDs)
             
             await MainActor.run {
-                self.followingList = limitedFollowing
+                self.followingList = followingUsers
                 self.isLoadingFollowing = false
             }
             
-            print("PROFILE FOLLOWING: Loaded \(limitedFollowing.count) following users")
+            print("PROFILE FOLLOWING: Loaded \(followingUsers.count) following users")
             
         } catch {
             await MainActor.run {
@@ -363,16 +359,17 @@ class ProfileViewModel: ObservableObject {
         }
         
         do {
-            // Use getFollowing method instead of getFollowerIDs (UserService doesn't have getFollowerIDs)
-            let followers = try await userService.getFollowers(userID: userID)
-            let limitedFollowers = Array(followers.prefix(limit))
-            
+            // Get follower IDs and convert to BasicUserInfo objects
+            let followerIDs = try await userService.getFollowerIDs(userID: userID)
+            let limitedFollowerIDs = Array(followerIDs.prefix(limit))
+            let followers = try await userService.getUsers(ids: limitedFollowerIDs)
+
             await MainActor.run {
-                self.followersList = limitedFollowers
+                self.followersList = followers
                 self.isLoadingFollowers = false
             }
             
-            print("PROFILE FOLLOWERS: Loaded \(limitedFollowers.count) followers")
+            print("PROFILE FOLLOWERS: Loaded \(followers.count) followers")
             
         } catch {
             await MainActor.run {
@@ -381,7 +378,7 @@ class ProfileViewModel: ObservableObject {
             print("PROFILE FOLLOWERS ERROR: \(error.localizedDescription)")
         }
     }
-    
+
     /// Start profile animations
     private func startProfileAnimations() async {
         guard let user = currentUser else { return }

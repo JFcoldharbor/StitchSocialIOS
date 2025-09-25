@@ -6,6 +6,7 @@
 //  Complete fix with VideoCoordinator integration and background thread handling
 //  FIXED: Added processSelectedVideo method for gallery video processing
 //  FIXED: Added public accessors for videoCoordinator properties
+//  URGENT FIX: Replaced StreamlinedCameraManager with CinematicCameraManager for iPhone compatibility
 //
 
 import Foundation
@@ -111,295 +112,6 @@ struct VideoMetadata {
     var aiSuggestedHashtags: [String] = []
 }
 
-// MARK: - Streamlined Camera Manager (Fixed)
-
-@MainActor
-class StreamlinedCameraManager: NSObject, ObservableObject, @unchecked Sendable {
-    
-    // MARK: - Essential State Only
-    
-    @Published var isSessionRunning = false
-    @Published var isRecording = false
-    @Published var currentCameraPosition: AVCaptureDevice.Position = .back
-    @Published var currentZoomFactor: CGFloat = 1.0
-    @Published var maxZoomFactor: CGFloat = 10.0
-    @Published var recordingDuration: TimeInterval = 0
-    
-    // MARK: - Core Components
-    
-    private let captureSession = AVCaptureSession()
-    private var videoDeviceInput: AVCaptureDeviceInput?
-    private var audioDeviceInput: AVCaptureDeviceInput?
-    private var movieOutput: AVCaptureMovieFileOutput?
-    private let sessionQueue = DispatchQueue(label: "camera.session")
-    
-    // Recording completion
-    private var recordingCompletion: ((URL?) -> Void)?
-    
-    var previewLayer: AVCaptureVideoPreviewLayer {
-        AVCaptureVideoPreviewLayer(session: captureSession)
-    }
-    
-    // MARK: - Session Management (FIXED - Background Thread)
-
-    @MainActor
-    func startSession() async {
-        return await withCheckedContinuation { continuation in
-            sessionQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume()
-                    return
-                }
-                
-                Task {
-                    await self.configureSessionOnBackground()
-                    
-                    // FIXED: Move session.startRunning() to background thread
-                    self.sessionQueue.async {
-                        let session = self.captureSession
-                        if !session.isRunning {
-                            session.startRunning()
-                        }
-                        
-                        Task { @MainActor in
-                            self.isSessionRunning = session.isRunning
-                            continuation.resume()
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @MainActor
-    func stopSession() async {
-        return await withCheckedContinuation { continuation in
-            sessionQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume()
-                    return
-                }
-                
-                // FIXED: Move session.stopRunning() to background thread
-                let session = self.captureSession
-                if session.isRunning {
-                    session.stopRunning()
-                }
-                
-                Task { @MainActor in
-                    self.isSessionRunning = false
-                    continuation.resume()
-                }
-            }
-        }
-    }
-    
-    // MARK: - Recording Controls
-    
-    @MainActor
-    func startRecording(completion: @escaping (URL?) -> Void) {
-        guard !isRecording, isSessionRunning else {
-            completion(nil)
-            return
-        }
-        
-        recordingCompletion = completion
-        
-        sessionQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("\(UUID().uuidString).mov")
-            
-            self.movieOutput?.startRecording(to: tempURL, recordingDelegate: self)
-            
-            Task { @MainActor in
-                self.isRecording = true
-            }
-        }
-    }
-    
-    @MainActor
-    func stopRecording() {
-        guard isRecording else { return }
-        
-        sessionQueue.async { [weak self] in
-            self?.movieOutput?.stopRecording()
-            
-            Task { @MainActor in
-                self?.isRecording = false
-            }
-        }
-    }
-    
-    // MARK: - Camera Controls
-    
-    func switchCamera() async {
-        await withCheckedContinuation { continuation in
-            sessionQueue.async { [weak self] in
-                guard let self = self else {
-                    continuation.resume()
-                    return
-                }
-                
-                self.captureSession.beginConfiguration()
-                
-                // Remove current input
-                if let currentInput = self.videoDeviceInput {
-                    self.captureSession.removeInput(currentInput)
-                }
-                
-                // Get opposite camera
-                let newPosition: AVCaptureDevice.Position = self.currentCameraPosition == .back ? .front : .back
-                
-                // Configure new camera
-                if let newDevice = self.getCamera(for: newPosition),
-                   let newInput = try? AVCaptureDeviceInput(device: newDevice) {
-                    
-                    if self.captureSession.canAddInput(newInput) {
-                        self.captureSession.addInput(newInput)
-                        self.videoDeviceInput = newInput
-                        
-                        Task { @MainActor in
-                            self.currentCameraPosition = newPosition
-                            self.maxZoomFactor = newDevice.activeFormat.videoMaxZoomFactor
-                            self.currentZoomFactor = 1.0
-                        }
-                    }
-                }
-                
-                self.captureSession.commitConfiguration()
-                continuation.resume()
-            }
-        }
-    }
-    
-    func setZoom(_ factor: CGFloat) async {
-        await withCheckedContinuation { continuation in
-            sessionQueue.async { [weak self] in
-                guard let self = self,
-                      let device = self.videoDeviceInput?.device else {
-                    continuation.resume()
-                    return
-                }
-                
-                let validZoom = min(max(factor, 1.0), device.maxAvailableVideoZoomFactor)
-                
-                do {
-                    try device.lockForConfiguration()
-                    device.videoZoomFactor = validZoom
-                    device.unlockForConfiguration()
-                    
-                    Task { @MainActor in
-                        self.currentZoomFactor = validZoom
-                    }
-                } catch {
-                    print("❌ CAMERA: Zoom failed - \(error)")
-                }
-                
-                continuation.resume()
-            }
-        }
-    }
-    
-    func focusAt(point: CGPoint, in view: UIView) async {
-        await withCheckedContinuation { continuation in
-            sessionQueue.async { [weak self] in
-                guard let self = self,
-                      let device = self.videoDeviceInput?.device else {
-                    continuation.resume()
-                    return
-                }
-                
-                let focusPoint = self.previewLayer.captureDevicePointConverted(fromLayerPoint: point)
-                
-                do {
-                    try device.lockForConfiguration()
-                    
-                    if device.isFocusPointOfInterestSupported {
-                        device.focusPointOfInterest = focusPoint
-                        device.focusMode = .autoFocus
-                    }
-                    
-                    if device.isExposurePointOfInterestSupported {
-                        device.exposurePointOfInterest = focusPoint
-                        device.exposureMode = .autoExpose
-                    }
-                    
-                    device.unlockForConfiguration()
-                } catch {
-                    print("❌ CAMERA: Focus failed - \(error)")
-                }
-                
-                continuation.resume()
-            }
-        }
-    }
-    
-    // MARK: - Configuration
-    
-    private func configureSessionOnBackground() async {
-        captureSession.beginConfiguration()
-        captureSession.sessionPreset = .high
-        
-        // Configure video input
-        if let videoDevice = getCamera(for: currentCameraPosition),
-           let videoInput = try? AVCaptureDeviceInput(device: videoDevice) {
-            
-            if captureSession.canAddInput(videoInput) {
-                captureSession.addInput(videoInput)
-                videoDeviceInput = videoInput
-                
-                await MainActor.run {
-                    maxZoomFactor = videoDevice.activeFormat.videoMaxZoomFactor
-                }
-            }
-        }
-        
-        // Configure audio input
-        if let audioDevice = AVCaptureDevice.default(for: .audio),
-           let audioInput = try? AVCaptureDeviceInput(device: audioDevice) {
-            
-            if captureSession.canAddInput(audioInput) {
-                captureSession.addInput(audioInput)
-                audioDeviceInput = audioInput
-            }
-        }
-        
-        // Configure movie output
-        let movieOutput = AVCaptureMovieFileOutput()
-        if captureSession.canAddOutput(movieOutput) {
-            captureSession.addOutput(movieOutput)
-            self.movieOutput = movieOutput
-        }
-        
-        captureSession.commitConfiguration()
-    }
-    
-    private func getCamera(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
-        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
-    }
-}
-
-// MARK: - AVCaptureFileOutputRecordingDelegate
-
-extension StreamlinedCameraManager: AVCaptureFileOutputRecordingDelegate {
-    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
-        Task { @MainActor [weak self] in
-            guard let self = self else { return }
-            
-            if let error = error {
-                print("❌ CAMERA: Recording failed - \(error)")
-                self.recordingCompletion?(nil)
-            } else {
-                print("✅ CAMERA: Recording completed - \(outputFileURL)")
-                self.recordingCompletion?(outputFileURL)
-            }
-            self.recordingCompletion = nil
-        }
-    }
-}
-
 // MARK: - Recording Controller (FIXED with VideoCoordinator Integration)
 
 @MainActor
@@ -421,7 +133,7 @@ class RecordingController: ObservableObject {
     private let authService: AuthService
     private let aiAnalyzer: AIVideoAnalyzer
     private let videoCoordinator: VideoCoordinator // NEW: Post-processing coordinator
-    let cameraManager: StreamlinedCameraManager
+    let cameraManager: CinematicCameraManager // URGENT FIX: Changed from StreamlinedCameraManager to CinematicCameraManager
     
     // MARK: - Configuration
     
@@ -434,7 +146,7 @@ class RecordingController: ObservableObject {
         self.videoService = VideoService()
         self.authService = AuthService()
         self.aiAnalyzer = AIVideoAnalyzer()
-        self.cameraManager = StreamlinedCameraManager()
+        self.cameraManager = CinematicCameraManager.shared // URGENT FIX: Use shared CinematicCameraManager instance
         
         // NEW: Initialize VideoCoordinator with all dependencies
         self.videoCoordinator = VideoCoordinator(
@@ -445,7 +157,7 @@ class RecordingController: ObservableObject {
             cachingService: nil // Optional caching service
         )
         
-        print("🎬 RECORDING CONTROLLER: Initialized with VideoCoordinator integration")
+        print("🎬 RECORDING CONTROLLER: Initialized with CinematicCameraManager and VideoCoordinator integration")
     }
     
     // MARK: - Camera Management
@@ -479,7 +191,7 @@ class RecordingController: ObservableObject {
                 await self?.handleRecordingCompleted(videoURL)
             }
         }
-        
+       
         print("🎬 RECORDING: Started with VideoCoordinator integration")
     }
     
@@ -541,7 +253,7 @@ class RecordingController: ObservableObject {
             let createdVideo = try await videoCoordinator.processVideoCreation(
                 recordedVideoURL: videoURL,
                 recordingContext: recordingContext,
-                userID: currentUser.id,
+               userID: currentUser.id,
                 userTier: currentUser.tier
             )
             

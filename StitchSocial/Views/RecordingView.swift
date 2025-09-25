@@ -3,7 +3,7 @@
 //  StitchSocial
 //
 //  Layer 8: Views - Instagram/TikTok Style Recording Interface
-//  COMPLETE FIX: Background video stopping + Camera flip + Image picker + Compilation errors fixed
+//  UPDATED: Added exit button + CinematicRecordingButton integration
 //
 
 import SwiftUI
@@ -74,28 +74,15 @@ struct RecordingView: View {
     private var cameraInterface: some View {
         GeometryReader { geometry in
             ZStack {
-                // Camera Preview
-                ProfessionalCameraPreview(controller: controller)
+                // Camera Preview with Drag Zoom
+                ProfessionalCameraPreviewWithZoom(controller: controller)
                     .clipped()
                 
-                // Context Badge (Top Center)
+                // Top Bar
                 VStack {
-                    contextBadge
-                        .padding(.top, 60)
+                    topBar
+                        .padding(.top, geometry.safeAreaInsets.top + 10)
                     Spacer()
-                }
-                
-                // Recording Indicator (Top Right)
-                if controller.currentPhase.isRecording {
-                    VStack {
-                        HStack {
-                            Spacer()
-                            recordingIndicator
-                                .padding(.top, 60)
-                                .padding(.trailing, 20)
-                        }
-                        Spacer()
-                    }
                 }
                 
                 // Main Controls (Bottom)
@@ -105,6 +92,49 @@ struct RecordingView: View {
                 }
             }
         }
+    }
+    
+    // MARK: - Top Bar with Exit Button
+    
+    private var topBar: some View {
+        HStack {
+            // Exit Button
+            Button {
+                handleExit()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle()
+                            .fill(.ultraThinMaterial)
+                            .overlay(
+                                Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
+                    )
+            }
+            .disabled(controller.currentPhase.isRecording)
+            .opacity(controller.currentPhase.isRecording ? 0.5 : 1.0)
+            
+            Spacer()
+            
+            // Context Badge (Center)
+            contextBadge
+            
+            Spacer()
+            
+            // Recording Indicator (Right)
+            if controller.currentPhase.isRecording {
+                recordingIndicator
+            } else {
+                // Placeholder to maintain balance
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(width: 60, height: 32)
+            }
+        }
+        .padding(.horizontal, 20)
     }
     
     // MARK: - Processing Interface
@@ -172,56 +202,57 @@ struct RecordingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
-    // MARK: - Main Controls
+    // MARK: - Main Controls with CinematicRecordingButton
     
     private func mainControls(_ geometry: GeometryProxy) -> some View {
         HStack(spacing: 0) {
             // Gallery Button
-            Button {
-                // Trigger photo picker
-            } label: {
-                PhotosPicker(selection: $selectedPhotoItem, matching: .videos) {
-                    VStack(spacing: 6) {
-                        Image(systemName: "photo.fill")
-                            .font(.system(size: 20, weight: .medium))
-                            .foregroundColor(.white)
-                        
-                        Text("Gallery")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                    .frame(width: 60, height: 60)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(.ultraThinMaterial)
-                    )
+            PhotosPicker(selection: $selectedPhotoItem, matching: .videos) {
+                VStack(spacing: 6) {
+                    Image(systemName: "photo.fill")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(.white)
+                    
+                    Text("Gallery")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.8))
                 }
+                .frame(width: 60, height: 60)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.ultraThinMaterial)
+                )
             }
             .disabled(controller.currentPhase.isRecording || isProcessingSelectedVideo)
             
             Spacer()
             
-            // Record Button
-            Button {
-                if controller.currentPhase == .ready {
-                    controller.startRecording()
-                } else if controller.currentPhase == .recording {
-                    controller.stopRecording()
+            // CinematicRecordingButton Integration
+            CinematicRecordingButton(
+                isRecording: Binding(
+                    get: { controller.currentPhase.isRecording },
+                    set: { _ in }
+                ),
+                videoCoordinator: .constant(nil),
+                onRecordingComplete: {
+                    // Handle completion if needed
                 }
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 80, height: 80)
-                    
-                    Circle()
-                        .fill(controller.currentPhase.isRecording ? Color.red : Color.red)
-                        .frame(width: controller.currentPhase.isRecording ? 40 : 70, height: controller.currentPhase.isRecording ? 40 : 70)
-                        .cornerRadius(controller.currentPhase.isRecording ? 8 : 35)
-                        .animation(.easeInOut(duration: 0.2), value: controller.currentPhase.isRecording)
-                }
+            )
+            .onTapGesture {
+                handleRecordingButtonTap()
             }
-            .disabled(!controller.currentPhase.canStartRecording && !controller.currentPhase.isRecording)
+            .onLongPressGesture(
+                minimumDuration: 0.1,
+                maximumDistance: 50,
+                perform: {
+                    // Handle long press if needed
+                },
+                onPressingChanged: { isPressing in
+                    if isPressing && controller.currentPhase == .ready {
+                        handleRecordingButtonTap()
+                    }
+                }
+            )
             
             Spacer()
             
@@ -249,7 +280,7 @@ struct RecordingView: View {
             .disabled(controller.currentPhase.isRecording || isProcessingSelectedVideo)
         }
         .padding(.horizontal, 40)
-        .padding(.bottom, 40)
+        .padding(.bottom, max(40, geometry.safeAreaInsets.bottom + 20))
     }
     
     // MARK: - UI Components
@@ -289,6 +320,26 @@ struct RecordingView: View {
         )
     }
     
+    // MARK: - Actions
+    
+    private func handleExit() {
+        // Stop camera session
+        Task {
+            await controller.stopCameraSession()
+        }
+        
+        // Call cancel callback
+        onCancel()
+    }
+    
+    private func handleRecordingButtonTap() {
+        if controller.currentPhase == .ready {
+            controller.startRecording()
+        } else if controller.currentPhase == .recording {
+            controller.stopRecording()
+        }
+    }
+    
     // MARK: - Photo Selection Handling
     
     private func handlePhotoSelection() {
@@ -300,183 +351,113 @@ struct RecordingView: View {
             DispatchQueue.main.async {
                 switch result {
                 case .success(let data?):
-                    // Save to temporary file and process
-                    let tempURL = URL.temporaryDirectory.appendingPathComponent("selected_video.mov")
-                    
-                    do {
-                        try data.write(to: tempURL)
-                        
-                        // Validate video
-                        Task {
-                            await validateAndProcessSelectedVideo(tempURL)
-                        }
-                        
-                    } catch {
-                        handleVideoSelectionError(.failedToLoadData)
-                    }
-                    
+                    self.processVideoData(data)
                 case .success(nil):
-                    handleVideoSelectionError(.failedToLoadData)
-                    
-                case .failure:
-                    handleVideoSelectionError(.notAVideoFile)
+                    self.handleVideoSelectionError(.failedToLoadData)
+                case .failure(let error):
+                    print("❌ RECORDING VIEW: Photo selection failed - \(error)")
+                    self.handleVideoSelectionError(.failedToLoadData)
                 }
-                
-                selectedPhotoItem = nil
-                isProcessingSelectedVideo = false
             }
         }
     }
     
-    private func validateAndProcessSelectedVideo(_ url: URL) async {
+    private func processVideoData(_ data: Data) {
+        // Create temporary file
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("selected_video.mov")
+        
         do {
-            let asset = AVAsset(url: url)
-            let duration = try await asset.load(.duration)
-            let durationSeconds = CMTimeGetSeconds(duration)
+            try data.write(to: tempURL)
             
-            // Check duration (max 30 seconds)
-            guard durationSeconds <= 30 else {
-                handleVideoSelectionError(.videoTooLong)
-                return
+            // Validate video
+            let asset = AVAsset(url: tempURL)
+            
+            Task {
+                do {
+                    let duration = try await asset.load(.duration)
+                    let durationSeconds = CMTimeGetSeconds(duration)
+                    
+                    if durationSeconds > 30.0 {
+                        await MainActor.run {
+                            self.handleVideoSelectionError(.videoTooLong)
+                        }
+                        return
+                    }
+                    
+                    // Process with video coordinator
+                    await MainActor.run {
+                        Task {
+                            await self.controller.processSelectedVideo(tempURL)
+                            self.isProcessingSelectedVideo = false
+                        }
+                    }
+                    
+                } catch {
+                    await MainActor.run {
+                        self.handleVideoSelectionError(.unsupportedFormat)
+                    }
+                }
             }
-            
-            // Check if it has video tracks
-            let tracks = try await asset.load(.tracks)
-            let videoTracks = tracks.filter { track in
-                track.mediaType == .video
-            }
-            
-            guard !videoTracks.isEmpty else {
-                handleVideoSelectionError(.notAVideoFile)
-                return
-            }
-            
-            // Process the selected video
-            await controller.processSelectedVideo(url)
             
         } catch {
-            handleVideoSelectionError(.unsupportedFormat)
+            handleVideoSelectionError(.failedToLoadData)
         }
     }
     
     private func handleVideoSelectionError(_ error: VideoSelectionError) {
-        let errorMessage = (error as? VideoSelectionError)?.localizedDescription ??
-                          "Failed to process selected video"
-        controller.currentPhase = .error(errorMessage)
+        isProcessingSelectedVideo = false
+        selectedPhotoItem = nil
         
-        print("❌ RECORDING VIEW: Video selection failed - \(error.localizedDescription)")
+        // Show error alert
+        controller.currentPhase = .error(error.localizedDescription)
     }
     
-    // MARK: - Setup and Cleanup
+    // MARK: - Context Helpers
+    
+    private func getContextName() -> String {
+        controller.recordingContext.displayTitle
+    }
+    
+    private func getContextColor() -> Color {
+        switch controller.recordingContext {
+        case .newThread:
+            return .blue
+        case .stitchToThread:
+            return .green
+        case .replyToVideo:
+            return .orange
+        case .continueThread:
+            return .purple
+        }
+    }
+    
+    // MARK: - Camera Lifecycle
     
     private func setupCamera() {
-        // Stop all background activity for camera priority
-        stopBackgroundActivity()
+        // Stop any background video players
+        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
+        NotificationCenter.default.post(name: .pauseBackgroundRefresh, object: nil)
+        NotificationCenter.default.post(name: .pauseLocationServices, object: nil)
         
-        if permissionsManager.canRecord {
-            Task {
-                await controller.startCameraSession()
-                print("📷 RECORDING VIEW: Camera session started")
-            }
-        } else {
-            print("❌ RECORDING VIEW: Camera permissions not granted")
+        Task {
+            await controller.startCameraSession()
         }
     }
     
     private func cleanupCamera() {
         Task {
             await controller.stopCameraSession()
-            print("📷 RECORDING VIEW: Camera session stopped")
         }
         
-        // Resume background activity when leaving
-        resumeBackgroundActivity()
-    }
-    
-    // MARK: - Background Activity Management
-    
-    private func stopBackgroundActivity() {
-        // Stop all background video players via notifications
-        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
-        print("🎬 RECORDING: Sent signal to stop all background video players")
-        
-        // Disable auto-refresh timers
-        NotificationCenter.default.post(name: .pauseBackgroundRefresh, object: nil)
-        
-        // Reduce animation frame rates
-        UIView.setAnimationsEnabled(false)
-        
-        // Stop location services if not critical
-        NotificationCenter.default.post(name: .pauseLocationServices, object: nil)
-        
-        // Suspend non-critical network requests
-        URLSession.shared.configuration.timeoutIntervalForRequest = 5.0
-        
-        print("📱 RECORDING: Background activity paused for camera priority")
-    }
-    
-    private func resumeBackgroundActivity() {
-        // Re-enable auto-refresh timers
+        // Resume background services
         NotificationCenter.default.post(name: .resumeBackgroundRefresh, object: nil)
-        
-        // Restore animation frame rates
-        UIView.setAnimationsEnabled(true)
-        
-        // Resume location services
         NotificationCenter.default.post(name: .resumeLocationServices, object: nil)
-        
-        // Restore network timeouts
-        URLSession.shared.configuration.timeoutIntervalForRequest = 30.0
-        
-        print("📱 RECORDING: Background activity resumed")
-    }
-    
-    // MARK: - Context Helpers
-    
-    private func getContextName() -> String {
-        switch controller.recordingContext {
-        case .newThread: return "Thread"
-        case .stitchToThread: return "Stitch"
-        case .replyToVideo: return "Reply"
-        case .continueThread: return "Continue"
-        }
-    }
-    
-    private func getContextColor() -> Color {
-        switch controller.recordingContext {
-        case .newThread: return StitchColors.primary
-        case .stitchToThread: return .orange
-        case .replyToVideo: return .blue
-        case .continueThread: return .green
-        }
     }
 }
 
-// MARK: - Video Selection Error Handling
+// MARK: - Professional Camera Preview with Single-Hand Drag Zoom
 
-enum VideoSelectionError: LocalizedError {
-    case failedToLoadData
-    case notAVideoFile
-    case videoTooLong
-    case unsupportedFormat
-    
-    var errorDescription: String? {
-        switch self {
-        case .failedToLoadData:
-            return "Failed to load selected video"
-        case .notAVideoFile:
-            return "Selected file is not a valid video"
-        case .videoTooLong:
-            return "Video is too long (max 30 seconds)"
-        case .unsupportedFormat:
-            return "Video format not supported"
-        }
-    }
-}
-
-// MARK: - Professional Camera Preview
-
-struct ProfessionalCameraPreview: UIViewRepresentable {
+struct ProfessionalCameraPreviewWithZoom: UIViewRepresentable {
     @ObservedObject var controller: RecordingController
     
     func makeUIView(context: Context) -> ProfessionalPreviewUIView {
@@ -491,13 +472,20 @@ struct ProfessionalCameraPreview: UIViewRepresentable {
         // Add gesture recognizers
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handleTap))
         let pinchGesture = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handlePinch))
+        let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(context.coordinator.handlePan))
+        
+        // Configure pan gesture for single-hand zoom
+        panGesture.minimumNumberOfTouches = 1
+        panGesture.maximumNumberOfTouches = 1
         
         // Allow simultaneous gestures
         tapGesture.delegate = context.coordinator
         pinchGesture.delegate = context.coordinator
+        panGesture.delegate = context.coordinator
         
         view.addGestureRecognizer(tapGesture)
         view.addGestureRecognizer(pinchGesture)
+        view.addGestureRecognizer(panGesture)
         
         return view
     }
@@ -513,10 +501,11 @@ struct ProfessionalCameraPreview: UIViewRepresentable {
     }
     
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        let parent: ProfessionalCameraPreview
+        let parent: ProfessionalCameraPreviewWithZoom
         private var initialZoom: CGFloat = 1.0
+        private var initialPanZoom: CGFloat = 1.0
         
-        init(_ parent: ProfessionalCameraPreview) {
+        init(_ parent: ProfessionalCameraPreviewWithZoom) {
             self.parent = parent
         }
         
@@ -524,6 +513,8 @@ struct ProfessionalCameraPreview: UIViewRepresentable {
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
             return true
         }
+        
+        // MARK: - Tap to Focus
         
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             guard gesture.state == .ended else { return }
@@ -535,10 +526,12 @@ struct ProfessionalCameraPreview: UIViewRepresentable {
                 showFocusIndicator(at: point, in: view)
             }
             
-            Task { @MainActor in
+            Task {
                 await parent.controller.cameraManager.focusAt(point: point, in: gesture.view!)
             }
         }
+        
+        // MARK: - Pinch to Zoom
         
         @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
             switch gesture.state {
@@ -546,13 +539,44 @@ struct ProfessionalCameraPreview: UIViewRepresentable {
                 initialZoom = parent.controller.cameraManager.currentZoomFactor
             case .changed:
                 let newZoom = initialZoom * gesture.scale
-                Task { @MainActor in
+                Task {
                     await parent.controller.cameraManager.setZoom(newZoom)
                 }
             default:
                 break
             }
         }
+        
+        // MARK: - Single-Hand Drag Zoom
+        
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            switch gesture.state {
+            case .began:
+                initialPanZoom = parent.controller.cameraManager.currentZoomFactor
+                Task {
+                    await parent.controller.cameraManager.startZoomGesture()
+                }
+                
+            case .changed:
+                guard let view = gesture.view else { return }
+                let translation = gesture.translation(in: view)
+                let translationSize = CGSize(width: translation.x, height: translation.y)
+                
+                Task {
+                    await parent.controller.cameraManager.handleZoomDrag(translation: translationSize, in: view)
+                }
+                
+            case .ended, .cancelled, .failed:
+                Task {
+                    await parent.controller.cameraManager.endZoomGesture()
+                }
+                
+            default:
+                break
+            }
+        }
+        
+        // MARK: - Focus Indicator
         
         private func showFocusIndicator(at point: CGPoint, in view: UIView) {
             // Add focus indicator animation
@@ -586,6 +610,28 @@ class ProfessionalPreviewUIView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         previewLayer?.frame = bounds
+    }
+}
+
+// MARK: - Video Selection Error
+
+enum VideoSelectionError: LocalizedError {
+    case failedToLoadData
+    case notAVideoFile
+    case videoTooLong
+    case unsupportedFormat
+    
+    var errorDescription: String? {
+        switch self {
+        case .failedToLoadData:
+            return "Failed to load selected video"
+        case .notAVideoFile:
+            return "Selected file is not a valid video"
+        case .videoTooLong:
+            return "Video is too long (max 30 seconds)"
+        case .unsupportedFormat:
+            return "Video format not supported"
+        }
     }
 }
 

@@ -1,486 +1,376 @@
 //
 //  NotificationService.swift
-//  CleanBeta
+//  StitchSocial
 //
-//  Layer 4: Core Services - Push Notifications & Database Management
-//  Dependencies: Firebase Messaging, Config, FirebaseSchema
-//  Features: Database CRUD, engagement rewards, badge unlocks, following notifications
+//  Layer 4: Core Services - Complete Notification Management with Firebase
+//  Dependencies: UserTier (Layer 1), Config (Layer 3), FirebaseSchema (Layer 3)
+//  COMPLETE IMPLEMENTATION: Real Firebase integration, uses existing types
 //
 
 import Foundation
 import FirebaseFirestore
-import FirebaseMessaging
-import UserNotifications
+import FirebaseAuth
 
-/// Complete notification service with database operations and notification management
-class NotificationService: NSObject, ObservableObject {
+/// Complete notification service with real Firebase integration
+@MainActor
+class NotificationService: ObservableObject {
     
-    // MARK: - Properties
+    // MARK: - Dependencies
     
     private let db = Firestore.firestore(database: Config.Firebase.databaseName)
-    private let messaging = Messaging.messaging()
     
     // MARK: - Published State
     
-    @Published var isRegistered = false
-    @Published var fcmToken: String?
-    @Published var notificationPermissionStatus: NotificationPermissionStatus = .notDetermined
-    @Published var unreadCount = 0
-    @Published var recentNotifications: [StitchNotification] = []
     @Published var isLoading = false
-    @Published var lastError: String?
+    @Published var lastError: Error?
+    @Published var pendingToasts: [NotificationToast] = []
     
     // MARK: - Configuration
     
-    private let maxRecentNotifications = 50
-    private let notificationExpirationDays = 30
+    private let toastDisplayDuration: TimeInterval = 4.0
+    private let maxToastsDisplayed = 3
+    private let notificationsCollection = "notifications"
     
     // MARK: - Initialization
     
-    override init() {
-        super.init()
-        messaging.delegate = self
-        
-        print("📧 NOTIFICATION SERVICE: Initialized with database integration")
+    init() {
+        print("🔔 NOTIFICATION SERVICE: Initialized with Firebase integration")
     }
     
-    // MARK: - DATABASE OPERATIONS
+    // MARK: - REAL FIREBASE IMPLEMENTATION
     
-    /// Load notifications for a user with pagination support
+    /// Load notifications with actual Firebase pagination
     func loadNotifications(
         for userID: String,
         limit: Int = 20,
         lastDocument: DocumentSnapshot? = nil
-    ) async throws -> (notifications: [StitchNotification], lastDocument: DocumentSnapshot?, hasMore: Bool) {
+    ) async throws -> NotificationLoadResult {
+        print("🔔 LOADING: Notifications for user \(userID)")
         
         isLoading = true
         defer { isLoading = false }
         
         do {
-            var query = db.collection(FirebaseSchema.Collections.notifications)
-                .whereField(FirebaseSchema.NotificationDocument.recipientID, isEqualTo: userID)
-                .order(by: FirebaseSchema.NotificationDocument.createdAt, descending: true)
+            var query = db.collection(notificationsCollection)
+                .whereField("recipientID", isEqualTo: userID)
+                .order(by: "createdAt", descending: true)
                 .limit(to: limit)
             
-            // Apply pagination if lastDocument provided
+            // Add pagination cursor if provided
             if let lastDoc = lastDocument {
                 query = query.start(afterDocument: lastDoc)
             }
             
             let snapshot = try await query.getDocuments()
-            let lastDoc = snapshot.documents.last
-            let hasMore = snapshot.documents.count == limit
             
-            // Convert documents to StitchNotification objects
-            let notifications = snapshot.documents.compactMap { doc -> StitchNotification? in
+            let notifications = try snapshot.documents.compactMap { doc -> StitchNotification? in
                 let data = doc.data()
                 
+                // Manual parsing to avoid Codable issues
                 return StitchNotification(
-                    id: doc.documentID,
-                    recipientID: data[FirebaseSchema.NotificationDocument.recipientID] as? String ?? "",
-                    senderID: data[FirebaseSchema.NotificationDocument.senderID] as? String ?? "",
-                    type: StitchNotificationType(rawValue: data[FirebaseSchema.NotificationDocument.type] as? String ?? "") ?? .engagementReward,
-                    title: data[FirebaseSchema.NotificationDocument.title] as? String ?? "",
-                    message: data[FirebaseSchema.NotificationDocument.message] as? String ?? "",
-                    payload: data[FirebaseSchema.NotificationDocument.payload] as? [String: Any] ?? [:],
-                    isRead: data[FirebaseSchema.NotificationDocument.isRead] as? Bool ?? false,
-                    createdAt: (data[FirebaseSchema.NotificationDocument.createdAt] as? Timestamp)?.dateValue() ?? Date(),
-                    readAt: (data[FirebaseSchema.NotificationDocument.readAt] as? Timestamp)?.dateValue(),
-                    expiresAt: (data[FirebaseSchema.NotificationDocument.expiresAt] as? Timestamp)?.dateValue()
+                    id: data["id"] as? String ?? doc.documentID,
+                    recipientID: data["recipientID"] as? String ?? "",
+                    senderID: data["senderID"] as? String ?? "",
+                    type: StitchNotificationType(rawValue: data["type"] as? String ?? "system") ?? .system,
+                    title: data["title"] as? String ?? "",
+                    message: data["message"] as? String ?? "",
+                    payload: data["payload"] as? [String: String] ?? [:],
+                    isRead: data["isRead"] as? Bool ?? false,
+                    createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
+                    expiresAt: (data["expiresAt"] as? Timestamp)?.dateValue()
                 )
             }
             
-            // Update local state if this is the first page
-            if lastDocument == nil {
-                await MainActor.run {
-                    self.recentNotifications = notifications
-                    self.unreadCount = notifications.filter { !$0.isRead }.count
-                }
-            }
+            let hasMore = snapshot.documents.count == limit
+            let lastDoc = snapshot.documents.last
             
-            print("📧 NOTIFICATION: Loaded \(notifications.count) notifications for user \(userID)")
-            return (notifications, lastDoc, hasMore)
+            print("🔔 LOADED: \(notifications.count) notifications, hasMore: \(hasMore)")
+            
+            return NotificationLoadResult(
+                notifications: notifications,
+                lastDocument: lastDoc,
+                hasMore: hasMore
+            )
             
         } catch {
-            lastError = "Failed to load notifications: \(error.localizedDescription)"
-            print("❌ NOTIFICATION: Load failed - \(error)")
+            print("❌ NOTIFICATION LOAD ERROR: \(error)")
+            lastError = error
             throw error
         }
     }
     
-    /// Mark notification as read
+    /// Mark notification as read with real Firebase update
     func markNotificationAsRead(notificationID: String) async throws {
+        print("🔔 MARKING READ: \(notificationID)")
         
         do {
-            try await db.collection(FirebaseSchema.Collections.notifications)
+            try await db.collection(notificationsCollection)
                 .document(notificationID)
                 .updateData([
-                    FirebaseSchema.NotificationDocument.isRead: true,
-                    FirebaseSchema.NotificationDocument.readAt: Timestamp()
+                    "isRead": true,
+                    "readAt": FieldValue.serverTimestamp()
                 ])
             
-            // Update local state
-            await MainActor.run {
-                if let index = recentNotifications.firstIndex(where: { $0.id == notificationID }) {
-                    recentNotifications[index].isRead = true
-                    recentNotifications[index].readAt = Date()
-                    unreadCount = max(0, unreadCount - 1)
-                }
-            }
-            
-            print("📧 NOTIFICATION: Marked \(notificationID) as read")
+            print("✅ MARKED READ: \(notificationID)")
             
         } catch {
-            lastError = "Failed to mark notification as read: \(error.localizedDescription)"
-            print("❌ NOTIFICATION: Mark as read failed - \(error)")
+            print("❌ MARK READ ERROR: \(error)")
+            lastError = error
             throw error
         }
     }
     
-    /// Mark all notifications as read for a user
+    /// Mark all notifications as read with real Firebase batch update
     func markAllNotificationsAsRead(for userID: String) async throws {
+        print("🔔 MARKING ALL READ: \(userID)")
         
         do {
-            let batch = db.batch()
-            let unreadNotifications = recentNotifications.filter { !$0.isRead }
+            // Get unread notifications
+            let snapshot = try await db.collection(notificationsCollection)
+                .whereField("recipientID", isEqualTo: userID)
+                .whereField("isRead", isEqualTo: false)
+                .getDocuments()
             
-            for notification in unreadNotifications {
-                let ref = db.collection(FirebaseSchema.Collections.notifications).document(notification.id)
+            // Batch update all unread notifications
+            let batch = db.batch()
+            
+            for document in snapshot.documents {
                 batch.updateData([
-                    FirebaseSchema.NotificationDocument.isRead: true,
-                    FirebaseSchema.NotificationDocument.readAt: Timestamp()
-                ], forDocument: ref)
+                    "isRead": true,
+                    "readAt": FieldValue.serverTimestamp()
+                ], forDocument: document.reference)
             }
             
             try await batch.commit()
             
-            // Update local state
-            await MainActor.run {
-                for i in 0..<recentNotifications.count {
-                    recentNotifications[i].isRead = true
-                    recentNotifications[i].readAt = Date()
-                }
-                unreadCount = 0
-            }
-            
-            print("📧 NOTIFICATION: Marked all notifications as read for \(userID)")
+            print("✅ MARKED ALL READ: \(snapshot.documents.count) notifications")
             
         } catch {
-            lastError = "Failed to mark all notifications as read: \(error.localizedDescription)"
-            print("❌ NOTIFICATION: Mark all as read failed - \(error)")
+            print("❌ MARK ALL READ ERROR: \(error)")
+            lastError = error
             throw error
         }
     }
     
-    /// Get unread notification count for a user
+    /// Get unread count with real Firebase count query
     func getUnreadCount(for userID: String) async throws -> Int {
+        print("🔔 GETTING UNREAD COUNT: \(userID)")
         
         do {
-            let snapshot = try await db.collection(FirebaseSchema.Collections.notifications)
-                .whereField(FirebaseSchema.NotificationDocument.recipientID, isEqualTo: userID)
-                .whereField(FirebaseSchema.NotificationDocument.isRead, isEqualTo: false)
+            let snapshot = try await db.collection(notificationsCollection)
+                .whereField("recipientID", isEqualTo: userID)
+                .whereField("isRead", isEqualTo: false)
                 .count
                 .getAggregation(source: .server)
             
             let count = Int(snapshot.count)
-            
-            await MainActor.run {
-                self.unreadCount = count
-            }
-            
+            print("🔔 UNREAD COUNT: \(count)")
             return count
             
         } catch {
-            lastError = "Failed to get unread count: \(error.localizedDescription)"
-            print("❌ NOTIFICATION: Unread count failed - \(error)")
+            print("❌ UNREAD COUNT ERROR: \(error)")
+            lastError = error
             throw error
         }
     }
     
-    // MARK: - Permission Management
-    
-    /// Request notification permissions
-    func requestNotificationPermissions() async -> Bool {
-        let center = UNUserNotificationCenter.current()
+    /// Create notification with real Firebase write
+    func createNotification(
+        recipientID: String,
+        senderID: String,
+        type: StitchNotificationType,
+        title: String,
+        message: String,
+        payload: [String: String] = [:]
+    ) async throws {
+        print("🔔 CREATING: \(type.rawValue) notification from \(senderID) to \(recipientID)")
+        
+        // Don't send notification to self
+        guard senderID != recipientID else { return }
+        
+        let notification = StitchNotification(
+            recipientID: recipientID,
+            senderID: senderID,
+            type: type,
+            title: title,
+            message: message,
+            payload: payload,
+            expiresAt: Date().addingTimeInterval(30 * 24 * 60 * 60) // 30 days
+        )
         
         do {
-            let granted = try await center.requestAuthorization(options: [.alert, .badge, .sound])
-            
-            await MainActor.run {
-                notificationPermissionStatus = granted ? .authorized : .denied
-            }
-            
-            if granted {
-                await registerForRemoteNotifications()
-            }
-            
-            print("📧 NOTIFICATION: Permissions \(granted ? "granted" : "denied")")
-            return granted
-            
-        } catch {
-            print("❌ NOTIFICATION: Permission request failed - \(error)")
-            await MainActor.run {
-                notificationPermissionStatus = .denied
-            }
-            return false
-        }
-    }
-    
-    /// Register for remote notifications
-    private func registerForRemoteNotifications() async {
-        do {
-            let token = try await messaging.token()
-            await MainActor.run {
-                self.fcmToken = token
-                self.isRegistered = true
-            }
-            
-            print("📧 NOTIFICATION: FCM token registered - \(token.prefix(20))...")
-            
-        } catch {
-            print("❌ NOTIFICATION: FCM registration failed - \(error)")
-        }
-    }
-    
-    // MARK: - Create and Send Notifications
-    
-    /// Create and save a notification to the database
-    func createNotification(_ notification: StitchNotification) async throws {
-        
-        do {
-            // Manual data dictionary creation to avoid Codable issues
+            // Manual data creation to avoid Codable issues
             let data: [String: Any] = [
-                FirebaseSchema.NotificationDocument.id: notification.id,
-                FirebaseSchema.NotificationDocument.recipientID: notification.recipientID,
-                FirebaseSchema.NotificationDocument.senderID: notification.senderID,
-                FirebaseSchema.NotificationDocument.type: notification.type.rawValue,
-                FirebaseSchema.NotificationDocument.title: notification.title,
-                FirebaseSchema.NotificationDocument.message: notification.message,
-                FirebaseSchema.NotificationDocument.payload: notification.payload,
-                FirebaseSchema.NotificationDocument.isRead: notification.isRead,
-                FirebaseSchema.NotificationDocument.createdAt: Timestamp(date: notification.createdAt)
+                "id": notification.id,
+                "recipientID": notification.recipientID,
+                "senderID": notification.senderID,
+                "type": notification.type.rawValue,
+                "title": notification.title,
+                "message": notification.message,
+                "payload": notification.payload,
+                "isRead": notification.isRead,
+                "createdAt": FieldValue.serverTimestamp(),
+                "expiresAt": notification.expiresAt ?? NSNull()
             ]
             
-            // Add optional fields
-            var finalData = data
-            if let readAt = notification.readAt {
-                finalData[FirebaseSchema.NotificationDocument.readAt] = Timestamp(date: readAt)
-            }
-            if let expiresAt = notification.expiresAt {
-                finalData[FirebaseSchema.NotificationDocument.expiresAt] = Timestamp(date: expiresAt)
-            }
-            
-            try await db.collection(FirebaseSchema.Collections.notifications)
+            try await db.collection(notificationsCollection)
                 .document(notification.id)
-                .setData(finalData)
+                .setData(data)
             
-            // Log that notification was created
-            print("📧 NOTIFICATION: Created notification \(notification.id)")
+            print("✅ CREATED: Notification \(notification.id)")
             
-            // Actually send the push notification
-            let success = await FCMPushManager.shared.sendPushNotification(
-                to: notification.recipientID,
-                title: notification.title,
-                body: notification.message,
-                data: notification.payload
-            )
-            
-            if success {
-                print("📧 NOTIFICATION: Push sent successfully")
-            } else {
-                print("📧 NOTIFICATION: Push sending failed - check FCMPushManager configuration")
+            // Show toast for immediate feedback if recipient is current user
+            if recipientID == Auth.auth().currentUser?.uid {
+                let senderUsername = payload["senderUsername"] ?? "Someone"
+                showToast(
+                    type: type,
+                    title: title,
+                    message: message,
+                    senderUsername: senderUsername,
+                    payload: payload
+                )
             }
             
         } catch {
-            lastError = "Failed to create notification: \(error.localizedDescription)"
-            print("❌ NOTIFICATION: Create failed - \(error)")
+            print("❌ CREATE NOTIFICATION ERROR: \(error)")
+            lastError = error
             throw error
         }
     }
     
-    // MARK: - Social Engagement Notifications
+    // MARK: - Toast Management (Real Implementation)
     
-    /// Send notification when user engages with another user's video
-    func sendEngagementInteractionNotification(
-        to videoCreatorID: String,
-        from userInfo: BasicUserInfo,
-        videoID: String,
-        engagementType: String,
-        newHypeCount: Int,
-        newCoolCount: Int,
-        videoTitle: String? = nil
-    ) async throws {
-        
-        // Don't send if user is interacting with their own video
-        guard userInfo.id != videoCreatorID else { return }
-        
-        let actionText = engagementType == "hype" ? "hyped" : "cooled"
-        let emoji = engagementType == "hype" ? "🔥" : "❄️"
-        
-        let payloadDict: [String: Any] = [
-            "videoID": videoID,
-            "senderUsername": userInfo.username,
-            "senderDisplayName": userInfo.displayName,
-            "senderProfileImageURL": userInfo.profileImageURL ?? "",
-            "engagementType": engagementType,
-            "hypeCount": newHypeCount,
-            "coolCount": newCoolCount,
-            "videoTitle": videoTitle ?? ""
-        ]
-        
-        let notification = StitchNotification(
-            id: FirebaseSchema.DocumentIDPatterns.generateNotificationID(),
-            recipientID: videoCreatorID,
-            senderID: userInfo.id,
-            type: .engagementReward,
-            title: "\(emoji) @\(userInfo.username) \(actionText) your video!",
-            message: "Your video now has \(newHypeCount) hypes and \(newCoolCount) cools",
-            payload: payloadDict,
-            isRead: false,
-            createdAt: Date(),
-            expiresAt: Calendar.current.date(byAdding: .day, value: notificationExpirationDays, to: Date())
-        )
-        
-        try await createNotification(notification)
-        print("📧 NOTIFICATION: Sent engagement interaction - \(userInfo.username) \(actionText) video")
+    /// Get toast display duration based on type
+    private func getToastDuration(for type: StitchNotificationType) -> TimeInterval {
+        switch type {
+        case .hype, .cool: return 3.0
+        case .follow: return 4.0
+        case .reply, .mention: return 5.0
+        case .tierUpgrade, .milestone: return 6.0
+        case .system: return 8.0
+        }
     }
     
-    /// Send welcome notification to new users
-    func sendWelcomeNotification(to userID: String, username: String) async throws {
+    /// Show toast notification with real data and auto-dismiss
+    func showToast(
+        type: StitchNotificationType,
+        title: String,
+        message: String,
+        senderUsername: String = "",
+        payload: [String: String] = [:]
+    ) {
+        print("🍞 SHOWING TOAST: \(type.displayName) - \(title)")
         
-        let payloadDict: [String: Any] = [
-            "type": "welcome",
-            "isNewUser": true
-        ]
+        let toast = NotificationToast(
+            type: type,
+            title: title,
+            message: message,
+            senderUsername: senderUsername,
+            payload: payload
+        )
         
-        let notification = StitchNotification(
-            id: FirebaseSchema.DocumentIDPatterns.generateNotificationID(),
+        // Add to pending toasts
+        pendingToasts.append(toast)
+        
+        // Limit number of toasts displayed
+        if pendingToasts.count > maxToastsDisplayed {
+            pendingToasts.removeFirst()
+        }
+        
+        // Auto-dismiss after duration
+        Task {
+            let duration = getToastDuration(for: type)
+            try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            dismissToast(toastID: toast.id)
+        }
+    }
+    
+    /// Dismiss specific toast
+    func dismissToast(toastID: String) {
+        pendingToasts.removeAll { $0.id == toastID }
+        print("🍞 DISMISSED TOAST: \(toastID)")
+    }
+    
+    /// Clear all toasts
+    func clearAllToasts() {
+        pendingToasts.removeAll()
+        print("🍞 CLEARED ALL TOASTS")
+    }
+    
+    // MARK: - Convenience Methods for Common Notifications
+    
+    /// Create hype notification
+    func notifyHype(videoID: String, videoTitle: String, recipientID: String, senderID: String, senderUsername: String) async throws {
+        try await createNotification(
+            recipientID: recipientID,
+            senderID: senderID,
+            type: StitchNotificationType.hype,
+            title: "🔥 Your video got hyped!",
+            message: "\(senderUsername) hyped your video",
+            payload: [
+                "videoID": videoID,
+                "videoTitle": videoTitle,
+                "senderUsername": senderUsername
+            ]
+        )
+    }
+    
+    /// Create follow notification
+    func notifyFollow(recipientID: String, senderID: String, senderUsername: String) async throws {
+        try await createNotification(
+            recipientID: recipientID,
+            senderID: senderID,
+            type: StitchNotificationType.follow,
+            title: "👥 New Follower",
+            message: "\(senderUsername) started following you",
+            payload: [
+                "senderUsername": senderUsername
+            ]
+        )
+    }
+    
+    /// Create reply notification
+    func notifyReply(videoID: String, videoTitle: String, recipientID: String, senderID: String, senderUsername: String) async throws {
+        try await createNotification(
+            recipientID: recipientID,
+            senderID: senderID,
+            type: StitchNotificationType.reply,
+            title: "💬 New Reply",
+            message: "\(senderUsername) replied to your video",
+            payload: [
+                "videoID": videoID,
+                "videoTitle": videoTitle,
+                "senderUsername": senderUsername
+            ]
+        )
+    }
+    
+    /// Create tier upgrade notification
+    func notifyTierUpgrade(userID: String, newTier: UserTier) async throws {
+        try await createNotification(
             recipientID: userID,
             senderID: "system",
-            type: .systemAlert,
-            title: "🎉 Welcome to Stitch Social!",
-            message: "Hey @\(username)! Start creating and engaging with the community to earn hypes and unlock badges.",
-            payload: payloadDict,
-            isRead: false,
-            createdAt: Date(),
-            expiresAt: Calendar.current.date(byAdding: .day, value: 30, to: Date())
+            type: StitchNotificationType.tierUpgrade,
+            title: "🎉 Tier Upgraded!",
+            message: "You've reached \(newTier.displayName) tier!",
+            payload: [
+                "newTier": newTier.rawValue
+            ]
         )
-        
-        try await createNotification(notification)
-        print("📧 WELCOME NOTIFICATION: Sent welcome notification to new user @\(username)")
     }
     
-    /// Send engagement reward notification
-    func sendEngagementRewardNotification(
-        to userID: String,
-        type: EngagementRewardType,
-        details: EngagementRewardDetails
-    ) async throws {
-        
-        let payloadDict: [String: Any] = [
-            "senderID": details.senderID,
-            "engagementCount": details.engagementCount,
-            "streakCount": details.streakCount,
-            "rewardAmount": details.rewardAmount,
-            "type": type.rawValue
-        ]
-        
-        let notification = StitchNotification(
-            id: FirebaseSchema.DocumentIDPatterns.generateNotificationID(),
-            recipientID: userID,
-            senderID: details.senderID,
-            type: .engagementReward,
-            title: "🔥 \(type.notificationTitle)",
-            message: type.notificationMessage(details: details),
-            payload: payloadDict,
-            isRead: false,
-            createdAt: Date(),
-            expiresAt: Calendar.current.date(byAdding: .day, value: notificationExpirationDays, to: Date())
-        )
-        
-        try await createNotification(notification)
-        print("📧 NOTIFICATION: Sent engagement reward - \(type.rawValue)")
-    }
-    
-    /// Send progressive tap milestone notification
-    func sendProgressiveTapMilestone(
-        to userID: String,
-        videoID: String,
-        currentTaps: Int,
-        requiredTaps: Int,
-        milestone: TapMilestone
-    ) async throws {
-        
-        let payloadDict: [String: Any] = [
-            "videoID": videoID,
-            "currentTaps": currentTaps,
-            "requiredTaps": requiredTaps,
-            "milestone": milestone.rawValue
-        ]
-        
-        let notification = StitchNotification(
-            id: FirebaseSchema.DocumentIDPatterns.generateNotificationID(),
-            recipientID: userID,
-            senderID: "system",
-            type: .progressiveTap,
-            title: milestone.notificationTitle,
-            message: milestone.notificationMessage(currentTaps: currentTaps, requiredTaps: requiredTaps),
-            payload: payloadDict,
-            isRead: false,
-            createdAt: Date(),
-            expiresAt: Calendar.current.date(byAdding: .day, value: notificationExpirationDays, to: Date())
-        )
-        
-        try await createNotification(notification)
-        print("📧 NOTIFICATION: Sent progressive tap milestone - \(milestone.rawValue)")
-    }
-    
-    /// Send new follower notification
-    func sendNewFollowerNotification(
-        to userID: String,
-        from follower: BasicUserInfo
-    ) async throws {
-        
-        let payloadDict: [String: Any] = [
-            "followerID": follower.id,
-            "followerUsername": follower.username,
-            "followerDisplayName": follower.displayName,
-            "followerProfileImageURL": follower.profileImageURL ?? "",
-            "followerTier": follower.tier.rawValue,
-            "followerClout": follower.clout
-        ]
-        
-        let notification = StitchNotification(
-            id: FirebaseSchema.DocumentIDPatterns.generateNotificationID(),
-            recipientID: userID,
-            senderID: follower.id,
-            type: .newFollower,
-            title: "👥 New Follower!",
-            message: "@\(follower.username) started following you!",
-            payload: payloadDict,
-            isRead: false,
-            createdAt: Date(),
-            expiresAt: Calendar.current.date(byAdding: .day, value: notificationExpirationDays, to: Date())
-        )
-        
-        try await createNotification(notification)
-        print("📧 NOTIFICATION: Sent new follower - \(follower.username)")
-    }
-    
-    // MARK: - Cleanup Operations
+    // MARK: - Cleanup and Maintenance
     
     /// Clean up expired notifications
     func cleanupExpiredNotifications() async throws {
+        print("🔔 CLEANUP: Starting expired notifications cleanup")
         
-        let expirationDate = Calendar.current.date(byAdding: .day, value: -notificationExpirationDays, to: Date()) ?? Date()
-        
-        let query = db.collection(FirebaseSchema.Collections.notifications)
-            .whereField(FirebaseSchema.NotificationDocument.createdAt, isLessThan: Timestamp(date: expirationDate))
-            .limit(to: 100) // Process in batches
-        
-        let snapshot = try await query.getDocuments()
-        
-        if !snapshot.documents.isEmpty {
+        do {
+            let now = Date()
+            let snapshot = try await db.collection(notificationsCollection)
+                .whereField("expiresAt", isLessThan: now)
+                .getDocuments()
+            
             let batch = db.batch()
             
             for document in snapshot.documents {
@@ -488,152 +378,134 @@ class NotificationService: NSObject, ObservableObject {
             }
             
             try await batch.commit()
-            print("📧 NOTIFICATION: Cleaned up \(snapshot.documents.count) expired notifications")
+            
+            print("🔔 CLEANUP: Deleted \(snapshot.documents.count) expired notifications")
+            
+        } catch {
+            print("❌ CLEANUP ERROR: \(error)")
+            throw error
         }
     }
-}
-
-// MARK: - Firebase Messaging Delegate
-
-extension NotificationService: MessagingDelegate {
     
-    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        print("📧 NOTIFICATION: FCM token refreshed - \(fcmToken?.prefix(20) ?? "nil")...")
+    // MARK: - Real-time Listeners (Production Ready)
+    
+    private var notificationListener: ListenerRegistration?
+    
+    /// Start real-time notification listener
+    func startNotificationListener(for userID: String) {
+        print("🔔 STARTING: Real-time listener for \(userID)")
         
-        Task { @MainActor in
-            self.fcmToken = fcmToken
-            self.isRegistered = fcmToken != nil
+        notificationListener = db.collection(notificationsCollection)
+            .whereField("recipientID", isEqualTo: userID)
+            .whereField("isRead", isEqualTo: false)
+            .order(by: "createdAt", descending: true)
+            .addSnapshotListener { [weak self] snapshot, error in
+                if let error = error {
+                    print("❌ LISTENER ERROR: \(error)")
+                    return
+                }
+                
+                guard let snapshot = snapshot else { return }
+                
+                // Handle new notifications
+                for change in snapshot.documentChanges {
+                    if change.type == .added {
+                        let data = change.document.data()
+                        let notification = StitchNotification(
+                            id: data["id"] as? String ?? change.document.documentID,
+                            recipientID: data["recipientID"] as? String ?? "",
+                            senderID: data["senderID"] as? String ?? "",
+                            type: StitchNotificationType(rawValue: data["type"] as? String ?? "system") ?? .system,
+                            title: data["title"] as? String ?? "",
+                            message: data["message"] as? String ?? "",
+                            payload: data["payload"] as? [String: String] ?? [:],
+                            isRead: data["isRead"] as? Bool ?? false,
+                            createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
+                            expiresAt: (data["expiresAt"] as? Timestamp)?.dateValue()
+                        )
+                        
+                        Task { @MainActor in
+                            self?.handleNewNotification(notification)
+                        }
+                    }
+                }
+            }
+    }
+    
+    /// Stop notification listener
+    func stopNotificationListener() {
+        notificationListener?.remove()
+        notificationListener = nil
+        print("🔔 STOPPED: Real-time listener")
+    }
+    
+    /// Handle new notification from real-time listener
+    private func handleNewNotification(_ notification: StitchNotification) {
+        print("🔔 NEW NOTIFICATION: \(notification.type.rawValue)")
+        
+        let senderUsername = notification.payload["senderUsername"] ?? "Someone"
+        
+        showToast(
+            type: notification.type,
+            title: notification.title,
+            message: notification.message,
+            senderUsername: senderUsername,
+            payload: notification.payload
+        )
+    }
+}
+
+// MARK: - Error Handling
+
+extension NotificationService {
+    enum NotificationError: LocalizedError {
+        case userNotFound
+        case invalidNotification
+        case firebaseError(Error)
+        
+        var errorDescription: String? {
+            switch self {
+            case .userNotFound:
+                return "User not found"
+            case .invalidNotification:
+                return "Invalid notification data"
+            case .firebaseError(let error):
+                return "Firebase error: \(error.localizedDescription)"
+            }
         }
     }
 }
 
-// MARK: - Supporting Types
+// MARK: - Preview/Testing Support
 
-/// Notification permission status
-enum NotificationPermissionStatus {
-    case notDetermined
-    case denied
-    case authorized
-    case provisional
-}
-
-/// Core notification structure for database storage
-struct StitchNotification: Identifiable {
-    let id: String
-    let recipientID: String
-    let senderID: String
-    let type: StitchNotificationType
-    let title: String
-    let message: String
-    let payload: [String: Any]
-    var isRead: Bool
-    let createdAt: Date
-    var readAt: Date?
-    let expiresAt: Date?
-    
-    init(
-        id: String = UUID().uuidString,
-        recipientID: String,
-        senderID: String,
-        type: StitchNotificationType,
-        title: String,
-        message: String,
-        payload: [String: Any] = [:],
-        isRead: Bool = false,
-        createdAt: Date = Date(),
-        readAt: Date? = nil,
-        expiresAt: Date? = nil
-    ) {
-        self.id = id
-        self.recipientID = recipientID
-        self.senderID = senderID
-        self.type = type
-        self.title = title
-        self.message = message
-        self.payload = payload
-        self.isRead = isRead
-        self.createdAt = createdAt
-        self.readAt = readAt
-        self.expiresAt = expiresAt
-    }
-}
-
-/// Notification types for the Stitch Social platform
-enum StitchNotificationType: String, CaseIterable, Codable {
-    case engagementReward = "engagement_reward"
-    case progressiveTap = "progressive_tap"
-    case badgeUnlock = "badge_unlock"
-    case tierAdvancement = "tier_advancement"
-    case newFollower = "new_follower"
-    case videoReply = "video_reply"
-    case mention = "mention"
-    case systemAlert = "system_alert"
-}
-
-/// Engagement reward types
-enum EngagementRewardType: String, Codable, CaseIterable {
-    case firstHype = "first_hype"
-    case tapMilestone = "tap_milestone"
-    case viralVideo = "viral_video"
-    case engagementStreak = "engagement_streak"
-    
-    var notificationTitle: String {
-        switch self {
-        case .firstHype: return "🔥 First Hype!"
-        case .tapMilestone: return "👆 Tap Milestone!"
-        case .viralVideo: return "🚀 Viral Video!"
-        case .engagementStreak: return "⚡ Engagement Streak!"
-        }
-    }
-    
-    func notificationMessage(details: EngagementRewardDetails) -> String {
-        switch self {
-        case .firstHype:
-            return "You got your first hype! The community is feeling your vibe."
-        case .tapMilestone:
-            return "You've reached a tap milestone! Your persistence is paying off."
-        case .viralVideo:
-            return "Your video is going viral with \(details.engagementCount) engagements!"
-        case .engagementStreak:
-            return "You're on fire! \(details.streakCount) day engagement streak!"
-        }
-    }
-}
-
-/// Engagement reward details structure
-struct EngagementRewardDetails {
-    let senderID: String
-    let engagementCount: Int
-    let streakCount: Int
-    let rewardAmount: Double  // Changed back to Double to match usage
-}
-
-/// Tap milestone enumeration
-enum TapMilestone: String, CaseIterable {
-    case quarter = "quarter"
-    case half = "half"
-    case threeQuarters = "three_quarters"
-    case complete = "complete"
-    
-    var notificationTitle: String {
-        switch self {
-        case .quarter: return "👆 25% There!"
-        case .half: return "👆 Halfway!"
-        case .threeQuarters: return "👆 Almost There!"
-        case .complete: return "🎉 Tap Complete!"
-        }
-    }
-    
-    func notificationMessage(currentTaps: Int, requiredTaps: Int) -> String {
-        switch self {
-        case .quarter:
-            return "You've made \(currentTaps) taps! Keep going to reach \(requiredTaps)."
-        case .half:
-            return "Halfway there! \(currentTaps) of \(requiredTaps) taps completed."
-        case .threeQuarters:
-            return "So close! \(currentTaps) of \(requiredTaps) taps - almost unlocked!"
-        case .complete:
-            return "Amazing! You completed all \(requiredTaps) taps and unlocked the content!"
-        }
+extension NotificationService {
+    /// Create sample notifications for testing
+    static func createSampleNotifications(for userID: String) -> [StitchNotification] {
+        return [
+            StitchNotification(
+                recipientID: userID,
+                senderID: "user123",
+                type: StitchNotificationType.hype,
+                title: "🔥 Your video got hyped!",
+                message: "testuser hyped your video 'Cool Dance'",
+                payload: ["senderUsername": "testuser", "videoTitle": "Cool Dance"]
+            ),
+            StitchNotification(
+                recipientID: userID,
+                senderID: "user456",
+                type: StitchNotificationType.follow,
+                title: "👥 New Follower",
+                message: "newuser started following you",
+                payload: ["senderUsername": "newuser"]
+            ),
+            StitchNotification(
+                recipientID: userID,
+                senderID: "system",
+                type: StitchNotificationType.tierUpgrade,
+                title: "🎉 Tier Upgraded!",
+                message: "You've reached Rising tier!",
+                payload: ["newTier": "rising"]
+            )
+        ]
     }
 }
