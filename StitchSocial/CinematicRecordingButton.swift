@@ -2,8 +2,8 @@
 //  CinematicRecordingButton.swift
 //  StitchSocial
 //
-//  REDESIGNED: Matches CustomDippedTabBar create button style
-//  Glassmorphism design with gradient backgrounds and shadows
+//  FIXED: Pure UI component with external action handler
+//  Removed internal recording logic - now controlled externally by RecordingController
 //
 
 import SwiftUI
@@ -11,7 +11,7 @@ import SwiftUI
 struct CinematicRecordingButton: View {
     @Binding var isRecording: Bool
     @Binding var videoCoordinator: VideoCoordinator?
-    let onRecordingComplete: () -> Void
+    let onButtonTap: () -> Void  // FIXED: Changed from onRecordingComplete to onButtonTap
     
     // Animation states
     @State private var pulseAnimation = false
@@ -21,7 +21,7 @@ struct CinematicRecordingButton: View {
     private let buttonSize: CGFloat = 68
     
     var body: some View {
-        Button(action: toggleRecording) {
+        Button(action: handleButtonTap) {  // FIXED: Use external handler only
             ZStack {
                 // Main glassmorphism background (matching create button)
                 Circle()
@@ -132,9 +132,9 @@ struct CinematicRecordingButton: View {
         }
     }
     
-    // MARK: - Actions
+    // MARK: - FIXED: External Action Handler
     
-    private func toggleRecording() {
+    private func handleButtonTap() {
         // Haptic feedback (matching create button)
         let impact = UIImpactFeedbackGenerator(style: .heavy)
         impact.impactOccurred()
@@ -150,26 +150,11 @@ struct CinematicRecordingButton: View {
             }
         }
         
-        // Toggle recording state
-        if isRecording {
-            stopRecording()
-        } else {
-            startRecording()
-        }
+        // FIXED: Call external handler instead of internal logic
+        onButtonTap()
     }
     
-    private func startRecording() {
-        isRecording = true
-        startAnimations()
-    }
-    
-    private func stopRecording() {
-        isRecording = false
-        stopAnimations()
-        onRecordingComplete()
-    }
-    
-    // MARK: - Animations
+    // MARK: - Pure Visual Animations Only
     
     private func startAnimations() {
         pulseAnimation = true

@@ -1,12 +1,8 @@
 //
 //  RecordingController.swift
-//  CleanBeta
+//  StitchSocial
 //
-//  Layer 5: Business Logic - Recording Flow Controller
-//  Complete fix with VideoCoordinator integration and background thread handling
-//  FIXED: Added processSelectedVideo method for gallery video processing
-//  FIXED: Added public accessors for videoCoordinator properties
-//  URGENT FIX: Replaced StreamlinedCameraManager with CinematicCameraManager for iPhone compatibility
+//  FIXED: Retain cycle issues causing crashes on exit + tier-based recording durations
 //
 
 import Foundation
@@ -14,7 +10,7 @@ import SwiftUI
 @preconcurrency import AVFoundation
 import FirebaseStorage
 
-// MARK: - Data Models and Types (MUST BE FIRST)
+// MARK: - Data Models and Types
 
 enum RecordingContext {
     case newThread
@@ -112,7 +108,7 @@ struct VideoMetadata {
     var aiSuggestedHashtags: [String] = []
 }
 
-// MARK: - Recording Controller (FIXED with VideoCoordinator Integration)
+// MARK: - Recording Controller (FIXED RETAIN CYCLES + TIER-BASED)
 
 @MainActor
 class RecordingController: ObservableObject {
@@ -127,37 +123,62 @@ class RecordingController: ObservableObject {
     @Published var aiAnalysisResult: VideoAnalysisResult?
     @Published var recordedVideoURL: URL?
     
-    // MARK: - Dependencies (FIXED - Added VideoCoordinator)
+    // MARK: - Recording Timer State (FIXED)
+    
+    private var recordingTimer: Timer?  // FIXED: Not @Published to avoid main actor issues in deinit
+    @Published var recordingDuration: TimeInterval = 0
+    @Published var recordingStartTime: Date?
+    
+    // MARK: - Dependencies
     
     private let videoService: VideoService
     private let authService: AuthService
     private let aiAnalyzer: AIVideoAnalyzer
-    private let videoCoordinator: VideoCoordinator // NEW: Post-processing coordinator
-    let cameraManager: CinematicCameraManager // URGENT FIX: Changed from StreamlinedCameraManager to CinematicCameraManager
+    private let videoCoordinator: VideoCoordinator
+    let cameraManager: CinematicCameraManager
     
-    // MARK: - Configuration
+    // MARK: - Configuration - TIER-BASED RECORDING DURATIONS
     
     let recordingContext: RecordingContext
+    private let recordingTickInterval: TimeInterval = 0.1
     
-    // MARK: - Initialization (FIXED - Initialize VideoCoordinator)
+    // Tier-based recording durations
+    private var maxRecordingDuration: TimeInterval {
+        guard let currentUser = authService.currentUser else { return 30.0 }
+        
+        switch currentUser.tier {
+        case .founder, .coFounder:
+            return 0  // Unlimited recording
+        case .partner, .legendary, .topCreator:
+            return 120.0  // 2 minutes
+        default:
+            return 30.0   // 30 seconds
+        }
+    }
+    
+    private var isUnlimitedRecording: Bool {
+        guard let currentUser = authService.currentUser else { return false }
+        return currentUser.tier == .founder || currentUser.tier == .coFounder
+    }
+    
+    // MARK: - Initialization
     
     init(recordingContext: RecordingContext) {
         self.recordingContext = recordingContext
         self.videoService = VideoService()
         self.authService = AuthService()
         self.aiAnalyzer = AIVideoAnalyzer()
-        self.cameraManager = CinematicCameraManager.shared // URGENT FIX: Use shared CinematicCameraManager instance
+        self.cameraManager = CinematicCameraManager.shared
         
-        // NEW: Initialize VideoCoordinator with all dependencies
         self.videoCoordinator = VideoCoordinator(
             videoService: videoService,
             aiAnalyzer: aiAnalyzer,
             videoProcessor: VideoProcessingService(),
             uploadService: VideoUploadService(),
-            cachingService: nil // Optional caching service
+            cachingService: nil
         )
         
-        print("🎬 RECORDING CONTROLLER: Initialized with CinematicCameraManager and VideoCoordinator integration")
+        print("🎬 RECORDING CONTROLLER: Initialized with tier-based recording")
     }
     
     // MARK: - Camera Management
@@ -173,26 +194,34 @@ class RecordingController: ObservableObject {
     }
     
     func stopCameraSession() async {
+        // FIXED: Direct timer cleanup to prevent retain cycles
+        stopRecordingTimer()
         await cameraManager.stopSession()
         print("✅ CONTROLLER: Camera session stopped")
     }
     
-    // MARK: - Recording Workflow (FIXED with VideoCoordinator)
+    // MARK: - Recording Workflow (TIER-BASED)
     
     func startRecording() {
         guard currentPhase == .ready else { return }
         
         currentPhase = .recording
         recordingPhase = .recording
+        recordingStartTime = Date()
+        recordingDuration = 0
         
-        // Start recording with VideoCoordinator integration
+        if !isUnlimitedRecording {
+            startRecordingTimer()
+        }
+        
+        // FIXED: Use weak self in camera callback to prevent retain cycle
         cameraManager.startRecording { [weak self] videoURL in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 await self?.handleRecordingCompleted(videoURL)
             }
         }
        
-        print("🎬 RECORDING: Started with VideoCoordinator integration")
+        print("🎬 RECORDING: Started - Tier: \(authService.currentUser?.tier.rawValue ?? "unknown"), Duration: \(isUnlimitedRecording ? "Unlimited" : "\(maxRecordingDuration)s")")
     }
     
     func stopRecording() {
@@ -200,28 +229,100 @@ class RecordingController: ObservableObject {
         
         currentPhase = .stopping
         recordingPhase = .stopping
+        
+        stopRecordingTimer()
         cameraManager.stopRecording()
         
-        print("🎬 RECORDING: Stopping...")
+        print("🎬 RECORDING: Stopped at \(String(format: "%.1f", recordingDuration))s")
     }
     
-    // MARK: - Gallery Video Processing - NEW METHOD
+    // MARK: - Recording Timer Management (FIXED)
     
-    /// Process video selected from gallery through VideoCoordinator workflow
+    private func startRecordingTimer() {
+        stopRecordingTimer()
+        
+        // FIXED: Proper weak self handling to prevent retain cycles
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: recordingTickInterval, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            Task { @MainActor [weak self] in
+                self?.updateRecordingDuration()
+            }
+        }
+        
+        print("⏱️ TIMER: Recording timer started")
+    }
+    
+    func stopRecordingTimer() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        print("⏱️ TIMER: Recording timer stopped")
+    }
+    
+    private func updateRecordingDuration() {
+        guard let startTime = recordingStartTime else { return }
+        
+        recordingDuration = Date().timeIntervalSince(startTime)
+        
+        if !isUnlimitedRecording && recordingDuration >= maxRecordingDuration {
+            print("⏱️ AUTO-STOP: Maximum duration reached (\(maxRecordingDuration)s)")
+            handleAutoStop()
+        }
+    }
+    
+    private func handleAutoStop() {
+        guard currentPhase == .recording else { return }
+        print("🛑 AUTO-STOP: Automatically stopping recording")
+        stopRecording()
+    }
+    
+    // MARK: - Duration Helper Properties (TIER-BASED)
+    
+    var formattedRecordingDuration: String {
+        let minutes = Int(recordingDuration) / 60
+        let seconds = Int(recordingDuration) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+    
+    var recordingProgress: Double {
+        if isUnlimitedRecording { return 0.0 }
+        return min(recordingDuration / maxRecordingDuration, 1.0)
+    }
+    
+    var recordingLimitText: String {
+        guard let currentUser = authService.currentUser else { return "30s limit" }
+        
+        switch currentUser.tier {
+        case .founder, .coFounder:
+            return "Unlimited"
+        case .partner, .legendary, .topCreator:
+            return "2min limit"
+        default:
+            return "30s limit"
+        }
+    }
+    
+    var timeRemainingText: String {
+        if isUnlimitedRecording { return "∞" }
+        
+        let remaining = maxRecordingDuration - recordingDuration
+        if remaining <= 0 { return "00:00" }
+        
+        let minutes = Int(remaining) / 60
+        let seconds = Int(remaining) % 60
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+    
+    // MARK: - Gallery Video Processing
+    
     func processSelectedVideo(_ videoURL: URL) async {
         print("📱 RECORDING CONTROLLER: Processing gallery-selected video")
-        print("📱 VIDEO URL: \(videoURL)")
-        
-        // Set the recorded video URL and update states
         recordedVideoURL = videoURL
         currentPhase = .aiProcessing
         recordingPhase = .aiProcessing
-        
-        // Trigger the same processing workflow as recorded videos
         await handleRecordingCompleted(videoURL)
     }
     
-    // MARK: - Post-Recording Processing (FIXED - Use VideoCoordinator)
+    // MARK: - Post-Recording Processing
     
     private func handleRecordingCompleted(_ videoURL: URL?) async {
         guard let videoURL = videoURL else {
@@ -234,8 +335,6 @@ class RecordingController: ObservableObject {
         recordingPhase = .aiProcessing
         
         print("🎬 POST-PROCESSING: Starting VideoCoordinator workflow")
-        
-        // NEW: Use VideoCoordinator for complete post-processing
         await processVideoWithCoordinator(videoURL: videoURL)
     }
     
@@ -248,97 +347,47 @@ class RecordingController: ObservableObject {
         do {
             print("🎬 VIDEO COORDINATOR: Starting complete post-processing workflow")
             
-            // Call VideoCoordinator for complete workflow:
-            // Recording → AI Analysis → Compression → Upload → Feed Integration
             let createdVideo = try await videoCoordinator.processVideoCreation(
                 recordedVideoURL: videoURL,
                 recordingContext: recordingContext,
-               userID: currentUser.id,
+                userID: currentUser.id,
                 userTier: currentUser.tier
             )
             
-            print("✅ VIDEO COORDINATOR: Post-processing completed successfully")
-            print("✅ CREATED VIDEO: \(createdVideo.title) (ID: \(createdVideo.id))")
-            
-            // Update UI state
-            currentPhase = .complete
-            recordingPhase = .complete
-            
-            // Store the AI result if available
-            aiAnalysisResult = videoCoordinator.aiAnalysisResult
-            
-            // Apply AI results to metadata if available
-            if let aiResult = aiAnalysisResult {
-                videoMetadata.title = aiResult.title
-                videoMetadata.description = aiResult.description
-                videoMetadata.hashtags = aiResult.hashtags
-                videoMetadata.aiAnalysisComplete = true
-                
-                print("✅ AI RESULTS: Applied to metadata")
-                print("✅ TITLE: '\(aiResult.title)'")
-                print("✅ HASHTAGS: \(aiResult.hashtags)")
-            } else {
-                print("📝 MANUAL MODE: No AI results - user will create content manually")
-            }
+            print("✅ VIDEO COORDINATOR: Processing complete")
+            await handleVideoCreationSuccess(createdVideo)
             
         } catch {
-            print("❌ VIDEO COORDINATOR: Post-processing failed - \(error.localizedDescription)")
-            handleRecordingError("Post-processing failed: \(error.localizedDescription)")
+            print("❌ VIDEO COORDINATOR: Processing failed - \(error)")
+            handleRecordingError("Video processing failed: \(error.localizedDescription)")
         }
     }
     
-    // MARK: - Legacy Handlers (Updated)
-    
-    func handleVideoRecorded(_ url: URL) {
-        // This is now handled by handleRecordingCompleted
-        recordedVideoURL = url
-        currentPhase = .aiProcessing
-    }
-    
-    func handleRecordingStateChanged(_ phase: RecordingPhase) {
-        recordingPhase = phase
+    private func handleVideoCreationSuccess(_ video: CoreVideoMetadata) async {
+        print("🎉 VIDEO CREATION: Success! Video ID: \(video.id)")
         
-        // Update current phase to match
-        switch phase {
-        case .ready:
-            currentPhase = .ready
-        case .recording:
-            currentPhase = .recording
-        case .stopping:
-            currentPhase = .stopping
-        case .aiProcessing:
-            currentPhase = .aiProcessing
-        case .complete:
-            currentPhase = .complete
-        case .error(let message):
-            currentPhase = .error(message)
+        currentPhase = .complete
+        recordingPhase = .complete
+        
+        // Store AI result if available from coordinator
+        aiAnalysisResult = videoCoordinator.aiAnalysisResult
+        
+        if let aiResult = aiAnalysisResult {
+            videoMetadata.title = aiResult.title
+            videoMetadata.description = aiResult.description
+            videoMetadata.hashtags = aiResult.hashtags
+            videoMetadata.aiAnalysisComplete = true
+            
+            print("✅ AI RESULTS: Applied to metadata")
+            print("✅ TITLE: '\(aiResult.title)'")
+        } else {
+            print("🔍 MANUAL MODE: No AI results - user will create content manually")
         }
     }
+    
+    // MARK: - Legacy Handlers
     
     func handleAIAnalysisComplete(_ result: VideoAnalysisResult?) {
-        print("🧠 DEBUG: AI analysis completed")
-        print("🧠 DEBUG: Result exists: \(result != nil)")
-        
-        if let result = result {
-            print("🧠 DEBUG: AI title: '\(result.title)'")
-            print("🧠 DEBUG: AI description: '\(result.description)'")
-            print("🧠 DEBUG: AI hashtags: \(result.hashtags)")
-            
-            // Apply AI results to metadata
-            videoMetadata.title = result.title
-            videoMetadata.description = result.description
-            videoMetadata.hashtags = Array(Set(result.hashtags))
-            videoMetadata.aiSuggestedTitles = [
-                result.title,
-                "\(result.title) 🔥",
-                "\(result.title) - What do you think?"
-            ]
-            videoMetadata.aiSuggestedHashtags = result.hashtags
-        } else {
-            print("🧠 DEBUG: AI analysis returned nil - user will create content manually")
-        }
-        
-        // Store AI result and transition to metadata input
         aiAnalysisResult = result
         videoMetadata.aiAnalysisComplete = true
         currentPhase = .complete
@@ -360,6 +409,7 @@ class RecordingController: ObservableObject {
     // MARK: - Error Handling
     
     private func handleRecordingError(_ message: String) {
+        stopRecordingTimer()
         errorMessage = message
         currentPhase = .error(message)
         recordingPhase = .error(message)
@@ -371,6 +421,8 @@ class RecordingController: ObservableObject {
         errorMessage = nil
         currentPhase = .ready
         recordingPhase = .ready
+        recordingDuration = 0
+        recordingStartTime = nil
     }
     
     // MARK: - Helper Methods
@@ -379,25 +431,30 @@ class RecordingController: ObservableObject {
         videoMetadata = VideoMetadata()
     }
     
-    // MARK: - VideoCoordinator Public Access (ADDED - Fix for compilation errors)
+    // MARK: - VideoCoordinator Public Access
     
-    /// Access to videoCoordinator's current task for UI display
     var currentTask: String {
         videoCoordinator.currentTask
     }
     
-    /// Access to videoCoordinator's progress for UI display
     var coordinatorProgress: Double {
         videoCoordinator.overallProgress
     }
     
-    /// Access to videoCoordinator's processing state
     var coordinatorIsProcessing: Bool {
         videoCoordinator.isProcessing
     }
     
-    /// Access to videoCoordinator's current phase
     var coordinatorCurrentPhase: VideoCreationPhase {
         videoCoordinator.currentPhase
+    }
+    
+    // MARK: - Cleanup (FIXED)
+    
+    deinit {
+        // FIXED: Don't create Task in deinit - direct timer cleanup only
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        print("🎬 RECORDING CONTROLLER: Deinitialized")
     }
 }

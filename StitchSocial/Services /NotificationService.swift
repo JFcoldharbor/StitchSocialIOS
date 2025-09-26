@@ -3,15 +3,15 @@
 //  StitchSocial
 //
 //  Layer 4: Core Services - Complete Notification Management with Firebase
-//  Dependencies: UserTier (Layer 1), Config (Layer 3), FirebaseSchema (Layer 3)
-//  COMPLETE IMPLEMENTATION: Real Firebase integration, uses existing types
+//  Dependencies: UserTier (Layer 1), Config (Layer 3), FirebaseSchema (Layer 3), FCMPushManager (Layer 4)
+//  COMPLETE IMPLEMENTATION: Real Firebase integration, uses existing types, FCM push notifications
 //
 
 import Foundation
 import FirebaseFirestore
 import FirebaseAuth
 
-/// Complete notification service with real Firebase integration
+/// Complete notification service with real Firebase integration and push notifications
 @MainActor
 class NotificationService: ObservableObject {
     
@@ -34,10 +34,10 @@ class NotificationService: ObservableObject {
     // MARK: - Initialization
     
     init() {
-        print("🔔 NOTIFICATION SERVICE: Initialized with Firebase integration")
+        print("📔 NOTIFICATION SERVICE: Initialized with Firebase integration and FCM push notifications")
     }
     
-    // MARK: - REAL FIREBASE IMPLEMENTATION
+    // MARK: - REAL FIREBASE IMPLEMENTATION WITH FCM INTEGRATION
     
     /// Load notifications with actual Firebase pagination
     func loadNotifications(
@@ -45,7 +45,7 @@ class NotificationService: ObservableObject {
         limit: Int = 20,
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> NotificationLoadResult {
-        print("🔔 LOADING: Notifications for user \(userID)")
+        print("📔 LOADING: Notifications for user \(userID)")
         
         isLoading = true
         defer { isLoading = false }
@@ -84,7 +84,7 @@ class NotificationService: ObservableObject {
             let hasMore = snapshot.documents.count == limit
             let lastDoc = snapshot.documents.last
             
-            print("🔔 LOADED: \(notifications.count) notifications, hasMore: \(hasMore)")
+            print("📔 LOADED: \(notifications.count) notifications, hasMore: \(hasMore)")
             
             return NotificationLoadResult(
                 notifications: notifications,
@@ -101,7 +101,7 @@ class NotificationService: ObservableObject {
     
     /// Mark notification as read with real Firebase update
     func markNotificationAsRead(notificationID: String) async throws {
-        print("🔔 MARKING READ: \(notificationID)")
+        print("📔 MARKING READ: \(notificationID)")
         
         do {
             try await db.collection(notificationsCollection)
@@ -122,7 +122,7 @@ class NotificationService: ObservableObject {
     
     /// Mark all notifications as read with real Firebase batch update
     func markAllNotificationsAsRead(for userID: String) async throws {
-        print("🔔 MARKING ALL READ: \(userID)")
+        print("📔 MARKING ALL READ: \(userID)")
         
         do {
             // Get unread notifications
@@ -154,7 +154,7 @@ class NotificationService: ObservableObject {
     
     /// Get unread count with real Firebase count query
     func getUnreadCount(for userID: String) async throws -> Int {
-        print("🔔 GETTING UNREAD COUNT: \(userID)")
+        print("📔 GETTING UNREAD COUNT: \(userID)")
         
         do {
             let snapshot = try await db.collection(notificationsCollection)
@@ -164,7 +164,7 @@ class NotificationService: ObservableObject {
                 .getAggregation(source: .server)
             
             let count = Int(snapshot.count)
-            print("🔔 UNREAD COUNT: \(count)")
+            print("📔 UNREAD COUNT: \(count)")
             return count
             
         } catch {
@@ -174,7 +174,7 @@ class NotificationService: ObservableObject {
         }
     }
     
-    /// Create notification with real Firebase write
+    /// Create notification with real Firebase write AND push notification using FCMPushManager
     func createNotification(
         recipientID: String,
         senderID: String,
@@ -183,7 +183,7 @@ class NotificationService: ObservableObject {
         message: String,
         payload: [String: String] = [:]
     ) async throws {
-        print("🔔 CREATING: \(type.rawValue) notification from \(senderID) to \(recipientID)")
+        print("📔 CREATING: \(type.rawValue) notification from \(senderID) to \(recipientID)")
         
         // Don't send notification to self
         guard senderID != recipientID else { return }
@@ -218,6 +218,20 @@ class NotificationService: ObservableObject {
                 .setData(data)
             
             print("✅ CREATED: Notification \(notification.id)")
+            
+            // NEW: Send push notification using FCMPushManager
+            let pushSuccess = await FCMPushManager.shared.sendPushNotification(
+                to: recipientID,
+                title: title,
+                body: message,
+                data: payload.merging(["type": type.rawValue]) { _, new in new }
+            )
+            
+            if pushSuccess {
+                print("📱 PUSH: Successfully sent push notification to \(recipientID)")
+            } else {
+                print("⚠️ PUSH: Failed to send push notification to \(recipientID)")
+            }
             
             // Show toast for immediate feedback if recipient is current user
             if recipientID == Auth.auth().currentUser?.uid {
@@ -299,7 +313,7 @@ class NotificationService: ObservableObject {
     
     // MARK: - Convenience Methods for Common Notifications
     
-    /// Create hype notification
+    /// Create hype notification with push notification
     func notifyHype(videoID: String, videoTitle: String, recipientID: String, senderID: String, senderUsername: String) async throws {
         try await createNotification(
             recipientID: recipientID,
@@ -315,7 +329,7 @@ class NotificationService: ObservableObject {
         )
     }
     
-    /// Create follow notification
+    /// Create follow notification with push notification
     func notifyFollow(recipientID: String, senderID: String, senderUsername: String) async throws {
         try await createNotification(
             recipientID: recipientID,
@@ -329,7 +343,7 @@ class NotificationService: ObservableObject {
         )
     }
     
-    /// Create reply notification
+    /// Create reply notification with push notification
     func notifyReply(videoID: String, videoTitle: String, recipientID: String, senderID: String, senderUsername: String) async throws {
         try await createNotification(
             recipientID: recipientID,
@@ -345,7 +359,7 @@ class NotificationService: ObservableObject {
         )
     }
     
-    /// Create tier upgrade notification
+    /// Create tier upgrade notification with push notification
     func notifyTierUpgrade(userID: String, newTier: UserTier) async throws {
         try await createNotification(
             recipientID: userID,
@@ -363,7 +377,7 @@ class NotificationService: ObservableObject {
     
     /// Clean up expired notifications
     func cleanupExpiredNotifications() async throws {
-        print("🔔 CLEANUP: Starting expired notifications cleanup")
+        print("📔 CLEANUP: Starting expired notifications cleanup")
         
         do {
             let now = Date()
@@ -379,7 +393,7 @@ class NotificationService: ObservableObject {
             
             try await batch.commit()
             
-            print("🔔 CLEANUP: Deleted \(snapshot.documents.count) expired notifications")
+            print("📔 CLEANUP: Deleted \(snapshot.documents.count) expired notifications")
             
         } catch {
             print("❌ CLEANUP ERROR: \(error)")
@@ -393,7 +407,7 @@ class NotificationService: ObservableObject {
     
     /// Start real-time notification listener
     func startNotificationListener(for userID: String) {
-        print("🔔 STARTING: Real-time listener for \(userID)")
+        print("📔 STARTING: Real-time listener for \(userID)")
         
         notificationListener = db.collection(notificationsCollection)
             .whereField("recipientID", isEqualTo: userID)
@@ -436,12 +450,12 @@ class NotificationService: ObservableObject {
     func stopNotificationListener() {
         notificationListener?.remove()
         notificationListener = nil
-        print("🔔 STOPPED: Real-time listener")
+        print("📔 STOPPED: Real-time listener")
     }
     
     /// Handle new notification from real-time listener
     private func handleNewNotification(_ notification: StitchNotification) {
-        print("🔔 NEW NOTIFICATION: \(notification.type.rawValue)")
+        print("📔 NEW NOTIFICATION: \(notification.type.rawValue)")
         
         let senderUsername = notification.payload["senderUsername"] ?? "Someone"
         
@@ -462,6 +476,7 @@ extension NotificationService {
         case userNotFound
         case invalidNotification
         case firebaseError(Error)
+        case fcmError(String)
         
         var errorDescription: String? {
             switch self {
@@ -471,6 +486,8 @@ extension NotificationService {
                 return "Invalid notification data"
             case .firebaseError(let error):
                 return "Firebase error: \(error.localizedDescription)"
+            case .fcmError(let message):
+                return "Push notification error: \(message)"
             }
         }
     }
