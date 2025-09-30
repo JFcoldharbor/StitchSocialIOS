@@ -5,6 +5,7 @@
 //  Layer 5: Business Logic - Video Quality Assessment & Compression Optimization
 //  Dependencies: Foundation only - PURE FUNCTIONS ONLY
 //  Critical for 28MB → 2-3MB compression and feed content ranking
+//  UPDATED: Duration-based tiered compression with user tier privileges
 //
 
 import Foundation
@@ -43,7 +44,66 @@ struct VideoCompressionSettings {
 
 /// Pure calculation functions for video quality assessment and compression optimization
 /// Enables 90% file size reduction while maintaining visual quality for mobile optimization
+/// UPDATED: Duration-based tiered compression with user privilege system
 struct VideoQualityAnalyzer {
+    
+    // MARK: - DURATION-BASED TIERED COMPRESSION (NEW)
+    
+    /// Calculate optimal resolution based on video duration and user tier
+    /// 0-2 min: 1440p | 2-5 min: 1080p | 5+ min: 720p (unless premium user)
+    /// Premium users (ambassadors, partners, etc.) get quality boost for long videos
+    static func calculateOptimalResolution(
+        duration: TimeInterval,
+        userTier: UserTier
+    ) -> CGSize {
+        // Premium tiers get quality boost for longer content
+        let isPremiumUser = userTier == .partner ||
+                           userTier == .topCreator ||
+                           userTier == .legendary ||
+                           userTier == .elite ||
+                           userTier == .influencer ||
+                           userTier == .founder ||
+                           userTier == .coFounder
+        
+        switch duration {
+        case 0...120:  // 0-2 minutes: Highest quality for short content
+            return CGSize(width: 1440, height: 2560)  // 1440p for all users
+            
+        case 120...300:  // 2-5 minutes: Balanced quality
+            return CGSize(width: 1080, height: 1920)  // 1080p for all users
+            
+        default:  // 5+ minutes: Aggressive compression unless premium
+            return isPremiumUser ?
+                CGSize(width: 1080, height: 1920) :  // Premium users keep 1080p
+                CGSize(width: 720, height: 1280)     // Regular users get 720p
+        }
+    }
+    
+    /// Get compression strategy description for UI display
+    static func getCompressionStrategyDescription(
+        duration: TimeInterval,
+        userTier: UserTier
+    ) -> String {
+        let resolution = calculateOptimalResolution(duration: duration, userTier: userTier)
+        let isPremium = userTier == .partner ||
+                        userTier == .topCreator ||
+                        userTier == .legendary ||
+                        userTier == .elite ||
+                        userTier == .influencer ||
+                        userTier == .founder ||
+                        userTier == .coFounder
+        
+        switch duration {
+        case 0...120:
+            return "Short video (≤2 min): 1440p quality - optimal for engagement"
+        case 120...300:
+            return "Medium video (2-5 min): 1080p quality - balanced compression"
+        default:
+            return isPremium ?
+                "Long video (5+ min): 1080p quality - premium user benefit" :
+                "Long video (5+ min): 720p quality - optimized for file size"
+        }
+    }
     
     // MARK: - Quality Assessment Functions
     
@@ -51,7 +111,7 @@ struct VideoQualityAnalyzer {
     /// Used for feed ranking and content discovery algorithms
     static func calculateQualityScore(resolution: CGSize, bitrate: Double, frameRate: Double) -> Double {
         let resolutionScore = calculateResolutionScore(width: Double(resolution.width), height: Double(resolution.height))
-        let bitrateScore = calculateBitrateEfficiency(bitrate: bitrate, resolution: resolution, duration: 30.0) // Assume 30s videos
+        let bitrateScore = calculateBitrateEfficiency(bitrate: bitrate, resolution: resolution, duration: 30.0)
         let frameRateScore = calculateFrameRateScore(frameRate: frameRate)
         let aspectRatioScore = calculateAspectRatioScore(aspectRatio: Double(resolution.width) / Double(resolution.height))
         
@@ -66,12 +126,12 @@ struct VideoQualityAnalyzer {
         let pixelCount = width * height
         
         // Mobile-optimized scoring thresholds
-        if pixelCount >= 2073600 { return 100.0 } // 1440x1440 or better
-        if pixelCount >= 2073600 { return 95.0 }  // 1920x1080
-        if pixelCount >= 921600 { return 85.0 }   // 1280x720
-        if pixelCount >= 409920 { return 70.0 }   // 854x480
-        if pixelCount >= 230400 { return 50.0 }   // 640x360
-        if pixelCount >= 76800 { return 30.0 }    // 320x240
+        if pixelCount >= 3686400 { return 100.0 } // 1440x2560 (4K)
+        if pixelCount >= 2073600 { return 95.0 }  // 1080x1920 (1080p)
+        if pixelCount >= 921600 { return 85.0 }   // 720x1280 (720p)
+        if pixelCount >= 409920 { return 70.0 }   // 480x854 (480p)
+        if pixelCount >= 230400 { return 50.0 }   // 360x640 (360p)
+        if pixelCount >= 76800 { return 30.0 }    // 240x320 (240p)
         return 10.0 // Below mobile standards
     }
     
@@ -93,53 +153,55 @@ struct VideoQualityAnalyzer {
         // Mobile-optimized frame rate scoring
         if frameRate >= 60 { return 100.0 }  // High frame rate
         if frameRate >= 30 { return 95.0 }   // Standard smooth
-        if frameRate >= 24 { return 80.0 }   // Cinematic standard
+        if frameRate >= 24 { return 85.0 }   // Cinematic smooth
         if frameRate >= 15 { return 60.0 }   // Acceptable minimum
-        return 30.0 // Below acceptable standards
+        if frameRate >= 10 { return 30.0 }   // Poor quality
+        return 10.0 // Unacceptable
     }
     
     /// Calculates aspect ratio optimization score for mobile viewing
     static func calculateAspectRatioScore(aspectRatio: Double) -> Double {
-        // Mobile-first aspect ratio optimization
-        if aspectRatio >= 0.5 && aspectRatio <= 0.6 { return 100.0 } // 9:16 to 5:8 (optimal mobile)
-        if aspectRatio >= 0.7 && aspectRatio <= 0.8 { return 90.0 }  // 4:5 to 5:7 (good mobile)
-        if aspectRatio >= 0.9 && aspectRatio <= 1.1 { return 80.0 }  // Square (acceptable)
-        if aspectRatio >= 1.2 && aspectRatio <= 1.8 { return 60.0 }  // Landscape (suboptimal mobile)
-        return 40.0 // Poor mobile optimization
+        // Optimal mobile aspect ratios (portrait focused)
+        let targetRatio = 9.0 / 16.0  // 16:9 portrait (optimal for mobile)
+        let difference = abs(aspectRatio - targetRatio)
+        
+        if difference <= 0.1 { return 100.0 }     // Perfect mobile ratio
+        if difference <= 0.2 { return 90.0 }      // Very good
+        if difference <= 0.3 { return 75.0 }      // Good
+        if difference <= 0.5 { return 60.0 }      // Acceptable
+        if difference <= 1.0 { return 40.0 }      // Poor
+        return 20.0 // Very poor aspect ratio
     }
     
     // MARK: - Compression Optimization Functions
     
-    /// Calculates optimal compression settings for 90% size reduction while preserving quality
-    static func calculateOptimalSettings(inputVideo: VideoQualityInput) -> VideoCompressionSettings {
-        let targetSize: Int64 = 3 * 1024 * 1024 // 3MB target
-        let duration = inputVideo.duration
+    /// Calculate compression settings optimized for duration and user tier
+    static func calculateCompressionSettings(
+        input: VideoQualityInput,
+        targetSizeMB: Double = 3.0,
+        userTier: UserTier
+    ) -> VideoCompressionSettings {
         
-        // Calculate target bitrate for size optimization
+        // Use duration-based resolution calculation
+        let optimalResolution = calculateOptimalResolution(
+            duration: input.duration,
+            userTier: userTier
+        )
+        
+        let targetSize = Int64(targetSizeMB * 1024 * 1024) // Convert MB to bytes
         let targetBitrate = calculateTargetBitrate(
-            currentSize: inputVideo.fileSize,
+            currentSize: input.fileSize,
             targetSize: targetSize,
-            duration: duration
+            duration: input.duration
         )
         
-        // Calculate maximum resolution for target file size
-        let maxResolution = calculateMaxResolution(
-            targetFileSize: targetSize,
-            duration: duration,
-            targetBitrate: targetBitrate
-        )
-        
-        // Quality factor based on compression aggressiveness
-        let compressionRatio = calculateCompressionRatio(
-            originalSize: inputVideo.fileSize,
-            targetSize: targetSize
-        )
-        let quality = calculateQualityFactor(compressionRatio: compressionRatio)
+        let compressionRatio = Double(input.fileSize) / Double(targetSize)
+        let qualityFactor = calculateQualityFactor(compressionRatio: compressionRatio)
         
         return VideoCompressionSettings(
             targetBitrate: targetBitrate,
-            maxResolution: maxResolution,
-            quality: quality,
+            maxResolution: optimalResolution,
+            quality: qualityFactor,
             codec: "H.264",
             estimatedOutputSize: targetSize
         )
@@ -168,7 +230,7 @@ struct VideoQualityAnalyzer {
     static func calculateMaxResolution(targetFileSize: Int64, duration: TimeInterval, targetBitrate: Int) -> CGSize {
         // Resolution tiers optimized for compression efficiency
         let resolutionTiers: [(CGSize, Int)] = [
-            (CGSize(width: 1440, height: 2560), 1_200_000), // 4K requires high bitrate
+            (CGSize(width: 1440, height: 2560), 1_200_000), // 1440p requires high bitrate
             (CGSize(width: 1080, height: 1920), 800_000),   // 1080p optimal
             (CGSize(width: 720, height: 1280), 500_000),    // 720p efficient
             (CGSize(width: 540, height: 960), 300_000),     // 540p minimum
@@ -187,49 +249,17 @@ struct VideoQualityAnalyzer {
     }
     
     /// Calculates compression ratio for quality assessment
-    static func calculateCompressionRatio(originalSize: Int64, targetSize: Int64) -> Double {
+    static func calculateCompressionRatio(originalSize: Int64, compressedSize: Int64) -> Double {
         guard originalSize > 0 else { return 1.0 }
-        return Double(originalSize) / Double(targetSize)
+        return Double(originalSize) / Double(compressedSize)
     }
     
-    // MARK: - Performance Calculation Functions
-    
-    /// Estimates compression processing time based on file complexity
-    static func calculateEstimatedCompressionTime(fileSize: Int64, compressionRatio: Double) -> TimeInterval {
-        // Base processing rate: ~5MB per second on modern mobile hardware
-        let baseProcessingRate: Double = 5 * 1024 * 1024 // 5MB/s
-        
-        // Complexity multiplier based on compression aggressiveness
-        let complexityMultiplier = sqrt(compressionRatio) // More aggressive = longer time
-        
-        let estimatedTime = (Double(fileSize) / baseProcessingRate) * complexityMultiplier
-        
-        // Clamp to reasonable bounds (5 seconds to 5 minutes)
-        return min(300.0, max(5.0, estimatedTime))
-    }
-    
-    /// Calculates quality loss score from bitrate reduction
-    static func calculateQualityLossScore(originalBitrate: Int, targetBitrate: Int) -> Double {
-        guard originalBitrate > 0 else { return 0.0 }
-        
-        let reductionRatio = Double(targetBitrate) / Double(originalBitrate)
-        
-        // Quality loss estimation (exponential degradation below 50% bitrate)
-        if reductionRatio >= 0.8 { return 5.0 }   // Minimal loss
-        if reductionRatio >= 0.6 { return 15.0 }  // Slight loss
-        if reductionRatio >= 0.4 { return 30.0 }  // Moderate loss
-        if reductionRatio >= 0.2 { return 50.0 }  // Noticeable loss
-        return 75.0 // Significant quality degradation
-    }
-    
-    // MARK: - Helper Functions
-    
-    /// Calculates optimal bitrate for given resolution
+    /// Calculates optimal bitrate for a given resolution
     private static func calculateOptimalBitrateForResolution(resolution: CGSize) -> Double {
         let pixelCount = Double(resolution.width * resolution.height)
         
-        // Optimal bitrates based on resolution (optimized for mobile)
-        if pixelCount >= 2073600 { return 1_200_000 } // 1440p
+        // Bitrate recommendations for mobile optimization
+        if pixelCount >= 3686400 { return 1_200_000 } // 1440p
         if pixelCount >= 2073600 { return 800_000 }   // 1080p
         if pixelCount >= 921600 { return 500_000 }    // 720p
         if pixelCount >= 409920 { return 300_000 }    // 480p
@@ -272,5 +302,35 @@ struct VideoQualityAnalyzer {
             aspectRatioScore: aspectRatioScore,
             overallGrade: grade
         )
+    }
+    
+    // MARK: - Testing & Validation
+    
+    /// Test duration-based compression strategy
+    static func testCompressionStrategy() {
+        print("🎬 TESTING DURATION-BASED COMPRESSION STRATEGY")
+        
+        let testCases: [(TimeInterval, UserTier, String)] = [
+            (90, .rookie, "Short video - Regular user"),
+            (90, .topCreator, "Short video - Premium user"),
+            (180, .rookie, "Medium video - Regular user"),
+            (180, .partner, "Medium video - Premium user"),
+            (420, .rookie, "Long video - Regular user"),
+            (420, .legendary, "Long video - Premium user"),
+            (600, .founder, "Very long video - Founder")
+        ]
+        
+        for (duration, tier, description) in testCases {
+            let resolution = calculateOptimalResolution(duration: duration, userTier: tier)
+            let strategy = getCompressionStrategyDescription(duration: duration, userTier: tier)
+            
+            print("📊 \(description):")
+            print("   Duration: \(Int(duration))s | Tier: \(tier.displayName)")
+            print("   Resolution: \(Int(resolution.width))x\(Int(resolution.height))")
+            print("   Strategy: \(strategy)")
+            print("")
+        }
+        
+        print("✅ Duration-based compression strategy testing complete")
     }
 }

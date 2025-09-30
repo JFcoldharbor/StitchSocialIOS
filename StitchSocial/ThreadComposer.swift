@@ -5,7 +5,7 @@
 //  Layer 8: Views - Thread Creation Interface
 //  Dependencies: VideoCoordinator (Layer 6), CoreVideoMetadata (Layer 1), BoundedVideoContainer
 //  Features: Working video preview, hashtag input, metadata editing, AI result integration
-//  FIXED: Multiple video players causing double audio playback
+//  FIXED: Now passes manual title/description to VideoCoordinator
 //
 
 import SwiftUI
@@ -96,7 +96,7 @@ struct ThreadComposer: View {
             
             // Video Preview - SMALLER SIZE
             videoPreview
-                .frame(height: 200) // Reduced from 300
+                .frame(height: 200)
             
             // Content Editor
             ScrollView {
@@ -148,7 +148,6 @@ struct ThreadComposer: View {
     
     private var videoPreview: some View {
         ZStack {
-            // FIXED: Use shared player to prevent multiple players
             if let player = sharedPlayer {
                 VideoPlayerContainer(player: player, isPlaying: $isPlaying)
                     .aspectRatio(9/16, contentMode: .fit)
@@ -174,7 +173,7 @@ struct ThreadComposer: View {
                     .cornerRadius(16)
             }
             
-            // Play/Pause Overlay with enhanced styling
+            // Play/Pause Overlay
             if !isPlaying {
                 Button {
                     togglePlayback()
@@ -231,10 +230,11 @@ struct ThreadComposer: View {
             }
             
             TextEditor(text: $description)
-                .frame(minHeight: 80)
+                .frame(height: 100)
                 .padding(8)
-                .background(Color(UIColor.systemBackground))
+                .background(Color.white.opacity(0.1))
                 .cornerRadius(8)
+                .foregroundColor(.white)
                 .onChange(of: description) { newValue in
                     if newValue.count > maxDescriptionLength {
                         description = String(newValue.prefix(maxDescriptionLength))
@@ -245,54 +245,53 @@ struct ThreadComposer: View {
     
     private var hashtagEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Hashtags")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                
-                Spacer()
-                
-                Text("\(hashtags.count)/\(maxHashtags)")
-                    .font(.caption)
-                    .foregroundColor(hashtags.count >= maxHashtags ? .red : .gray)
+            Text("Hashtags")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            // Existing hashtags
+            if !hashtags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(hashtags, id: \.self) { hashtag in
+                            HStack(spacing: 4) {
+                                Text("#\(hashtag)")
+                                    .foregroundColor(.white)
+                                
+                                Button {
+                                    removeHashtag(hashtag)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.white.opacity(0.6))
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.blue.opacity(0.3))
+                            .cornerRadius(16)
+                        }
+                    }
+                }
             }
             
-            // Hashtag input
-            HStack {
-                TextField("Add hashtag...", text: $newHashtagText)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onSubmit {
+            // Add new hashtag
+            if hashtags.count < maxHashtags {
+                HStack {
+                    TextField("Add hashtag...", text: $newHashtagText)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .onSubmit {
+                            addHashtag()
+                        }
+                    
+                    Button("Add") {
                         addHashtag()
                     }
-                
-                Button("Add") {
-                    addHashtag()
-                }
-                .disabled(newHashtagText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hashtags.count >= maxHashtags)
-            }
-            
-            // Hashtag display
-            if !hashtags.isEmpty {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 8) {
-                    ForEach(hashtags, id: \.self) { hashtag in
-                        HStack {
-                            Text("#\(hashtag)")
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.blue.opacity(0.2))
-                                .cornerRadius(8)
-                            
-                            Button {
-                                removeHashtag(hashtag)
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.red)
-                                    .font(.caption)
-                            }
-                        }
-                        .foregroundColor(.white)
-                    }
+                    .disabled(newHashtagText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(newHashtagText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.3) : Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
                 }
             }
         }
@@ -344,10 +343,15 @@ struct ThreadComposer: View {
                     .fontWeight(.semibold)
                     .foregroundColor(.white)
                 
-                Text("This may take a moment")
+                Text(videoCoordinator.currentTask)
                     .font(.subheadline)
                     .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
             }
+            
+            ProgressView(value: videoCoordinator.overallProgress)
+                .progressViewStyle(LinearProgressViewStyle(tint: .blue))
+                .frame(width: 200)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -356,19 +360,24 @@ struct ThreadComposer: View {
     
     private var canPost: Bool {
         return !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        title.count >= 3 &&
-        !isCreating
+               title.count <= maxTitleLength &&
+               description.count <= maxDescriptionLength &&
+               !isCreating
     }
     
-    // MARK: - FIXED: Single Video Player Management
+    // MARK: - Video Player Setup
     
     private func setupSharedVideoPlayer() {
-        // FIXED: Create only ONE player instance
-        print("🎬 SETUP: Creating single shared video player")
+        print("🎬 SETUP: Creating shared video player")
         let player = AVPlayer(url: recordedVideoURL)
-        sharedPlayer = player
+        player.isMuted = false
+        player.actionAtItemEnd = .none
         
-        // Setup looping
+        sharedPlayer = player
+        isPlaying = true
+        player.play()
+        
+        // Loop video
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem,
@@ -380,10 +389,7 @@ struct ThreadComposer: View {
             }
         }
         
-        // Auto-play preview
-        isPlaying = true
-        player.play()
-        print("🎬 SETUP: Player created and started")
+        print("🎬 SETUP: Player ready and playing")
     }
     
     private func togglePlayback() {
@@ -391,12 +397,11 @@ struct ThreadComposer: View {
         
         if isPlaying {
             player.pause()
-            print("⏸️ PLAYBACK: Paused")
+            isPlaying = false
         } else {
             player.play()
-            print("▶️ PLAYBACK: Playing")
+            isPlaying = true
         }
-        isPlaying.toggle()
     }
     
     private func cleanupVideoPlayer() {
@@ -412,7 +417,7 @@ struct ThreadComposer: View {
     
     private func addHashtag() {
         let cleanedText = newHashtagText.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "#", with: "") // Remove # if user added it
+            .replacingOccurrences(of: "#", with: "")
         
         guard !cleanedText.isEmpty,
               !hashtags.contains(cleanedText),
@@ -426,11 +431,10 @@ struct ThreadComposer: View {
         hashtags.removeAll { $0 == hashtag }
     }
     
-    // MARK: - AI Analysis View (ENHANCED)
+    // MARK: - AI Analysis View
     
     private var aiAnalysisView: some View {
         VStack(spacing: 24) {
-            // Animated gradient circle
             ZStack {
                 Circle()
                     .stroke(
@@ -479,16 +483,14 @@ struct ThreadComposer: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
-    // MARK: - AI Analysis Methods (FIXED: Pause video during analysis)
+    // MARK: - AI Analysis Methods
     
     private func performInitialAIAnalysis() {
-        // Skip if we already have AI results
         if aiResult != nil {
             setupInitialContent()
             return
         }
         
-        // FIXED: Pause video during AI analysis to prevent audio conflicts
         print("🤖 AI ANALYSIS: Starting - pausing video player")
         sharedPlayer?.pause()
         isPlaying = false
@@ -496,7 +498,6 @@ struct ThreadComposer: View {
         
         Task {
             do {
-                // Perform AI analysis on the recorded video
                 let aiAnalyzer = AIVideoAnalyzer()
                 let result = await aiAnalyzer.analyzeVideo(
                     url: recordedVideoURL,
@@ -508,18 +509,15 @@ struct ThreadComposer: View {
                     hasAnalyzed = true
                     
                     if let result = result {
-                        // Use AI results
                         title = result.title
                         description = result.description
                         hashtags = Array(result.hashtags.prefix(maxHashtags))
                         print("✅ THREAD COMPOSER: AI analysis successful - '\(result.title)'")
                     } else {
-                        // Use defaults
                         setupInitialContent()
                         print("⚠️ THREAD COMPOSER: AI analysis failed - using defaults")
                     }
                     
-                    // FIXED: Resume video after AI analysis completes
                     print("🎬 AI ANALYSIS: Complete - resuming video player")
                     isPlaying = true
                     sharedPlayer?.play()
@@ -531,7 +529,6 @@ struct ThreadComposer: View {
                     setupInitialContent()
                     print("❌ THREAD COMPOSER: AI analysis error - \(error.localizedDescription)")
                     
-                    // FIXED: Resume video even on error
                     print("🎬 AI ANALYSIS: Error - resuming video player")
                     isPlaying = true
                     sharedPlayer?.play()
@@ -541,10 +538,7 @@ struct ThreadComposer: View {
     }
     
     private func skipAIAnalysis() {
-        print("⭐ THREAD COMPOSER: AI analysis skipped by user")
-        
-        // FIXED: Resume video when skipping AI analysis
-        print("🎬 AI ANALYSIS: Skipped - resuming video player")
+        print("⏭ THREAD COMPOSER: AI analysis skipped by user")
         isAnalyzing = false
         hasAnalyzed = true
         setupInitialContent()
@@ -555,13 +549,11 @@ struct ThreadComposer: View {
     // MARK: - Setup Methods
     
     private func setupInitialContent() {
-        // Use AI results if available, otherwise use defaults
         if let aiResult = aiResult {
             title = aiResult.title
             description = aiResult.description
             hashtags = Array(aiResult.hashtags.prefix(maxHashtags))
         } else {
-            // Set default values based on context
             title = getDefaultTitle()
             description = ""
             hashtags = []
@@ -594,12 +586,11 @@ struct ThreadComposer: View {
         }
     }
     
-    // MARK: - Thread Creation (FIXED: Pause video during creation)
+    // MARK: - Thread Creation (FIXED: Pass Manual Title/Description)
     
     private func createThread() {
         guard !isCreating else { return }
         
-        // FIXED: Pause video preview during creation
         print("🎬 CREATION: Starting - pausing video player")
         sharedPlayer?.pause()
         isPlaying = false
@@ -607,18 +598,36 @@ struct ThreadComposer: View {
         
         Task {
             do {
-                // Don't inject custom analysis result - let AI analysis work naturally
-                // The VideoCoordinator will handle AI analysis and use results automatically
+                // CRITICAL FIX: Pass user-edited title and description to VideoCoordinator
+                // These will override AI results in Firebase
+                let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
                 
-                // Create video through VideoCoordinator (it will handle AI analysis)
+                print("✍️ MANUAL CONTENT: Passing to VideoCoordinator")
+                print("✍️ TITLE: '\(trimmedTitle)'")
+                print("✍️ DESCRIPTION: '\(trimmedDescription)'")
+                
+                // Get current user info from AuthService
+                let authService = AuthService()
+                let currentUserID = authService.currentUser?.id ?? "unknown"
+                let currentUserTier = authService.currentUser?.tier ?? .rookie
+                
+                print("🔐 AUTH: User ID = '\(currentUserID)'")
+                print("🔐 AUTH: User Tier = '\(currentUserTier.rawValue)'")
+                
                 let createdVideo = try await videoCoordinator.processVideoCreation(
                     recordedVideoURL: recordedVideoURL,
                     recordingContext: recordingContext,
-                    userID: AuthService().currentUser?.id ?? "unknown",
-                    userTier: .rookie
+                    userID: currentUserID,
+                    userTier: currentUserTier,
+                    manualTitle: trimmedTitle.isEmpty ? nil : trimmedTitle,        // NEW: Pass manual title
+                    manualDescription: trimmedDescription.isEmpty ? nil : trimmedDescription  // NEW: Pass manual description
                 )
                 
                 await MainActor.run {
+                    print("✅ THREAD CREATION: Success!")
+                    print("✅ FINAL TITLE: '\(createdVideo.title)'")
+                    print("✅ FINAL DESCRIPTION: '\(createdVideo.description)'")
                     isCreating = false
                     onVideoCreated(createdVideo)
                 }
@@ -626,11 +635,11 @@ struct ThreadComposer: View {
             } catch {
                 await MainActor.run {
                     isCreating = false
-                    errorMessage = error.localizedDescription
+                    errorMessage = "Failed to create thread: \(error.localizedDescription)"
                     showError = true
+                    print("❌ THREAD CREATION: Failed - \(error.localizedDescription)")
                     
-                    // FIXED: Resume video preview on error
-                    print("🎬 CREATION: Error - resuming video player")
+                    // Resume video on error
                     isPlaying = true
                     sharedPlayer?.play()
                 }
@@ -639,60 +648,47 @@ struct ThreadComposer: View {
     }
 }
 
-// MARK: - FIXED: Video Player Container (Single Player Instance)
+// MARK: - Video Player Container
 
 struct VideoPlayerContainer: UIViewRepresentable {
-    let player: AVPlayer // FIXED: Accept player instance instead of creating new one
+    let player: AVPlayer
     @Binding var isPlaying: Bool
     
     func makeUIView(context: Context) -> UIView {
-        print("🎬 CONTAINER: Creating view with existing player")
-        let containerView = UIView()
-        containerView.backgroundColor = UIColor.black
+        let view = UIView(frame: .zero)
+        view.backgroundColor = .black
         
-        // FIXED: Use provided player instead of creating new one
         let playerLayer = AVPlayerLayer(player: player)
         playerLayer.videoGravity = .resizeAspectFill
+        playerLayer.frame = view.bounds
+        view.layer.addSublayer(playerLayer)
         
-        containerView.layer.addSublayer(playerLayer)
+        context.coordinator.playerLayer = playerLayer
+        context.coordinator.containerView = view
         
-        // Store in coordinator
-        let coordinator = context.coordinator
-        coordinator.player = player
-        coordinator.playerLayer = playerLayer
-        coordinator.containerView = containerView
-        
-        // FIXED: Don't auto-play here since it's managed externally
-        print("🎬 CONTAINER: View created, player managed externally")
-        
-        return containerView
+        return view
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {
-        let coordinator = context.coordinator
-        
-        // Update player layer frame
-        coordinator.playerLayer?.frame = uiView.bounds
-        
-        // FIXED: Sync playback state with external control
-        if isPlaying && coordinator.player?.rate == 0 {
-            coordinator.player?.play()
-        } else if !isPlaying && coordinator.player?.rate != 0 {
-            coordinator.player?.pause()
+        if let playerLayer = context.coordinator.playerLayer {
+            playerLayer.frame = uiView.bounds
         }
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(self)
     }
     
-    class Coordinator: NSObject {
-        var player: AVPlayer?
+    class Coordinator {
+        var parent: VideoPlayerContainer
         var playerLayer: AVPlayerLayer?
         var containerView: UIView?
         
+        init(_ parent: VideoPlayerContainer) {
+            self.parent = parent
+        }
+        
         deinit {
-            // FIXED: Don't pause player here since it's managed externally
             NotificationCenter.default.removeObserver(self)
         }
     }

@@ -969,6 +969,8 @@ struct BoundedVideoContainerView: View {
     let containerID: String
     let onVideoLoop: (String) -> Void
     
+    @EnvironmentObject var authService: AuthService
+    
     var body: some View {
         ZStack {
             // Strictly bounded video player

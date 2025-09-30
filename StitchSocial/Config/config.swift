@@ -1,15 +1,16 @@
 //
 //  Config.swift
-//  CleanBeta
+//  StitchSocial
 //
-//  Created by James Garmon on 7/12/25.
+//  Layer 3: Configuration - App Configuration and Environment Settings
+//  Dependencies: None - Pure configuration data
+//  Features: Environment detection, API keys, Firebase settings, feature flags
 //
 
 import Foundation
 
-/// Central configuration management for CleanBeta
-/// Handles API keys, environment settings, and app configuration
-/// Clean, secure approach to managing sensitive data and settings
+/// Central configuration management for StitchSocial
+/// Handles environment-specific settings, API keys, and feature flags
 struct Config {
     
     // MARK: - Environment Detection
@@ -27,6 +28,14 @@ struct Config {
             #else
             return .production
             #endif
+        }
+        
+        var displayName: String {
+            switch self {
+            case .development: return "Development"
+            case .staging: return "Staging"
+            case .production: return "Production"
+            }
         }
     }
     
@@ -46,7 +55,7 @@ struct Config {
                     return plistKey
                 }
                 
-                // Development fallback - UPDATED with your real API key
+                // Development fallback - YOUR REAL API KEY
                 switch Environment.current {
                 case .development:
                     return "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"
@@ -62,6 +71,7 @@ struct Config {
             static let promptVersion = "1"
             static let timeoutInterval: TimeInterval = 30.0
             static let maxRetries = 2
+            static let organizationID: String? = nil // Auto-detect
             
             /// Whisper API Configuration
             struct Whisper {
@@ -89,6 +99,9 @@ struct Config {
         /// Storage bucket name (if different from default)
         static let storageBucket: String? = nil // Uses default
         
+        /// FCM Server Key for push notifications
+        static let fcmServerKey = "BIrbeI7xJ8M-BR4BRR8nVK4cgeHQ5kg7BZScN7H9OPOuPpoZCyZIT_Nxf7j5qB6fvJEKil2oXKS4ViQQ-G-ClXc"
+        
         /// Firebase configuration validation
         static func validateConfiguration() -> Bool {
             guard !databaseName.isEmpty else {
@@ -96,7 +109,13 @@ struct Config {
                 return false
             }
             
+            guard !fcmServerKey.isEmpty else {
+                print("❌ CONFIG: FCM server key is empty")
+                return false
+            }
+            
             print("✅ CONFIG: Firebase database configured - \(databaseName)")
+            print("✅ CONFIG: FCM server key configured - \(fcmServerKey.prefix(20))...")
             return true
         }
     }
@@ -138,6 +157,10 @@ struct Config {
         static let maxDescriptionLength = 500
         static let maxHashtags = 10
         static let maxHashtagLength = 30
+        
+        /// App Store configuration
+        static let appStoreID = "66B6XS2SPX" // Your App Store Connect ID
+        static let teamID = "66B6XS2SPX" // Your Apple Developer Team ID
     }
     
     // MARK: - Feature Flags
@@ -170,6 +193,14 @@ struct Config {
         
         static let enableCrashReporting: Bool = {
             Environment.current != .development
+        }()
+        
+        static let enablePushNotifications: Bool = {
+            !Firebase.fcmServerKey.isEmpty
+        }()
+        
+        static let enableAdvancedMetrics: Bool = {
+            Environment.current == .development
         }()
     }
     
@@ -210,6 +241,23 @@ struct Config {
         static let lockoutDuration: TimeInterval = 5 * 60 // 5 minutes
     }
     
+    // MARK: - Push Notification Configuration
+    
+    struct PushNotifications {
+        static let enableSound = true
+        static let enableBadge = true
+        static let enableAlert = true
+        static let enableProvisional = true
+        
+        /// Default notification categories
+        static let categories: [String] = [
+            "HYPE_NOTIFICATION",
+            "FOLLOW_NOTIFICATION",
+            "REPLY_NOTIFICATION",
+            "SYSTEM_NOTIFICATION"
+        ]
+    }
+    
     // MARK: - Validation Methods
     
     /// Check if configuration is valid for current environment
@@ -226,6 +274,11 @@ struct Config {
             issues.append("OpenAI API key appears to be a placeholder")
         }
         
+        // Check Firebase configuration
+        if !Firebase.validateConfiguration() {
+            issues.append("Firebase configuration is invalid")
+        }
+        
         // Check app configuration
         if App.bundleID.isEmpty {
             issues.append("Bundle ID is missing")
@@ -236,6 +289,9 @@ struct Config {
         case .production:
             if Features.enableDebugLogging {
                 issues.append("Debug logging should be disabled in production")
+            }
+            if Firebase.fcmServerKey.isEmpty {
+                issues.append("FCM server key is required for production push notifications")
             }
         case .development:
             if !Features.enableDebugLogging {
@@ -257,11 +313,13 @@ struct Config {
         let validation = validateConfiguration()
         
         print("🔧 CONFIG STATUS:")
-        print("   Environment: \(Environment.current)")
+        print("   Environment: \(Environment.current.displayName)")
         print("   App Version: \(App.version) (\(App.buildNumber))")
         print("   AI Enabled: \(Features.enableAIAnalysis)")
         print("   OpenAI Key: \(API.OpenAI.apiKey.isEmpty ? "❌ Missing" : "✅ Configured (\(API.OpenAI.apiKey.count) chars)")")
         print("   Firebase DB: \(Firebase.databaseName)")
+        print("   FCM Key: \(Firebase.fcmServerKey.isEmpty ? "❌ Missing" : "✅ Configured")")
+        print("   Push Notifications: \(Features.enablePushNotifications ? "✅ Enabled" : "❌ Disabled")")
         print("   Bundle ID: \(App.bundleID)")
         print("   Debug Logging: \(Features.enableDebugLogging ? "✅" : "❌")")
         
@@ -273,6 +331,8 @@ struct Config {
         } else {
             print("   ✅ Configuration Valid")
         }
+        
+        print("FIREBASE: Configuration validated")
     }
 }
 

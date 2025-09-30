@@ -5,6 +5,7 @@
 //  Layer 4: Core Services - Video Technical Analysis & Compression
 //  Handles video quality assessment, format validation, and compression
 //  Pure AVFoundation processing - no Firebase or AI dependencies
+//  UPDATED: Duration-based tiered compression with user tier privileges
 //
 
 import Foundation
@@ -125,17 +126,21 @@ class VideoProcessingService: ObservableObject {
         }
     }
     
-    // MARK: - Video Compression (COMPLETE IMPLEMENTATION)
+    // MARK: - Video Compression (UPDATED WITH DURATION-BASED TIERED STRATEGY)
     
-    /// Compress video to target file size with H.264/AAC encoding
-    /// Achieves 90% size reduction (28MB → 3MB) while maintaining quality
+    /// Compress video to target file size with H.264/AAC encoding and duration-based tiered strategy
+    /// Achieves 90% size reduction (28MB → 3MB) while maintaining quality based on user tier
+    /// UPDATED: Now includes userTier parameter for duration-based tiered compression
     func compress(
         videoURL: URL,
+        userTier: UserTier,
         targetSizeMB: Double = 3.0,
         progressCallback: @escaping (Double) -> Void = { _ in }
     ) async throws -> URL {
         
         let startTime = Date()
+        
+        print("🗜️ PROCESSING SERVICE: Starting tiered compression for \(userTier.displayName)")
         
         await MainActor.run {
             self.isProcessing = true
@@ -149,43 +154,56 @@ class VideoProcessingService: ObservableObject {
             await updateProgress(0.1, task: "Validating video file...")
             try await validateVideoFile(videoURL)
             
-            // STEP 2: Analyze video for optimal settings
+            // STEP 2: Extract video duration for tiered strategy
+            await updateProgress(0.15, task: "Extracting video duration...")
+            let asset = AVAsset(url: videoURL)
+            let duration = try await asset.load(.duration).seconds
+            
+            // NEW: Calculate optimal resolution based on duration and user tier
+            let optimalResolution = VideoQualityAnalyzer.calculateOptimalResolution(
+                duration: duration,
+                userTier: userTier
+            )
+            
+            print("🎯 PROCESSING SERVICE: \(String(format: "%.1f", duration))s video → \(Int(optimalResolution.width))x\(Int(optimalResolution.height)) for \(userTier.displayName)")
+            
+            // STEP 3: Analyze video for optimal settings
             await updateProgress(0.2, task: "Analyzing video quality...")
             let qualityAnalysis = try await analyzeVideoQuality(videoURL: videoURL)
             
-            // STEP 3: Calculate compression settings
+            // STEP 4: Calculate compression settings with user tier
             await updateProgress(0.3, task: "Calculating compression settings...")
             let compressionSettings = calculateCompressionSettings(
                 analysis: qualityAnalysis,
+                userTier: userTier,
                 targetSizeMB: targetSizeMB
             )
             
-            // STEP 4: Setup export session
+            // STEP 5: Setup export session
             await updateProgress(0.4, task: "Setting up compression...")
-            let asset = AVAsset(url: videoURL)
             
+            // FIXED: Use HighestQuality preset for true 1440p quality
             guard let exportSession = AVAssetExportSession(
                 asset: asset,
-                presetName: AVAssetExportPresetMediumQuality
+                presetName: AVAssetExportPresetHighestQuality
             ) else {
                 throw VideoProcessingError.compressionFailed("Failed to create export session")
             }
             
-            // STEP 5: Configure output settings with advanced H.264/AAC encoding
+            // STEP 6: Configure output settings with advanced H.264/AAC encoding
             let outputURL = generateCompressedVideoURL()
             exportSession.outputURL = outputURL
             exportSession.outputFileType = .mp4
             exportSession.shouldOptimizeForNetworkUse = true
             
             // Configure video composition for better compression
-            let mainasset = AVAsset(url: videoURL)
             let videoComposition = try await createVideoComposition(
                 asset: asset,
                 settings: compressionSettings
             )
             exportSession.videoComposition = videoComposition
             
-            // STEP 6: Start compression with progress tracking
+            // STEP 7: Start compression with progress tracking
             await updateProgress(0.5, task: "Compressing video...")
             
             return try await withCheckedThrowingContinuation { continuation in
@@ -223,15 +241,16 @@ class VideoProcessingService: ObservableObject {
                             await self.updateProgress(1.0, task: "Compression complete!")
                             self.isProcessing = false
                             
-                            // Log success metrics
+                            // Log success metrics with tiered compression info
                             let processingTime = Date().timeIntervalSince(startTime)
                             let originalSize = self.getFileSize(videoURL)
                             let compressedSize = self.getFileSize(outputURL)
                             let compressionRatio = Double(originalSize) / Double(compressedSize)
                             
-                            print("✅ COMPRESSION: Success - \(self.formatFileSize(originalSize)) → \(self.formatFileSize(compressedSize))")
-                            print("✅ COMPRESSION: Ratio: \(String(format: "%.1fx", compressionRatio))")
-                            print("✅ COMPRESSION: Time: \(String(format: "%.1fs", processingTime))")
+                            print("✅ TIERED COMPRESSION: \(self.formatFileSize(originalSize)) → \(self.formatFileSize(compressedSize))")
+                            print("✅ COMPRESSION RATIO: \(String(format: "%.1fx", compressionRatio))")
+                            print("✅ PROCESSING TIME: \(String(format: "%.1fs", processingTime))")
+                            print("✅ STRATEGY: \(VideoQualityAnalyzer.getCompressionStrategyDescription(duration: duration, userTier: userTier))")
                             
                             self.recordProcessingMetrics(
                                 duration: processingTime,
@@ -592,11 +611,13 @@ class VideoProcessingService: ObservableObject {
         return recommendations
     }
     
-    // MARK: - Advanced Compression Methods
+    // MARK: - Advanced Compression Methods (UPDATED WITH USER TIER)
     
-    /// Calculate optimal compression settings for target file size
+    /// Calculate optimal compression settings for target file size with user tier considerations
+    /// UPDATED: Now includes userTier parameter for duration-based compression strategy
     private func calculateCompressionSettings(
         analysis: VideoQualityAnalysis,
+        userTier: UserTier,
         targetSizeMB: Double
     ) -> VideoCompressionSettings {
         
@@ -609,7 +630,11 @@ class VideoProcessingService: ObservableObject {
             aspectRatio: analysis.videoAnalysis.aspectRatio
         )
         
-        return VideoQualityAnalyzer.calculateOptimalSettings(inputVideo: inputVideo)
+        return VideoQualityAnalyzer.calculateCompressionSettings(
+            input: inputVideo,
+            targetSizeMB: targetSizeMB,
+            userTier: userTier
+        )
     }
     
     /// Create video composition for compression settings

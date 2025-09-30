@@ -5,6 +5,7 @@
 //  Layer 4: Core Services - Complete Video Management with Full Engagement Tracking
 //  Dependencies: Firebase Firestore, Firebase Storage, FirebaseSchema, HypeRatingCalculator
 //  Features: Thread hierarchy, following feed, multidirectional swiping, engagement updates, secure video deletion
+//  UPDATED: Added description field support to createThread and createChildReply methods
 //
 
 import Foundation
@@ -30,6 +31,7 @@ class VideoService: ObservableObject {
     /// Create new thread (parent video)
     func createThread(
         title: String,
+        description: String = "",
         videoURL: String,
         thumbnailURL: String,
         creatorID: String,
@@ -43,6 +45,7 @@ class VideoService: ObservableObject {
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
             FirebaseSchema.VideoDocument.title: title,
+            FirebaseSchema.VideoDocument.description: description,
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
             FirebaseSchema.VideoDocument.creatorID: creatorID,
@@ -101,6 +104,7 @@ class VideoService: ObservableObject {
         let video = CoreVideoMetadata(
             id: videoID,
             title: title,
+            description: description,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -134,6 +138,7 @@ class VideoService: ObservableObject {
     func createChildReply(
         to threadID: String,
         title: String,
+        description: String = "",
         videoURL: String,
         thumbnailURL: String,
         creatorID: String,
@@ -156,6 +161,7 @@ class VideoService: ObservableObject {
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
             FirebaseSchema.VideoDocument.title: title,
+            FirebaseSchema.VideoDocument.description: description,
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
             FirebaseSchema.VideoDocument.creatorID: creatorID,
@@ -207,6 +213,7 @@ class VideoService: ObservableObject {
         return CoreVideoMetadata(
             id: videoID,
             title: title,
+            description: description,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -255,6 +262,7 @@ class VideoService: ObservableObject {
         let video = CoreVideoMetadata(
             id: data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID,
             title: data[FirebaseSchema.VideoDocument.title] as? String ?? "",
+            description: data[FirebaseSchema.VideoDocument.description] as? String ?? "",
             videoURL: data[FirebaseSchema.VideoDocument.videoURL] as? String ?? "",
             thumbnailURL: data[FirebaseSchema.VideoDocument.thumbnailURL] as? String ?? "",
             creatorID: data[FirebaseSchema.VideoDocument.creatorID] as? String ?? "",
@@ -856,6 +864,7 @@ class VideoService: ObservableObject {
         
         let id = data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
         let title = data[FirebaseSchema.VideoDocument.title] as? String ?? ""
+        let description = data[FirebaseSchema.VideoDocument.description] as? String ?? ""
         let videoURL = data[FirebaseSchema.VideoDocument.videoURL] as? String ?? ""
         let thumbnailURL = data[FirebaseSchema.VideoDocument.thumbnailURL] as? String ?? ""
         let creatorID = data[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
@@ -893,6 +902,7 @@ class VideoService: ObservableObject {
         return CoreVideoMetadata(
             id: id,
             title: title,
+            description: description,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -1075,6 +1085,15 @@ struct PaginatedResult<T> {
     let items: [T]
     let lastDocument: DocumentSnapshot?
     let hasMore: Bool
+}
+
+// MARK: - Extensions for Array Chunking
+extension Array {
+    func Mychunked(into size: Int) -> [[Element]] {
+        return stride(from: 0, to: count, by: size).map {
+            Array(self[$0..<Swift.min($0 + size, count)])
+        }
+    }
 }
 
 // MARK: - Hello World Test Extension

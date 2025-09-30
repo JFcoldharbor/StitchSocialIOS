@@ -210,6 +210,19 @@ struct SpecialUsersConfig {
             priority: 700
         ),
         
+        "pumanyc213@gmail.com": SpecialUserEntry(
+            email: "pumanyc213@gmail.com",
+            role: .ambassador,
+            tierRawValue: "celebrity",
+            startingClout: 20000,
+            customTitle: "Black Ink Ambassador 🎨",
+            customBio: "Black Ink Original Cast Member | Father | Cannabis Expert | Ambassador to Stitch",
+            badgeRawValues: ["celebrity_crown", "verified", "tv_star"],
+            specialPerks: ["verified_badge", "exclusive_features", "priority_support"],
+            isAutoFollowed: false,
+            priority: 700
+        ),
+        
         // MARK: - MUSIC INDUSTRY / RAE SREMMURD FAMILY
         
         "afterflaspoint@icloud.com": SpecialUserEntry(
@@ -236,6 +249,19 @@ struct SpecialUsersConfig {
             specialPerks: ["affiliate_support", "exclusive_features", "family_connection"],
             isAutoFollowed: false,
             priority: 350
+        ),
+        
+        "ohshitsad@gmail.com": SpecialUserEntry(
+            email: "ohshitsad@gmail.com",
+            role: .ambassador,
+            tierRawValue: "celebrity",
+            startingClout: 15000,
+            customTitle: "Black Ink Tattoo Artist 🎨",
+            customBio: "Original Black Ink Cast | Tattoo Artist Enthusiast | Ambassador to Stitch",
+            badgeRawValues: ["celebrity_crown", "verified", "tv_star"],
+            specialPerks: ["verified_badge", "exclusive_features", "priority_support"],
+            isAutoFollowed: false,
+            priority: 700
         ),
         
         // MARK: - TECH AFFILIATES

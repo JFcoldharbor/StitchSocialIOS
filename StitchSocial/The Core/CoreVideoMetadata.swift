@@ -5,6 +5,7 @@
 //  Foundation layer - Depends only on CoreTypes
 //  Single source of truth for all video content - Reddit/Twitch style with full engagement system
 //  Handles Thread/Child/Stepchild logic + Quality scoring + Engagement metrics + Temperature system
+//  UPDATED: Added description field for video content descriptions
 //
 
 import Foundation
@@ -16,11 +17,71 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     // MARK: - Core Identity
     let id: String
     let title: String
+    let description: String  // NEW: Video description field
     let videoURL: String
     let thumbnailURL: String
     let creatorID: String
     let creatorName: String
     let createdAt: Date
+    
+    // MARK: - Default Initializer with Description Default
+    init(
+        id: String,
+        title: String,
+        description: String = "",  // Default empty description for backwards compatibility
+        videoURL: String,
+        thumbnailURL: String,
+        creatorID: String,
+        creatorName: String,
+        createdAt: Date,
+        threadID: String?,
+        replyToVideoID: String?,
+        conversationDepth: Int,
+        viewCount: Int,
+        hypeCount: Int,
+        coolCount: Int,
+        replyCount: Int,
+        shareCount: Int,
+        temperature: String,
+        qualityScore: Int,
+        engagementRatio: Double,
+        velocityScore: Double,
+        trendingScore: Double,
+        duration: TimeInterval,
+        aspectRatio: Double,
+        fileSize: Int64,
+        discoverabilityScore: Double,
+        isPromoted: Bool,
+        lastEngagementAt: Date?
+    ) {
+        self.id = id
+        self.title = title
+        self.description = description
+        self.videoURL = videoURL
+        self.thumbnailURL = thumbnailURL
+        self.creatorID = creatorID
+        self.creatorName = creatorName
+        self.createdAt = createdAt
+        self.threadID = threadID
+        self.replyToVideoID = replyToVideoID
+        self.conversationDepth = conversationDepth
+        self.viewCount = viewCount
+        self.hypeCount = hypeCount
+        self.coolCount = coolCount
+        self.replyCount = replyCount
+        self.shareCount = shareCount
+        self.temperature = temperature
+        self.qualityScore = qualityScore
+        self.engagementRatio = engagementRatio
+        self.velocityScore = velocityScore
+        self.trendingScore = trendingScore
+        self.duration = duration
+        self.aspectRatio = aspectRatio
+        self.fileSize = fileSize
+        self.discoverabilityScore = discoverabilityScore
+        self.isPromoted = isPromoted
+        self.lastEngagementAt = lastEngagementAt
+    }
     
     // MARK: - Thread/Parent-Child-Stepchild Logic
     /// nil = new thread (parent), value = part of existing thread
@@ -145,7 +206,7 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .binary)
     }
     
-    /// Display color based on temperature (FIXED: Removed duplicate "warm" case)
+    /// Display color based on temperature
     var temperatureColor: Color {
         switch temperature.lowercased() {
         case "fire", "blazing": return .red
@@ -182,7 +243,7 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     }
 }
 
-// MARK: - Factory Methods
+// MARK: - Factory Methods (UPDATED: All include description parameter)
 
 extension CoreVideoMetadata {
     
@@ -190,6 +251,7 @@ extension CoreVideoMetadata {
     static func newThread(
         id: String = UUID().uuidString,
         title: String,
+        description: String = "",
         videoURL: String,
         thumbnailURL: String,
         creatorID: String,
@@ -200,6 +262,7 @@ extension CoreVideoMetadata {
         return CoreVideoMetadata(
             id: id,
             title: title,
+            description: description,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -231,6 +294,7 @@ extension CoreVideoMetadata {
     static func childReply(
         to threadID: String,
         title: String,
+        description: String = "",
         videoURL: String,
         thumbnailURL: String,
         creatorID: String,
@@ -241,6 +305,7 @@ extension CoreVideoMetadata {
         return CoreVideoMetadata(
             id: UUID().uuidString,
             title: title,
+            description: description,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -273,6 +338,7 @@ extension CoreVideoMetadata {
         to childVideoID: String,
         threadID: String,
         title: String,
+        description: String = "",
         videoURL: String,
         thumbnailURL: String,
         creatorID: String,
@@ -283,6 +349,7 @@ extension CoreVideoMetadata {
         return CoreVideoMetadata(
             id: UUID().uuidString,
             title: title,
+            description: description,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -311,7 +378,7 @@ extension CoreVideoMetadata {
     }
 }
 
-// MARK: - Engagement Updates
+// MARK: - Engagement Updates (UPDATED: Include description in copy methods)
 
 extension CoreVideoMetadata {
     
@@ -341,6 +408,7 @@ extension CoreVideoMetadata {
         return CoreVideoMetadata(
             id: id,
             title: title,
+            description: description, // Include description in copy
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -378,6 +446,7 @@ extension CoreVideoMetadata {
         return CoreVideoMetadata(
             id: id,
             title: title,
+            description: description, // Include description in copy
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,

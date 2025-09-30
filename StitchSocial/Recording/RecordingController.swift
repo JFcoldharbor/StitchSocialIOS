@@ -2,11 +2,13 @@
 //  RecordingController.swift
 //  StitchSocial
 //
+//  FIXED: Upload timing - now only uploads after user confirms "Post" in ThreadComposer
 //  FIXED: Retain cycle issues causing crashes on exit + tier-based recording durations
 //
 
 import Foundation
 import SwiftUI
+import Photos
 @preconcurrency import AVFoundation
 import FirebaseStorage
 
@@ -322,7 +324,7 @@ class RecordingController: ObservableObject {
         await handleRecordingCompleted(videoURL)
     }
     
-    // MARK: - Post-Recording Processing
+    // MARK: - Post-Recording Processing (FIXED - NO PREMATURE UPLOAD)
     
     private func handleRecordingCompleted(_ videoURL: URL?) async {
         guard let videoURL = videoURL else {
@@ -330,64 +332,93 @@ class RecordingController: ObservableObject {
             return
         }
         
+        print("📹 RECORDING: Video recorded successfully")
+        print("📹 SAVING: Saving to photo gallery as backup")
+        
+        // Save to gallery immediately (backup in case of crash)
+        await saveVideoToGallery(videoURL)
+        
         recordedVideoURL = videoURL
-        currentPhase = .aiProcessing
-        recordingPhase = .aiProcessing
-        
-        print("🎬 POST-PROCESSING: Starting VideoCoordinator workflow")
-        await processVideoWithCoordinator(videoURL: videoURL)
-    }
-    
-    private func processVideoWithCoordinator(videoURL: URL) async {
-        guard let currentUser = authService.currentUser else {
-            handleRecordingError("No authenticated user")
-            return
-        }
-        
-        do {
-            print("🎬 VIDEO COORDINATOR: Starting complete post-processing workflow")
-            
-            let createdVideo = try await videoCoordinator.processVideoCreation(
-                recordedVideoURL: videoURL,
-                recordingContext: recordingContext,
-                userID: currentUser.id,
-                userTier: currentUser.tier
-            )
-            
-            print("✅ VIDEO COORDINATOR: Processing complete")
-            await handleVideoCreationSuccess(createdVideo)
-            
-        } catch {
-            print("❌ VIDEO COORDINATOR: Processing failed - \(error)")
-            handleRecordingError("Video processing failed: \(error.localizedDescription)")
-        }
-    }
-    
-    private func handleVideoCreationSuccess(_ video: CoreVideoMetadata) async {
-        print("🎉 VIDEO CREATION: Success! Video ID: \(video.id)")
-        
         currentPhase = .complete
         recordingPhase = .complete
         
-        // Store AI result if available from coordinator
-        aiAnalysisResult = videoCoordinator.aiAnalysisResult
+        print("✅ RECORDING: Ready for ThreadComposer")
+        print("✅ Upload will occur when user confirms 'Post'")
+    }
+    
+    private func saveVideoToGallery(_ videoURL: URL) async {
+        print("💾 GALLERY: Saving video to user's photo library")
         
-        if let aiResult = aiAnalysisResult {
-            videoMetadata.title = aiResult.title
-            videoMetadata.description = aiResult.description
-            videoMetadata.hashtags = aiResult.hashtags
-            videoMetadata.aiAnalysisComplete = true
-            
-            print("✅ AI RESULTS: Applied to metadata")
-            print("✅ TITLE: '\(aiResult.title)'")
-        } else {
-            print("🔍 MANUAL MODE: No AI results - user will create content manually")
+        await withCheckedContinuation { continuation in
+            PHPhotoLibrary.requestAuthorization { status in
+                guard status == .authorized else {
+                    print("⚠️ GALLERY: Permission denied")
+                    continuation.resume()
+                    return
+                }
+                
+                PHPhotoLibrary.shared().performChanges({
+                    PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: videoURL)
+                }) { success, error in
+                    if success {
+                        print("✅ GALLERY: Video saved successfully")
+                    } else if let error = error {
+                        print("❌ GALLERY: Failed to save - \(error.localizedDescription)")
+                    }
+                    continuation.resume()
+                }
+            }
         }
     }
     
-    // MARK: - Legacy Handlers
+    // MARK: - Legacy Handlers (Updated)
+    
+    func handleVideoRecorded(_ url: URL) {
+        recordedVideoURL = url
+        currentPhase = .aiProcessing
+    }
+    
+    func handleRecordingStateChanged(_ phase: RecordingPhase) {
+        recordingPhase = phase
+        
+        switch phase {
+        case .ready:
+            currentPhase = .ready
+        case .recording:
+            currentPhase = .recording
+        case .stopping:
+            currentPhase = .stopping
+        case .aiProcessing:
+            currentPhase = .aiProcessing
+        case .complete:
+            currentPhase = .complete
+        case .error(let message):
+            currentPhase = .error(message)
+        }
+    }
     
     func handleAIAnalysisComplete(_ result: VideoAnalysisResult?) {
+        print("🧠 DEBUG: AI analysis completed")
+        print("🧠 DEBUG: Result exists: \(result != nil)")
+        
+        if let result = result {
+            print("🧠 DEBUG: AI title: '\(result.title)'")
+            print("🧠 DEBUG: AI description: '\(result.description)'")
+            print("🧠 DEBUG: AI hashtags: \(result.hashtags)")
+            
+            videoMetadata.title = result.title
+            videoMetadata.description = result.description
+            videoMetadata.hashtags = Array(Set(result.hashtags))
+            videoMetadata.aiSuggestedTitles = [
+                result.title,
+                "\(result.title) 🔥",
+                "\(result.title) - What do you think?"
+            ]
+            videoMetadata.aiSuggestedHashtags = result.hashtags
+        } else {
+            print("🧠 DEBUG: AI analysis returned nil - user will create content manually")
+        }
+        
         aiAnalysisResult = result
         videoMetadata.aiAnalysisComplete = true
         currentPhase = .complete
@@ -406,7 +437,7 @@ class RecordingController: ObservableObject {
         resetMetadata()
     }
     
-    // MARK: - Error Handling
+    // MARK: - Error Handling (FIXED)
     
     private func handleRecordingError(_ message: String) {
         stopRecordingTimer()

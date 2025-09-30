@@ -6,6 +6,7 @@
 //  Dependencies: VideoService, AIVideoAnalyzer, VideoProcessingService, VideoUploadService, AudioExtractionService
 //  Orchestrates: Recording → [Audio Extraction + Compression + AI Analysis] → Upload → Feed Integration
 //  OPTIMIZATION: Parallel processing for sub-20 second video creation
+//  FIXED: Manual title/description override support for ThreadComposer
 //
 
 import Foundation
@@ -25,7 +26,7 @@ class VideoCoordinator: ObservableObject {
     private let videoProcessor: VideoProcessingService
     private let uploadService: VideoUploadService
     private let cachingService: CachingService?
-    private let audioExtractor: AudioExtractionService // NEW
+    private let audioExtractor: AudioExtractionService
     
     // MARK: - Workflow State
     
@@ -64,7 +65,7 @@ class VideoCoordinator: ObservableObject {
     
     // MARK: - Configuration
     
-    private let maxRetries = 1 // Reduced for speed
+    private let maxRetries = 1
     private let compressionEnabled = true
     private let aiAnalysisEnabled = true
     private let feedIntegrationEnabled = true
@@ -87,18 +88,21 @@ class VideoCoordinator: ObservableObject {
         self.cachingService = cachingService
         self.audioExtractor = audioExtractor ?? AudioExtractionService()
         
-        print("🎬 VIDEO COORDINATOR: Initialized with PARALLEL PROCESSING")
+        print("🎬 VIDEO COORDINATOR: Initialized with PARALLEL PROCESSING + MANUAL OVERRIDE")
     }
     
-    // MARK: - PARALLEL VIDEO CREATION WORKFLOW
+    // MARK: - PARALLEL VIDEO CREATION WORKFLOW (FIXED: Manual Override Support)
     
-    /// OPTIMIZED: Parallel video creation workflow for sub-20 second processing
+    /// OPTIMIZED: Parallel video creation workflow with MANUAL title/description override
     /// Runs audio extraction, compression, and AI analysis simultaneously
+    /// FIXED: Now accepts optional manual title/description to override AI results
     func processVideoCreation(
         recordedVideoURL: URL,
         recordingContext: RecordingContext,
         userID: String,
-        userTier: UserTier
+        userTier: UserTier,
+        manualTitle: String? = nil,        // NEW: Manual override
+        manualDescription: String? = nil   // NEW: Manual override
     ) async throws -> CoreVideoMetadata {
         
         guard !isProcessing else {
@@ -114,6 +118,14 @@ class VideoCoordinator: ObservableObject {
         print("🎬 VIDEO: \(recordedVideoURL.lastPathComponent)")
         print("🎬 CONTEXT: \(recordingContext)")
         print("🎬 USER: \(userID)")
+        
+        // NEW: Log manual overrides if provided
+        if let manualTitle = manualTitle {
+            print("✍️ MANUAL OVERRIDE: Title = '\(manualTitle)'")
+        }
+        if let manualDescription = manualDescription {
+            print("✍️ MANUAL OVERRIDE: Description = '\(manualDescription)'")
+        }
         
         defer { isProcessing = false }
         
@@ -133,12 +145,14 @@ class VideoCoordinator: ObservableObject {
                 userID: userID
             )
             
-            // PHASE 3: FEED INTEGRATION (90-100%)
+            // PHASE 3: FEED INTEGRATION (90-100%) - FIXED: Pass manual overrides
             let createdVideo = try await performFeedIntegration(
                 uploadResult: uploadResult,
                 analysisResult: parallelResults.aiAnalysis,
                 recordingContext: recordingContext,
-                userID: userID
+                userID: userID,
+                manualTitle: manualTitle,        // NEW: Pass through
+                manualDescription: manualDescription  // NEW: Pass through
             )
             
             // Complete workflow
@@ -155,10 +169,9 @@ class VideoCoordinator: ObservableObject {
         }
     }
     
-    // MARK: - PHASE 1: PARALLEL PROCESSING (FIXED RACE CONDITIONS)
+    // MARK: - PHASE 1: PARALLEL PROCESSING
     
     /// Run audio extraction, compression, and AI analysis in parallel
-    /// FIXED: Proper task collection without ordering assumptions
     private func performParallelProcessing(
         videoURL: URL,
         userID: String,
@@ -171,7 +184,6 @@ class VideoCoordinator: ObservableObject {
         
         print("⚡ PARALLEL: Starting simultaneous audio + compression + AI")
         
-        // FIXED: Use dictionary to collect results without ordering assumptions
         var audioResult: AudioExtractionResult?
         var compressionResult: CompressionResult?
         var aiResult: VideoAnalysisResult?
@@ -185,7 +197,9 @@ class VideoCoordinator: ObservableObject {
                 let audioResult = try await self.audioExtractor.extractAudio(from: videoURL) { progress in
                     Task { @MainActor in
                         self.audioExtractionProgress = progress
-                        await self.updateParallelProgress()
+                        Task {
+                            await self.updateParallelProgress()
+                        }
                     }
                 }
                 
@@ -196,210 +210,105 @@ class VideoCoordinator: ObservableObject {
             group.addTask { [weak self] in
                 guard let self = self else { throw VideoCreationError.unknown("Coordinator deallocated") }
                 
-                let compressionResult = try await self.performFastCompression(videoURL: videoURL) { progress in
-                    Task { @MainActor in
-                        self.compressionProgress = progress
+                print("🗜️ PARALLEL: Starting VideoProcessingService compression with userTier: \(userTier.displayName)")
+                
+                let compressedURL = try await self.videoProcessor.compress(
+                    videoURL: videoURL,
+                    userTier: userTier,
+                    targetSizeMB: 3.0,
+                    progressCallback: { progress in
+                        Task { @MainActor in
+                            self.compressionProgress = progress
+                            Task {
+                                await self.updateParallelProgress()
+                            }
+                        }
+                    }
+                )
+                
+                let originalSize = await self.getFileSize(videoURL)
+                let compressedSize = await self.getFileSize(compressedURL)
+                let ratio = Double(compressedSize) / Double(originalSize)
+                
+                let result = CompressionResult(
+                    originalURL: videoURL,
+                    outputURL: compressedURL,
+                    originalSize: originalSize,
+                    compressedSize: compressedSize,
+                    compressionRatio: ratio,
+                    qualityScore: 0.85,
+                    processingTime: 0
+                )
+                
+                return .compression(result)
+            }
+            
+            // Task 3: AI Analysis
+            group.addTask { [weak self] in
+                guard let self = self else { throw VideoCreationError.unknown("Coordinator deallocated") }
+                
+                print("🧠 PARALLEL: Starting AI analysis")
+                
+                // FIXED: Use correct method name 'analyzeVideo' not 'analyzeVideoContent'
+                let aiResult = await self.aiAnalyzer.analyzeVideo(
+                    url: videoURL,
+                    userID: userID
+                )
+                
+                // Manually update progress since analyzeVideo doesn't have callback
+                await MainActor.run {
+                    self.aiAnalysisProgress = 1.0
+                    Task {
                         await self.updateParallelProgress()
                     }
                 }
                 
-                return .compression(compressionResult)
+                return .aiAnalysis(aiResult)
             }
             
-            // FIXED: Collect tasks in any order without assumptions
+            // Collect results
             for try await task in group {
                 switch task {
                 case .audioExtraction(let result):
                     audioResult = result
-                    extractedAudioURL = result.audioURL
-                    print("✅ PARALLEL: Audio extraction completed in \(String(format: "%.1f", result.extractionTime))s")
-                    
-                    // Start AI analysis after audio is ready (but don't block other tasks)
-                    if aiResult == nil { // Only start once
-                        group.addTask { [weak self] in
-                            guard let self = self else { throw VideoCreationError.unknown("Coordinator deallocated") }
-                            
-                            let aiResult = await self.performFastAIAnalysis(
-                                audioResult: result,
-                                userID: userID,
-                                userTier: userTier
-                            ) { progress in
-                                Task { @MainActor in
-                                    self.aiAnalysisProgress = progress
-                                    await self.updateParallelProgress()
-                                }
-                            }
-                            
-                            return .aiAnalysis(aiResult)
-                        }
-                    }
-                    
+                    print("🎵 PARALLEL: Audio extraction complete")
                 case .compression(let result):
                     compressionResult = result
-                    compressedVideoURL = result.outputURL
-                    print("✅ PARALLEL: Compression completed - \(String(format: "%.1fx", result.compressionRatio)) reduction")
-                    
+                    self.compressionResult = result
+                    self.compressedVideoURL = result.outputURL
+                    print("🗜️ PARALLEL: Compression complete - \(result.compressionRatio * 100)% of original")
                 case .aiAnalysis(let result):
                     aiResult = result
-                    aiAnalysisResult = result
-                    print("✅ PARALLEL: AI analysis completed")
-                }
-                
-                // Check if we have the minimum required results to proceed
-                if let audio = audioResult, let compression = compressionResult {
-                    // We have essential results, can proceed even if AI is still running
-                    await updateProgress(0.7)
-                    currentTask = "Parallel processing complete"
-                    
-                    // Cancel any remaining tasks and return results
-                    group.cancelAll()
-                    
-                    return ParallelProcessingResult(
-                        audioExtraction: audio,
-                        compression: compression,
-                        aiAnalysis: aiResult // May be nil if still running
-                    )
+                    self.aiAnalysisResult = result
+                    if let title = result?.title {
+                        print("🧠 PARALLEL: AI analysis complete - '\(title)'")
+                    } else {
+                        print("🧠 PARALLEL: AI analysis complete - No results")
+                    }
                 }
             }
             
-            // This should not be reached, but handle the case
-            throw VideoCreationError.unknown("Parallel processing incomplete")
-        }
-    }
-    
-    // MARK: - FAST COMPRESSION
-    
-    /// Fast compression optimized for parallel processing
-    private func performFastCompression(
-        videoURL: URL,
-        progressCallback: @escaping (Double) -> Void
-    ) async throws -> CompressionResult {
-        
-        print("🗜️ FAST COMPRESSION: Starting parallel compression")
-        
-        let originalSize = getFileSize(videoURL)
-        let targetSizeMB = 3.0
-        let targetSizeBytes = Int64(targetSizeMB * 1024 * 1024)
-        
-        // Quick size check
-        if originalSize <= targetSizeBytes {
-            progressCallback(1.0)
-            return createSkippedCompressionResult(videoURL: videoURL)
-        }
-        
-        // Fast compression using preset
-        let outputURL = createTemporaryVideoURL()
-        
-        let compressedURL = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
-            let asset = AVAsset(url: videoURL)
-            
-            guard let exportSession = AVAssetExportSession(
-                asset: asset,
-                presetName: AVAssetExportPresetMediumQuality // Balance of speed and quality
-            ) else {
-                continuation.resume(throwing: VideoCreationError.compressionFailed("Export session failed"))
-                return
+            guard let audio = audioResult,
+                  let compression = compressionResult else {
+                throw VideoCreationError.unknown("Parallel processing incomplete")
             }
             
-            exportSession.outputURL = outputURL
-            exportSession.outputFileType = .mov
-            exportSession.shouldOptimizeForNetworkUse = true
+            self.extractedAudioURL = audio.audioURL
             
-            // Progress tracking
-            let timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
-                progressCallback(Double(exportSession.progress))
-            }
+            print("✅ PARALLEL PROCESSING: All tasks complete")
+            await self.updateProgress(0.7)
             
-            exportSession.exportAsynchronously {
-                timer.invalidate()
-                
-                switch exportSession.status {
-                case .completed:
-                    continuation.resume(returning: outputURL)
-                case .failed:
-                    let error = exportSession.error?.localizedDescription ?? "Unknown error"
-                    continuation.resume(throwing: VideoCreationError.compressionFailed(error))
-                case .cancelled:
-                    continuation.resume(throwing: VideoCreationError.compressionFailed("Cancelled"))
-                default:
-                    continuation.resume(throwing: VideoCreationError.compressionFailed("Unexpected status"))
-                }
-            }
-        }
-        
-        let compressedSize = getFileSize(compressedURL)
-        let compressionRatio = Double(originalSize) / Double(compressedSize)
-        
-        let result = CompressionResult(
-            originalURL: videoURL,
-            outputURL: compressedURL,
-            originalSize: originalSize,
-            compressedSize: compressedSize,
-            compressionRatio: compressionRatio,
-            qualityScore: 85.0,
-            processingTime: 0.0
-        )
-        
-        compressionResult = result
-        print("✅ FAST COMPRESSION: \(formatFileSize(originalSize)) → \(formatFileSize(compressedSize))")
-        
-        return result
-    }
-    
-    // MARK: - FAST AI ANALYSIS (FIXED: No Double Audio Extraction)
-    
-    /// FIXED: Use original video URL instead of extracted audio URL to prevent double extraction
-    private func performFastAIAnalysis(
-        audioResult: AudioExtractionResult,
-        userID: String,
-        userTier: UserTier,
-        progressCallback: @escaping (Double) -> Void
-    ) async -> VideoAnalysisResult? {
-        
-        print("🤖 FAST AI: Starting analysis on extracted audio")
-        
-        guard aiAnalysisEnabled else {
-            progressCallback(1.0)
-            return nil
-        }
-        
-        progressCallback(0.2)
-        
-        // FIXED: Use original video URL instead of extracted audio URL
-        // This prevents AIVideoAnalyzer from extracting audio again
-        let analysisTask = Task {
-            return await aiAnalyzer.analyzeVideo(url: audioResult.originalVideoURL, userID: userID)
-        }
-        
-        do {
-            progressCallback(0.5)
-            
-            // Fast timeout - 10 seconds max
-            let result = try await withTimeout(seconds: 10) {
-                await analysisTask.value
-            }
-            
-            progressCallback(1.0)
-            
-            if let result = result {
-                print("✅ FAST AI: Success - Title: '\(result.title)'")
-            } else {
-                print("✅ FAST AI: No result - manual mode")
-            }
-            
-            return result
-            
-        } catch {
-            analysisTask.cancel()
-            progressCallback(1.0)
-            print("⚠️ FAST AI: Timeout (10s) - manual mode")
-            return nil
+            return ParallelProcessingResult(
+                audioExtraction: audio,
+                compression: compression,
+                aiAnalysis: aiResult
+            )
         }
     }
     
     // MARK: - PHASE 2: PARALLEL UPLOAD
     
-    /// Upload with parallel thumbnail generation
+    /// Upload compressed video and thumbnail simultaneously
     private func performParallelUpload(
         compressionResult: CompressionResult,
         aiResult: VideoAnalysisResult?,
@@ -408,10 +317,10 @@ class VideoCoordinator: ObservableObject {
     ) async throws -> VideoUploadResult {
         
         currentPhase = .uploading
-        currentTask = "Starting upload..."
+        currentTask = "Uploading video..."
         await updateProgress(0.7)
         
-        print("☁️ PARALLEL UPLOAD: Starting upload with thumbnail generation")
+        print("☁️ PARALLEL UPLOAD: Starting")
         
         let metadata = VideoUploadMetadata(
             title: aiResult?.title ?? getDefaultTitle(for: recordingContext),
@@ -421,7 +330,6 @@ class VideoCoordinator: ObservableObject {
             creatorName: ""
         )
         
-        // Upload with progress tracking
         let result = try await uploadService.uploadVideo(
             videoURL: compressionResult.outputURL,
             metadata: metadata,
@@ -435,14 +343,16 @@ class VideoCoordinator: ObservableObject {
         return result
     }
     
-    // MARK: - PHASE 3: FEED INTEGRATION (UNCHANGED)
+    // MARK: - PHASE 3: FEED INTEGRATION (FIXED: Manual Override Support)
     
-    /// Feed integration (same as before)
+    /// Feed integration - FIXED: Now respects manual title/description overrides
     private func performFeedIntegration(
         uploadResult: VideoUploadResult,
         analysisResult: VideoAnalysisResult?,
         recordingContext: RecordingContext,
-        userID: String
+        userID: String,
+        manualTitle: String? = nil,        // NEW: Manual override
+        manualDescription: String? = nil   // NEW: Manual override
     ) async throws -> CoreVideoMetadata {
         
         currentPhase = .integrating
@@ -453,13 +363,47 @@ class VideoCoordinator: ObservableObject {
             throw VideoCreationError.feedIntegrationFailed("Invalid data")
         }
         
+        // FIXED: Smart hashtag handling
+        let smartHashtags = generateSmartHashtags(
+            aiHashtags: analysisResult?.hashtags,
+            recordingContext: recordingContext
+        )
+        
+        // CRITICAL FIX: Use manual overrides if provided, otherwise fall back to AI/defaults
+        let finalTitle = manualTitle ?? analysisResult?.title ?? getDefaultTitle(for: recordingContext)
+        let finalDescription = manualDescription ?? analysisResult?.description ?? getDefaultDescription(for: recordingContext)
+        
         let metadata = VideoUploadMetadata(
-            title: (analysisResult?.title ?? "New Video"),
-            description: (analysisResult?.description ?? ""),
-            hashtags: (analysisResult?.hashtags ?? []),
+            title: finalTitle,
+            description: finalDescription,
+            hashtags: smartHashtags,
             creatorID: userID,
             creatorName: ""
         )
+        
+        // NEW: Enhanced logging for debugging
+        if let manual = manualTitle {
+            print("🔗 FEED INTEGRATION: Using MANUAL title: '\(manual)'")
+        } else if let aiTitle = analysisResult?.title {
+            print("🔗 FEED INTEGRATION: Using AI-generated title: '\(aiTitle)'")
+        } else {
+            print("🔗 FEED INTEGRATION: Using default title: '\(finalTitle)'")
+        }
+        
+        if let manual = manualDescription {
+            print("🔗 FEED INTEGRATION: Using MANUAL description: '\(manual)'")
+        } else if let aiDesc = analysisResult?.description {
+            print("🔗 FEED INTEGRATION: Using AI-generated description: '\(aiDesc)'")
+        } else {
+            print("🔗 FEED INTEGRATION: Using default description")
+        }
+        
+        if let aiHashtags = analysisResult?.hashtags, !aiHashtags.isEmpty {
+            print("🔗 FEED INTEGRATION: AI hashtags: \(aiHashtags)")
+            print("🔗 FEED INTEGRATION: Smart hashtags: \(smartHashtags)")
+        } else {
+            print("🔗 FEED INTEGRATION: Using context hashtags: \(smartHashtags)")
+        }
         
         let createdVideo = try await uploadService.createVideoDocument(
             uploadResult: uploadResult,
@@ -472,6 +416,8 @@ class VideoCoordinator: ObservableObject {
         self.createdVideo = createdVideo
         
         print("🔗 FEED INTEGRATION: Success - \(createdVideo.id)")
+        print("🔗 FINAL VIDEO TITLE: '\(createdVideo.title)'")
+        print("🔗 FINAL VIDEO DESCRIPTION: '\(createdVideo.description)'")
         return createdVideo
     }
     
@@ -479,9 +425,9 @@ class VideoCoordinator: ObservableObject {
     
     /// Update combined parallel progress
     private func updateParallelProgress() async {
-        let audioWeight = 0.2    // 20%
-        let compressionWeight = 0.4  // 40%
-        let aiWeight = 0.4       // 40%
+        let audioWeight = 0.2
+        let compressionWeight = 0.4
+        let aiWeight = 0.4
         
         let combinedProgress = (
             audioExtractionProgress * audioWeight +
@@ -489,7 +435,7 @@ class VideoCoordinator: ObservableObject {
             aiAnalysisProgress * aiWeight
         )
         
-        await updateProgress(combinedProgress * 0.7) // 0-70% of total
+        await updateProgress(combinedProgress * 0.7)
         
         let activeTasks = [
             audioExtractionProgress < 1.0 ? "Audio" : nil,
@@ -503,26 +449,22 @@ class VideoCoordinator: ObservableObject {
     }
     
     /// Fast timeout implementation
-    /// FIXED: Proper task cancellation to prevent timeout after success
     private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
         return try await withThrowingTaskGroup(of: T.self) { group in
-            // Add the operation
             group.addTask {
                 try await operation()
             }
             
-            // Add timeout task
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
                 throw VideoCreationError.analysisTimeout
             }
             
-            // Return first completed result and cancel others
             guard let result = try await group.next() else {
                 throw VideoCreationError.analysisTimeout
             }
             
-            group.cancelAll() // Cancel timeout task if operation succeeded
+            group.cancelAll()
             return result
         }
     }
@@ -541,7 +483,7 @@ class VideoCoordinator: ObservableObject {
         print("🎯 TARGET ACHIEVED: \(totalTime < 20 ? "YES" : "NO") (sub-20s)")
     }
     
-    // MARK: - Error Handling & Cleanup (Same as before)
+    // MARK: - Error Handling & Cleanup
     
     private func handleCreationError(_ error: Error) async {
         currentPhase = .error
@@ -551,107 +493,112 @@ class VideoCoordinator: ObservableObject {
     }
     
     private func performCleanup() async {
-        // Cleanup compressed video
         if let compressedURL = compressedVideoURL, compressedURL != recordedVideoURL {
             try? FileManager.default.removeItem(at: compressedURL)
         }
         
-        // Cleanup extracted audio
         if let audioURL = extractedAudioURL {
             try? FileManager.default.removeItem(at: audioURL)
         }
-        
-        audioExtractor.cleanupTemporaryFiles()
-        print("🧹 CLEANUP: All temporary files removed")
     }
-    
-    // MARK: - Utility Methods (Same as before)
     
     private func updateProgress(_ progress: Double) async {
         overallProgress = progress
     }
     
+    /// Generate smart hashtags combining AI + context + trending
+    private func generateSmartHashtags(
+        aiHashtags: [String]?,
+        recordingContext: RecordingContext
+    ) -> [String] {
+        var smartHashtags: [String] = []
+        
+        // 1. AI hashtags (if available)
+        if let aiTags = aiHashtags {
+            smartHashtags.append(contentsOf: aiTags.prefix(3))
+        }
+        
+        // 2. Context-based hashtags
+        switch recordingContext {
+        case .newThread:
+            smartHashtags.append("original")
+        case .stitchToThread:
+            smartHashtags.append("stitch")
+        case .replyToVideo:
+            smartHashtags.append("reply")
+        case .continueThread:
+            smartHashtags.append("continuation")
+        }
+        
+        return Array(Set(smartHashtags)).prefix(5).map { $0 }
+    }
+    
+    /// Get default title based on context
     private func getDefaultTitle(for context: RecordingContext) -> String {
         switch context {
-        case .newThread: return "New Thread"
-        case .stitchToThread: return "Stitch"
-        case .replyToVideo: return "Reply"
-        case .continueThread: return "Thread Continuation"
+        case .newThread:
+            return "New Thread"
+        case .stitchToThread(_, let info):
+            return "Stitch to \(info.creatorName)"
+        case .replyToVideo(_, let info):
+            return "Reply to \(info.creatorName)"
+        case .continueThread(_, let info):
+            return "Continuing: \(info.title)"
         }
     }
     
+    /// Get default description based on context
     private func getDefaultDescription(for context: RecordingContext) -> String {
         switch context {
-        case .newThread: return "Starting a new conversation"
-        case .stitchToThread: return "Stitching to continue the thread"
-        case .replyToVideo: return "Replying to the video"
-        case .continueThread: return "Continuing the thread"
+        case .newThread:
+            return "Check out my new thread!"
+        case .stitchToThread(_, let info):
+            return "Stitching to thread by \(info.creatorName)"
+        case .replyToVideo(_, let info):
+            return "Replying to video by \(info.creatorName)"
+        case .continueThread(_, let info):
+            return "Continuing thread: \(info.title)"
         }
     }
     
+    /// Get default hashtags based on context
     private func getDefaultHashtags(for context: RecordingContext) -> [String] {
         switch context {
-        case .newThread: return ["thread", "newthread"]
-        case .stitchToThread: return ["stitch", "thread"]
-        case .replyToVideo: return ["reply", "response"]
-        case .continueThread: return ["thread", "continue"]
+        case .newThread:
+            return ["newthread", "original"]
+        case .stitchToThread:
+            return ["stitch"]
+        case .replyToVideo:
+            return ["reply"]
+        case .continueThread:
+            return ["continuation"]
         }
     }
     
-    private func createSkippedCompressionResult(videoURL: URL) -> CompressionResult {
-        let fileSize = getFileSize(videoURL)
-        return CompressionResult(
-            originalURL: videoURL,
-            outputURL: videoURL,
-            originalSize: fileSize,
-            compressedSize: fileSize,
-            compressionRatio: 1.0,
-            qualityScore: 100.0,
-            processingTime: 0.0
-        )
-    }
-    
-    private func createTemporaryVideoURL() -> URL {
-        let tempDir = FileManager.default.temporaryDirectory
-        let filename = "compressed_\(UUID().uuidString).mov"
-        return tempDir.appendingPathComponent(filename)
-    }
-    
-    private func getFileSize(_ url: URL) -> Int64 {
+    /// Get file size helper
+    private func getFileSize(_ url: URL) async -> Int64 {
         do {
-            let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey])
-            return Int64(resourceValues.fileSize ?? 0)
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            return attributes[.size] as? Int64 ?? 0
         } catch {
+            print("⚠️ FILE SIZE: Could not get file size for \(url.lastPathComponent)")
             return 0
         }
     }
     
-    private func formatFileSize(_ bytes: Int64) -> String {
+    /// Format file size for display
+    private func formatFileSize(_ bytes: Int64) async -> String {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
-    }
-    
-    /// Calculate average creation time
-    private func calculateAverageCreationTime() -> TimeInterval {
-        // Implementation would track creation times
-        return 45.0 // Placeholder
-    }
-    
-    /// Calculate success rate
-    private func calculateSuccessRate() -> Double {
-        guard creationMetrics.totalVideosCreated > 0 else { return 1.0 }
-        let totalAttempts = creationMetrics.totalVideosCreated + creationMetrics.totalErrorsEncountered
-        return Double(creationMetrics.totalVideosCreated) / Double(totalAttempts)
     }
 }
 
 // MARK: - Supporting Types
 
-/// Updated phases for parallel processing
 enum VideoCreationPhase: String, CaseIterable {
     case ready = "ready"
-    case parallelProcessing = "parallel_processing" // NEW
+    case parallelProcessing = "parallel_processing"
     case uploading = "uploading"
     case integrating = "integrating"
     case complete = "complete"
@@ -669,21 +616,18 @@ enum VideoCreationPhase: String, CaseIterable {
     }
 }
 
-/// Parallel task types
 enum ParallelTask {
     case audioExtraction(AudioExtractionResult)
     case compression(CompressionResult)
     case aiAnalysis(VideoAnalysisResult?)
 }
 
-/// Result from parallel processing phase
 struct ParallelProcessingResult {
     let audioExtraction: AudioExtractionResult
     let compression: CompressionResult
     let aiAnalysis: VideoAnalysisResult?
 }
 
-/// Video creation errors (same as before)
 enum VideoCreationError: LocalizedError {
     case invalidVideo(String)
     case analysisTimeout
@@ -710,7 +654,6 @@ enum VideoCreationError: LocalizedError {
     }
 }
 
-/// Compression result
 struct CompressionResult {
     let originalURL: URL
     let outputURL: URL
@@ -721,7 +664,6 @@ struct CompressionResult {
     let processingTime: TimeInterval
 }
 
-/// Analytics
 struct VideoCreationMetrics {
     var totalVideosCreated: Int = 0
     var totalErrorsEncountered: Int = 0
@@ -732,18 +674,9 @@ struct VideoCreationMetrics {
     var lastErrorType: String = ""
 }
 
-/// Performance statistics
 struct PerformanceStats {
     var averageCreationTime: TimeInterval = 0.0
     var successRate: Double = 1.0
     var lastErrorType: String?
     var sub20SecondCount: Int = 0
-}
-
-/// Compression configuration
-struct CompressionConfig {
-    let targetBitrate: Double
-    let maxResolution: CGSize
-    let quality: Double
-    let frameRate: Double
 }

@@ -1,18 +1,10 @@
 //
-//  SettingsView.swift
+//  SettingsView.swift - UPDATED WITH REFERRAL INTEGRATION
 //  StitchSocial
 //
-//  Created by James Garmon on 9/8/25.
-//
-
-
-//
-//  SettingsView.swift
-//  CleanBeta
-//
-//  Layer 8: Views - Settings Interface
-//  Dependencies: AuthService (Layer 4), Config (Layer 1)
-//  Features: Account management, sign-out, app info
+//  Layer 8: Views - Settings Interface with Referral System
+//  Dependencies: AuthService (Layer 4), ReferralButton (Layer 8), Config (Layer 1)
+//  Features: Account management, referral system, sign-out, app info
 //
 
 import SwiftUI
@@ -36,6 +28,11 @@ struct SettingsView: View {
             VStack(spacing: 0) {
                 accountSection
                 Divider().background(Color.gray.opacity(0.3))
+                
+                // 🆕 NEW: Social Section with Referral Button
+                socialSection
+                Divider().background(Color.gray.opacity(0.3))
+                
                 preferencesSection
                 Divider().background(Color.gray.opacity(0.3))
                 supportSection
@@ -92,42 +89,42 @@ struct SettingsView: View {
         }
     }
     
-    private func accountInfoRow(title: String, value: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 16))
-                .foregroundColor(.gray)
-            
-            Spacer()
-            
-            Text(value)
-                .font(.system(size: 16))
+    // 🆕 NEW: Social Section with Referral Integration
+    private var socialSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Social")
+                .font(.headline)
                 .foregroundColor(.white)
-        }
-        .padding(.vertical, 8)
-    }
-    
-    private var signOutButton: some View {
-        Button(action: { showingSignOutConfirmation = true }) {
-            HStack {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 16))
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+            
+            VStack(spacing: 12) {
+                // 🎯 MAIN FEATURE: Referral Button Integration
+                if let currentUser = authService.currentUser {
+                    ReferralButton(userID: currentUser.id)
+                        .padding(.horizontal, 4) // Small adjustment for visual alignment
+                }
                 
-                Text("Sign Out")
-                    .font(.system(size: 16, weight: .medium))
+                // Additional social settings can go here
+                settingsRow(
+                    icon: "person.2.fill",
+                    title: "Friend Suggestions",
+                    subtitle: "Discover people you might know"
+                ) {
+                    // Future: Navigate to friend suggestions
+                }
                 
-                Spacer()
-                
-                if isSigningOut {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                        .tint(.white)
+                settingsRow(
+                    icon: "heart.fill",
+                    title: "Engagement Settings",
+                    subtitle: "Customize hype and interaction preferences"
+                ) {
+                    // Future: Navigate to engagement settings
                 }
             }
-            .foregroundColor(isSigningOut ? .gray : .red)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
         }
-        .disabled(isSigningOut)
     }
     
     // MARK: - Preferences Section
@@ -243,6 +240,44 @@ struct SettingsView: View {
     }
     
     // MARK: - Helper Views
+    
+    private func accountInfoRow(title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 16))
+                .foregroundColor(.gray)
+            
+            Spacer()
+            
+            Text(value)
+                .font(.system(size: 16))
+                .foregroundColor(.white)
+        }
+        .padding(.vertical, 8)
+    }
+    
+    private var signOutButton: some View {
+        Button(action: { showingSignOutConfirmation = true }) {
+            HStack {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 16))
+                
+                Text("Sign Out")
+                    .font(.system(size: 16, weight: .medium))
+                
+                Spacer()
+                
+                if isSigningOut {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                        .tint(.white)
+                }
+            }
+            .foregroundColor(isSigningOut ? .gray : .red)
+            .padding(.vertical, 12)
+        }
+        .disabled(isSigningOut)
+    }
     
     private func settingsRow(
         icon: String,

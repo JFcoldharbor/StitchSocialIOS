@@ -48,6 +48,9 @@ struct ContextualVideoOverlay: View {
     // Real user data lookup
     @State private var realCreatorName: String?
     @State private var realThreadCreatorName: String?
+    @State private var realCreatorProfileImageURL: String?
+    @State private var realThreadCreatorProfileImageURL: String?
+    @State private var videoDescription: String?
     @State private var isLoadingUserData = false
     
     // Recording state
@@ -215,6 +218,9 @@ struct ContextualVideoOverlay: View {
             // Clear cached data when video changes
             realCreatorName = nil
             realThreadCreatorName = nil
+            realCreatorProfileImageURL = nil
+            realThreadCreatorProfileImageURL = nil
+            videoDescription = nil
             isLoadingUserData = false
             
             // Reload for new video
@@ -561,67 +567,44 @@ struct ContextualVideoOverlay: View {
     
     // FIXED: Enhanced creator pill with universal tap navigation and profile pictures
     private func creatorPill(creator: CoreVideoMetadata, isThread: Bool, colors: [Color]) -> some View {
-        // Determine correct display name based on which creator this pill represents
+        // Determine correct display name and profile image based on which creator this pill represents
         let displayName: String
+        let profileImageURL: String?
+        
         if creator.creatorID == video.creatorID {
             // This is the video creator
             displayName = displayCreatorName
-        } else if let threadVideo = threadVideo, creator.creatorID == threadVideo.creatorID {
+            profileImageURL = realCreatorProfileImageURL
+        } else {
             // This is the thread creator
             displayName = displayThreadCreatorName
-        } else {
-            // Fallback to creator's stored name
-            displayName = creator.creatorName
+            profileImageURL = realThreadCreatorProfileImageURL
         }
         
         return SwiftUI.Button {
-            print("🔍 CREATOR PILL: Tapped creator pill for userID: \(creator.creatorID)")
-            print("🔍 CREATOR PILL: Context: \(context)")
-            print("🔍 CREATOR PILL: Should use fullscreen: \(shouldUseFullscreenPresentation)")
-            
+            print("🎬 CREATOR PILL: Tapped creator pill for userID: \(creator.creatorID)")
             selectedUserID = creator.creatorID
-            
-            // FIXED: Context-aware presentation selection with debugging
-            if shouldUseFullscreenPresentation {
-                print("📱 CREATOR PILL: Setting showingProfileFullscreen = true")
-                showingProfileFullscreen = true
-            } else {
-                // Fallback - should not be used since we always use fullscreen now
-                print("📋 CREATOR PILL: Setting showingProfileSheet = true")
-                showingProfileFullscreen = true // Force fullscreen even in fallback
-            }
-            
+            showingProfileFullscreen = true
             onAction?(.profile(creator.creatorID))
         } label: {
             HStack(spacing: isThread ? 8 : 6) {
-                // FIXED: Profile picture avatar with border and debugging
-                Button {
-                    // Same action as pill - navigate to profile
-                    print("🔍 PROFILE PICTURE: Tapped profile picture for userID: \(creator.creatorID)")
-                    selectedUserID = creator.creatorID
-                    if shouldUseFullscreenPresentation {
-                        print("📱 PROFILE: Using fullscreen presentation")
-                        showingProfileFullscreen = true
-                    } else {
-                        // Fallback - should not be used since we always use fullscreen now
-                        print("📋 PROFILE: Using fullscreen presentation (forced)")
-                        showingProfileFullscreen = true // Force fullscreen even in fallback
-                    }
-                    onAction?(.profile(creator.creatorID))
-                } label: {
-                    ZStack {
-                        Circle()
-                            .fill(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
-                            .frame(width: isThread ? 28 : 22, height: isThread ? 28 : 22)
-                            .shadow(color: colors.first?.opacity(0.5) ?? .clear, radius: 6, x: 0, y: 2)
-                        
-                        // Profile picture - Load from user data when available
-                        AsyncThumbnailView.avatar(url: "")
-                            .frame(width: isThread ? 24 : 18, height: isThread ? 24 : 18)
-                            .clipShape(Circle())
-                    }
+                // Profile picture with real image URL and proper fallback
+                AsyncImage(url: URL(string: profileImageURL ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Circle()
+                        .fill(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .overlay(
+                            Text(String(displayName.prefix(1)).uppercased())
+                                .font(.system(size: isThread ? 10 : 8, weight: .bold))
+                                .foregroundColor(.white)
+                        )
                 }
-                .buttonStyle(PlainButtonStyle())
+                .frame(width: isThread ? 28 : 22, height: isThread ? 28 : 22)
+                .clipShape(Circle())
+                .shadow(color: colors.first?.opacity(0.5) ?? .clear, radius: 6, x: 0, y: 2)
                 
                 // Name and context
                 VStack(alignment: .leading, spacing: 1) {
@@ -776,14 +759,27 @@ struct ContextualVideoOverlay: View {
         .buttonStyle(ContextualScaleButtonStyle())
     }
     
-    // MARK: - FIXED: Video Title View - Static text, no background
+    // MARK: - FIXED: Video Title and Description View - Static text, no background
     private var videoTitleView: some View {
-        Text(video.title)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundColor(.white)
-            .lineLimit(2)
-            .multilineTextAlignment(.leading)
-            .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
+        VStack(alignment: .leading, spacing: 4) {
+            // Video Title
+            Text(video.title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 1)
+            
+            // Video Description (if available)
+            if let description = videoDescription, !description.isEmpty {
+                Text(description)
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundColor(.white.opacity(0.8))
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .shadow(color: .black.opacity(0.6), radius: 1, x: 0, y: 1)
+            }
+        }
     }
     
     private var metadataRow: some View {
@@ -946,10 +942,9 @@ struct ContextualVideoOverlay: View {
         if let user = try? await userService.getUser(id: video.creatorID) {
             await MainActor.run {
                 realCreatorName = user.displayName
-                // TODO: Add realCreatorImageURL state variable and set it here
-                // realCreatorImageURL = user.profileImageURL
+                realCreatorProfileImageURL = user.profileImageURL
             }
-            print("DEBUG: Loaded creator name: \(user.displayName) for video: \(video.title)")
+            print("DEBUG: Loaded creator name: \(user.displayName), profile image: \(user.profileImageURL ?? "none") for video: \(video.title)")
         } else {
             print("DEBUG: Failed to load user for creatorID: \(video.creatorID)")
         }
@@ -959,10 +954,9 @@ struct ContextualVideoOverlay: View {
             if let threadUser = try? await userService.getUser(id: threadVideo.creatorID) {
                 await MainActor.run {
                     realThreadCreatorName = threadUser.displayName
-                    // TODO: Add realThreadCreatorImageURL state variable and set it here
-                    // realThreadCreatorImageURL = threadUser.profileImageURL
+                    realThreadCreatorProfileImageURL = threadUser.profileImageURL
                 }
-                print("DEBUG: Loaded thread creator name: \(threadUser.displayName)")
+                print("DEBUG: Loaded thread creator name: \(threadUser.displayName), profile image: \(threadUser.profileImageURL ?? "none")")
             }
         }
         
@@ -991,8 +985,11 @@ struct ContextualVideoOverlay: View {
             
             await MainActor.run {
                 videoEngagement = engagement
+                // Use description from CoreVideoMetadata now that it includes description field
+                videoDescription = video.description.isEmpty ? nil : video.description
             }
             print("✅ CONTEXTUAL OVERLAY: Loaded FRESH engagement data - \(engagement.hypeCount) hypes, \(engagement.coolCount) cools")
+            print("✅ CONTEXTUAL OVERLAY: Video description: \(videoDescription ?? "none")")
             
         } catch {
             print("❌ CONTEXTUAL OVERLAY: Failed to load fresh engagement data - \(error)")
@@ -1011,9 +1008,12 @@ struct ContextualVideoOverlay: View {
             
             await MainActor.run {
                 videoEngagement = engagement
+                // Use description from video metadata even in fallback mode
+                videoDescription = video.description.isEmpty ? nil : video.description
             }
             
             print("⚠️ CONTEXTUAL OVERLAY: Using fallback engagement data - \(engagement.hypeCount) hypes, \(engagement.coolCount) cools")
+            print("⚠️ CONTEXTUAL OVERLAY: Video description: \(videoDescription ?? "none")")
         }
     }
     

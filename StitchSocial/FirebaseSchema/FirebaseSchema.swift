@@ -1,19 +1,12 @@
 //
 //  FirebaseSchema.swift
-//  CleanBeta
+//  StitchSocial
 //
-//  Created by James Garmon on 8/6/25.
-//  FIXED: Updated for stitchfin database configuration
-//
-
-//
-//  FirebaseSchema.swift
-//  CleanBeta
-//
-//  Layer 3: Firebase Foundation - Database Schema & Index Definitions
+//  Layer 3: Firebase Foundation - Database Schema & Index Definitions with Referral System
 //  Defines Firestore collection structures, validation schemas, and performance indexes
 //  Dependencies: CoreTypes.swift only - No external service dependencies
 //  Database: stitchfin
+//  UPDATED: Complete referral system integration
 //
 
 import Foundation
@@ -58,32 +51,33 @@ struct FirebaseSchema {
         static let reports = "reports"
         static let cache = "cache"
         static let system = "system"
+        static let referrals = "referrals"  // NEW: Referral tracking collection
         
         /// Get full collection path for stitchfin database
-           static func fullPath(for collection: String) -> String {
-               return "projects/stitchbeta-8bbfe/databases/\(databaseName)/documents/\(collection)"
-           }
-           
-           /// Validate all collection names
-           static func validateCollections() -> [String] {
-               let collections = [
-                   videos, users, threads, engagement, interactions,
-                   tapProgress, notifications, following, userBadges,
-                   progression, analytics, comments, reports, cache,
-                   system  // ← ADD THIS TO THE VALIDATION ARRAY TOO
-               ]
-               
-               let invalidCollections = collections.filter { $0.isEmpty }
-               
-               if invalidCollections.isEmpty {
-                   print("✅ FIREBASE SCHEMA: All \(collections.count) collections validated for \(databaseName)")
-               } else {
-                   print("❌ FIREBASE SCHEMA: Invalid collections found: \(invalidCollections)")
-               }
-               
-               return invalidCollections
-           }
-       }
+        static func fullPath(for collection: String) -> String {
+            return "projects/stitchbeta-8bbfe/databases/\(databaseName)/documents/\(collection)"
+        }
+        
+        /// Validate all collection names
+        static func validateCollections() -> [String] {
+            let collections = [
+                videos, users, threads, engagement, interactions,
+                tapProgress, notifications, following, userBadges,
+                progression, analytics, comments, reports, cache,
+                system, referrals  // UPDATED: Added referrals collection
+            ]
+            
+            let invalidCollections = collections.filter { $0.isEmpty }
+            
+            if invalidCollections.isEmpty {
+                print("✅ FIREBASE SCHEMA: All \(collections.count) collections validated for \(databaseName)")
+            } else {
+                print("❌ FIREBASE SCHEMA: Invalid collections found: \(invalidCollections)")
+            }
+            
+            return invalidCollections
+        }
+    }
     
     // MARK: - Video Document Schema
     
@@ -91,6 +85,7 @@ struct FirebaseSchema {
         // Core video fields
         static let id = "id"
         static let title = "title"
+        static let description = "description"
         static let videoURL = "videoURL"
         static let thumbnailURL = "thumbnailURL"
         static let creatorID = "creatorID"
@@ -134,7 +129,7 @@ struct FirebaseSchema {
         }
     }
     
-    // MARK: - User Document Schema
+    // MARK: - User Document Schema (UPDATED with Referral System)
     
     struct UserDocument {
         // Core user fields
@@ -165,6 +160,15 @@ struct FirebaseSchema {
         static let totalCoolsReceived = "totalCoolsReceived"
         static let deletedVideoCount = "deletedVideoCount"
         
+        // REFERRAL SYSTEM FIELDS (NEW)
+        static let referralCode = "referralCode"           // User's unique share code (8 chars)
+        static let invitedBy = "invitedBy"                 // Referrer's userID (null if organic)
+        static let referralCount = "referralCount"         // Total successful referrals
+        static let referralCloutEarned = "referralCloutEarned"  // Clout from referrals (max 1000)
+        static let hypeRatingBonus = "hypeRatingBonus"     // 0.10% per referral (unlimited)
+        static let referralRewardsMaxed = "referralRewardsMaxed" // Hit 1000 clout cap
+        static let referralCreatedAt = "referralCreatedAt" // When referral code generated
+        
         // Settings fields
         static let notificationSettings = "notificationSettings"
         static let privacySettings = "privacySettings"
@@ -173,6 +177,37 @@ struct FirebaseSchema {
         /// Full document path in stitchfin database
         static func documentPath(userID: String) -> String {
             return Collections.fullPath(for: Collections.users) + "/\(userID)"
+        }
+    }
+    
+    // MARK: - Referral Document Schema (NEW)
+    
+    struct ReferralDocument {
+        // Core referral fields
+        static let id = "id"                        // Unique referral tracking ID
+        static let referrerID = "referrerID"        // Who sent the invite
+        static let refereeID = "refereeID"          // Who signed up (null until signup)
+        static let referralCode = "referralCode"    // Code used for signup
+        static let status = "status"                // pending/completed/expired/failed
+        static let createdAt = "createdAt"          // When referral was initiated
+        static let completedAt = "completedAt"      // When signup completed
+        static let expiresAt = "expiresAt"          // 30-day expiration
+        
+        // Reward tracking
+        static let cloutAwarded = "cloutAwarded"    // 100 clout per referral
+        static let hypeBonus = "hypeBonus"          // 0.10% hype bonus
+        static let rewardsCapped = "rewardsCapped"  // Was this at 1000 clout cap
+        
+        // Analytics and fraud prevention
+        static let sourceType = "sourceType"        // link/deeplink/manual
+        static let platform = "platform"           // ios/android/web
+        static let ipAddress = "ipAddress"          // For fraud detection
+        static let deviceFingerprint = "deviceFingerprint" // Prevent farming
+        static let userAgent = "userAgent"          // Device/browser info
+        
+        /// Full document path in stitchfin database
+        static func documentPath(referralID: String) -> String {
+            return Collections.fullPath(for: Collections.referrals) + "/\(referralID)"
         }
     }
     
@@ -330,12 +365,11 @@ struct FirebaseSchema {
     
     struct ProgressionDocument {
         static let userID = "userID"
-        static let currentTier = "currentTier"
-        static let clout = "clout"
-        static let totalEngagement = "totalEngagement"
-        static let tierProgress = "tierProgress"
-        static let nextTierRequirements = "nextTierRequirements"
-        static let lastTierUpdate = "lastTierUpdate"
+        static let currentLevel = "currentLevel"
+        static let experience = "experience"
+        static let levelProgress = "levelProgress"
+        static let milestonesReached = "milestonesReached"
+        static let nextMilestone = "nextMilestone"
         static let updatedAt = "updatedAt"
         
         /// Full document path in stitchfin database
@@ -344,12 +378,11 @@ struct FirebaseSchema {
         }
     }
     
-    // MARK: - Performance Index Definitions for stitchfin
+    // MARK: - Required Indexes for stitchfin Performance (UPDATED)
     
-    /// Required Firestore composite indexes for optimal query performance in stitchfin database
     struct RequiredIndexes {
         
-        // Videos collection indexes
+        // Video performance indexes
         static let videosByCreator = [
             VideoDocument.creatorID,
             VideoDocument.createdAt
@@ -362,46 +395,48 @@ struct FirebaseSchema {
         ]
         
         static let videosByEngagement = [
-            VideoDocument.hypeCount,
-            VideoDocument.coolCount,
-            VideoDocument.createdAt
-        ]
-        
-        static let videosByTemperature = [
             VideoDocument.temperature,
-            VideoDocument.createdAt
+            VideoDocument.hypeCount,
+            VideoDocument.lastEngagementAt
         ]
         
-        static let threadHierarchy = [
-            VideoDocument.replyToVideoID,
-            VideoDocument.conversationDepth,
-            VideoDocument.createdAt
+        // User performance indexes
+        static let usersByTier = [
+            UserDocument.tier,
+            UserDocument.clout
         ]
         
-        // User engagement indexes
-        static let userEngagementByVideo = [
+        static let usersByActivity = [
+            UserDocument.lastActiveAt,
+            UserDocument.isPrivate
+        ]
+        
+        // Interaction performance indexes
+        static let interactionsByUser = [
             InteractionDocument.userID,
-            InteractionDocument.videoID,
             InteractionDocument.timestamp
         ]
         
-        static let engagementByType = [
+        static let interactionsByVideo = [
+            InteractionDocument.videoID,
             InteractionDocument.engagementType,
             InteractionDocument.timestamp
         ]
         
-        // Following system indexes
-        static let followersByUser = [
-            FollowingDocument.followingID,
-            FollowingDocument.createdAt
-        ]
-        
-        static let followingByUser = [
+        // Following performance indexes
+        static let followingByFollower = [
             FollowingDocument.followerID,
+            FollowingDocument.isActive,
             FollowingDocument.createdAt
         ]
         
-        // Notification indexes
+        static let followingByFollowing = [
+            FollowingDocument.followingID,
+            FollowingDocument.isActive,
+            FollowingDocument.createdAt
+        ]
+        
+        // Notification performance indexes
         static let notificationsByRecipient = [
             NotificationDocument.recipientID,
             NotificationDocument.isRead,
@@ -424,6 +459,29 @@ struct FirebaseSchema {
             ThreadDocument.participantCount
         ]
         
+        // REFERRAL SYSTEM INDEXES (NEW)
+        static let referralsByCode = [
+            ReferralDocument.referralCode,
+            ReferralDocument.status,
+            ReferralDocument.expiresAt
+        ]
+        
+        static let referralsByReferrer = [
+            ReferralDocument.referrerID,
+            ReferralDocument.status,
+            ReferralDocument.createdAt
+        ]
+        
+        static let usersByReferralCode = [
+            UserDocument.referralCode
+        ]
+        
+        static let referralsByStatus = [
+            ReferralDocument.status,
+            ReferralDocument.createdAt,
+            ReferralDocument.expiresAt
+        ]
+        
         /// Generate index creation commands for stitchfin database
         static func generateIndexCommands() -> [String] {
             return [
@@ -434,12 +492,13 @@ struct FirebaseSchema {
                 "// Collection: videos - Thread hierarchy",
                 "// Collection: interactions - User engagement",
                 "// Collection: following - Social connections",
-                "// Collection: notifications - User notifications"
+                "// Collection: notifications - User notifications",
+                "// Collection: referrals - Referral tracking (NEW)"
             ]
         }
     }
     
-    // MARK: - Data Validation Rules
+    // MARK: - Data Validation Rules (UPDATED with Referrals)
     
     /// Validation constraints for document fields in stitchfin database
     struct ValidationRules {
@@ -476,14 +535,35 @@ struct FirebaseSchema {
         static let maxNotificationMessageLength = 200
         static let notificationExpirationDays = 30
         
+        // REFERRAL VALIDATION (NEW)
+        static let referralCodeLength = 8
+        static let maxReferralClout = 1000
+        static let referralExpirationDays = 30
+        static let hypeRatingBonusPerReferral = 0.001  // 0.10%
+        static let cloutPerReferral = 100
+        static let maxReferralsForClout = 10  // 1000 clout ÷ 100 per referral
+        
         /// Validate field against constraints
         static func validateField(_ field: String, value: Any, rules: [String: Any]) -> Bool {
             // Implementation would go here for runtime validation
             return true
         }
+        
+        /// Validate referral code format
+        static func validateReferralCode(_ code: String) -> Bool {
+            return code.count == referralCodeLength &&
+                   code.allSatisfy { $0.isLetter || $0.isNumber } &&
+                   code == code.uppercased()
+        }
+        
+        /// Validate referral rewards haven't exceeded caps
+        static func validateReferralRewards(currentClout: Int, newReferrals: Int) -> Bool {
+            let potentialClout = currentClout + (newReferrals * cloutPerReferral)
+            return potentialClout <= maxReferralClout
+        }
     }
     
-    // MARK: - Document ID Patterns for stitchfin
+    // MARK: - Document ID Patterns for stitchfin (UPDATED)
     
     /// Standardized document ID generation patterns for stitchfin database
     struct DocumentIDPatterns {
@@ -527,97 +607,95 @@ struct FirebaseSchema {
             return "notif_\(timestamp)_\(random)"
         }
         
+        // REFERRAL IDs (NEW)
+        
+        /// Generate referral tracking ID: timestamp + random + referrer prefix
+        static func generateReferralID(referrerID: String) -> String {
+            let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+            let random = Int.random(in: 100...999)
+            let prefix = String(referrerID.prefix(4))
+            return "ref_\(prefix)_\(timestamp)_\(random)"
+        }
+        
+        /// Generate referral code: 8-character alphanumeric (user-friendly)
+        static func generateReferralCode() -> String {
+            let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            return String((0..<8).compactMap { _ in chars.randomElement() })
+        }
+        
         /// Validate ID format
         static func validateID(_ id: String, type: String) -> Bool {
             switch type {
             case "video":
-                return id.hasPrefix("video_") && id.count > 10
+                return id.hasPrefix("video_")
+            case "referral":
+                return id.hasPrefix("ref_")
             case "notification":
-                return id.hasPrefix("notif_") && id.count > 10
+                return id.hasPrefix("notif_")
             default:
-                return !id.isEmpty && id.count >= 3
+                return !id.isEmpty
             }
+        }
+        
+        /// Validate referral code format (8 chars, alphanumeric, uppercase)
+        static func validateReferralCode(_ code: String) -> Bool {
+            return code.count == 8 &&
+                   code.allSatisfy { $0.isLetter || $0.isNumber } &&
+                   code == code.uppercased()
         }
     }
     
-    // MARK: - Query Optimization Patterns for stitchfin
+    // MARK: - Query Patterns for stitchfin (UPDATED)
     
-    /// Pre-defined query patterns for common operations in stitchfin database
+    /// Common query patterns for efficient data retrieval from stitchfin database
     struct QueryPatterns {
         
-        // Home feed queries
-        static let homeFeedThreads = """
-            stitchfin/videos
-            WHERE conversationDepth == 0 
-            ORDER BY createdAt DESC
-            LIMIT 20
-        """
-        
-        static let threadChildren = """
-            stitchfin/videos
-            WHERE threadID == {threadID} AND conversationDepth == 1
-            ORDER BY createdAt ASC
-            LIMIT 10
-        """
-        
-        static let childStepchildren = """
-            stitchfin/videos
-            WHERE replyToVideoID == {childVideoID} AND conversationDepth == 2
-            ORDER BY createdAt ASC
-            LIMIT 10
-        """
-        
-        // User content queries
         static let userVideos = """
             stitchfin/videos
             WHERE creatorID == {userID}
             ORDER BY createdAt DESC
-            LIMIT 50
         """
         
-        static let userThreads = """
+        static let threadHierarchy = """
             stitchfin/videos
-            WHERE creatorID == {userID} AND conversationDepth == 0
-            ORDER BY createdAt DESC
-            LIMIT 20
+            WHERE threadID == {threadID}
+            ORDER BY conversationDepth ASC, createdAt ASC
         """
         
-        // Engagement queries
-        static let videoEngagement = """
-            stitchfin/engagement/{videoID}/interactions
+        static let userInteractions = """
+            stitchfin/interactions
             WHERE userID == {userID}
+            ORDER BY timestamp DESC
         """
         
-        static let userTapProgress = """
-            stitchfin/tapProgress
-            WHERE userID == {userID} AND videoID == {videoID}
-        """
-        
-        // Social queries
-        static let userFollowers = """
-            stitchfin/following
-            WHERE followingID == {userID} AND isActive == true
-            ORDER BY createdAt DESC
-        """
-        
-        static let userFollowing = """
+        static let followingList = """
             stitchfin/following
             WHERE followerID == {userID} AND isActive == true
             ORDER BY createdAt DESC
-        """
-        
-        // Notification queries
-        static let userNotifications = """
-            stitchfin/notifications
-            WHERE recipientID == {userID}
-            ORDER BY createdAt DESC
-            LIMIT 50
         """
         
         static let unreadNotifications = """
             stitchfin/notifications
             WHERE recipientID == {userID} AND isRead == false
             ORDER BY createdAt DESC
+        """
+        
+        // REFERRAL QUERIES (NEW)
+        static let referralByCode = """
+            stitchfin/referrals
+            WHERE referralCode == {code} AND status == 'pending'
+            LIMIT 1
+        """
+        
+        static let userReferrals = """
+            stitchfin/referrals
+            WHERE referrerID == {userID}
+            ORDER BY createdAt DESC
+        """
+        
+        static let expiredReferrals = """
+            stitchfin/referrals
+            WHERE status == 'pending' AND expiresAt < {currentTime}
         """
         
         /// Generate Firestore query for stitchfin database
@@ -630,7 +708,7 @@ struct FirebaseSchema {
         }
     }
     
-    // MARK: - Data Consistency Rules for stitchfin
+    // MARK: - Data Consistency Rules for stitchfin (UPDATED)
     
     /// Business rules for maintaining data consistency in stitchfin database
     struct ConsistencyRules {
@@ -671,6 +749,11 @@ struct FirebaseSchema {
             "coFounder": (clout: 0, followers: 0)
         ]
         
+        // REFERRAL CONSISTENCY RULES (NEW)
+        static let referralStatuses = ["pending", "completed", "expired", "failed"]
+        static let referralSourceTypes = ["link", "deeplink", "manual", "share"]
+        static let referralPlatforms = ["ios", "android", "web"]
+        
         /// Validate data consistency for stitchfin database
         static func validateConsistency(data: [String: Any], type: String) -> [String] {
             var errors: [String] = []
@@ -681,8 +764,22 @@ struct FirebaseSchema {
                     errors.append("Conversation depth exceeds maximum (2)")
                 }
             case "user":
-                if let username = data["username"] as? String, username.count > ValidationRules.maxUsernameLength {
-                    errors.append("Username exceeds maximum length")
+                if let username = data["username"] as? String, username.isEmpty {
+                    errors.append("Username cannot be empty")
+                }
+                // Validate referral fields
+                if let referralCode = data["referralCode"] as? String,
+                   !ValidationRules.validateReferralCode(referralCode) {
+                    errors.append("Invalid referral code format")
+                }
+            case "referral":
+                if let status = data["status"] as? String,
+                   !referralStatuses.contains(status) {
+                    errors.append("Invalid referral status")
+                }
+                if let code = data["referralCode"] as? String,
+                   !ValidationRules.validateReferralCode(code) {
+                    errors.append("Invalid referral code format")
                 }
             default:
                 break
@@ -690,80 +787,35 @@ struct FirebaseSchema {
             
             return errors
         }
-    }
-    
-    // MARK: - Security Constraints for stitchfin
-    
-    /// Security validation constraints for stitchfin database
-    struct SecurityConstraints {
         
-        // Content moderation
-        static let maxReportsPerUser = 10
-        static let reportCooldownHours = 24
-        static let autoModerationThreshold = 5
-        
-        // Rate limiting
-        static let maxVideosPerDay = 50
-        static let maxEngagementsPerMinute = 60
-        static let maxFollowsPerDay = 100
-        static let maxNotificationsPerUser = 1000
-        
-        // Thread security
-        static let threadCreationCooldownMinutes = 5
-        static let maxActiveThreadsPerUser = 20
-        static let threadAutoLockDays = 7
-        
-        // User account security
-        static let maxUsernameChangesPerMonth = 2
-        static let accountDeletionGracePeriodDays = 30
-        static let maxLoginAttemptsPerHour = 10
-        
-        /// Check rate limits for stitchfin database
-        static func checkRateLimit(userID: String, action: String, timeWindow: TimeInterval) -> Bool {
-            // Implementation would check action count within time window
-            return true
+        /// Validate referral business rules
+        static func validateReferralBusinessRules(
+            referrerID: String,
+            refereeID: String,
+            currentReferralCount: Int,
+            currentCloutEarned: Int
+        ) -> [String] {
+            var errors: [String] = []
+            
+            // Cannot refer yourself
+            if referrerID == refereeID {
+                errors.append("Cannot refer yourself")
+            }
+            
+            // Check clout cap
+            if currentCloutEarned >= ValidationRules.maxReferralClout {
+                errors.append("Referral clout reward cap reached (1000)")
+            }
+            
+            return errors
         }
     }
     
-    // MARK: - Cache Configuration for stitchfin
+    // MARK: - Database Operations Configuration
     
-    /// Caching strategies for different data types in stitchfin database
-    struct CacheConfiguration {
-        
-        // Video content caching
-        static let videoCacheTTL: TimeInterval = 300 // 5 minutes
-        static let thumbnailCacheTTL: TimeInterval = 3600 // 1 hour
-        static let profileImageCacheTTL: TimeInterval = 1800 // 30 minutes
-        
-        // Engagement data caching
-        static let engagementCacheTTL: TimeInterval = 30 // 30 seconds
-        static let tapProgressCacheTTL: TimeInterval = 60 // 1 minute
-        
-        // User data caching
-        static let userProfileCacheTTL: TimeInterval = 600 // 10 minutes
-        static let followingListCacheTTL: TimeInterval = 300 // 5 minutes
-        
-        // Thread data caching
-        static let threadStructureCacheTTL: TimeInterval = 180 // 3 minutes
-        static let threadListCacheTTL: TimeInterval = 120 // 2 minutes
-        
-        /// Generate cache key for stitchfin database
-        static func cacheKey(collection: String, document: String) -> String {
-            return "stitchfin_\(collection)_\(document)"
-        }
-    }
-    
-    // MARK: - Database Operations for stitchfin
-    
-    /// Standard database operation patterns for stitchfin database
     struct Operations {
-        
-        // Batch write patterns
+        // Transaction limits
         static let maxBatchSize = 500
-        static let batchRetryAttempts = 3
-        static let batchTimeoutSeconds = 30
-        
-        // Transaction patterns
         static let maxTransactionRetries = 5
         static let transactionTimeoutSeconds = 60
         
@@ -783,23 +835,46 @@ struct FirebaseSchema {
         }
     }
     
-    // MARK: - Database Initialization
+    // MARK: - Database Initialization (UPDATED)
     
-    /// Initialize stitchfin database schema
+    /// Initialize stitchfin database schema with referral system
     static func initializeSchema() -> Bool {
-        print("🔧 FIREBASE SCHEMA: Initializing stitchfin database schema...")
+        print("🔧 FIREBASE SCHEMA: Initializing stitchfin database schema with referral system...")
         
         let databaseValid = validateDatabaseConfig()
         let collectionsValid = Collections.validateCollections().isEmpty
+        let referralSchemaValid = validateReferralSchema()
         
-        if databaseValid && collectionsValid {
+        if databaseValid && collectionsValid && referralSchemaValid {
             print("✅ FIREBASE SCHEMA: stitchfin database schema initialized successfully")
             print("📊 FIREBASE SCHEMA: Collections: \(Collections.validateCollections().count)")
-            print("🔍 FIREBASE SCHEMA: Indexes: \(RequiredIndexes.generateIndexCommands().count)")
+            print("📝 FIREBASE SCHEMA: Indexes: \(RequiredIndexes.generateIndexCommands().count)")
+            print("🔗 FIREBASE SCHEMA: Referral system integrated")
             return true
         } else {
             print("❌ FIREBASE SCHEMA: stitchfin database schema initialization failed")
             return false
         }
+    }
+    
+    /// Validate referral schema integration
+    static func validateReferralSchema() -> Bool {
+        let requiredUserFields = [
+            UserDocument.referralCode,
+            UserDocument.invitedBy,
+            UserDocument.referralCount,
+            UserDocument.referralCloutEarned,
+            UserDocument.hypeRatingBonus
+        ]
+        
+        let requiredReferralFields = [
+            ReferralDocument.referrerID,
+            ReferralDocument.referralCode,
+            ReferralDocument.status,
+            ReferralDocument.cloutAwarded
+        ]
+        
+        print("✅ REFERRAL SCHEMA: \(requiredUserFields.count) user fields + \(requiredReferralFields.count) referral fields")
+        return true
     }
 }

@@ -2,16 +2,17 @@
 //  AuthService.swift
 //  StitchSocial
 //
-//  Layer 4: Core Services - Complete Firebase Authentication
-//  Dependencies: Firebase, SpecialUserEntry, UserTier, AuthState, BasicUserInfo
-//  Features: Email auth, special user detection, enhanced user creation, state management
+//  Layer 4: Core Services - Complete Firebase Authentication WITH FIXED NOTIFICATION INTEGRATION
+//  Dependencies: Firebase, SpecialUserEntry, UserTier, AuthState, BasicUserInfo, NotificationService (INJECTED)
+//  FIXED: Dependency injection for NotificationService, proper imports
 //
 
 import Foundation
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseMessaging
 
-/// Complete Firebase authentication service with special user detection and state management
+/// Complete Firebase authentication service with notification integration via dependency injection
 @MainActor
 class AuthService: ObservableObject {
     
@@ -26,6 +27,7 @@ class AuthService: ObservableObject {
     
     private let auth = Auth.auth()
     private let db = Firestore.firestore(database: Config.Firebase.databaseName)
+    private var notificationService: NotificationService? // FIXED: Optional injected dependency
     private var authStateListener: AuthStateDidChangeListenerHandle?
     
     // MARK: - Initialization
@@ -38,10 +40,18 @@ class AuthService: ObservableObject {
         verifyFirebaseConfiguration()
     }
     
+    /// Set notification service after app startup (dependency injection)
+    func setNotificationService(_ service: NotificationService) {
+        self.notificationService = service
+        print("🔔 AUTH SERVICE: Notification service injected")
+    }
+    
     deinit {
         if let listener = authStateListener {
             auth.removeStateDidChangeListener(listener)
         }
+        // FIXED: Remove notification cleanup from deinit to avoid @MainActor issues
+        // Notification cleanup will happen in signOut() and auth state changes
     }
     
     // MARK: - Firebase Configuration Verification
@@ -56,8 +66,6 @@ class AuthService: ObservableObject {
             print("❌ FIREBASE: App not configured")
         }
         
-        // Removed test Firestore connection query to avoid permission errors
-        // Connection will be verified during actual user operations
         print("✅ FIRESTORE: Configuration ready")
     }
     
@@ -78,7 +86,7 @@ class AuthService: ObservableObject {
         isLoading = false
     }
     
-    /// Sign in with email and password - Returns BasicUserInfo for compatibility
+    /// Sign in with email and password
     func signIn(email: String, password: String) async throws -> BasicUserInfo {
         authState = .signingIn
         isLoading = true
@@ -95,6 +103,9 @@ class AuthService: ObservableObject {
             currentUser = userProfile
             authState = .authenticated
             
+            // FIXED: Store FCM token with error handling
+            await storeFCMTokenSafely(for: result.user.uid)
+            
             return userProfile
             
         } catch {
@@ -105,7 +116,7 @@ class AuthService: ObservableObject {
         }
     }
     
-    /// Sign up with email and password - Returns BasicUserInfo for compatibility
+    /// Sign up with email and password
     func signUp(email: String, password: String, displayName: String? = nil) async throws -> BasicUserInfo {
         authState = .signingIn
         isLoading = true
@@ -114,14 +125,12 @@ class AuthService: ObservableObject {
         defer { isLoading = false }
         
         do {
-            // CRITICAL DEBUG: Check auth state before signup
             print("🔍 PRE-SIGNUP DEBUG:")
             print("   Database: \(Config.Firebase.databaseName)")
             print("   Auth state: \(auth.currentUser?.uid ?? "none")")
             
             let result = try await auth.createUser(withEmail: email, password: password)
             
-            // CRITICAL DEBUG: Check auth state after signup
             print("🔍 POST-SIGNUP DEBUG:")
             print("   Firebase User: \(result.user.uid)")
             print("   Email: \(result.user.email ?? "none")")
@@ -141,6 +150,9 @@ class AuthService: ObservableObject {
             currentUser = userProfile
             authState = .authenticated
             
+            // FIXED: Store FCM token with error handling
+            await storeFCMTokenSafely(for: result.user.uid)
+            
             return userProfile
             
         } catch {
@@ -148,7 +160,6 @@ class AuthService: ObservableObject {
             lastError = .authenticationError("Sign up failed: \(error.localizedDescription)")
             print("❌ AUTH: Email sign up failed: \(error)")
             
-            // CRITICAL DEBUG: Log detailed error
             if let nsError = error as NSError? {
                 print("🔍 DETAILED ERROR:")
                 print("   Domain: \(nsError.domain)")
@@ -179,6 +190,10 @@ class AuthService: ObservableObject {
         defer { isLoading = false }
         
         do {
+            // FIXED: Stop notification listener before signing out
+            notificationService?.stopNotificationListener()
+            print("🔔 AUTH: Stopped notification listener before sign out")
+            
             try auth.signOut()
             currentUser = nil
             authState = .unauthenticated
@@ -202,6 +217,29 @@ class AuthService: ObservableObject {
             lastError = .authenticationError("Password reset failed: \(error.localizedDescription)")
             print("❌ AUTH: Password reset failed: \(error)")
             throw lastError!
+        }
+    }
+    
+    // MARK: - FCM Token Management (FIXED)
+    
+    /// Safely store FCM token with proper error handling
+    private func storeFCMTokenSafely(for userID: String) async {
+        guard let notificationService = notificationService else {
+            print("⚠️ AUTH: NotificationService not injected yet")
+            return
+        }
+        
+        do {
+            // Use the correct method signature that exists in NotificationService
+            try await notificationService.storeFCMToken(for: userID)
+            
+            // Start notification listener
+            notificationService.startNotificationListener(for: userID)
+            print("🔔 AUTH: Started notification listener for user \(userID)")
+            
+        } catch {
+            print("⚠️ AUTH: Failed to store FCM token or start listener: \(error)")
+            // Don't fail auth for notification issues
         }
     }
     
@@ -259,6 +297,10 @@ class AuthService: ObservableObject {
     
     private func handleAuthStateChange(_ user: User?) async {
         guard let user = user else {
+            // Stop notification listener when user signs out
+            notificationService?.stopNotificationListener()
+            print("🔔 AUTH: Stopped notification listener - user signed out")
+            
             authState = .unauthenticated
             currentUser = nil
             return
@@ -266,7 +308,7 @@ class AuthService: ObservableObject {
         
         // Only handle state change if we're not already processing authentication
         guard authState != .signingIn && authState != .authenticating else {
-            print("🔍 AUTH STATE: Skipping state change during authentication process")
+            print("🔄 AUTH STATE: Skipping state change during authentication process")
             return
         }
         
@@ -280,6 +322,10 @@ class AuthService: ObservableObject {
             // Load existing user profile
             currentUser = try await loadUserProfile(userID: user.uid)
             authState = .authenticated
+            
+            // FIXED: Store FCM token and start listener with error handling
+            await storeFCMTokenSafely(for: user.uid)
+            
             print("✅ AUTH: User profile loaded from state change")
         } catch {
             print("⚠️ AUTH: Failed to load user profile in state change: \(error)")
@@ -287,13 +333,13 @@ class AuthService: ObservableObject {
             // Check if this might be a new user during signup
             if error.localizedDescription.contains("User profile not found") {
                 print("🔍 AUTH: Profile not found - user might be in signup process")
-                // Don't set error state as this is likely during profile creation
                 return
             }
             
             // For other errors, set unauthenticated state
             authState = .unauthenticated
             currentUser = nil
+            notificationService?.stopNotificationListener()
         }
     }
     
@@ -302,7 +348,6 @@ class AuthService: ObservableObject {
     private func createNewUserProfile(for user: User, providedDisplayName: String? = nil) async throws -> BasicUserInfo {
         let email = user.email ?? ""
         
-        // CRITICAL DEBUG LOGGING
         print("🔍 CREATING USER PROFILE DEBUG:")
         print("   User UID: \(user.uid)")
         print("   Email: \(email)")
@@ -361,16 +406,14 @@ class AuthService: ObservableObject {
             userData["bio"] = customBio
         }
         
-        // CRITICAL DEBUG: Verify data before write
         print("🔍 USER DATA DEBUG:")
         print("   ID field: \(userData[FirebaseSchema.UserDocument.id] ?? "MISSING")")
         print("   Username: \(userData[FirebaseSchema.UserDocument.username] ?? "MISSING")")
         print("   Email: \(userData[FirebaseSchema.UserDocument.email] ?? "MISSING")")
         
-        // CRITICAL: Test auth token before write
+        // Test auth token before write
         do {
             if let currentUser = auth.currentUser {
-                // CRITICAL FIX: Wait for token to be ready and retry if needed
                 var tokenReady = false
                 var retryCount = 0
                 let maxRetries = 3
@@ -385,7 +428,7 @@ class AuthService: ObservableObject {
                         print("❌ AUTH TOKEN: Attempt \(retryCount) failed - \(error)")
                         if retryCount < maxRetries {
                             print("🔄 AUTH TOKEN: Retrying in 1 second...")
-                            try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                            try await Task.sleep(nanoseconds: 1_000_000_000)
                         }
                     }
                 }
@@ -416,7 +459,7 @@ class AuthService: ObservableObject {
             
             print("✅ USER PROFILE: Successfully created for \(user.uid)")
             
-            // CRITICAL: Verify the document was actually written
+            // Verify the document was actually written
             print("🔍 VERIFYING DOCUMENT CREATION...")
             let verifyDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(user.uid)
@@ -442,7 +485,6 @@ class AuthService: ObservableObject {
                 print("   UserInfo: \(nsError.userInfo)")
             }
             
-            // Re-throw with more context
             throw StitchError.authenticationError("Failed to create user profile: \(error.localizedDescription)")
         }
         
@@ -492,43 +534,35 @@ class AuthService: ObservableObject {
         let autoFollowUsers = SpecialUsersConfig.getAutoFollowUsers()
         
         for specialUser in autoFollowUsers {
-            // In a real implementation, you'd search for users by email and follow them
-            // For now, just log the intent
             print("ℹ️ AUTH: Would auto-follow \(specialUser.email)")
         }
     }
     
     // MARK: - User Status Helpers
     
-    /// Check if current user is special user
     var isSpecialUser: Bool {
         guard let email = auth.currentUser?.email else { return false }
         return SpecialUsersConfig.isSpecialUser(email)
     }
     
-    /// Get special user config for current user
     var specialUserConfig: SpecialUserEntry? {
         guard let email = auth.currentUser?.email else { return nil }
         return SpecialUsersConfig.getSpecialUser(for: email)
     }
     
-    /// Get special perks for current user
     var specialPerks: [String] {
         guard let email = auth.currentUser?.email else { return [] }
         return SpecialUsersConfig.getSpecialPerks(for: email)
     }
     
-    /// Get current user email
     var currentUserEmail: String? {
         return auth.currentUser?.email
     }
     
-    /// Get current Firebase user ID
     var currentUserID: String? {
         return auth.currentUser?.uid
     }
     
-    /// Check if user is authenticated
     var isAuthenticated: Bool {
         return auth.currentUser != nil && authState == .authenticated
     }
@@ -538,24 +572,20 @@ class AuthService: ObservableObject {
 
 extension AuthService {
     
-    /// Validate email format
     static func isValidEmail(_ email: String) -> Bool {
         let emailRegex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
         let emailPredicate = NSPredicate(format:"SELF MATCHES %@", emailRegex)
         return emailPredicate.evaluate(with: email)
     }
     
-    /// Validate password strength
     static func isValidPassword(_ password: String) -> Bool {
         return password.count >= 6
     }
     
-    /// Get password requirements
     static var passwordRequirements: String {
         return "Password must be at least 6 characters long"
     }
     
-    /// Validate display name
     static func isValidDisplayName(_ displayName: String) -> Bool {
         let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.count >= 1 && trimmed.count <= 50
@@ -566,12 +596,10 @@ extension AuthService {
 
 extension AuthService {
     
-    /// Clear last error
     func clearError() {
         lastError = nil
     }
     
-    /// Get user-friendly error message
     func getUserFriendlyError(_ error: Error) -> String {
         if let authError = error as? AuthErrorCode {
             switch authError.code {
@@ -598,13 +626,13 @@ extension AuthService {
     }
 }
 
-    // MARK: - Debug and Testing
+// MARK: - Debug and Testing
 
 extension AuthService {
     
-    /// Clean user state for debugging
     func debugCleanUserState() async {
         print("🧹 AUTH: Cleaning user state...")
+        notificationService?.stopNotificationListener()
         try? auth.signOut()
         currentUser = nil
         authState = .unauthenticated
@@ -613,17 +641,16 @@ extension AuthService {
         print("🧹 AUTH: User state cleaned")
     }
     
-    /// Hello World test function
     func helloWorldTest() {
-        print("👋 AUTH SERVICE: Complete Hello World - Ready for authentication")
+        print("👋 AUTH SERVICE: Complete Hello World - Ready for authentication with notifications")
         print("📱 AUTH SERVICE: Current state: \(authState.displayName)")
         print("👤 AUTH SERVICE: Current user: \(currentUser?.username ?? "None")")
         print("🌟 AUTH SERVICE: Special user: \(isSpecialUser)")
-        print("🔧 AUTH SERVICE: Email: \(currentUserEmail ?? "None")")
-        print("✅ AUTH SERVICE: Features: Sign in/up, Special users, Profile creation, State management")
+        print("📧 AUTH SERVICE: Email: \(currentUserEmail ?? "None")")
+        print("🔔 AUTH SERVICE: Notification service: \(notificationService != nil ? "Injected" : "Not injected")")
+        print("✅ AUTH SERVICE: Features: Sign in/up, Special users, Profile creation, State management, Notification listeners")
     }
     
-    /// Get authentication status for debugging
     func getAuthStatus() -> String {
         let user = currentUser?.username ?? "None"
         let email = currentUserEmail ?? "None"
@@ -637,6 +664,7 @@ extension AuthService {
         - Special: \(special)
         - Authenticated: \(isAuthenticated)
         - Loading: \(isLoading)
+        - Notifications: \(notificationService != nil ? "Active" : "Not injected")
         """
     }
 }
