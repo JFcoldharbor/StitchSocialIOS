@@ -442,20 +442,20 @@ class ProfileViewModel: ObservableObject {
     }
     
     func deleteVideo(_ video: CoreVideoMetadata) async -> Bool {
-        do {
-            try await videoService.deleteVideo(videoID: video.id, creatorID: video.creatorID)
-            
-            // Remove from local array
-            userVideos.removeAll { $0.id == video.id }
-            
-            print("PROFILE: Video deleted successfully")
-            return true
-        } catch {
-            errorMessage = "Failed to delete video: \(error.localizedDescription)"
-            print("PROFILE ERROR: Delete failed - \(error.localizedDescription)")
-            return false
+            do {
+                try await videoService.deleteVideo(videoID: video.id)
+                
+                // Remove from local array
+                userVideos.removeAll { $0.id == video.id }
+                
+                print("PROFILE: Video deleted successfully")
+                return true
+            } catch {
+                errorMessage = "Failed to delete video: \(error.localizedDescription)"
+                print("PROFILE ERROR: Delete failed - \(error.localizedDescription)")
+                return false
+            }
         }
-    }
     
     // MARK: - Computed Properties
     

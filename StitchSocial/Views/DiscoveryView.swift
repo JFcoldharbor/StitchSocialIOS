@@ -1,18 +1,16 @@
 //
-//  DiscoveryView.swift
+//  DiscoveryView with Progressive Loading
 //  StitchSocial
 //
-//  Layer 8: Views - Content Discovery Interface with Fullscreen Transition
-//  Dependencies: DiscoverySwipeCards, FullscreenVideoView
-//  Features: Mode toggle, category filtering, seamless fullscreen transition
+//  TikTok-style infinite scroll with intelligent content batching
 //
 
 import SwiftUI
-import AVFoundation
-import AVKit
+import Foundation
 import FirebaseAuth
+import FirebaseFirestore
 
-// MARK: - Discovery Mode
+// MARK: - Discovery Mode & Category (ORIGINAL)
 
 enum DiscoveryMode: String, CaseIterable {
     case swipe = "swipe"
@@ -32,8 +30,6 @@ enum DiscoveryMode: String, CaseIterable {
         }
     }
 }
-
-// MARK: - Discovery Category
 
 enum DiscoveryCategory: String, CaseIterable {
     case all = "all"
@@ -63,377 +59,302 @@ enum DiscoveryCategory: String, CaseIterable {
     }
 }
 
-// MARK: - Discovery ViewModel
+// MARK: - Progressive Loading State
+
+struct LoadingState {
+    var isInitialLoading = false
+    var isLoadingMore = false
+    var hasMoreContent = true
+    var loadingBatch = 0
+    var totalLoaded = 0
+    var lastLoadTime = Date()
+}
+
+// MARK: - Discovery ViewModel with Progressive Loading
 
 @MainActor
 class DiscoveryViewModel: ObservableObject {
+    // Published properties
     @Published var videos: [CoreVideoMetadata] = []
     @Published var filteredVideos: [CoreVideoMetadata] = []
-    @Published var isLoading = false
+    @Published var loadingState = LoadingState()
     @Published var currentCategory: DiscoveryCategory = .all
     @Published var errorMessage: String?
     
-    private let videoService = VideoService()
+    // Progressive loading configuration
+    let initialBatchSize = 40       // Increased from 20 to 40 for better grid experience
+    let subsequentBatchSize = 20    // Increased from 10 to 20 for smoother loading
+    private let triggerLoadThreshold = 10  // Load more when 10 videos remaining (more aggressive)
+    private let maxCachedVideos = 300     // Increased cache for much better grid experience
     
-    func loadContent() async {
-        isLoading = true
-        defer { isLoading = false }
+    // Services and state
+    private let videoService = VideoService()
+    private var allAvailableVideos: [CoreVideoMetadata] = []
+    private var lastDocument: DocumentSnapshot?
+    
+    // MARK: - Initial Loading
+    
+    func loadInitialContent() async {
+        guard !loadingState.isInitialLoading else { return }
+        
+        loadingState.isInitialLoading = true
+        defer { loadingState.isInitialLoading = false }
         
         do {
-            let result = try await videoService.getAllThreadsWithChildren(limit: 50)
-            videos = result.threads.map { $0.parentVideo }
-            filteredVideos = videos
-            errorMessage = nil
-            print("DISCOVERY VM: Loaded \(videos.count) videos")
+            print("🎯 DISCOVERY: Loading initial batch (\(initialBatchSize) videos)")
+            
+            // FIXED: Use fast parent-only loading
+            let result = try await videoService.getDiscoveryParentThreadsOnly(limit: initialBatchSize)
+            let loadedVideos = result.threads.map { $0.parentVideo }
+            
+            await MainActor.run {
+                allAvailableVideos = loadedVideos
+                lastDocument = result.lastDocument
+                loadingState.hasMoreContent = result.hasMore
+                loadingState.totalLoaded = loadedVideos.count
+                loadingState.loadingBatch = 1
+                
+                // Apply category filter and light shuffle
+                applyFilterAndShuffle()
+                
+                errorMessage = nil
+                print("✅ DISCOVERY: Initial load complete - \(filteredVideos.count) videos ready")
+            }
         } catch {
-            errorMessage = "Failed to load discovery content"
-            videos = []
-            filteredVideos = []
-            print("DISCOVERY VM: Failed to load content: \(error)")
+            await MainActor.run {
+                errorMessage = "Failed to load discovery content"
+                print("❌ DISCOVERY: Initial load failed: \(error)")
+            }
         }
     }
+    
+    // MARK: - Progressive Loading
+    
+    func checkAndLoadMore(currentIndex: Int) async {
+        // Check if we need to load more content
+        let remainingCount = filteredVideos.count - currentIndex
+        
+        guard remainingCount <= triggerLoadThreshold,
+              !loadingState.isLoadingMore,
+              loadingState.hasMoreContent else {
+            return
+        }
+        
+        await loadMoreContent()
+    }
+    
+    private func loadMoreContent() async {
+        guard !loadingState.isLoadingMore else { return }
+        
+        loadingState.isLoadingMore = true
+        defer { loadingState.isLoadingMore = false }
+        
+        do {
+            print("🔥 DISCOVERY: Loading more content (batch \(loadingState.loadingBatch + 1))")
+            
+            // FIXED: Use fast parent-only loading
+            let result = try await videoService.getDiscoveryParentThreadsOnly(
+                limit: subsequentBatchSize,
+                lastDocument: lastDocument
+            )
+            let newVideos = result.threads.map { $0.parentVideo }
+            
+            await MainActor.run {
+                // Add to available videos
+                allAvailableVideos.append(contentsOf: newVideos)
+                lastDocument = result.lastDocument
+                loadingState.hasMoreContent = result.hasMore
+                loadingState.totalLoaded += newVideos.count
+                loadingState.loadingBatch += 1
+                loadingState.lastLoadTime = Date()
+                
+                // Apply filter and add to current feed
+                let newFilteredVideos = applyCurrentFilter(to: newVideos)
+                let lightShuffledNew = lightShuffle(videos: newFilteredVideos)
+                filteredVideos.append(contentsOf: lightShuffledNew)
+                
+                // Memory management - remove old videos if cache gets too large
+                manageMemory()
+                
+                print("✅ DISCOVERY: Loaded \(newVideos.count) more videos (total: \(filteredVideos.count))")
+            }
+        } catch {
+            print("❌ DISCOVERY: Failed to load more content: \(error)")
+        }
+    }
+    
+    // MARK: - Refresh Content
+    
+    func refreshContent() async {
+        // Reset state
+        allAvailableVideos = []
+        lastDocument = nil
+        loadingState = LoadingState()
+        
+        // Load fresh content
+        await loadInitialContent()
+    }
+    
+    // MARK: - Randomize Content
+    
+    func randomizeContent() {
+        // Shuffle all available videos
+        allAvailableVideos = allAvailableVideos.shuffled()
+        
+        // Re-apply current filter with shuffle
+        applyFilterAndShuffle()
+        
+        print("🎲 DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
+    }
+    
+    private func manageMemory() {
+        if filteredVideos.count > maxCachedVideos {
+            let videosToRemove = filteredVideos.count - maxCachedVideos
+            filteredVideos.removeFirst(videosToRemove)
+            print("🧹 DISCOVERY: Removed \(videosToRemove) old videos for memory management")
+        }
+    }
+    
+    // MARK: - Filtering and Shuffling
     
     func filterBy(category: DiscoveryCategory) {
         currentCategory = category
-        
-        switch category {
-        case .all:
-            filteredVideos = videos
-        case .trending:
-            filteredVideos = videos.filter { $0.temperature == "hot" || $0.temperature == "blazing" }
-        case .recent:
-            filteredVideos = videos.sorted { $0.createdAt > $1.createdAt }
-        case .popular:
-            filteredVideos = videos.sorted { $0.hypeCount > $1.hypeCount }
-        case .following:
-            filteredVideos = videos
-        }
-        
-        print("DISCOVERY VM: Filtered to \(filteredVideos.count) videos for \(category.displayName)")
+        applyFilterAndShuffle()
     }
     
+    private func applyFilterAndShuffle() {
+        let filtered = applyCurrentFilter(to: allAvailableVideos)
+        filteredVideos = lightShuffle(videos: filtered)
+        print("🔄 DISCOVERY: Applied \(currentCategory.displayName) filter - \(filteredVideos.count) videos")
+    }
+    
+    private func applyCurrentFilter(to videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
+        switch currentCategory {
+        case .all:
+            return videos
+        case .trending:
+            return videos.filter { $0.temperature == "hot" || $0.temperature == "blazing" }
+        case .recent:
+            return videos.sorted { $0.createdAt > $1.createdAt }
+        case .popular:
+            return videos.sorted { $0.hypeCount > $1.hypeCount }
+        case .following:
+            return videos // TODO: Filter by followed users
+        }
+    }
+    
+    // MARK: - Light Shuffle (Fast Performance)
+    
+    private func lightShuffle(videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
+        var shuffled = videos.shuffled()
+        
+        // Simple rule: prevent same creator back-to-back
+        var result: [CoreVideoMetadata] = []
+        var remaining = shuffled
+        
+        while !remaining.isEmpty {
+            let lastCreatorID = result.last?.creatorID
+            
+            if let differentIndex = remaining.firstIndex(where: { $0.creatorID != lastCreatorID }) {
+                result.append(remaining.remove(at: differentIndex))
+            } else {
+                result.append(remaining.removeFirst())
+            }
+        }
+        
+        return result
+    }
+    
+    // MARK: - Engagement Updates
+    
     func updateVideoEngagement(videoID: String, type: InteractionType) {
-        // Update both main videos and filtered videos
-        if let index = videos.firstIndex(where: { $0.id == videoID }) {
-            var updatedVideo = videos[index]
-            switch type {
-            case .hype:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount,
-                    hypeCount: updatedVideo.hypeCount + 1,
-                    coolCount: updatedVideo.coolCount,
-                    replyCount: updatedVideo.replyCount,
-                    shareCount: updatedVideo.shareCount,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            case .cool:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount,
-                    hypeCount: updatedVideo.hypeCount,
-                    coolCount: updatedVideo.coolCount + 1,
-                    replyCount: updatedVideo.replyCount,
-                    shareCount: updatedVideo.shareCount,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            case .share:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount,
-                    hypeCount: updatedVideo.hypeCount,
-                    coolCount: updatedVideo.coolCount,
-                    replyCount: updatedVideo.replyCount,
-                    shareCount: updatedVideo.shareCount + 1,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            case .view:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount + 1,
-                    hypeCount: updatedVideo.hypeCount,
-                    coolCount: updatedVideo.coolCount,
-                    replyCount: updatedVideo.replyCount,
-                    shareCount: updatedVideo.shareCount,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            case .reply:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount,
-                    hypeCount: updatedVideo.hypeCount,
-                    coolCount: updatedVideo.coolCount,
-                    replyCount: updatedVideo.replyCount + 1,
-                    shareCount: updatedVideo.shareCount,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            }
-            videos[index] = updatedVideo
-        }
+        // Update in both arrays efficiently
+        updateVideoInArray(&allAvailableVideos, videoID: videoID, type: type)
+        updateVideoInArray(&filteredVideos, videoID: videoID, type: type)
+        print("📊 DISCOVERY: Updated \(type.rawValue) for video \(videoID)")
+    }
+    
+    private func updateVideoInArray(_ array: inout [CoreVideoMetadata], videoID: String, type: InteractionType) {
+        guard let index = array.firstIndex(where: { $0.id == videoID }) else { return }
         
-        // Apply same logic to filteredVideos
-        if let filteredIndex = filteredVideos.firstIndex(where: { $0.id == videoID }) {
-            var updatedVideo = filteredVideos[filteredIndex]
-            switch type {
-            case .hype:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount,
-                    hypeCount: updatedVideo.hypeCount + 1,
-                    coolCount: updatedVideo.coolCount,
-                    replyCount: updatedVideo.replyCount,
-                    shareCount: updatedVideo.shareCount,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            case .cool:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount,
-                    hypeCount: updatedVideo.hypeCount,
-                    coolCount: updatedVideo.coolCount + 1,
-                    replyCount: updatedVideo.replyCount,
-                    shareCount: updatedVideo.shareCount,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            case .share:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount,
-                    hypeCount: updatedVideo.hypeCount,
-                    coolCount: updatedVideo.coolCount,
-                    replyCount: updatedVideo.replyCount,
-                    shareCount: updatedVideo.shareCount + 1,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            case .view:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount + 1,
-                    hypeCount: updatedVideo.hypeCount,
-                    coolCount: updatedVideo.coolCount,
-                    replyCount: updatedVideo.replyCount,
-                    shareCount: updatedVideo.shareCount,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            case .reply:
-                updatedVideo = CoreVideoMetadata(
-                    id: updatedVideo.id,
-                    title: updatedVideo.title,
-                    videoURL: updatedVideo.videoURL,
-                    thumbnailURL: updatedVideo.thumbnailURL,
-                    creatorID: updatedVideo.creatorID,
-                    creatorName: updatedVideo.creatorName,
-                    createdAt: updatedVideo.createdAt,
-                    threadID: updatedVideo.threadID,
-                    replyToVideoID: updatedVideo.replyToVideoID,
-                    conversationDepth: updatedVideo.conversationDepth,
-                    viewCount: updatedVideo.viewCount,
-                    hypeCount: updatedVideo.hypeCount,
-                    coolCount: updatedVideo.coolCount,
-                    replyCount: updatedVideo.replyCount + 1,
-                    shareCount: updatedVideo.shareCount,
-                    temperature: updatedVideo.temperature,
-                    qualityScore: updatedVideo.qualityScore,
-                    engagementRatio: updatedVideo.engagementRatio,
-                    velocityScore: updatedVideo.velocityScore,
-                    trendingScore: updatedVideo.trendingScore,
-                    duration: updatedVideo.duration,
-                    aspectRatio: updatedVideo.aspectRatio,
-                    fileSize: updatedVideo.fileSize,
-                    discoverabilityScore: updatedVideo.discoverabilityScore,
-                    isPromoted: updatedVideo.isPromoted,
-                    lastEngagementAt: updatedVideo.lastEngagementAt
-                )
-            }
-            filteredVideos[filteredIndex] = updatedVideo
+        var updatedVideo = array[index]
+        switch type {
+        case .hype:
+            updatedVideo = CoreVideoMetadata(
+                id: updatedVideo.id,
+                title: updatedVideo.title,
+                videoURL: updatedVideo.videoURL,
+                thumbnailURL: updatedVideo.thumbnailURL,
+                creatorID: updatedVideo.creatorID,
+                creatorName: updatedVideo.creatorName,
+                createdAt: updatedVideo.createdAt,
+                threadID: updatedVideo.threadID,
+                replyToVideoID: updatedVideo.replyToVideoID,
+                conversationDepth: updatedVideo.conversationDepth,
+                viewCount: updatedVideo.viewCount,
+                hypeCount: updatedVideo.hypeCount + 1,
+                coolCount: updatedVideo.coolCount,
+                replyCount: updatedVideo.replyCount,
+                shareCount: updatedVideo.shareCount,
+                temperature: updatedVideo.temperature,
+                qualityScore: updatedVideo.qualityScore,
+                engagementRatio: updatedVideo.engagementRatio,
+                velocityScore: updatedVideo.velocityScore,
+                trendingScore: updatedVideo.trendingScore,
+                duration: updatedVideo.duration,
+                aspectRatio: updatedVideo.aspectRatio,
+                fileSize: updatedVideo.fileSize,
+                discoverabilityScore: updatedVideo.discoverabilityScore,
+                isPromoted: updatedVideo.isPromoted,
+                lastEngagementAt: updatedVideo.lastEngagementAt
+            )
+        case .cool:
+            updatedVideo = CoreVideoMetadata(
+                id: updatedVideo.id,
+                title: updatedVideo.title,
+                videoURL: updatedVideo.videoURL,
+                thumbnailURL: updatedVideo.thumbnailURL,
+                creatorID: updatedVideo.creatorID,
+                creatorName: updatedVideo.creatorName,
+                createdAt: updatedVideo.createdAt,
+                threadID: updatedVideo.threadID,
+                replyToVideoID: updatedVideo.replyToVideoID,
+                conversationDepth: updatedVideo.conversationDepth,
+                viewCount: updatedVideo.viewCount,
+                hypeCount: updatedVideo.hypeCount,
+                coolCount: updatedVideo.coolCount + 1,
+                replyCount: updatedVideo.replyCount,
+                shareCount: updatedVideo.shareCount,
+                temperature: updatedVideo.temperature,
+                qualityScore: updatedVideo.qualityScore,
+                engagementRatio: updatedVideo.engagementRatio,
+                velocityScore: updatedVideo.velocityScore,
+                trendingScore: updatedVideo.trendingScore,
+                duration: updatedVideo.duration,
+                aspectRatio: updatedVideo.aspectRatio,
+                fileSize: updatedVideo.fileSize,
+                discoverabilityScore: updatedVideo.discoverabilityScore,
+                isPromoted: updatedVideo.isPromoted,
+                lastEngagementAt: updatedVideo.lastEngagementAt
+            )
+        default:
+            break
         }
-        
-        print("DISCOVERY VM: Updated \(type.rawValue) for video \(videoID)")
+        array[index] = updatedVideo
     }
 }
 
-// MARK: - Main Discovery View
+// MARK: - Enhanced DiscoveryView with Progressive Loading
 
 struct DiscoveryView: View {
+    // MARK: - State
     @StateObject private var viewModel = DiscoveryViewModel()
     @EnvironmentObject private var authService: AuthService
-    @StateObject private var engagementCoordinator = EngagementCoordinator(
+    @StateObject private var engagementManager = EngagementManager(
         videoService: VideoService(),
-        notificationService: NotificationService()
+        userService: UserService()
     )
     
-    // MARK: - State
     @State private var selectedCategory: DiscoveryCategory = .all
     @State private var discoveryMode: DiscoveryMode = .swipe
     @State private var currentSwipeIndex: Int = 0
@@ -460,15 +381,15 @@ struct DiscoveryView: View {
                     .ignoresSafeArea()
                     
                     VStack(spacing: 0) {
-                        // Header
+                        // Header with Loading Indicator
                         headerView
                         
                         // Category Selector
                         categorySelector
                         
                         // Content
-                        if viewModel.isLoading && viewModel.videos.isEmpty {
-                            loadingView
+                        if viewModel.loadingState.isInitialLoading {
+                            initialLoadingView
                         } else if let errorMessage = viewModel.errorMessage {
                             errorView(errorMessage)
                         } else {
@@ -480,12 +401,10 @@ struct DiscoveryView: View {
                 // Fullscreen Mode
                 if let video = selectedVideo {
                     FullscreenVideoView(video: video) {
-                        // Dismiss callback
                         withAnimation(.easeInOut(duration: 0.4)) {
                             isFullscreenMode = false
                         }
                         selectedVideo = nil
-                        print("FULLSCREEN: Dismissed back to discovery")
                     }
                     .ignoresSafeArea()
                     .transition(.move(edge: .bottom))
@@ -495,28 +414,22 @@ struct DiscoveryView: View {
         .navigationBarHidden(isFullscreenMode)
         .statusBarHidden(isFullscreenMode)
         .task {
-            print("DISCOVERY: Starting loadContent task")
-            await viewModel.loadContent()
-            print("DISCOVERY: Loaded \(viewModel.filteredVideos.count) videos")
+            // Only load if we don't have content already (prevents reloading on tab switch)
+            if viewModel.filteredVideos.isEmpty {
+                await viewModel.loadInitialContent()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RefreshDiscovery"))) { _ in
             Task {
-                await viewModel.loadContent()
+                await viewModel.loadInitialContent()
             }
         }
         .sheet(isPresented: $showingSearch) {
             SearchView()
         }
-        .onAppear {
-            print("DISCOVERY DEBUG: Videos count = \(viewModel.videos.count)")
-            print("DISCOVERY DEBUG: Filtered count = \(viewModel.filteredVideos.count)")
-            if let firstVideo = viewModel.filteredVideos.first {
-                print("DISCOVERY DEBUG: First video = \(firstVideo.title)")
-            }
-        }
     }
     
-    // MARK: - Header View
+    // MARK: - Header View with Loading Indicators
     
     private var headerView: some View {
         HStack {
@@ -526,9 +439,22 @@ struct DiscoveryView: View {
                     .fontWeight(.bold)
                     .foregroundColor(.white)
                 
-                Text("\(viewModel.filteredVideos.count) videos")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.6))
+                HStack(spacing: 8) {
+                    Text("\(viewModel.filteredVideos.count) videos")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
+                    
+                    if viewModel.loadingState.isLoadingMore {
+                        HStack(spacing: 4) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .progressViewStyle(CircularProgressViewStyle(tint: .cyan))
+                            Text("Loading...")
+                                .font(.caption2)
+                                .foregroundColor(.cyan)
+                        }
+                    }
+                }
             }
             
             Spacer()
@@ -537,29 +463,12 @@ struct DiscoveryView: View {
                 // Mode Toggle
                 Button {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                        discoveryMode = discoveryMode == .grid ? .swipe : .grid
+                        discoveryMode = discoveryMode == DiscoveryMode.grid ? DiscoveryMode.swipe : DiscoveryMode.grid
                     }
                 } label: {
                     Image(systemName: discoveryMode.icon)
                         .font(.title2)
-                        .foregroundColor(discoveryMode == .swipe ? .cyan : .white.opacity(0.7))
-                }
-                
-                // DEBUG: Direct fullscreen test
-                Button {
-                    if let firstVideo = viewModel.filteredVideos.first {
-                        print("DEBUG: Direct fullscreen test with video: \(firstVideo.title)")
-                        selectedVideo = firstVideo
-                        withAnimation(.easeInOut(duration: 0.4)) {
-                            isFullscreenMode = true
-                        }
-                    } else {
-                        print("DEBUG: No videos available for test")
-                    }
-                } label: {
-                    Image(systemName: "play.rectangle.fill")
-                        .font(.title2)
-                        .foregroundColor(.red)
+                        .foregroundColor(discoveryMode == DiscoveryMode.swipe ? .cyan : .white.opacity(0.7))
                 }
                 
                 Button {
@@ -580,10 +489,11 @@ struct DiscoveryView: View {
     private var categorySelector: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 16) {
-                ForEach(DiscoveryCategory.allCases, id: \.rawValue) { category in
+                ForEach(DiscoveryCategory.allCases, id: \.self) { category in
                     Button {
                         selectedCategory = category
                         viewModel.filterBy(category: category)
+                        currentSwipeIndex = 0 // Reset to beginning when changing category
                     } label: {
                         VStack(spacing: 8) {
                             HStack(spacing: 4) {
@@ -608,22 +518,20 @@ struct DiscoveryView: View {
         .padding(.vertical, 12)
     }
     
-    // MARK: - Content View
+    // MARK: - Content View with Progressive Loading
     
     @ViewBuilder
     private var contentView: some View {
         switch discoveryMode {
-        case .swipe:
+        case DiscoveryMode.swipe:
             DiscoverySwipeCards(
                 videos: viewModel.filteredVideos,
                 currentIndex: $currentSwipeIndex,
                 onVideoTap: { video in
-                    print("DISCOVERY: onVideoTap called for video: \(video.title)")
                     selectedVideo = video
                     withAnimation(.easeInOut(duration: 0.4)) {
                         isFullscreenMode = true
                     }
-                    print("DISCOVERY: Transitioning to fullscreen mode")
                 },
                 onEngagement: { type, video in
                     handleEngagement(type, video: video)
@@ -638,122 +546,103 @@ struct DiscoveryView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.clear)
             .onChange(of: currentSwipeIndex) { oldValue, newValue in
-                print("DISCOVERY: Swipe index changed from \(oldValue) to \(newValue)")
-                if newValue < viewModel.filteredVideos.count {
-                    print("DISCOVERY: Now showing video: \(viewModel.filteredVideos[newValue].title)")
+                print("🎯 DISCOVERY: Swipe \(oldValue) → \(newValue)")
+                
+                // Trigger progressive loading when user gets close to end
+                Task {
+                    await viewModel.checkAndLoadMore(currentIndex: newValue)
                 }
             }
             
-        case .grid:
-            ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 2), spacing: 2) {
-                    ForEach(viewModel.filteredVideos, id: \.id) { video in
-                        Button {
-                            print("DISCOVERY GRID: Button tapped for video: \(video.title)")
-                            selectedVideo = video
-                            withAnimation(.easeInOut(duration: 0.4)) {
-                                isFullscreenMode = true
-                            }
-                            print("DISCOVERY GRID: Transitioning to fullscreen mode")
-                        } label: {
-                            AsyncImage(url: URL(string: video.thumbnailURL)) { image in
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                            } placeholder: {
-                                Rectangle()
-                                    .fill(Color.gray.opacity(0.3))
-                            }
-                            .frame(height: 200)
-                            .clipped()
-                            .cornerRadius(8)
-                        }
+        case DiscoveryMode.grid:
+            DiscoveryGridView(
+                videos: viewModel.filteredVideos,
+                onVideoTap: { video in
+                    selectedVideo = video
+                    withAnimation(.easeInOut(duration: 0.4)) {
+                        isFullscreenMode = true
                     }
-                }
-                .padding()
-            }
-            .onAppear {
-                print("GRID MODE: Grid view appeared with \(viewModel.filteredVideos.count) videos")
-            }
+                },
+                onLoadMore: {
+                    Task {
+                        await viewModel.checkAndLoadMore(currentIndex: viewModel.filteredVideos.count - 5)
+                    }
+                },
+                onRefresh: {
+                    Task {
+                        await viewModel.refreshContent()
+                    }
+                },
+                isLoadingMore: viewModel.loadingState.isLoadingMore
+            )
         }
     }
     
-    // MARK: - Loading and Error Views
+    // MARK: - Loading Views
     
-    private var loadingView: some View {
-        VStack(spacing: 16) {
+    private var initialLoadingView: some View {
+        VStack(spacing: 20) {
             ProgressView()
-                .tint(.cyan)
                 .scaleEffect(1.5)
+                .progressViewStyle(CircularProgressViewStyle(tint: .cyan))
             
             Text("Discovering amazing content...")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
+                .font(.headline)
+                .foregroundColor(.white.opacity(0.8))
+                .multilineTextAlignment(.center)
+            
+            Text("Loading first \(viewModel.initialBatchSize) videos")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.6))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.clear)
     }
     
+    // MARK: - Error View
+    
     private func errorView(_ message: String) -> some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.largeTitle)
-                .foregroundColor(.orange)
+                .font(.system(size: 50))
+                .foregroundColor(.yellow)
             
-            Text("Discovery Error")
-                .font(.headline)
+            Text("Oops!")
+                .font(.title)
+                .fontWeight(.bold)
                 .foregroundColor(.white)
             
             Text(message)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.7))
+                .font(.body)
+                .foregroundColor(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
             
             Button("Try Again") {
                 Task {
-                    await viewModel.loadContent()
+                    await viewModel.loadInitialContent()
                 }
             }
-            .buttonStyle(PrimaryButtonStyle())
+            .padding(.horizontal, 40)
+            .padding(.vertical, 15)
+            .background(Color.cyan)
+            .foregroundColor(.black)
+            .cornerRadius(25)
+            .fontWeight(.semibold)
         }
-        .padding(.horizontal, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.clear)
     }
     
-    // MARK: - Actions
+    // MARK: - Helper Methods
     
     private func handleEngagement(_ type: InteractionType, video: CoreVideoMetadata) {
-        Task {
-            do {
-                // Process engagement with coordinator
-                try await engagementCoordinator.processEngagement(
-                    videoID: video.id,
-                    engagementType: type,
-                    userID: authService.currentUserID ?? "",
-                    userTier: .rookie
-                )
-                
-                // Update local video data immediately for UI responsiveness
-                viewModel.updateVideoEngagement(videoID: video.id, type: type)
-                
-                print("DISCOVERY: Successfully processed \(type.rawValue) for video: \(video.title)")
-                
-            } catch {
-                print("DISCOVERY: Engagement failed: \(error)")
-            }
-        }
+        print("🎯 DISCOVERY: Handling \(type.rawValue) engagement for video: \(video.title)")
+        viewModel.updateVideoEngagement(videoID: video.id, type: type)
     }
 }
 
-// MARK: - Primary Button Style
-
-struct PrimaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundColor(.white)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(Color.cyan)
-            .cornerRadius(8)
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-    }
+#Preview {
+    DiscoveryView()
+        .environmentObject(AuthService())
 }

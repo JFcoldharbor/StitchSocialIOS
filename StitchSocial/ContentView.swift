@@ -16,7 +16,7 @@ struct ContentView: View {
     @StateObject private var authService = AuthService()
     @StateObject private var videoService = VideoService()
     @StateObject private var userService = UserService()
-    @State private var selectedTab: MainAppTab = .home
+    @State private var selectedTab: MainAppTab = .discovery
     @State private var showingOnboarding = false
     @State private var showingRecording = false
     @State private var isLoading = true

@@ -3,7 +3,7 @@
 //  StitchSocial
 //
 //  Layer 6: Coordination - Reusable Thread Navigation System
-//  Dependencies: VideoService (Layer 4), ThreadData (Layer 1), NavigationContext
+//  Dependencies: VideoService (Layer 4), ThreadData (Layer 1)
 //  Features: Stabilized gesture handling, context-aware navigation, smooth animations
 //  Purpose: Single source of truth for thread navigation logic (HomeFeed + Profile)
 //
@@ -211,51 +211,93 @@ class ThreadNavigationCoordinator: ObservableObject {
             height: translation.height + (velocity.height * 0.1)
         )
         
-        // Determine swipe direction with strict thresholds
-        let isHorizontalSwipe = abs(adjustedTranslation.width) > GestureConfig.horizontalThreshold &&
-                               abs(adjustedTranslation.width) > abs(adjustedTranslation.height) * GestureConfig.directionRatio
-        let isVerticalSwipe = abs(adjustedTranslation.height) > GestureConfig.verticalThreshold &&
-                             abs(adjustedTranslation.height) > abs(adjustedTranslation.width) * GestureConfig.directionRatio
+        // Reset drag offset with animation
+        withAnimation(.easeOut(duration: 0.2)) {
+            navigationState.dragOffset = .zero
+        }
         
-        // Debounce rapid gestures
-        gestureDebouncer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                self?.processGesture(
-                    isHorizontal: isHorizontalSwipe,
-                    isVertical: isVerticalSwipe,
-                    translation: adjustedTranslation,
-                    velocity: velocity
-                )
-            }
+        // Determine dominant direction
+        let isHorizontal = abs(adjustedTranslation.width) > abs(adjustedTranslation.height)
+        
+        if isHorizontal && context.allowsHorizontalChildNavigation {
+            handleHorizontalSwipe(translation: adjustedTranslation, velocity: velocity)
+        } else if !isHorizontal && context.allowsVerticalThreadNavigation {
+            handleVerticalSwipe(translation: adjustedTranslation, velocity: velocity)
+        } else {
+            print("🚫 SWIPE: Direction not allowed in context \(context)")
+            smoothSnapToCurrentPosition()
         }
     }
     
-    // MARK: - Gesture Processing
+    // MARK: - Navigation Methods
     
-    private func processGesture(
-        isHorizontal: Bool,
-        isVertical: Bool,
-        translation: CGSize,
-        velocity: CGSize
-    ) {
-        print("🎯 GESTURE: Horizontal=\(isHorizontal), Vertical=\(isVertical)")
-        print("🎯 GESTURE: Translation=\(translation), Context=\(context)")
-        print("🎯 GESTURE: Context allows horizontal=\(context.allowsHorizontalChildNavigation)")
-        
-        navigationState.isAnimating = true
-        
-        if isHorizontal && context.allowsHorizontalChildNavigation {
-            print("✅ GESTURE: Processing horizontal swipe")
-            handleHorizontalSwipe(translation: translation, velocity: velocity)
-        } else if isVertical && context.allowsVerticalThreadNavigation {
-            print("✅ GESTURE: Processing vertical swipe")
-            handleVerticalSwipe(translation: translation, velocity: velocity)
-        } else {
-            print("❌ GESTURE: Ambiguous or blocked - snapping back")
-            smoothSnapToCurrentPosition()
+    func smoothMoveToThread(_ index: Int) {
+        guard index >= 0 && index < threads.count else {
+            print("❌ THREAD: Invalid index \(index)")
+            return
         }
         
-        // Reset drag state with animation
+        print("🎯 THREAD: Moving to thread \(index)")
+        
+        navigationState.isAnimating = true
+        navigationState.currentThreadIndex = index
+        navigationState.currentStitchIndex = 0
+        
+        // Calculate new offsets
+        let targetVerticalOffset = -CGFloat(index) * containerSize.height
+        
+        withAnimation(animationSpring) {
+            navigationState.verticalOffset = targetVerticalOffset
+            navigationState.horizontalOffset = 0
+        }
+        
+        // End animation state
+        DispatchQueue.main.asyncAfter(deadline: .now() + GestureConfig.animationDuration) {
+            self.navigationState.isAnimating = false
+        }
+        
+        // Preload adjacent content
+        preloadAdjacentThreads()
+    }
+    
+    func smoothMoveToStitch(_ index: Int) {
+        guard let currentThread = getCurrentThread() else {
+            print("❌ STITCH: No current thread")
+            return
+        }
+        
+        let maxIndex = currentThread.childVideos.count
+        guard index >= 0 && index <= maxIndex else {
+            print("❌ STITCH: Invalid index \(index) for thread with \(maxIndex) children")
+            return
+        }
+        
+        print("🎯 STITCH: Moving to stitch \(index)")
+        
+        navigationState.isAnimating = true
+        navigationState.currentStitchIndex = index
+        
+        // Calculate horizontal offset
+        let targetHorizontalOffset = -CGFloat(index) * containerSize.width
+        
+        withAnimation(animationSpring) {
+            navigationState.horizontalOffset = targetHorizontalOffset
+        }
+        
+        // End animation state
+        DispatchQueue.main.asyncAfter(deadline: .now() + GestureConfig.animationDuration) {
+            self.navigationState.isAnimating = false
+        }
+    }
+    
+    private func smoothSnapToCurrentPosition() {
+        navigationState.isAnimating = true
+        
+        withAnimation(animationSpring) {
+            navigationState.verticalOffset = -CGFloat(navigationState.currentThreadIndex) * containerSize.height
+            navigationState.horizontalOffset = -CGFloat(navigationState.currentStitchIndex) * containerSize.width
+        }
+        
         withAnimation(.easeOut(duration: 0.2)) {
             navigationState.dragOffset = .zero
         }
@@ -315,131 +357,72 @@ class ThreadNavigationCoordinator: ObservableObject {
         let isSwipeDown = translation.height > 0  // Previous thread
         
         if isSwipeUp {
+            // Move to next thread
             if navigationState.currentThreadIndex < threads.count - 1 {
-                smoothMoveToThread(navigationState.currentThreadIndex + 1)
+                let nextThreadIndex = navigationState.currentThreadIndex + 1
+                print("⬇️ VERTICAL: Moving to thread \(nextThreadIndex)")
+                smoothMoveToThread(nextThreadIndex)
             } else {
-                // Context-specific behavior at end
+                print("🔚 VERTICAL: At end of threads")
                 handleEndOfFeed()
             }
         } else if isSwipeDown {
+            // Move to previous thread
             if navigationState.currentThreadIndex > 0 {
-                smoothMoveToThread(navigationState.currentThreadIndex - 1)
+                let prevThreadIndex = navigationState.currentThreadIndex - 1
+                print("⬆️ VERTICAL: Moving to thread \(prevThreadIndex)")
+                smoothMoveToThread(prevThreadIndex)
             } else {
+                print("🔝 VERTICAL: At top of feed")
                 smoothSnapToCurrentPosition()
             }
         }
     }
     
-    // MARK: - Navigation Methods
-    
-    func smoothMoveToThread(_ threadIndex: Int) {
-        guard threadIndex >= 0 && threadIndex < threads.count else {
-            smoothSnapToCurrentPosition()
-            return
-        }
-        
-        navigationState.currentThreadIndex = threadIndex
-        navigationState.currentStitchIndex = 0 // Reset to parent
-        
-        // Smooth spring animation
-        withAnimation(.spring(response: GestureConfig.animationDuration, dampingFraction: 0.8)) {
-            navigationState.verticalOffset = -CGFloat(threadIndex) * containerSize.height
-            navigationState.horizontalOffset = 0 // Reset horizontal when changing threads
-        }
-        
-        // Reset video play count for new thread
-        if let newVideo = getCurrentVideo() {
-            resetVideoPlayCount(for: newVideo.id)
-        }
-        
-        // Preload adjacent content
-        preloadAdjacentThreads()
-    }
-    
-    func smoothMoveToStitch(_ stitchIndex: Int) {
-        guard let currentThread = getCurrentThread() else {
-            smoothSnapToCurrentPosition()
-            return
-        }
-        
-        let maxStitchIndex = currentThread.childVideos.count
-        guard stitchIndex >= 0 && stitchIndex <= maxStitchIndex else {
-            smoothSnapToCurrentPosition()
-            return
-        }
-        
-        navigationState.currentStitchIndex = stitchIndex
-        
-        // Smooth spring animation
-        withAnimation(.spring(response: GestureConfig.animationDuration, dampingFraction: 0.8)) {
-            navigationState.horizontalOffset = -CGFloat(stitchIndex) * containerSize.width
-        }
-        
-        // Reset video play count for new video
-        if let newVideo = getCurrentVideo() {
-            resetVideoPlayCount(for: newVideo.id)
-        }
-    }
-    
-    private func smoothSnapToCurrentPosition() {
-        // Smooth return to current position
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
-            // Offsets remain unchanged - just smooth animation
-        }
-    }
-    
-    // MARK: - Context-Specific Behavior
+    // MARK: - End of Feed Handling
     
     private func handleEndOfFeed() {
+        print("🔄 END: Reached end of feed in context \(context)")
+        
         switch context {
         case .homeFeed:
-            // Reshuffle feed
-            reshuffleAndResetFeed()
-        case .profile:
-            // Snap back - no reshuffling in profile
-            smoothSnapToCurrentPosition()
-        case .discovery, .fullscreen:
-            // Context-specific end behavior
-            smoothSnapToCurrentPosition()
+            triggerFeedReshuffling()
+        case .discovery:
+            smoothSnapToCurrentPosition() // Stay at current position
+        case .profile, .fullscreen:
+            smoothSnapToCurrentPosition() // Limited navigation context
         }
     }
     
-    private func reshuffleAndResetFeed() {
-        guard !isReshuffling else { return }
-        
+    private func triggerFeedReshuffling() {
+        print("🔄 RESHUFFLE: Starting feed reshuffling")
         isReshuffling = true
         
-        Task {
-            // Simulate reshuffling delay
-            try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+        // Simulate reshuffling delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            // Reset to beginning
+            self.navigationState.reset()
+            self.isReshuffling = false
             
-            await MainActor.run {
-                // Reset navigation state
-                navigationState.reset()
-                
-                // Clear play counts
-                videoPlayCounts.removeAll()
-                
-                isReshuffling = false
-            }
+            print("✅ RESHUFFLE: Feed reshuffling complete")
         }
     }
     
-    // MARK: - Auto-Progression
-    
-    func incrementVideoPlayCount(for videoID: String) {
-        videoPlayCounts[videoID, default: 0] += 1
-    }
-    
-    private func resetVideoPlayCount(for videoID: String) {
-        videoPlayCounts[videoID] = 0
-    }
+    // MARK: - Auto-Progression Logic
     
     private func checkAutoProgression() {
         guard let currentVideo = getCurrentVideo() else { return }
         
-        let videoID = currentVideo.id
-        let playCount = videoPlayCounts[videoID] ?? 0
+        let playCount = videoPlayCounts[currentVideo.id, default: 0] + 1
+        videoPlayCounts[currentVideo.id] = playCount
+        
+        print("📺 AUTO: Video \(currentVideo.id) played \(playCount) times")
+        
+        // Only auto-advance for contexts that support it
+        guard context.autoProgressionEnabled && playCount >= maxPlaysPerVideo else { return }
+        
+        // Reset count to prevent immediate re-triggering
+        videoPlayCounts[currentVideo.id] = 0
         
         if playCount >= maxPlaysPerVideo {
             autoAdvanceToNext()
@@ -482,10 +465,8 @@ class ThreadNavigationCoordinator: ObservableObject {
         isReshuffling = false
     }
     
-    func updateContext(_ newContext: NavigationContext) {
-        // Context switching not implemented yet - would recreate coordinator
-        print("Context switching to \(newContext) - requires coordinator recreation")
-    }
+    // FIXED: Removed problematic updateContext method that referenced non-existent NavigationContext
+    // Context switching not implemented - would require coordinator recreation
 }
 
 // MARK: - Gesture Configuration Extension

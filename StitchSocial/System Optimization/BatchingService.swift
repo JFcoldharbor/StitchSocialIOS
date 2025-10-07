@@ -123,7 +123,7 @@ class BatchingService: ObservableObject {
     // MARK: - Write Operations Queueing
     
     /// Queue engagement update for batched writing
-    func queueEngagementUpdate(videoID: String, update: EngagementUpdate) {
+    func queueEngagementUpdate(videoID: String, update: BatchEngagementUpdate) {
         let operation = BatchWrite.engagementUpdate(videoID: videoID, update: update)
         
         // Replace existing update for same video
@@ -292,7 +292,7 @@ class BatchingService: ObservableObject {
         guard !operations.isEmpty else { return }
         
         // Group operations by type for efficient processing
-        let engagementUpdates = operations.compactMap { operation -> (String, EngagementUpdate)? in
+        let engagementUpdates = operations.compactMap { operation -> (String, BatchEngagementUpdate)? in
             if case .engagementUpdate(let videoID, let update) = operation {
                 return (videoID, update)
             }
@@ -327,7 +327,7 @@ class BatchingService: ObservableObject {
         }
     }
     
-    private func processEngagementBatch(updates: [(String, EngagementUpdate)]) async throws {
+    private func processEngagementBatch(updates: [(String, BatchEngagementUpdate)]) async throws {
         let batch = db.batch()
         
         for (videoID, update) in updates {
@@ -403,9 +403,8 @@ class BatchingService: ObservableObject {
     
     private func setupAutoFlush(interval: TimeInterval = 2.0) {
         flushTimer?.invalidate()
-        flushTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        flushTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             Task { @MainActor in
-                guard let self = self else { return }
                 if !self.writeQueue.isEmpty {
                     try? await self.flushPendingWrites()
                 }
@@ -448,6 +447,7 @@ class BatchingService: ObservableObject {
             return nil
         }
         
+        let description = data[FirebaseSchema.VideoDocument.description] as? String ?? ""
         let threadID = data[FirebaseSchema.VideoDocument.threadID] as? String
         let replyToVideoID = data[FirebaseSchema.VideoDocument.replyToVideoID] as? String
         let conversationDepth = data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
@@ -474,6 +474,7 @@ class BatchingService: ObservableObject {
         return CoreVideoMetadata(
             id: id,
             title: title,
+            description: description,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -511,7 +512,7 @@ class BatchingService: ObservableObject {
         
         let displayName = data[FirebaseSchema.UserDocument.displayName] as? String
         let profileImageURL = data[FirebaseSchema.UserDocument.profileImageURL] as? String
-        let bio = data[FirebaseSchema.UserDocument.bio] as? String
+        let bio = data[FirebaseSchema.UserDocument.bio] as? String ?? ""
         let followerCount = data[FirebaseSchema.UserDocument.followerCount] as? Int ?? 0
         let followingCount = data[FirebaseSchema.UserDocument.followingCount] as? Int ?? 0
         let videoCount = data[FirebaseSchema.UserDocument.videoCount] as? Int ?? 0
@@ -525,9 +526,11 @@ class BatchingService: ObservableObject {
             id: document.documentID,
             username: username,
             displayName: displayName ?? username,
+            bio: bio,
             tier: tier,
             clout: clout,
             isVerified: isVerified,
+            isPrivate: isPrivate,
             profileImageURL: profileImageURL,
             createdAt: Date()
         )
@@ -538,7 +541,7 @@ class BatchingService: ObservableObject {
 
 /// Batch write operation types
 enum BatchWrite {
-    case engagementUpdate(videoID: String, update: EngagementUpdate)
+    case engagementUpdate(videoID: String, update: BatchEngagementUpdate)
     case viewTracking(videoID: String, userID: String, duration: TimeInterval, timestamp: Date)
     case userInteraction(userID: String, videoID: String, interactionType: InteractionType, timestamp: Date)
 }
@@ -548,6 +551,15 @@ enum BatchRead {
     case videos(videoIDs: [String])
     case users(userIDs: [String])
     case threads(threadIDs: [String])
+}
+
+/// Engagement update data structure for batching
+struct BatchEngagementUpdate {
+    let hypeCount: Int
+    let coolCount: Int
+    let viewCount: Int
+    let temperature: String
+    let lastEngagementAt: Date
 }
 
 /// View tracking data structure
@@ -596,7 +608,7 @@ struct BatchPerformanceStats {
 // MARK: - Array Chunking Extension
 
 extension Array {
-    func Bigchunked(into size: Int) -> [[Element]] {
+    func Mainchunked(into size: Int) -> [[Element]] {
         return stride(from: 0, to: count, by: size).map {
             Array(self[$0..<Swift.min($0 + size, count)])
         }

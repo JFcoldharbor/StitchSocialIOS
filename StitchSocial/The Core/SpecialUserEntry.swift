@@ -154,6 +154,19 @@ struct SpecialUsersConfig {
             priority: 500
         ),
         
+        "email.euni@gmail.com": SpecialUserEntry(
+            email: "email.euni@gmail.com",
+            role: .influencer,
+            tierRawValue: "influencer",
+            startingClout: 12500,
+            customTitle: "Influencer ⭐",
+            customBio: "Influencer | Connected to Teddy Ruks | Ambassador to Stitch",
+            badgeRawValues: ["influencer_crown", "verified"],
+            specialPerks: ["verified_badge", "exclusive_features"],
+            isAutoFollowed: false,
+            priority: 500
+        ),
+        
         "kiakallen@gmail.com": SpecialUserEntry(
             email: "kiakallen@gmail.com",
             role: .influencer,

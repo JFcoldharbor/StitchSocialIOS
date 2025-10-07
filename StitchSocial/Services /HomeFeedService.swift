@@ -32,11 +32,11 @@ class HomeFeedService: ObservableObject {
     private var lastDocument: DocumentSnapshot?
     private var hasMoreContent: Bool = true
     
-    // MARK: - Configuration
+    // MARK: - Configuration (Discovery Pattern)
     
-    private let defaultFeedSize = 20
-    private let preloadTriggerIndex = 15
-    private let maxCachedThreads = 100
+    private let defaultFeedSize = 40 // Increased like Discovery for better experience
+    private let triggerLoadThreshold = 10 // Like Discovery - more aggressive loading
+    private let maxCachedThreads = 300 // Increased like Discovery for better caching
     
     // MARK: - Caching for Performance
     private var cachedFollowingIDs: [String] = []
@@ -57,13 +57,13 @@ class HomeFeedService: ObservableObject {
     
     // MARK: - Primary Feed Operations - FIXED FOR FULL FOLLOWING FEED
     
-    /// Load initial following feed - PARENT THREADS ONLY for instant display
+    /// Load initial following feed - DISCOVERY PATTERN for followers only
     func loadFeed(userID: String, limit: Int = 20) async throws -> [ThreadData] {
         
         isLoading = true
         defer { isLoading = false }
         
-        print("HOME FEED: Loading initial feed for user \(userID)")
+        print("HOME FEED: Loading initial feed for user \(userID) (Discovery pattern)")
         
         // Step 1: Get following IDs with caching
         let followingIDs = try await getCachedFollowingIDs(userID: userID)
@@ -74,10 +74,10 @@ class HomeFeedService: ObservableObject {
         
         print("HOME FEED: Found \(followingIDs.count) following users")
         
-        // Step 2: Get PARENT THREADS ONLY - FIXED: Remove artificial limit
+        // Step 2: Get parent threads using Discovery pattern
         let threads = try await getFollowingParentThreadsOnly(
             followingIDs: followingIDs,
-            limit: limit // FIXED: Use full limit, not min(limit, 10)
+            limit: limit
         )
         
         // Step 3: Update state
@@ -85,33 +85,37 @@ class HomeFeedService: ObservableObject {
         feedStats.totalThreadsLoaded = threads.count
         feedStats.lastRefreshTime = Date()
         
-        print("HOME FEED: Loaded \(threads.count) PARENT threads (children will load lazily)")
+        print("HOME FEED: Loaded \(threads.count) PARENT threads from followers (Discovery pattern)")
         return threads
     }
     
-    /// Refresh feed with new content
+    /// Refresh feed with new content - ALWAYS FRESH FIREBASE QUERIES
     func refreshFeed(userID: String) async throws -> [ThreadData] {
         
         isRefreshing = true
         defer { isRefreshing = false }
         
-        print("🔄 HOME FEED: Refreshing feed for user \(userID)")
+        print("🔄 HOME FEED: Refreshing with FRESH content from Firebase")
         
-        // Reset pagination state
+        // Reset pagination state - but not needed for follower rotation
         lastDocument = nil
         hasMoreContent = true
         
-        // Load fresh content (parent threads only)
+        // REAL FIX: Clear current feed and get completely fresh content
+        currentFeed.removeAll()
+        feedStats = FeedStats()
+        
+        // Load fresh content from Firebase
         let freshThreads = try await loadFeed(userID: userID, limit: defaultFeedSize)
         
         feedStats.refreshCount += 1
         feedStats.lastRefreshTime = Date()
         
-        print("✅ HOME FEED: Feed refreshed with \(freshThreads.count) threads")
+        print("✅ HOME FEED: Feed refreshed with \(freshThreads.count) FRESH threads from Firebase")
         return freshThreads
     }
     
-    /// Load more content for pagination
+    /// Load more content for pagination - REAL FIREBASE QUERIES FOR NEW CONTENT
     func loadMoreContent(userID: String) async throws -> [ThreadData] {
         
         guard hasMoreContent && !isLoading else {
@@ -122,111 +126,105 @@ class HomeFeedService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
-        print("🔄 HOME FEED: Loading more content for pagination")
+        print("🔄 HOME FEED: Loading FRESH content from different followers")
         
         // Get following IDs
-        let followingIDs = try await userService.getFollowingIDs(userID: userID)
+        let followingIDs = try await getCachedFollowingIDs(userID: userID)
         guard !followingIDs.isEmpty else { return currentFeed }
         
-        // Load next batch (parent threads only)
+        // REAL FIX: Load from different followers each time - NO PAGINATION
         let nextBatch = try await getFollowingParentThreadsOnly(
             followingIDs: followingIDs,
-            limit: defaultFeedSize,
-            startAfter: lastDocument
+            limit: defaultFeedSize
+            // NO startAfter - we want fresh content from different followers
         )
         
-        // Update content state
-        if nextBatch.count < defaultFeedSize {
+        // Always append new content (no pagination means we always get fresh content)
+        if !nextBatch.isEmpty {
+            currentFeed.append(contentsOf: nextBatch)
+            feedStats.totalThreadsLoaded = currentFeed.count
+            
+            // Memory management - like Discovery
+            if currentFeed.count > maxCachedThreads {
+                let threadsToRemove = currentFeed.count - maxCachedThreads
+                currentFeed.removeFirst(threadsToRemove)
+                print("🧹 HOME FEED: Cleaned \(threadsToRemove) old threads from memory")
+            }
+            
+            print("✅ HOME FEED: Loaded \(nextBatch.count) FRESH threads from different followers, total: \(currentFeed.count)")
+        } else {
+            print("🔄 HOME FEED: No new content from current follower chunk, trying reshuffle")
             hasMoreContent = false
         }
         
-        // Append to current feed
-        currentFeed.append(contentsOf: nextBatch)
-        
-        // Manage memory - remove old threads if feed gets too large
-        if currentFeed.count > maxCachedThreads {
-            let threadsToRemove = currentFeed.count - maxCachedThreads
-            currentFeed.removeFirst(threadsToRemove)
-        }
-        
-        feedStats.totalThreadsLoaded = currentFeed.count
-        
-        print("✅ HOME FEED: Loaded \(nextBatch.count) more threads, total: \(currentFeed.count)")
         return currentFeed
     }
     
-    // MARK: - LAZY LOADING IMPLEMENTATION - FIXED FOR ALL FOLLOWING USERS
+    // MARK: - REAL NEW CONTENT LOADING - NO FAKE PAGINATION
     
-    /// Get parent threads only (no children) for instant loading - FIXED
+    /// Get parent threads from ALL followers continuously - ACTUAL new content each time
     private func getFollowingParentThreadsOnly(
         followingIDs: [String],
         limit: Int,
         startAfter: DocumentSnapshot? = nil
     ) async throws -> [ThreadData] {
         
-        // FIXED: Increased batch size for better user coverage
-        let batchSize = min(10, followingIDs.count) // FIXED: Increased from 5 to 10
-        let batches = followingIDs.batchedChunks(into: batchSize)
-        
-        var allThreads: [ThreadData] = []
-        
-        // FIXED: Process ALL batches, not just first 2
-        // Process each batch of following users
-        for batch in batches { // FIXED: Removed .prefix(2) limitation
-            let batchThreads = try await getParentThreadsBatch(
-                creatorIDs: batch,
-                limit: limit,
-                startAfter: startAfter
-            )
-            allThreads.append(contentsOf: batchThreads)
-            
-            // Stop if we have enough content for this load
-            if allThreads.count >= limit {
-                break
-            }
+        guard !followingIDs.isEmpty else {
+            print("🏠 HOME FEED: No followers to load from")
+            return []
         }
-        
-        // Simple random shuffle - no complex algorithm
-        let shuffledThreads = Array(allThreads.shuffled().prefix(limit))
-        
-        print("🎲 HOME FEED: Shuffled \(allThreads.count) parent threads from \(batches.count) batches to \(shuffledThreads.count)")
-        return shuffledThreads
-    }
-    
-    /// Get batch of PARENT THREADS ONLY (no children loading)
-    private func getParentThreadsBatch(
-        creatorIDs: [String],
-        limit: Int,
-        startAfter: DocumentSnapshot?
-    ) async throws -> [ThreadData] {
         
         let db = Firestore.firestore(database: Config.Firebase.databaseName)
         
-        // Query for parent threads only (conversationDepth = 0)
-        var query = db.collection(FirebaseSchema.Collections.videos)
-            .whereField(FirebaseSchema.VideoDocument.creatorID, in: creatorIDs)
+        // REAL FIX: Query different followers each time, not same ones with pagination
+        let followingChunk = getNextFollowingChunk(from: followingIDs)
+        
+        print("🏠 HOME FEED: Querying \(followingChunk.count) followers from total \(followingIDs.count)")
+        
+        // QUERY FOR RECENT CONTENT FROM THIS GROUP - NO PAGINATION
+        let query = db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.creatorID, in: followingChunk)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
             .limit(to: limit)
-        
-        if let startAfter = startAfter {
-            query = query.start(afterDocument: startAfter)
-        }
+        // NO startAfter - we want recent content from these followers
         
         let snapshot = try await query.getDocuments()
-        lastDocument = snapshot.documents.last
+        // Don't update lastDocument for follower feeds - we rotate followers instead
         
         var threads: [ThreadData] = []
         
-        // Convert documents to ThreadData - PARENT ONLY (no children)
+        // Convert documents to ThreadData
         for document in snapshot.documents {
             if let thread = try await createParentThreadFromDocument(document) {
                 threads.append(thread)
             }
         }
         
-        print("📊 HOME FEED: Loaded \(threads.count) parent threads from batch of \(creatorIDs.count) creators")
-        return threads
+        // Light shuffle for variety
+        let shuffledThreads = threads.shuffled()
+        
+        print("🏠 HOME FEED: Loaded \(shuffledThreads.count) FRESH threads from \(followingChunk.count) different followers")
+        return shuffledThreads
+    }
+    
+    /// Get next chunk of followers to query (rotates on each call, not time)
+    private func getNextFollowingChunk(from followingIDs: [String]) -> [String] {
+        let maxFollowersPerQuery = 30 // Firestore's actual whereIn limit
+        let chunkSize = min(maxFollowersPerQuery, followingIDs.count)
+        
+        if followingIDs.count <= chunkSize {
+            // If we have fewer followers than limit, return all
+            return followingIDs
+        }
+        
+        // Rotate through different chunks on each load
+        let rotationIndex = (feedStats.refreshCount + currentFeed.count / 20) % (followingIDs.count - chunkSize + 1)
+        let endIndex = min(rotationIndex + chunkSize, followingIDs.count)
+        
+        let chunk = Array(followingIDs[rotationIndex..<endIndex])
+        print("🔄 HOME FEED: Using followers chunk \(rotationIndex)-\(endIndex-1) of \(followingIDs.count) total")
+        return chunk
     }
     
     /// Create ThreadData with PARENT ONLY (no children loading) - FIXED FOR SPEED
@@ -403,9 +401,23 @@ class HomeFeedService: ObservableObject {
         print("⚡ HOME FEED: Preloaded horizontal navigation for indices \(preloadRange)")
     }
     
-    /// Check if should load more content based on current position
+    /// Check if should load more content based on current position - DISCOVERY PATTERN
     func shouldLoadMoreContent(currentThreadIndex: Int) -> Bool {
-        return currentThreadIndex >= preloadTriggerIndex && hasMoreContent && !isLoading
+        let triggerLoadThreshold = 10 // Like Discovery - more aggressive loading
+        let remainingCount = currentFeed.count - currentThreadIndex
+        return remainingCount <= triggerLoadThreshold && hasMoreContent && !isLoading
+    }
+    
+    /// Progressive loading check (like Discovery's checkAndLoadMore)
+    func checkAndLoadMore(currentIndex: Int, userID: String) async {
+        guard shouldLoadMoreContent(currentThreadIndex: currentIndex) else { return }
+        
+        do {
+            _ = try await loadMoreContent(userID: userID)
+            print("⚡ HOME FEED: Auto-loaded more content at index \(currentIndex)")
+        } catch {
+            print("❌ HOME FEED: Auto-load failed: \(error)")
+        }
     }
     
     // MARK: - RESHUFFLE FUNCTIONALITY - NEW
@@ -426,31 +438,28 @@ class HomeFeedService: ObservableObject {
         print("✅ HOME FEED: Feed reshuffled - new order applied")
     }
     
-    /// Get reshuffled feed for bottom reach scenario
+    /// Get reshuffled feed for bottom reach scenario - REAL FIREBASE QUERIES
     func getReshuffledFeed(userID: String) async throws -> [ThreadData] {
         
-        print("🔄 HOME FEED: Creating reshuffled feed from existing content")
+        print("🔄 HOME FEED: Getting FRESH content from Firebase (not reshuffling cache)")
         
-        // If we have no more content to load, reshuffle existing
-        if !hasMoreContent && !currentFeed.isEmpty {
-            reshuffleCurrentFeed()
-            return currentFeed
-        }
-        
-        // Otherwise try to load more content first, then reshuffle if needed
+        // REAL FIX: Don't reshuffle cache - get FRESH content from Firebase
         do {
-            let moreContent = try await loadMoreContent(userID: userID)
-            if moreContent.count > currentFeed.count - 5 { // Got new content
-                return moreContent
+            let freshContent = try await loadMoreContent(userID: userID)
+            if freshContent.count > currentFeed.count - 10 { // Got new content
+                return freshContent
             } else {
-                // No new content, reshuffle existing
-                reshuffleCurrentFeed()
-                return currentFeed
+                // Try refreshing completely
+                print("🔄 HOME FEED: Loading more didn't work, doing full refresh")
+                return try await refreshFeed(userID: userID)
             }
         } catch {
-            // Failed to load more, reshuffle what we have
+            // Fallback - only then reshuffle existing
             if !currentFeed.isEmpty {
-                reshuffleCurrentFeed()
+                print("❌ HOME FEED: Firebase queries failed, shuffling existing as fallback")
+                currentFeed = currentFeed.shuffled()
+                feedStats.refreshCount += 1
+                feedStats.lastRefreshTime = Date()
                 return currentFeed
             }
             throw error
@@ -531,9 +540,9 @@ extension HomeFeedService {
     
     /// Test home feed functionality
     func helloWorldTest() {
-        print("🏠 HOME FEED SERVICE: Hello World - Ready for instant parent thread loading!")
-        print("🏠 Features: Lazy child loading, following feed, random shuffle")
-        print("🏠 Performance: <100ms parent load, lazy children on demand")
+        print("🏠 HOME FEED SERVICE: Hello World - Discovery pattern for followers!")
+        print("🏠 Features: Continuous loading, following-only content, no double cycling")
+        print("🏠 Performance: Like Discovery but followers only")
     }
 }
 

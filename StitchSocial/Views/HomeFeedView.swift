@@ -12,7 +12,7 @@ import SwiftUI
 import AVFoundation
 import Combine
 
-// MARK: - GeometryProxy Protocol for Auto-Progression
+// MARK: - GeometryProxy Protocol
 
 protocol GeometryProxyProtocol {
     var size: CGSize { get }
@@ -20,7 +20,7 @@ protocol GeometryProxyProtocol {
 
 extension GeometryProxy: GeometryProxyProtocol {}
 
-// MARK: - MockGeometry Helper for Auto-Progression
+// MARK: - MockGeometry Helper
 
 struct MockGeometry: GeometryProxyProtocol {
     let size: CGSize
@@ -49,20 +49,15 @@ struct HomeFeedView: View {
     @State private var loadingError: String? = nil
     @State private var isReshuffling: Bool = false
     
-    // ENHANCED Auto-progression tracking
+    // Video tracking (simplified)
     @State private var videoPlayCounts: [String: Int] = [:]
-    @State private var videoStartTimes: [String: Date] = [:]
-    @State private var autoProgressTimer: Timer?
-    @State private var autoRefreshTimer: Timer?
     @State private var lastUserInteraction: Date = Date()
-    @State private var isAutoProgressionEnabled: Bool = true
-    @State private var isAutoRefreshEnabled: Bool = true
     
-    // Auto-progression configuration
-    private let maxPlaysPerVideo = 2
-    private let minWatchTimeBeforeProgression: TimeInterval = 3.0
-    private let autoRefreshInterval: TimeInterval = 300.0 // 5 minutes
-    private let userInactivityThreshold: TimeInterval = 10.0 // 10 seconds
+    // MARK: - People Finder State
+    
+    @State private var showingPeopleFinder: Bool = false
+    @State private var shouldShowPeopleFinderPrompt: Bool = false
+    @State private var peopleFinderTriggerCount: Int = 0
     
     // MARK: - Viewport State
     
@@ -73,29 +68,29 @@ struct HomeFeedView: View {
     @State private var isAnimating: Bool = false
     @State private var gestureDebouncer: Timer?
     
-    // MARK: - STABILIZED GESTURE PHYSICS
+    // MARK: - OPTIMIZED GESTURE PHYSICS
     
-    // Stricter thresholds for deliberate gestures
-    private let gestureMinimumDistance: CGFloat = 35 // Increased from 20
-    private let swipeThresholdHorizontal: CGFloat = 120 // Increased from 80
-    private let swipeThresholdVertical: CGFloat = 140 // Increased from 100
-    private let directionRatio: CGFloat = 2.5 // Increased from 2.0
-    private let animationDuration: TimeInterval = 0.25 // Reduced for snappier feel
+    // Reduce calculations for smoother performance
+    private let gestureMinimumDistance: CGFloat = 30 // Reduced from 35
+    private let swipeThresholdHorizontal: CGFloat = 100 // Reduced from 120
+    private let swipeThresholdVertical: CGFloat = 120 // Reduced from 140
+    private let directionRatio: CGFloat = 2.0 // Reduced from 2.5
+    private let animationDuration: TimeInterval = 0.2 // Reduced from 0.25
     
-    // Drag resistance for stability
-    private let dragResistance: CGFloat = 0.6 // New: reduces flimsy feeling
-    private let maxDragDistance: CGFloat = 80 // New: clamps maximum drag
+    // Simplified drag resistance
+    private let dragResistance: CGFloat = 0.8 // Increased from 0.6 for less resistance
+    private let maxDragDistance: CGFloat = 60 // Reduced from 80
     
     // MARK: - Initialization
     
     init(
-        videoService: VideoService? = nil,
-        userService: UserService? = nil,
-        authService: AuthService? = nil
+        injectedVideoService: VideoService? = nil,
+        injectedUserService: UserService? = nil,
+        injectedAuthService: AuthService? = nil
     ) {
-        let videoSvc = videoService ?? VideoService()
-        let userSvc = userService ?? UserService()
-        let authSvc = authService ?? AuthService()
+        let videoSvc = injectedVideoService ?? VideoService()
+        let userSvc = injectedUserService ?? UserService()
+        let authSvc = injectedAuthService ?? AuthService()
         let cachingService = CachingService()
         let homeFeedService = HomeFeedService(
             videoService: videoSvc,
@@ -142,12 +137,10 @@ struct HomeFeedView: View {
                 loadInstantFeed()
                 hasLoadedInitialFeed = true
             }
-            startAutoProgressionTimer()
-            startAutoRefreshTimer()
         }
+        .killBackgroundOnAppear(.stitches)
         .onDisappear {
-            stopAutoProgressionTimer()
-            stopAutoRefreshTimer()
+            // Cleanup if needed
         }
         .refreshable {
             Task {
@@ -242,10 +235,17 @@ struct HomeFeedView: View {
                 video: thread.parentVideo,
                 thread: thread,
                 isActive: threadIndex == currentThreadIndex && currentStitchIndex == 0,
-                containerID: "\(thread.id)-parent"
-            ) { videoID in
-                incrementVideoPlayCount(for: videoID)
-            }
+                containerID: "\(thread.id)-parent",
+                onVideoLoop: { videoID in
+                    incrementVideoPlayCount(for: videoID)
+                },
+                onVideoPositionUpdate: { position in
+                    // Just log position for debugging - notification is handled in container
+                    if threadIndex == currentThreadIndex && currentStitchIndex == 0 {
+                        // Log position updates for active parent video only
+                    }
+                }
+            )
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped() // CRITICAL: Prevent overflow
             .position(
@@ -259,10 +259,14 @@ struct HomeFeedView: View {
                     video: childVideo,
                     thread: thread,
                     isActive: threadIndex == currentThreadIndex && currentStitchIndex == (childIndex + 1),
-                    containerID: "\(thread.id)-child-\(childIndex)"
-                ) { videoID in
-                    incrementVideoPlayCount(for: videoID)
-                }
+                    containerID: "\(thread.id)-child-\(childIndex)",
+                    onVideoLoop: { videoID in
+                        incrementVideoPlayCount(for: videoID)
+                    },
+                    onVideoPositionUpdate: { position in
+                        // Child videos don't need notification logic
+                    }
+                )
                 .frame(width: geometry.size.width, height: geometry.size.height)
                 .clipped() // CRITICAL: Prevent overflow
                 .position(
@@ -271,7 +275,7 @@ struct HomeFeedView: View {
                 )
             }
         }
-        .id("\(thread.id)-\(thread.childVideos.count)") // Rebuild when children count changes
+        .id("\(thread.id)-\(thread.childVideos.count)") // Only rebuild when children change
     }
     
     // MARK: - ENHANCED Gesture Handling with User Interaction Tracking
@@ -288,25 +292,21 @@ struct HomeFeedView: View {
         
         let translation = value.translation
         
-        // Apply drag resistance and clamping for stability
-        let resistedTranslation = CGSize(
-            width: min(abs(translation.width), maxDragDistance) * dragResistance * (translation.width < 0 ? -1 : 1),
-            height: min(abs(translation.height), maxDragDistance) * dragResistance * (translation.height < 0 ? -1 : 1)
-        )
+        // Simplified drag resistance calculation
+        let resistedWidth = min(abs(translation.width), maxDragDistance) * dragResistance * (translation.width < 0 ? -1 : 1)
+        let resistedHeight = min(abs(translation.height), maxDragDistance) * dragResistance * (translation.height < 0 ? -1 : 1)
         
-        let isHorizontalDrag = abs(resistedTranslation.width) > abs(resistedTranslation.height)
-        
-        if isHorizontalDrag {
+        // Quick direction check
+        if abs(resistedWidth) > abs(resistedHeight) {
             // Check if horizontal movement is allowed (children exist)
             if let thread = getCurrentThread(), !thread.childVideos.isEmpty {
-                dragOffset = CGSize(width: resistedTranslation.width, height: 0)
+                dragOffset = CGSize(width: resistedWidth, height: 0)
             } else {
-                // Block horizontal drag but allow vertical
-                dragOffset = CGSize(width: 0, height: resistedTranslation.height)
+                dragOffset = CGSize(width: 0, height: resistedHeight)
             }
         } else {
             // Vertical drag only
-            dragOffset = CGSize(width: 0, height: resistedTranslation.height)
+            dragOffset = CGSize(width: 0, height: resistedHeight)
         }
     }
     
@@ -397,7 +397,7 @@ struct HomeFeedView: View {
             } else {
                 // At end of children - snap back
                 smoothSnapToCurrentPosition()
-                print("📚 AT END: Cannot go further in thread")
+                print("🔚 AT END: Cannot go further in thread")
             }
         } else if isSwipeRight {
             // Go to previous child (backward in thread)
@@ -422,9 +422,13 @@ struct HomeFeedView: View {
             if currentThreadIndex < currentFeed.count - 1 {
                 smoothMoveToThread(currentThreadIndex + 1, geometry: geometry)
             } else {
-                // Reshuffle when reaching bottom
-                reshuffleAndResetFeed()
-                print("🔀 REACHED BOTTOM: Reshuffling feed")
+                // Check if we should load more content or reshuffle
+                if shouldTriggerScrollLoad() {
+                    loadMoreContentAndContinue()
+                } else {
+                    // At end with no more content - stay at current position
+                    smoothSnapToCurrentPosition()
+                }
             }
         } else if isSwipeDown {
             // Move to previous thread
@@ -440,10 +444,8 @@ struct HomeFeedView: View {
     // MARK: - Smooth Navigation Methods
     
     private func smoothMoveToThread(_ threadIndex: Int, geometry: GeometryProxyProtocol) {
-        // Record user interaction if this is manual navigation
-        if !(geometry is MockGeometry) {
-            recordUserInteraction()
-        }
+        // Record user interaction
+        recordUserInteraction()
         
         guard threadIndex >= 0 && threadIndex < currentFeed.count else {
             smoothSnapToCurrentPosition()
@@ -467,14 +469,26 @@ struct HomeFeedView: View {
         // Preload adjacent content
         preloadAdjacentThreads()
         
-        print("🎬 MOVED TO THREAD: \(threadIndex)")
+        // Check if we should load more content based on scroll position
+        // Only check every 3rd navigation to reduce overhead
+        if peopleFinderTriggerCount % 3 == 0 {
+            checkScrollBasedLoading()
+        }
+        
+        // Track navigation for people finder less frequently
+        // Only check every 5th navigation instead of every navigation
+        if peopleFinderTriggerCount % 5 == 0 {
+            trackNavigationForPeopleFinder()
+        }
+        
+        peopleFinderTriggerCount += 1
+        
+        print("🎬 MOVED TO THREAD: \(threadIndex) - Videos should now activate")
     }
     
     private func smoothMoveToStitch(_ stitchIndex: Int, geometry: GeometryProxyProtocol) {
-        // Record user interaction if this is manual navigation
-        if !(geometry is MockGeometry) {
-            recordUserInteraction()
-        }
+        // Record user interaction
+        recordUserInteraction()
         
         guard let currentThread = getCurrentThread() else {
             smoothSnapToCurrentPosition()
@@ -510,160 +524,16 @@ struct HomeFeedView: View {
         print("↩️ SNAPPED BACK: Staying at Thread \(currentThreadIndex), Child \(currentStitchIndex)")
     }
     
-    // MARK: - ENHANCED Auto-Progression System
-    
-    private func startAutoProgressionTimer() {
-        // Start timer that checks every 1 second for progression conditions
-        autoProgressTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
-            checkAutoProgression()
-        }
-        print("🔄 AUTO-PROGRESSION: Timer started (checks every 1s)")
-    }
-    
-    private func stopAutoProgressionTimer() {
-        autoProgressTimer?.invalidate()
-        autoProgressTimer = nil
-        print("⏹️ AUTO-PROGRESSION: Timer stopped")
-    }
-    
-    private func startAutoRefreshTimer() {
-        // Start timer that checks for auto refresh every minute
-        autoRefreshTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
-            checkAutoRefresh()
-        }
-        print("🔄 AUTO-REFRESH: Timer started (checks every 60s)")
-    }
-    
-    private func stopAutoRefreshTimer() {
-        autoRefreshTimer?.invalidate()
-        autoRefreshTimer = nil
-        print("⏹️ AUTO-REFRESH: Timer stopped")
-    }
-    
-    private func checkAutoProgression() {
-        // Don't auto-progress if user recently interacted or auto-progression is disabled
-        guard isAutoProgressionEnabled else { return }
-        guard Date().timeIntervalSince(lastUserInteraction) > userInactivityThreshold else { return }
-        guard let currentVideo = getCurrentVideo() else { return }
-        
-        let videoID = currentVideo.id
-        let playCount = videoPlayCounts[videoID] ?? 0
-        let watchTime = getVideoWatchTime(videoID: videoID)
-        
-        // Check if video has played enough times AND user has watched it long enough
-        let shouldProgress = playCount >= maxPlaysPerVideo && watchTime >= minWatchTimeBeforeProgression
-        
-        if shouldProgress {
-            print("⏭️ AUTO-PROGRESS: Advancing after \(playCount) plays, \(watchTime)s watch time")
-            autoAdvanceToNext()
-        }
-    }
-    
-    private func checkAutoRefresh() {
-        // Only auto-refresh if enabled and user has been inactive
-        guard isAutoRefreshEnabled else { return }
-        guard Date().timeIntervalSince(lastUserInteraction) > userInactivityThreshold else { return }
-        
-        // Check if enough time has passed since last refresh
-        let timeSinceLastRefresh = Date().timeIntervalSince(homeFeedService.getFeedStats().lastRefreshTime ?? Date.distantPast)
-        
-        if timeSinceLastRefresh > autoRefreshInterval {
-            print("🔄 AUTO-REFRESH: Refreshing feed after \(timeSinceLastRefresh)s")
-            Task {
-                await performAutoRefresh()
-            }
-        }
-    }
-    
-    private func performAutoRefresh() async {
-        guard let currentUserID = authService.currentUserID else { return }
-        
-        do {
-            print("🔄 AUTO-REFRESH: Starting background refresh...")
-            let freshThreads = try await homeFeedService.refreshFeed(userID: currentUserID)
-            
-            await MainActor.run {
-                // Only update if we got new content
-                if !freshThreads.isEmpty && freshThreads.count != currentFeed.count {
-                    currentFeed = freshThreads
-                    preloadAdjacentThreads()
-                    print("✅ AUTO-REFRESH: Updated feed with \(freshThreads.count) threads")
-                }
-            }
-        } catch {
-            print("❌ AUTO-REFRESH: Failed - \(error.localizedDescription)")
-        }
-    }
-    
-    private func autoAdvanceToNext() {
-        // Create a mock geometry for auto advancement
-        let screenBounds = UIScreen.main.bounds
-        let mockGeometry = MockGeometry(size: screenBounds.size)
-        
-        // Try to advance to next child first, then next thread
-        guard let currentThread = getCurrentThread() else { return }
-        
-        if currentStitchIndex < currentThread.childVideos.count {
-            // Move to next child
-            smoothMoveToStitch(currentStitchIndex + 1, geometry: mockGeometry)
-            print("⏭️ AUTO-PROGRESS: Moved to next child (\(currentStitchIndex + 1))")
-        } else if currentThreadIndex < currentFeed.count - 1 {
-            // Move to next thread
-            smoothMoveToThread(currentThreadIndex + 1, geometry: mockGeometry)
-            print("⏭️ AUTO-PROGRESS: Moved to next thread (\(currentThreadIndex + 1))")
-        } else {
-            // Check if we should load more content or reshuffle
-            if homeFeedService.shouldLoadMoreContent(currentThreadIndex: currentThreadIndex) {
-                loadMoreFeedContent()
-            } else {
-                reshuffleAndResetFeed()
-                print("⏭️ AUTO-PROGRESS: Reshuffling at end of feed")
-            }
-        }
-    }
-    
-    private func loadMoreFeedContent() {
-        guard let currentUserID = authService.currentUserID else { return }
-        
-        Task {
-            do {
-                print("📥 LOADING MORE: Fetching additional content...")
-                let moreThreads = try await homeFeedService.loadMoreContent(userID: currentUserID)
-                
-                await MainActor.run {
-                    currentFeed = moreThreads
-                    print("✅ LOADED MORE: Feed now has \(currentFeed.count) threads")
-                }
-            } catch {
-                print("❌ LOAD MORE ERROR: \(error.localizedDescription)")
-                // Fallback to reshuffle if loading more content fails
-                reshuffleAndResetFeed()
-            }
-        }
-    }
-    
-    // MARK: - Enhanced Video Play Count Management
+    // MARK: - Video Play Count Management
     
     private func incrementVideoPlayCount(for videoID: String) {
         videoPlayCounts[videoID, default: 0] += 1
-        
-        // Track when video started playing
-        if videoStartTimes[videoID] == nil {
-            videoStartTimes[videoID] = Date()
-        }
-        
         print("🎥 PLAY COUNT: Video \(videoID) played \(videoPlayCounts[videoID] ?? 0) times")
     }
     
     private func resetVideoPlayCount(for videoID: String) {
         videoPlayCounts[videoID] = 0
-        videoStartTimes[videoID] = Date()
         print("🔄 RESET COUNT: Video \(videoID) play count reset")
-    }
-    
-    private func getVideoWatchTime(videoID: String) -> TimeInterval {
-        guard let startTime = videoStartTimes[videoID] else { return 0 }
-        return Date().timeIntervalSince(startTime)
     }
     
     // MARK: - User Interaction Tracking
@@ -673,19 +543,131 @@ struct HomeFeedView: View {
         print("👆 USER INTERACTION: Recorded at \(lastUserInteraction)")
     }
     
-    // MARK: - Auto-Progression Controls
+    // MARK: - Enhanced Content Loading with Updated Service Methods
     
-    private func toggleAutoProgression() {
-        isAutoProgressionEnabled.toggle()
-        print("🔄 AUTO-PROGRESSION: \(isAutoProgressionEnabled ? "Enabled" : "Disabled")")
+    private func loadMoreContentAndContinue() {
+        guard let currentUserID = authService.currentUserID else { return }
+        
+        Task {
+            do {
+                print("📤 LOADING MORE: Fetching content...")
+                
+                // Use updated HomeFeedService method for better content loading
+                let updatedFeed = try await homeFeedService.getReshuffledFeed(userID: currentUserID)
+                
+                await MainActor.run {
+                    if updatedFeed.count > currentFeed.count {
+                        // Got new content - replace feed to avoid double cycling
+                        currentFeed = updatedFeed
+                        // Stay at current position in the updated feed
+                        currentThreadIndex = min(currentThreadIndex, currentFeed.count - 1)
+                        print("✅ LOADED MORE: Updated feed with \(updatedFeed.count) threads")
+                        
+                        // Trigger preloading for new content
+                        preloadAdjacentThreads()
+                    }
+                }
+                
+                // Handle no new content case outside MainActor.run
+                if updatedFeed.count <= currentFeed.count {
+                    let freshThreads = try await homeFeedService.refreshFeed(userID: currentUserID)
+                    await MainActor.run {
+                        currentFeed = freshThreads
+                        currentThreadIndex = 0
+                        currentStitchIndex = 0
+                        verticalOffset = 0
+                        horizontalOffset = 0
+                        print("🔄 REFRESHED: New feed with \(freshThreads.count) threads")
+                    }
+                }
+            } catch {
+                print("❌ LOAD MORE ERROR: \(error.localizedDescription)")
+                // Use existing refreshFeed method directly
+                await refreshFeed()
+            }
+        }
     }
     
-    private func toggleAutoRefresh() {
-        isAutoRefreshEnabled.toggle()
-        print("🔄 AUTO-REFRESH: \(isAutoRefreshEnabled ? "Enabled" : "Disabled")")
+    // MARK: - Smart Scroll-Based Loading
+    
+    private func checkScrollBasedLoading() {
+        guard let currentUserID = authService.currentUserID else { return }
+        
+        let shouldTriggerLoad = shouldTriggerScrollLoad()
+        
+        if shouldTriggerLoad {
+            Task {
+                do {
+                    print("📱 SCROLL LOAD: Triggered at thread \(currentThreadIndex)")
+                    let newThreads = try await homeFeedService.loadMoreContent(userID: currentUserID)
+                    
+                    await MainActor.run {
+                        if !newThreads.isEmpty {
+                            currentFeed.append(contentsOf: newThreads)
+                            print("✅ SCROLL LOAD: Added \(newThreads.count) threads seamlessly")
+                        }
+                    }
+                } catch {
+                    print("❌ SCROLL LOAD ERROR: \(error.localizedDescription)")
+                }
+            }
+        }
     }
     
-    // MARK: - Loading and Data Management
+    private func shouldTriggerScrollLoad() -> Bool {
+        let remainingThreads = currentFeed.count - currentThreadIndex
+        let triggerThreshold = 5 // Load more when 5 threads remaining
+        
+        return remainingThreads <= triggerThreshold &&
+               !homeFeedService.isLoading
+    }
+    
+    // MARK: - Intelligent Reshuffle with Diversification
+    
+    private func intelligentReshuffleAndResetFeed() {
+        guard let currentUserID = authService.currentUserID else { return }
+        
+        isReshuffling = true
+        
+        Task {
+            do {
+                print("🔀 INTELLIGENT RESHUFFLE: Creating diverse content mix...")
+                
+                // Get fresh content with intelligent diversification
+                let freshThreads = try await homeFeedService.refreshFeed(userID: currentUserID)
+                
+                // Simulate processing time for better UX
+                try await Task.sleep(nanoseconds: 1_500_000_000) // 1.5 seconds
+                
+                await MainActor.run {
+                    // Replace entire feed with diversified content
+                    currentFeed = freshThreads
+                    currentThreadIndex = 0
+                    currentStitchIndex = 0
+                    verticalOffset = 0
+                    horizontalOffset = 0
+                    isReshuffling = false
+                    
+                    // Clear play counts for fresh start
+                    videoPlayCounts.removeAll()
+                    
+                    print("✅ INTELLIGENT RESHUFFLE COMPLETE: Diverse feed with \(freshThreads.count) threads")
+                }
+                
+                // Preload first few threads
+                await preloadCurrentAndNext()
+                
+            } catch {
+                await MainActor.run {
+                    isReshuffling = false
+                    loadingError = "Failed to refresh content: \(error.localizedDescription)"
+                    print("❌ INTELLIGENT RESHUFFLE ERROR: \(error)")
+                }
+            }
+        }
+    }
+    
+    // MARK: - Content Loading and Management
     
     private func loadInstantFeed() {
         guard let currentUserID = authService.currentUserID else {
@@ -754,42 +736,6 @@ struct HomeFeedView: View {
         }
     }
     
-    // MARK: - Reshuffle Functionality
-    
-    private func reshuffleAndResetFeed() {
-        guard let currentUserID = authService.currentUserID else { return }
-        
-        isReshuffling = true
-        
-        Task {
-            do {
-                print("🔀 RESHUFFLING: Getting new feed order")
-                
-                // Simulate reshuffling delay
-                try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
-                
-                await MainActor.run {
-                    // Reset to top with new shuffled content
-                    currentThreadIndex = 0
-                    currentStitchIndex = 0
-                    verticalOffset = 0
-                    horizontalOffset = 0
-                    isReshuffling = false
-                    
-                    // Clear play counts
-                    videoPlayCounts.removeAll()
-                    
-                    print("✅ RESHUFFLE COMPLETE: Feed reset to top")
-                }
-            } catch {
-                await MainActor.run {
-                    isReshuffling = false
-                    print("❌ RESHUFFLE ERROR: \(error)")
-                }
-            }
-        }
-    }
-    
     // MARK: - Preloading Support
     
     private func preloadCurrentAndNext() async {
@@ -807,7 +753,7 @@ struct HomeFeedView: View {
         
         let thread = currentFeed[index]
         if thread.childVideos.isEmpty {
-            print("🔍 PRELOAD: Thread \(thread.id) has no children, attempting to load...")
+            print("📤 PRELOAD: Thread \(thread.id) has no children, attempting to load...")
             loadThreadChildren(threadID: thread.id)
         } else {
             print("✅ PRELOAD: Thread \(thread.id) already has \(thread.childVideos.count) children")
@@ -827,7 +773,7 @@ struct HomeFeedView: View {
     private func loadThreadChildren(threadID: String) {
         Task {
             do {
-                let children = try await videoService.getThreadChildren(threadID: threadID)
+                let children = try await homeFeedService.loadThreadChildren(threadID: threadID)
                 
                 await MainActor.run {
                     updateThreadWithChildren(threadID: threadID, children: children)
@@ -948,15 +894,287 @@ struct HomeFeedView: View {
         .padding()
     }
     
+    // MARK: - People Finder Integration
+    
+    /// Check if user should see people finder based on engagement patterns
+    private func checkPeopleFinderEligibility() {
+        guard let currentUserID = authService.currentUserID else { return }
+        
+        // Simple heuristic: check current feed size and following activity
+        // If user has very few threads in feed, suggest people finder
+        let shouldShow = currentFeed.count < 3 ||
+                        peopleFinderTriggerCount % 20 == 0
+        
+        if shouldShow && !shouldShowPeopleFinderPrompt {
+            shouldShowPeopleFinderPrompt = true
+            print("👥 PEOPLE FINDER: Triggered - Feed size: \(currentFeed.count), Count: \(peopleFinderTriggerCount)")
+        }
+    }
+    
+    /// Track navigation for people finder triggers
+    private func trackNavigationForPeopleFinder() {
+        peopleFinderTriggerCount += 1
+        
+        // Check for discovery trigger every 20 views
+        if peopleFinderTriggerCount % 20 == 0 {
+            checkPeopleFinderEligibility()
+        }
+    }
+    
+    /// People Finder Prompt Overlay
+    private var peopleFinderPromptOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.7)
+                .ignoresSafeArea()
+            
+            VStack(spacing: 20) {
+                // Icon
+                Image(systemName: "person.3.fill")
+                    .font(.system(size: 50))
+                    .foregroundColor(.cyan)
+                
+                // Title
+                Text("Discover New Creators")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                
+                // Description
+                Text("Follow more creators to see diverse content in your feed")
+                    .font(.body)
+                    .foregroundColor(.gray)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                
+                // Buttons
+                HStack(spacing: 16) {
+                    Button("Maybe Later") {
+                        shouldShowPeopleFinderPrompt = false
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Color.gray.opacity(0.3))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                    
+                    Button("Find People") {
+                        shouldShowPeopleFinderPrompt = false
+                        showingPeopleFinder = true
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Color.cyan)
+                    .foregroundColor(.black)
+                    .cornerRadius(8)
+                    .fontWeight(.semibold)
+                }
+            }
+            .padding(30)
+            .background(Color.black.opacity(0.9))
+            .cornerRadius(20)
+            .shadow(radius: 20)
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: shouldShowPeopleFinderPrompt)
+    }
+    
     // MARK: - Audio Session
     
     private func setupAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
-            try AVAudioSession.sharedInstance().setActive(true)
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .default, options: [.allowBluetooth, .allowBluetoothA2DP])
+            try audioSession.setActive(true)
+            print("✅ AUDIO SESSION: Configured for video playback")
         } catch {
-            print("Failed to setup audio session: \(error)")
+            print("❌ AUDIO SESSION: Failed to setup - \(error)")
         }
+    }
+}
+
+// MARK: - People Finder View Integration
+
+struct PeopleFinderView: View {
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var searchViewModel = SearchViewModel()
+    @State private var selectedTab: SearchTab = .users
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    Text("Find People to Follow")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .foregroundColor(.cyan)
+                }
+                .padding()
+                .background(Color.black)
+                
+                // Search bar
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.gray)
+                    
+                    TextField("Search for people...", text: $searchViewModel.searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .foregroundColor(.white)
+                }
+                .padding()
+                .background(Color.gray.opacity(0.2))
+                .cornerRadius(10)
+                .padding(.horizontal)
+                
+                // Content
+                if searchViewModel.searchText.isEmpty {
+                    // Show "People You May Know" when no search
+                    peopleYouMayKnowSection
+                } else {
+                    // Show search results
+                    searchResultsSection
+                }
+            }
+            .background(Color.black)
+            .onChange(of: searchViewModel.searchText) { _, newValue in
+                if !newValue.isEmpty {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        if searchViewModel.searchText == newValue {
+                            searchViewModel.performSearch()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    private var peopleYouMayKnowSection: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("People You May Know")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                    Spacer()
+                }
+                .padding(.horizontal)
+                
+                if searchViewModel.isLoadingSuggestions {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                } else {
+                    LazyVStack(spacing: 0) {
+                        ForEach(searchViewModel.suggestedUsers, id: \.id) { user in
+                            PeopleFinderUserRow(
+                                user: user,
+                                followManager: searchViewModel.followManager
+                            )
+                        }
+                    }
+                }
+            }
+            .padding(.top)
+        }
+    }
+    
+    private var searchResultsSection: some View {
+        ScrollView {
+            if searchViewModel.isSearching {
+                ProgressView()
+                    .tint(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(searchViewModel.userResults, id: \.id) { user in
+                        PeopleFinderUserRow(
+                            user: user,
+                            followManager: searchViewModel.followManager
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - People Finder User Row Component
+
+struct PeopleFinderUserRow: View {
+    let user: BasicUserInfo
+    @ObservedObject var followManager: FollowManager
+    
+    var body: some View {
+        HStack(spacing: 12) {
+            // Profile picture
+            AsyncImage(url: URL(string: user.profileImageURL ?? "")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Circle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        Image(systemName: "person.fill")
+                            .foregroundColor(.gray)
+                    )
+            }
+            .frame(width: 50, height: 50)
+            .clipShape(Circle())
+            
+            // User info
+            VStack(alignment: .leading, spacing: 4) {
+                Text(user.displayName)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                
+                Text("@\(user.username)")
+                    .font(.system(size: 14))
+                    .foregroundColor(.gray)
+                
+                if !user.displayName.isEmpty {
+                    Text(user.displayName)
+                        .font(.system(size: 14))
+                        .foregroundColor(.gray)
+                        .lineLimit(2)
+                }
+            }
+            
+            Spacer()
+            
+            // Follow button
+            Button(action: {
+                Task {
+                    await followManager.toggleFollow(for: user.id)
+                }
+            }) {
+                Text(followManager.isFollowing(user.id) ? "Following" : "Follow")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(followManager.isFollowing(user.id) ? .white : .black)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(followManager.isFollowing(user.id) ? Color.gray.opacity(0.3) : Color.cyan)
+                    .cornerRadius(20)
+            }
+            .disabled(followManager.isLoading(user.id))
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
     }
 }
 
@@ -968,8 +1186,15 @@ struct BoundedVideoContainerView: View {
     let isActive: Bool
     let containerID: String
     let onVideoLoop: (String) -> Void
+    let onVideoPositionUpdate: (TimeInterval) -> Void // Add position callback
     
     @EnvironmentObject var authService: AuthService
+    @State private var currentVideoPosition: TimeInterval = 0
+    @State private var previousActiveState: Bool = false
+    
+    private var isParentVideo: Bool {
+        containerID.contains("-parent")
+    }
     
     var body: some View {
         ZStack {
@@ -978,7 +1203,8 @@ struct BoundedVideoContainerView: View {
                 video: video,
                 isActive: isActive,
                 shouldPlay: isActive,
-                onVideoLoop: onVideoLoop
+                onVideoLoop: onVideoLoop,
+                currentVideoPosition: $currentVideoPosition
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped() // CRITICAL: Strict bounds enforcement
@@ -995,11 +1221,26 @@ struct BoundedVideoContainerView: View {
                 )
             }
         }
-        .onAppear {
-            print("🎬 BOUNDED CONTAINER: \(video.id.prefix(8)) - isActive: \(isActive)")
+        .onChange(of: isActive) { oldValue, newValue in
+            if newValue != previousActiveState {
+                previousActiveState = newValue
+                if newValue {
+                    print("▶️ CONTAINER ACTIVATED: \(video.id.prefix(8))")
+                } else {
+                    print("⏸️ CONTAINER DEACTIVATED: \(video.id.prefix(8))")
+                }
+            }
         }
-        .onChange(of: isActive) { _, newValue in
-            print("🔄 BOUNDED CONTAINER: \(video.id.prefix(8)) - Active changed to: \(newValue)")
+        .onChange(of: currentVideoPosition) { _, newPosition in
+            // Pass video position to parent
+            onVideoPositionUpdate(newPosition)
+        }
+        .onChange(of: video.id) { _, _ in
+            // Reset position when video changes
+            currentVideoPosition = 0
+        }
+        .onAppear {
+            previousActiveState = isActive
         }
     }
 }
@@ -1009,10 +1250,16 @@ struct BoundedVideoPlayer: UIViewRepresentable {
     let isActive: Bool
     let shouldPlay: Bool
     let onVideoLoop: (String) -> Void
+    @Binding var currentVideoPosition: TimeInterval
     
     func makeUIView(context: Context) -> BoundedVideoUIView {
         let view = BoundedVideoUIView()
         view.onVideoLoop = onVideoLoop
+        view.onVideoPositionUpdate = { position in
+            DispatchQueue.main.async {
+                currentVideoPosition = position
+            }
+        }
         return view
     }
     
@@ -1029,108 +1276,94 @@ class BoundedVideoUIView: UIView {
     private var player: AVPlayer?
     private var playerLayer: AVPlayerLayer?
     private var notificationObserver: NSObjectProtocol?
+    private var timeObserver: Any?
     private var currentVideoID: String?
+    private var lastShouldPlay: Bool = false
     var onVideoLoop: ((String) -> Void)?
-    
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setupStrictBounds()
-        setupKillObserver()
-    }
-    
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setupStrictBounds()
-        setupKillObserver()
-    }
-    
-    // FIXED: Strict bounds setup for HomeFeed
-    private func setupStrictBounds() {
-        backgroundColor = .black
-        clipsToBounds = true // CRITICAL: Prevent view overflow
-        layer.masksToBounds = true // CRITICAL: Prevent layer overflow
-        
-        // Create player layer with strict bounds
-        playerLayer = AVPlayerLayer()
-        playerLayer?.videoGravity = .resizeAspectFill
-        playerLayer?.masksToBounds = true // CRITICAL: Prevent player overflow
-        layer.addSublayer(playerLayer!)
-        
-        print("✅ BOUNDED VIDEO: Strict bounds setup complete")
-    }
-    
-    private func setupKillObserver() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(killPlayer),
-            name: .RealkillAllVideoPlayers,
-            object: nil
-        )
-    }
-    
-    @objc private func killPlayer() {
-        player?.pause()
-        player?.seek(to: .zero)
-        print("🛑 BOUNDED VIDEO: Killed player for \(currentVideoID ?? "unknown")")
-    }
+    var onVideoPositionUpdate: ((TimeInterval) -> Void)?
     
     override func layoutSubviews() {
         super.layoutSubviews()
-        // Ensure player layer exactly matches view bounds
         playerLayer?.frame = bounds
     }
     
     func setupVideo(video: CoreVideoMetadata, isActive: Bool, shouldPlay: Bool) {
-        // Only create new player if video changed
-        if currentVideoID != video.id {
-            cleanupCurrentPlayer()
-            
-            guard let url = URL(string: video.videoURL) else {
-                print("❌ BOUNDED VIDEO: Invalid URL for \(video.id)")
-                return
+        let actualShouldPlay = shouldPlay && isActive
+        
+        // If same video, just update playback state
+        if currentVideoID == video.id {
+            if lastShouldPlay != actualShouldPlay {
+                updatePlaybackState(shouldPlay: actualShouldPlay)
+                lastShouldPlay = actualShouldPlay
             }
-            
-            let newPlayer = AVPlayer(url: url)
-            player = newPlayer
-            playerLayer?.player = newPlayer
-            currentVideoID = video.id
-            
-            setupLooping()
-            print("🎬 BOUNDED VIDEO: Created bounded player for \(video.id)")
+            return
         }
         
-        // Control playback based on active state
-        if isActive && shouldPlay {
-            player?.play()
-            print("▶️ BOUNDED VIDEO: Playing \(video.id)")
+        // Setup new video
+        cleanupCurrentPlayer()
+        currentVideoID = video.id
+        lastShouldPlay = actualShouldPlay
+        
+        guard let url = URL(string: video.videoURL) else { return }
+        
+        // Create player and layer - keep existing for smooth preloading
+        player = AVPlayer(url: url)
+        playerLayer = AVPlayerLayer(player: player)
+        playerLayer?.videoGravity = .resizeAspectFill
+        playerLayer?.frame = bounds
+        
+        if let playerLayer = playerLayer {
+            layer.addSublayer(playerLayer)
+        }
+        
+        // Setup observers
+        setupVideoEndObserver()
+        setupTimeObserver()
+        
+        // Set initial playback state
+        updatePlaybackState(shouldPlay: actualShouldPlay)
+    }
+    
+    private func updatePlaybackState(shouldPlay: Bool) {
+        guard let player = player else { return }
+        
+        if shouldPlay {
+            player.play()
         } else {
-            player?.pause()
-            if currentVideoID == video.id {
-                print("⏸️ BOUNDED VIDEO: Paused \(video.id)")
-            }
+            player.pause()
         }
     }
     
-    private func setupLooping() {
+    private func setupVideoEndObserver() {
         guard let player = player else { return }
-        
-        if let observer = notificationObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
         
         notificationObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self, let currentVideoID = self.currentVideoID else { return }
-            
-            // Call the loop callback
-            self.onVideoLoop?(currentVideoID)
-            
-            // Restart video
-            player.seek(to: .zero)
-            player.play()
+            self?.handleVideoEnd()
+        }
+    }
+    
+    private func handleVideoEnd() {
+        guard let videoID = currentVideoID else { return }
+        onVideoLoop?(videoID)
+        player?.seek(to: .zero)
+        if lastShouldPlay {
+            player?.play()
+        }
+    }
+    
+    private func setupTimeObserver() {
+        guard let player = player else { return }
+        
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC)),
+            queue: .main
+        ) { [weak self] time in
+            let currentPosition = CMTimeGetSeconds(time)
+            self?.onVideoPositionUpdate?(currentPosition)
         }
     }
     
@@ -1142,16 +1375,20 @@ class BoundedVideoUIView: UIView {
             notificationObserver = nil
         }
         
-        player = nil
-        playerLayer?.player = nil
-        currentVideoID = nil
+        if let timeObserver = timeObserver {
+            player?.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
         
-        print("🗑️ BOUNDED VIDEO: Cleaned up bounded player")
+        playerLayer?.removeFromSuperlayer()
+        playerLayer = nil
+        player = nil
+        currentVideoID = nil
+        lastShouldPlay = false
     }
     
     deinit {
         cleanupCurrentPlayer()
-        NotificationCenter.default.removeObserver(self)
     }
 }
 

@@ -321,6 +321,9 @@ struct RecordingView: View {
         Task { @MainActor in
             await controller.stopCameraSession()
             
+            // CRITICAL: Restore audio session before dismissal
+            await restorePlaybackAudioSession()
+            
             // Ensure all strong references are cleared
             controller.recordedVideoURL = nil
             controller.aiAnalysisResult = nil
@@ -413,6 +416,9 @@ struct RecordingView: View {
         // FIXED: Use the correct notification name that exists in the project
         NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
         
+        // Set up recording audio session
+        setupRecordingAudioSession()
+        
         Task {
             await controller.startCameraSession()
         }
@@ -421,6 +427,29 @@ struct RecordingView: View {
     private func cleanupCamera() {
         Task {
             await controller.stopCameraSession()
+            
+            // CRITICAL: Restore playback audio session
+            await restorePlaybackAudioSession()
+        }
+    }
+    
+    // MARK: - Audio Session Management
+    
+    private func setupRecordingAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("Failed to setup recording audio session: \(error)")
+        }
+    }
+    
+    private func restorePlaybackAudioSession() async {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("Failed to restore playback audio session: \(error)")
         }
     }
 }

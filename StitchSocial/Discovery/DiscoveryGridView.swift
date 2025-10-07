@@ -2,9 +2,7 @@
 //  DiscoveryGridView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Grid-style Discovery Layout
-//  Dependencies: VideoThumbnailView, CoreVideoMetadata
-//  Features: 3-column grid, thumbnail previews, engagement badges
+//  Clean Instagram-style grid with native pull-to-refresh
 //
 
 import SwiftUI
@@ -12,231 +10,191 @@ import SwiftUI
 struct DiscoveryGridView: View {
     
     // MARK: - Props
-    
     let videos: [CoreVideoMetadata]
     let onVideoTap: (CoreVideoMetadata) -> Void
-    let onEngagement: (InteractionType, CoreVideoMetadata) -> Void
-    let onProfileTap: (String) -> Void
+    let onLoadMore: () -> Void
+    let onRefresh: () -> Void
+    let isLoadingMore: Bool
     
-    // MARK: - State
-    
-    @State private var selectedVideo: CoreVideoMetadata?
-    @State private var showingVideoPlayer = false
-    
-    // MARK: - Configuration
-    
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
-    private let spacing: CGFloat = 1
+    // MARK: - Grid Configuration
+    private let columns = [
+        GridItem(.flexible(), spacing: 2),
+        GridItem(.flexible(), spacing: 2)
+    ]
     
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: spacing) {
+            LazyVGrid(columns: columns, spacing: 2) {
                 ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
-                    gridThumbnailItem(video: video, index: index)
+                    GridVideoThumbnail(
+                        video: video,
+                        onTap: { onVideoTap(video) }
+                    )
+                    .onAppear {
+                        // Load more when near the end - adjusted for 2-column layout
+                        if index >= videos.count - 8 {
+                            onLoadMore()
+                        }
+                    }
+                }
+                
+                // Loading indicator at bottom
+                if isLoadingMore && !videos.isEmpty {
+                    HStack {
+                        Spacer()
+                        VStack(spacing: 8) {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .cyan))
+                                .scaleEffect(0.8)
+                            
+                            Text("Loading more...")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.6))
+                        }
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 20)
                 }
             }
-            .padding(.horizontal, 0)
+            .padding(.horizontal, 2)
+        }
+        .refreshable {
+            onRefresh()
         }
         .background(Color.black)
     }
+}
+
+// MARK: - Grid Video Thumbnail
+
+struct GridVideoThumbnail: View {
+    let video: CoreVideoMetadata
+    let onTap: () -> Void
     
-    // MARK: - Grid Thumbnail Item
+    @State private var imageLoaded = false
     
-    private func gridThumbnailItem(video: CoreVideoMetadata, index: Int) -> some View {
+    var body: some View {
         GeometryReader { geometry in
-            AsyncImage(url: URL(string: video.thumbnailURL)) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
-            } placeholder: {
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-                    .overlay(
-                        ProgressView()
-                            .tint(.white)
-                    )
-            }
-            .overlay(gridOverlay(video: video))
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onVideoTap(video)
-            }
-        }
-        .aspectRatio(9/16, contentMode: .fit)
-    }
-    
-    // MARK: - Grid Overlay
-    
-    private func gridOverlay(video: CoreVideoMetadata) -> some View {
-        ZStack {
-            // Gradient overlay for readability
-            LinearGradient(
-                colors: [
-                    Color.clear,
-                    Color.clear,
-                    Color.black.opacity(0.6)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            
-            VStack {
-                Spacer()
-                
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Creator info
-                        Button {
-                            onProfileTap(video.creatorID)
-                        } label: {
-                            HStack(spacing: 4) {
-                                // Creator profile placeholder (no profile image in video metadata)
-                                Circle()
-                                    .fill(LinearGradient(
-                                        colors: [.blue.opacity(0.6), .purple.opacity(0.4)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ))
-                                    .frame(width: 16, height: 16)
-                                    .overlay(
-                                        Text(video.creatorName.prefix(1).uppercased())
-                                            .font(.caption2)
-                                            .fontWeight(.bold)
-                                            .foregroundColor(.white)
-                                    )
-                                
-                                Text(video.creatorName)
-                                    .font(.caption2)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.white)
-                                    .lineLimit(1)
+            ZStack {
+                // Thumbnail Image
+                AsyncImage(url: URL(string: video.thumbnailURL ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .onAppear { imageLoaded = true }
+                } placeholder: {
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.gray.opacity(0.3),
+                                    Color.gray.opacity(0.1)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .overlay {
+                            if !imageLoaded {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white.opacity(0.6)))
+                                    .scaleEffect(0.7)
                             }
                         }
-                        
-                        // Video stats
-                        HStack(spacing: 8) {
-                            statItem(
-                                icon: "eye.fill",
-                                count: video.viewCount,
-                                color: .white.opacity(0.8)
-                            )
-                            
-                            statItem(
-                                icon: "flame.fill",
-                                count: video.hypeCount,
-                                color: .orange
-                            )
-                        }
-                    }
-                    
-                    Spacer()
-                    
-                    // Engagement quick actions
-                    VStack(spacing: 6) {
-                        Button {
-                            onEngagement(.hype, video)
-                        } label: {
-                            Image(systemName: "flame.fill")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                                .frame(width: 24, height: 24)
-                                .background(Color.black.opacity(0.6))
-                                .clipShape(Circle())
-                        }
-                        
-                        Button {
-                            onEngagement(.share, video)
-                        } label: {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.caption)
-                                .foregroundColor(.white)
-                                .frame(width: 24, height: 24)
-                                .background(Color.black.opacity(0.6))
-                                .clipShape(Circle())
-                        }
-                    }
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
-            }
-            
-            // Play indicator
-            if video.duration > 0 {
+                
+                // Top overlay with duration
                 VStack {
                     HStack {
                         Spacer()
-                        
                         Text(formatDuration(video.duration))
                             .font(.caption2)
-                            .fontWeight(.medium)
+                            .fontWeight(.semibold)
                             .foregroundColor(.white)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.black.opacity(0.7))
                             .cornerRadius(4)
-                            .padding(.trailing, 6)
-                            .padding(.top, 6)
                     }
+                    .padding(.top, 6)
+                    .padding(.trailing, 6)
                     
                     Spacer()
                 }
-            }
-            
-            // Temperature indicator
-            if !video.temperature.isEmpty && video.temperature.lowercased() != "normal" {
+                
+                // Bottom overlay with stats
                 VStack {
-                    HStack {
-                        temperatureIndicator(video.temperature)
-                            .padding(.leading, 6)
-                            .padding(.top, 6)
+                    Spacer()
+                    
+                    HStack(spacing: 8) {
+                        if video.hypeCount > 0 {
+                            HStack(spacing: 2) {
+                                Image(systemName: "flame.fill")
+                                    .font(.caption2)
+                                    .foregroundColor(.orange)
+                                Text(formatCount(video.hypeCount))
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                            }
+                        }
+                        
+                        if video.viewCount > 0 {
+                            HStack(spacing: 2) {
+                                Image(systemName: "play.fill")
+                                    .font(.caption2)
+                                    .foregroundColor(.white)
+                                Text(formatCount(video.viewCount))
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                            }
+                        }
                         
                         Spacer()
                     }
-                    
-                    Spacer()
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
+                    .background(
+                        LinearGradient(
+                            colors: [
+                                Color.clear,
+                                Color.black.opacity(0.6)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                 }
+                
+                // Tap overlay
+                Rectangle()
+                    .fill(Color.clear)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onTap()
+                    }
             }
         }
+        .aspectRatio(9/16, contentMode: .fit)
+        .clipped()
     }
     
-    // MARK: - Helper Components
+    // MARK: - Helper Functions
     
-    private func statItem(icon: String, count: Int, color: Color) -> some View {
-        HStack(spacing: 2) {
-            Image(systemName: icon)
-                .font(.caption2)
-                .foregroundColor(color)
-            
-            Text(formatCount(count))
-                .font(.caption2)
-                .fontWeight(.medium)
-                .foregroundColor(.white.opacity(0.9))
-        }
-    }
-    
-    private func temperatureIndicator(_ temperature: String) -> some View {
-        let color: Color = {
-            switch temperature.lowercased() {
-            case "hot", "blazing": return .red
-            case "warm": return .orange
-            case "cool": return .blue
-            case "cold", "frozen": return .cyan
-            default: return .gray
-            }
-        }()
+    private func formatDuration(_ duration: Double) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
         
-        return Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
-            .overlay(
-                Circle()
-                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
-            )
+        if minutes > 0 {
+            return String(format: "%d:%02d", minutes, seconds)
+        } else {
+            return String(format: "0:%02d", seconds)
+        }
     }
-    
-    // MARK: - Helper Methods
     
     private func formatCount(_ count: Int) -> String {
         if count >= 1_000_000 {
@@ -244,18 +202,18 @@ struct DiscoveryGridView: View {
         } else if count >= 1_000 {
             return String(format: "%.1fK", Double(count) / 1_000)
         } else {
-            return String(count)
+            return "\(count)"
         }
     }
-    
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        
-        if minutes > 0 {
-            return String(format: "%d:%02d", minutes, seconds)
-        } else {
-            return String(format: ":%02d", seconds)
-        }
-    }
+}
+
+#Preview {
+    DiscoveryGridView(
+        videos: [],
+        onVideoTap: { _ in },
+        onLoadMore: { },
+        onRefresh: { },
+        isLoadingMore: false
+    )
+    .background(Color.black)
 }

@@ -2,150 +2,340 @@
 //  FullscreenVideoView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Fullscreen Video Player with AVPlayer
+//  Layer 8: Views - Clean Fullscreen Video Player with Thread Navigation
 //  Dependencies: SwiftUI, AVFoundation, AVKit
-//  Features: Edge-to-edge video playback with dismiss functionality
+//  Features: Horizontal child navigation only, clean UI, actual video playback
 //
 
 import SwiftUI
 import AVFoundation
 import AVKit
 import FirebaseAuth
+import Combine
 
 struct FullscreenVideoView: View {
     let video: CoreVideoMetadata
     let onDismiss: (() -> Void)?
     
-    @State private var player: AVPlayer?
-    @State private var showingControls = true
+    // MARK: - State
+    @State private var currentThread: ThreadData?
+    @State private var currentVideoIndex: Int = 0
+    @State private var isLoadingThread = true
+    @State private var loadError: String?
     
-    // Convenience initializer for backwards compatibility
-    init(video: CoreVideoMetadata, onDismiss: (() -> Void)? = nil) {
-        self.video = video
-        self.onDismiss = onDismiss
+    // Navigation state
+    @State private var horizontalOffset: CGFloat = 0
+    @State private var dragOffset: CGSize = .zero
+    @State private var isAnimating = false
+    
+    // Services
+    @StateObject private var videoService = VideoService()
+    
+    // MARK: - Computed Properties
+    
+    private var allVideos: [CoreVideoMetadata] {
+        guard let thread = currentThread else { return [video] }
+        return [thread.parentVideo] + thread.childVideos
     }
+    
+    private var currentVideo: CoreVideoMetadata {
+        guard currentVideoIndex >= 0 && currentVideoIndex < allVideos.count else { return video }
+        return allVideos[currentVideoIndex]
+    }
+    
+    private var currentUserID: String? {
+        return Auth.auth().currentUser?.uid
+    }
+    
+    // MARK: - Body
     
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea(.all)
-            
-            // Edge-to-edge video player using HomeFeed approach
-            if let _ = player {
-                FullscreenVideoPlayerView(
-                    video: video,
-                    isActive: true,
-                    shouldPlay: true
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
-                .ignoresSafeArea(.all)
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        showingControls.toggle()
-                    }
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.ignoresSafeArea(.all)
+                
+                if isLoadingThread {
+                    loadingView
+                } else if let error = loadError {
+                    errorView(error)
+                } else {
+                    mainContentView(geometry: geometry)
                 }
-            } else {
-                // Loading state
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .tint(.white)
-                        .scaleEffect(1.5)
-                    
-                    Text("Loading video...")
-                        .foregroundColor(.white)
-                        .font(.subheadline)
-                }
-            }
-            
-            // Controls overlay (when visible) - Overlaid on edge-to-edge video
-            if showingControls {
-                VStack {
-                    // Top controls
-                    HStack {
-                        Button("Close") {
-                            print("FULLSCREEN: Close button tapped")
-                            onDismiss?()
-                        }
-                        .foregroundColor(.white)
-                        .padding(12)
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(8)
-                        
-                        Spacer()
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 16)
-                    
-                    Spacer()
-                    
-                    // Contextual Video Overlay - No additional padding
-                    ContextualVideoOverlay(
-                        video: video,
-                        context: .discovery,
-                        currentUserID: getCurrentUserID(),
-                        threadVideo: nil,
-                        isVisible: showingControls
-                    ) { action in
-                        handleOverlayAction(action)
-                    }
-                }
-                .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationBarHidden(true)
+        .statusBarHidden(true)
         .ignoresSafeArea(.all)
         .onAppear {
-            print("FULLSCREEN: View appeared for video: \(video.title)")
-            setupPlayer()
+            setupAudioSession()
+            loadThreadData()
         }
         .onDisappear {
-            cleanupPlayer()
+            cleanupAudioSession()
         }
-        .gesture(
-            // Swipe down to dismiss
-            DragGesture()
-                .onEnded { value in
-                    if value.translation.height > 100 {
-                        print("FULLSCREEN: Swipe down detected, dismissing")
-                        onDismiss?()
-                    }
-                }
-        )
     }
     
-    // MARK: - Player Management
+    // MARK: - Main Content View
     
-    private func setupPlayer() {
-        guard URL(string: video.videoURL) != nil else {
-            print("FULLSCREEN: Invalid video URL for \(video.title)")
+    private func mainContentView(geometry: GeometryProxy) -> some View {
+        ZStack {
+            // Video players positioned horizontally
+            ForEach(Array(allVideos.enumerated()), id: \.offset) { index, videoData in
+                VideoPlayerComponent(
+                    video: videoData,
+                    isActive: index == currentVideoIndex && !isAnimating
+                )
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .clipped()
+                .ignoresSafeArea(.all)
+                .position(
+                    x: geometry.size.width / 2 + CGFloat(index) * geometry.size.width + horizontalOffset + dragOffset.width,
+                    y: geometry.size.height / 2
+                )
+            }
+            
+            // UI Overlays
+            overlayViews(geometry: geometry)
+        }
+        .gesture(swipeGesture(geometry: geometry))
+    }
+    
+    // MARK: - UI Overlays
+    
+    private func overlayViews(geometry: GeometryProxy) -> some View {
+        VStack {
+            // Top area
+            HStack {
+                // Thread position indicator (left)
+                if allVideos.count > 1 {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(currentVideoIndex + 1) of \(allVideos.count)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.8))
+                        
+                        if currentVideoIndex == 0 {
+                            Text("Original video")
+                                .font(.caption2)
+                                .foregroundColor(.cyan)
+                        } else {
+                            Text("Reply \(currentVideoIndex)")
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                }
+                
+                Spacer()
+                
+                // Close button (right)
+                Button(action: {
+                    onDismiss?()
+                }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(Color.black.opacity(0.6))
+                        )
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+            }
+            
+            Spacer()
+            
+            // Bottom contextual overlay
+            ContextualVideoOverlay(
+                video: currentVideo,
+                context: .profileOther,  // ✅ CORRECT - shows full overlay
+                currentUserID: currentUserID,
+                threadVideo: currentVideoIndex > 0 ? currentThread?.parentVideo : nil,
+                isVisible: true,
+                onAction: handleOverlayAction
+            )
+            .id("\(currentVideo.id)-\(currentVideoIndex)")
+        }
+    }
+    
+    // MARK: - Gesture Handling
+    
+    private func swipeGesture(geometry: GeometryProxy) -> some Gesture {
+        DragGesture(minimumDistance: 30)
+            .onChanged { value in
+                if !isAnimating {
+                    dragOffset = CGSize(
+                        width: value.translation.width * 0.8,
+                        height: 0
+                    )
+                }
+            }
+            .onEnded { value in
+                handleSwipe(translation: value.translation, geometry: geometry)
+            }
+    }
+    
+    private func handleSwipe(translation: CGSize, geometry: GeometryProxy) {
+        let threshold: CGFloat = 80
+        let isSwipeLeft = translation.width < -threshold
+        let isSwipeRight = translation.width > threshold
+        
+        if isSwipeLeft && currentVideoIndex < allVideos.count - 1 {
+            // Next video
+            moveToVideo(currentVideoIndex + 1, geometry: geometry)
+        } else if isSwipeRight && currentVideoIndex > 0 {
+            // Previous video
+            moveToVideo(currentVideoIndex - 1, geometry: geometry)
+        } else {
+            // Snap back
+            snapBack()
+        }
+    }
+    
+    private func moveToVideo(_ index: Int, geometry: GeometryProxy) {
+        guard index >= 0 && index < allVideos.count else {
+            snapBack()
             return
         }
         
-        print("FULLSCREEN: Setting up custom player for \(video.title)")
+        isAnimating = true
+        currentVideoIndex = index
         
-        // Create a dummy player to trigger the UI update
-        // The actual player is created in FullscreenVideoUIView
-        player = AVPlayer()
+        let targetOffset = -CGFloat(index) * geometry.size.width
         
-        // Auto-hide controls after 3 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                showingControls = false
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+            horizontalOffset = targetOffset
+            dragOffset = .zero
+        }
+        
+        // Haptic feedback
+        let impact = UIImpactFeedbackGenerator(style: .light)
+        impact.impactOccurred()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            isAnimating = false
+        }
+        
+        print("FULLSCREEN: Moved to video \(index + 1) of \(allVideos.count)")
+    }
+    
+    private func snapBack() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            dragOffset = .zero
+        }
+    }
+    
+    // MARK: - Thread Data Loading
+    
+    private func loadThreadData() {
+        Task {
+            do {
+                isLoadingThread = true
+                loadError = nil
+                
+                let threadID = video.threadID ?? video.id
+                let threadData = try await videoService.getCompleteThread(threadID: threadID)
+                
+                let startingIndex: Int
+                if video.id == threadData.parentVideo.id {
+                    startingIndex = 0
+                } else if let childIndex = threadData.childVideos.firstIndex(where: { $0.id == video.id }) {
+                    startingIndex = childIndex + 1
+                } else {
+                    startingIndex = 0
+                }
+                
+                await MainActor.run {
+                    self.currentThread = threadData
+                    self.currentVideoIndex = startingIndex
+                    self.isLoadingThread = false
+                }
+                
+                print("FULLSCREEN: Loaded thread with \(threadData.childVideos.count) children")
+                
+            } catch {
+                await MainActor.run {
+                    self.loadError = error.localizedDescription
+                    self.isLoadingThread = false
+                }
+                print("FULLSCREEN ERROR: \(error)")
             }
         }
     }
     
-    private func cleanupPlayer() {
-        print("FULLSCREEN: Cleaning up player")
-        player = nil
+    // MARK: - Audio Session
+    
+    private func setupAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("FULLSCREEN: Failed to setup audio session: \(error)")
+        }
     }
     
-    
-    // MARK: - Helper Functions
-    
-    private func getCurrentUserID() -> String? {
-        return Auth.auth().currentUser?.uid
+    private func cleanupAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(false)
+        } catch {
+            print("FULLSCREEN: Failed to cleanup audio session: \(error)")
+        }
     }
+    
+    // MARK: - State Views
+    
+    private var loadingView: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .tint(.white)
+                .scaleEffect(1.5)
+            
+            Text("Loading video thread...")
+                .foregroundColor(.white)
+                .font(.subheadline)
+        }
+    }
+    
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 40))
+                .foregroundColor(.red)
+            
+            Text("Failed to load video")
+                .foregroundColor(.white)
+                .font(.headline)
+            
+            Text(message)
+                .foregroundColor(.gray)
+                .font(.caption)
+                .multilineTextAlignment(.center)
+            
+            HStack(spacing: 16) {
+                Button("Retry") {
+                    loadThreadData()
+                }
+                .padding()
+                .background(Color.cyan)
+                .foregroundColor(.black)
+                .cornerRadius(8)
+                
+                Button("Close") {
+                    onDismiss?()
+                }
+                .padding()
+                .background(Color.gray)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+        }
+        .padding()
+    }
+    
+    // MARK: - Action Handling
     
     private func handleOverlayAction(_ action: ContextualOverlayAction) {
         switch action {
@@ -164,10 +354,12 @@ struct FullscreenVideoView: View {
             )
             
         case .engagement(let type):
-            handleEngagement(type)
+            print("FULLSCREEN: Engagement \(type) for video \(currentVideo.id)")
+            let impact = UIImpactFeedbackGenerator(style: .medium)
+            impact.impactOccurred()
             
         case .follow, .unfollow, .followToggle:
-            handleFollowAction()
+            print("FULLSCREEN: Follow action for creator \(currentVideo.creatorID)")
             
         case .share:
             shareVideo()
@@ -178,71 +370,14 @@ struct FullscreenVideoView: View {
         case .stitch:
             presentStitchInterface()
             
-        case .profileManagement, .profileSettings:
-            NotificationCenter.default.post(
-                name: NSNotification.Name("PresentSettings"),
-                object: nil
-            )
-            
-        case .more:
-            presentMoreOptions()
-        }
-    }
-    
-    private func handleEngagement(_ type: ContextualEngagementType) {
-        guard let currentUserID = Auth.auth().currentUser?.uid else { return }
-        
-        Task {
-            let engagementCoordinator = EngagementCoordinator(
-                videoService: VideoService(),
-                notificationService: NotificationService()
-            )
-            
-            switch type {
-            case .hype:
-                try await engagementCoordinator.processEngagement(
-                    videoID: video.id,
-                    engagementType: .hype,
-                    userID: currentUserID,
-                    userTier: .rookie
-                )
-            case .cool:
-                try await engagementCoordinator.processEngagement(
-                    videoID: video.id,
-                    engagementType: .cool,
-                    userID: currentUserID,
-                    userTier: .rookie
-                )
-            case .share:
-                shareVideo()
-            case .reply:
-                presentReplyInterface()
-            case .stitch:
-                presentStitchInterface()
-            }
-        }
-    }
-    
-    private func handleFollowAction() {
-        guard let currentUserID = Auth.auth().currentUser?.uid else { return }
-        
-        Task {
-            do {
-                let userService = UserService()
-                try await userService.followUser(
-                    followerID: currentUserID,
-                    followingID: video.creatorID
-                )
-                print("FULLSCREEN: Follow action completed for user \(video.creatorID)")
-            } catch {
-                print("FULLSCREEN: Follow action failed: \(error)")
-            }
+        case .more, .profileManagement, .profileSettings:
+            print("FULLSCREEN: More options requested")
         }
     }
     
     private func shareVideo() {
-        let shareText = "Check out this video on Stitch Social!"
-        let shareURL = URL(string: "https://stitchsocial.app/video/\(video.id)")!
+        let shareText = "Check out this video by \(currentVideo.creatorName) on Stitch Social!"
+        let shareURL = URL(string: "https://stitchsocial.app/video/\(currentVideo.id)")!
         
         let activityController = UIActivityViewController(
             activityItems: [shareText, shareURL],
@@ -271,8 +406,8 @@ struct FullscreenVideoView: View {
             object: nil,
             userInfo: [
                 "context": "replyToVideo",
-                "videoID": video.id,
-                "threadID": video.threadID ?? video.id
+                "videoID": currentVideo.id,
+                "threadID": currentVideo.threadID ?? currentVideo.id
             ]
         )
     }
@@ -283,148 +418,153 @@ struct FullscreenVideoView: View {
             object: nil,
             userInfo: [
                 "context": "stitchVideo",
-                "videoID": video.id,
-                "threadID": video.threadID ?? video.id
+                "videoID": currentVideo.id,
+                "threadID": currentVideo.threadID ?? currentVideo.id
             ]
         )
     }
-    
-    private func presentMoreOptions() {
-        print("FULLSCREEN: More options requested for video \(video.id)")
-    }
-    
-    private func formatCount(_ count: Int) -> String {
-        if count >= 1000000 {
-            return String(format: "%.1fM", Double(count) / 1000000)
-        } else if count >= 1000 {
-            return String(format: "%.1fK", Double(count) / 1000)
-        } else {
-            return "\(count)"
-        }
-    }
 }
 
-// MARK: - Custom Fullscreen Video Player (HomeFeed Style)
+// MARK: - Video Player Component
 
-struct FullscreenVideoPlayerView: UIViewRepresentable {
+struct VideoPlayerComponent: View {
     let video: CoreVideoMetadata
     let isActive: Bool
-    let shouldPlay: Bool
     
-    func makeUIView(context: Context) -> FullscreenVideoUIView {
-        let view = FullscreenVideoUIView()
-        return view
+    @State private var player: AVPlayer?
+    @State private var playerItem: AVPlayerItem?
+    @State private var isLoading = true
+    @State private var hasError = false
+    @State private var cancellables = Set<AnyCancellable>()
+    
+    var body: some View {
+        GeometryReader { geometry in
+            if hasError {
+                errorState
+            } else if isLoading {
+                loadingState
+            } else {
+                VideoPlayer(player: player)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+                    .ignoresSafeArea(.all)
+            }
+        }
+        .onAppear {
+            setupPlayer()
+        }
+        .onDisappear {
+            cleanupPlayer()
+        }
+        .onChange(of: isActive) { _, newValue in
+            if newValue {
+                player?.play()
+            } else {
+                player?.pause()
+            }
+        }
     }
     
-    func updateUIView(_ uiView: FullscreenVideoUIView, context: Context) {
-        uiView.setupVideo(
-            video: video,
-            isActive: isActive,
-            shouldPlay: shouldPlay
-        )
+    private func setupPlayer() {
+        guard let videoURL = URL(string: video.videoURL) else {
+            hasError = true
+            isLoading = false
+            return
+        }
+        
+        let asset = AVAsset(url: videoURL)
+        playerItem = AVPlayerItem(asset: asset)
+        player = AVPlayer(playerItem: playerItem)
+        
+        // Configure for looping
+        NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { _ in
+            player?.seek(to: .zero)
+            if isActive {
+                player?.play()
+            }
+        }
+        
+        // Monitor loading state
+        playerItem?.publisher(for: \.status)
+            .receive(on: DispatchQueue.main)
+            .sink { status in
+                switch status {
+                case .readyToPlay:
+                    isLoading = false
+                    if isActive {
+                        player?.play()
+                    }
+                case .failed:
+                    hasError = true
+                    isLoading = false
+                case .unknown:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func cleanupPlayer() {
+        player?.pause()
+        player = nil
+        playerItem = nil
+        cancellables.removeAll()
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    private var loadingState: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: 16) {
+                ProgressView()
+                    .tint(.white)
+                    .scaleEffect(1.5)
+                Text("Loading video...")
+                    .foregroundColor(.white)
+                    .font(.subheadline)
+            }
+        }
+    }
+    
+    private var errorState: some View {
+        ZStack {
+            Color.black
+            VStack(spacing: 16) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 40))
+                    .foregroundColor(.red)
+                Text("Failed to load video")
+                    .foregroundColor(.white)
+                    .font(.subheadline)
+            }
+        }
     }
 }
 
-class FullscreenVideoUIView: UIView {
-    private var player: AVPlayer?
-    private var playerLayer: AVPlayerLayer?
-    private var notificationObserver: NSObjectProtocol?
-    private var currentVideoID: String?
-    
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        setupStrictBounds()
-    }
-    
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        setupStrictBounds()
-    }
-    
-    // FIXED: Strict bounds setup like HomeFeed
-    private func setupStrictBounds() {
-        backgroundColor = .black
-        clipsToBounds = true // CRITICAL: Prevent view overflow
-        layer.masksToBounds = true // CRITICAL: Prevent layer overflow
-        
-        // Create player layer with strict bounds
-        playerLayer = AVPlayerLayer()
-        playerLayer?.videoGravity = .resizeAspectFill
-        playerLayer?.masksToBounds = true // CRITICAL: Prevent player overflow
-        layer.addSublayer(playerLayer!)
-        
-        print("FULLSCREEN PLAYER: Strict bounds setup complete")
-    }
-    
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        // FIXED: Ensure player layer exactly matches view bounds
-        playerLayer?.frame = bounds
-    }
-    
-    func setupVideo(video: CoreVideoMetadata, isActive: Bool, shouldPlay: Bool) {
-        // Only create new player if video changed
-        if currentVideoID != video.id {
-            cleanupCurrentPlayer()
-            
-            guard let url = URL(string: video.videoURL) else {
-                print("FULLSCREEN PLAYER: Invalid URL for \(video.id)")
-                return
+// MARK: - Preview
+
+struct FullscreenVideoView_Previews: PreviewProvider {
+    static var previews: some View {
+        FullscreenVideoView(
+            video: CoreVideoMetadata.newThread(
+                title: "Preview Video",
+                videoURL: "https://example.com/video.mp4",
+                thumbnailURL: "https://example.com/thumb.jpg",
+                creatorID: "creator1",
+                creatorName: "Creator",
+                duration: 30.0,
+                fileSize: 1024
+            ),
+            onDismiss: {
+                print("Preview dismiss")
             }
-            
-            let newPlayer = AVPlayer(url: url)
-            player = newPlayer
-            playerLayer?.player = newPlayer
-            currentVideoID = video.id
-            
-            setupLooping()
-            print("FULLSCREEN PLAYER: Created player for \(video.id)")
-        }
-        
-        // Control playback based on active state
-        if isActive && shouldPlay {
-            player?.play()
-            print("FULLSCREEN PLAYER: Playing \(video.id)")
-        } else {
-            player?.pause()
-            print("FULLSCREEN PLAYER: Paused \(video.id)")
-        }
-    }
-    
-    private func setupLooping() {
-        guard let player = player else { return }
-        
-        if let observer = notificationObserver {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        
-        notificationObserver = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: player.currentItem,
-            queue: .main
-        ) { _ in
-            player.seek(to: .zero)
-            player.play()
-        }
-    }
-    
-    private func cleanupCurrentPlayer() {
-        player?.pause()
-        
-        if let observer = notificationObserver {
-            NotificationCenter.default.removeObserver(observer)
-            notificationObserver = nil
-        }
-        
-        player = nil
-        playerLayer?.player = nil
-        currentVideoID = nil
-        
-        print("FULLSCREEN PLAYER: Cleaned up player")
-    }
-    
-    deinit {
-        cleanupCurrentPlayer()
-        NotificationCenter.default.removeObserver(self)
+        )
     }
 }

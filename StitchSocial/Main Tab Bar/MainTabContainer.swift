@@ -22,7 +22,7 @@ struct MainTabContainer: View {
     
     // MARK: - Navigation State
     
-    @State private var selectedTab: MainAppTab = .home
+    @State private var selectedTab: MainAppTab = .discovery
     @State private var showingRecording = false
     
     // MARK: - Double Upload Prevention

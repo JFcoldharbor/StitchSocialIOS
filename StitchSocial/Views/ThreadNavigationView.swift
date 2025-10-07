@@ -10,6 +10,7 @@
 
 import SwiftUI
 import AVFoundation
+import ObjectiveC
 
 // MARK: - ThreadNavigationView
 
@@ -53,51 +54,35 @@ struct ThreadNavigationView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            navigationContainer(geometry: geometry)
-                .onAppear {
-                    setupNavigation(geometry: geometry)
-                    // Set initial threads after view appears
-                    coordinator.setThreads(initialThreads)
-                }
-                .onChange(of: geometry.size) { _, newSize in
-                    updateContainerSize(newSize)
-                }
-        }
-        .coordinateSpace(name: "threadNavigation")
-    }
-    
-    // MARK: - Navigation Container
-    
-    private func navigationContainer(geometry: GeometryProxy) -> some View {
-        ZStack {
-            // Background
-            contextBackground
-            
-            // Thread containers with positioning
-            if coordinator.isReshuffling {
-                reshufflingOverlay
-            } else {
-                threadContainerGrid(geometry: geometry)
+            ZStack {
+                // Context-specific background
+                contextBackground
+                
+                // Main content container
+                threadNavigationContainer(geometry: geometry)
+                    .gesture(
+                        DragGesture(minimumDistance: 10)
+                            .onChanged { coordinator.handleDragChanged($0) }
+                            .onEnded { coordinator.handleDragEnded($0) }
+                    )
+                
+                // Context-specific overlays
+                contextOverlays
             }
-            
-            // Context-specific overlays
-            contextOverlays
+            .onAppear {
+                containerSize = geometry.size
+                coordinator.setThreads(initialThreads)
+            }
+            .onChange(of: geometry.size) { newSize in
+                containerSize = newSize
+            }
         }
-        .clipped()
-        .gesture(
-            DragGesture(minimumDistance: coordinator.minimumDragDistance)
-                .onChanged { value in
-                    coordinator.handleDragChanged(value)
-                }
-                .onEnded { value in
-                    coordinator.handleDragEnded(value)
-                }
-        )
+        .background(Color.black.ignoresSafeArea())
     }
     
-    // MARK: - Thread Container Grid
+    // MARK: - Thread Navigation Container
     
-    private func threadContainerGrid(geometry: GeometryProxy) -> some View {
+    private func threadNavigationContainer(geometry: GeometryProxy) -> some View {
         ZStack {
             ForEach(Array(coordinator.threads.enumerated()), id: \.offset) { threadIndex, thread in
                 threadContainer(
@@ -194,7 +179,7 @@ struct ThreadNavigationView: View {
         )
     }
     
-    // MARK: - FIXED: Video Container Factory - Use Compatible BoundedVideoContainer
+    // MARK: - Video Container Factory
     
     private func videoContainer(
         video: CoreVideoMetadata,
@@ -203,22 +188,17 @@ struct ThreadNavigationView: View {
         containerID: String
     ) -> some View {
         Group {
-            switch context {
-            case .homeFeed, .discovery:
-                // FIXED: Use the original BoundedVideoContainer (5 parameters) to avoid compilation error
+            if context.useBoundedContainers {
                 BoundedVideoContainer(
                     video: video,
                     thread: thread,
                     isActive: isActive,
                     containerID: containerID,
                     onVideoLoop: { videoID in
-                        coordinator.incrementVideoPlayCount(for: videoID)
                         onVideoLoop?(videoID)
                     }
                 )
-                
-            case .profile, .fullscreen:
-                // Use enhanced VideoPlayerView for profile/fullscreen
+            } else {
                 VideoPlayerView(
                     video: video,
                     isActive: isActive,
@@ -226,149 +206,83 @@ struct ThreadNavigationView: View {
                         onEngagement?(interactionType, video)
                     }
                 )
-                .onAppear {
-                    if isActive {
-                        coordinator.incrementVideoPlayCount(for: video.id)
-                        onVideoLoop?(video.id)
-                    }
-                }
             }
         }
     }
     
-    // MARK: - Context-Specific UI
+    // MARK: - Helper Methods
+    
+    private func isVideoActive(threadIndex: Int, stitchIndex: Int) -> Bool {
+        return threadIndex == coordinator.navigationState.currentThreadIndex &&
+               stitchIndex == coordinator.navigationState.currentStitchIndex &&
+               !coordinator.navigationState.isAnimating
+    }
+    
+    private func verticalPosition(for threadIndex: Int, geometry: GeometryProxy) -> CGFloat {
+        let offset = CGFloat(threadIndex - coordinator.navigationState.currentThreadIndex)
+        return offset * geometry.size.height
+    }
+    
+    private func horizontalPosition(for stitchIndex: Int, geometry: GeometryProxy) -> CGFloat {
+        let offset = CGFloat(stitchIndex - coordinator.navigationState.currentStitchIndex)
+        return offset * geometry.size.width
+    }
+    
+    // MARK: - Background Configurations
     
     private var contextBackground: some View {
         Group {
             switch context {
-            case .homeFeed, .discovery:
+            case .homeFeed:
                 Color.black.ignoresSafeArea()
+                
+            case .discovery:
+                LinearGradient(
+                    colors: [Color.purple.opacity(0.3), Color.black],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+                
             case .profile:
-                Color.clear // Profile handles its own background
+                Color.black.opacity(0.95).ignoresSafeArea()
+                
             case .fullscreen:
                 Color.black.ignoresSafeArea()
             }
         }
     }
     
+    // MARK: - Context-Specific Overlays
+    
     private var contextOverlays: some View {
-        Group {
+        VStack {
             switch context {
             case .homeFeed:
-                // Home feed specific overlays (bubbles, etc.)
-                EmptyView()
-                
-            case .profile:
-                // Profile navigation hints
-                profileNavigationHints
+                // Home feed specific overlays
+                Spacer()
                 
             case .discovery:
                 // Discovery specific overlays
-                EmptyView()
+                Spacer()
+                
+            case .profile:
+                // Profile specific overlays
+                Spacer()
                 
             case .fullscreen:
-                // Fullscreen controls
-                EmptyView()
+                // Fullscreen specific overlays
+                Spacer()
             }
         }
     }
+}
+
+// MARK: - ThreadNavigationView Public Interface
+
+extension ThreadNavigationView {
     
-    private var profileNavigationHints: some View {
-        VStack {
-            Spacer()
-            
-            if let currentThread = coordinator.getCurrentThread(),
-               !currentThread.childVideos.isEmpty {
-                HStack {
-                    Spacer()
-                    
-                    FloatingBubbleNotification(
-                        replyCount: currentThread.childVideos.count,
-                        context: .profile,
-                        onDismiss: {},
-                        onAction: nil
-                    )
-                    .padding(.trailing, 20)
-                    .padding(.bottom, 20)
-                }
-            }
-        }
-    }
-    
-    // MARK: - Reshuffling Overlay
-    
-    private var reshufflingOverlay: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "shuffle.circle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.cyan)
-                .rotationEffect(.degrees(coordinator.isReshuffling ? 360 : 0))
-                .animation(
-                    .linear(duration: 1).repeatForever(autoreverses: false),
-                    value: coordinator.isReshuffling
-                )
-            
-            Text("Reshuffling feed...")
-                .foregroundColor(.white)
-                .font(.headline)
-        }
-        .padding(24)
-        .background(Color.black.opacity(0.8))
-        .cornerRadius(16)
-    }
-    
-    // MARK: - Setup and State Management
-    
-    private func setupNavigation(geometry: GeometryProxy) {
-        containerSize = geometry.size
-        coordinator.setContainerSize(geometry.size)
-        
-        // Start auto-progression for appropriate contexts
-        if context.autoProgressionEnabled {
-            coordinator.startAutoProgression()
-        }
-    }
-    
-    private func updateContainerSize(_ newSize: CGSize) {
-        containerSize = newSize
-        coordinator.setContainerSize(newSize)
-    }
-    
-    // MARK: - Position Calculations
-    
-    private func verticalPosition(for threadIndex: Int, geometry: GeometryProxy) -> CGFloat {
-        switch context {
-        case .homeFeed, .discovery:
-            return CGFloat(threadIndex) * geometry.size.height
-        case .profile, .fullscreen:
-            return 0 // Single thread view
-        }
-    }
-    
-    private func horizontalPosition(for stitchIndex: Int, geometry: GeometryProxy) -> CGFloat {
-        switch context {
-        case .homeFeed, .profile, .fullscreen:
-            return CGFloat(stitchIndex) * geometry.size.width
-        case .discovery:
-            return 0 // No horizontal navigation in discovery
-        }
-    }
-    
-    private func isVideoActive(threadIndex: Int, stitchIndex: Int) -> Bool {
-        return threadIndex == coordinator.navigationState.currentThreadIndex &&
-               stitchIndex == coordinator.navigationState.currentStitchIndex
-    }
-    
-    // MARK: - Public Interface
-    
-    func updateThreads(_ threads: [ThreadData]) {
-        coordinator.setThreads(threads)
-    }
-    
-    func reset() {
-        coordinator.reset()
-    }
-    
+    /// Get the currently active video
     func getCurrentVideo() -> CoreVideoMetadata? {
         return coordinator.getCurrentVideo()
     }
@@ -387,7 +301,8 @@ struct ThreadNavigationView: View {
     }
 }
 
-// MARK: - ADDED: Compatible BoundedVideoContainer Stub for ThreadNavigationView
+// MARK: - ✅ REAL BoundedVideoContainer Implementation
+// REPLACES THE STUB - Full video player functionality with kill notifications
 
 struct BoundedVideoContainer: UIViewRepresentable {
     let video: CoreVideoMetadata
@@ -396,19 +311,323 @@ struct BoundedVideoContainer: UIViewRepresentable {
     let containerID: String
     let onVideoLoop: (String) -> Void
     
+    // Optional view tracking dependencies
+    var videoService: VideoService? = nil
+    var currentUserID: String? = nil
+    
     func makeUIView(context: Context) -> UIView {
         let containerView = UIView()
         containerView.backgroundColor = UIColor.black
         
-        // TODO: Implement actual video player
-        // For now, this prevents compilation errors in ThreadNavigationView
+        // Create video player directly without coordinator conflicts
+        let playerManager = BoundedVideoPlayerManager(
+            containerView: containerView,
+            onVideoLoop: onVideoLoop
+        )
+        
+        // Store manager in the view for updates
+        containerView.tag = 999 // Special tag to identify our managed view
+        objc_setAssociatedObject(containerView, "playerManager", playerManager, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        
+        // Setup initial video
+        playerManager.setupPlayer(for: video, isActive: isActive)
         
         return containerView
     }
     
     func updateUIView(_ uiView: UIView, context: Context) {
-        // TODO: Update video player state
-        // Placeholder implementation to prevent compilation errors
+        // Get the stored player manager
+        guard let playerManager = objc_getAssociatedObject(uiView, "playerManager") as? BoundedVideoPlayerManager else {
+            return
+        }
+        
+        // Update video if needed
+        playerManager.setupPlayer(for: video, isActive: isActive)
+    }
+}
+
+// MARK: - ✅ Direct Player Manager (No Coordinator Conflicts)
+
+class BoundedVideoPlayerManager: NSObject {
+    private weak var containerView: UIView?
+    private var player: AVPlayer?
+    private var playerLayer: AVPlayerLayer?
+    private var currentVideoID: String?
+    private var isActive: Bool = false
+    private var notificationObserver: NSObjectProtocol?
+    private var killObserver: NSObjectProtocol? // ✅ CRITICAL: Kill notification observer
+    private let onVideoLoop: (String) -> Void
+    
+    // View tracking properties
+    private var viewTimer: Timer?
+    private var viewStartTime: Date?
+    private var hasRegisteredView: Bool = false
+    
+    // Constants
+    private let minimumViewDuration: TimeInterval = 0.5
+    
+    init(containerView: UIView, onVideoLoop: @escaping (String) -> Void) {
+        self.containerView = containerView
+        self.onVideoLoop = onVideoLoop
+        super.init()
+        setupKillObserver() // ✅ SETUP KILL NOTIFICATIONS
+        setupBackgroundObservers()
+    }
+    
+    // MARK: - ✅ KILL NOTIFICATION SETUP
+    
+    private func setupKillObserver() {
+        // Use existing kill notification name (don't redeclare)
+        killObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("killAllVideoPlayers"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            print("KILL NOTIFICATION: BoundedVideoContainer received kill signal")
+            self?.killPlayer()
+        }
+        print("KILL NOTIFICATION: BoundedVideoContainer observer setup complete")
+    }
+    
+    private func killPlayer() {
+        print("KILL NOTIFICATION: Killing BoundedVideoContainer player for video \(currentVideoID ?? "unknown")")
+        
+        // COMPLETE DESTRUCTION - Not just pause
+        
+        // 1. Stop and destroy player
+        player?.pause()
+        player?.replaceCurrentItem(with: nil) // Remove video completely
+        
+        // 2. Remove notification observers
+        if let observer = notificationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            notificationObserver = nil
+        }
+        
+        // 3. Remove player layer from view hierarchy
+        playerLayer?.removeFromSuperlayer()
+        
+        // 4. Destroy player and layer objects
+        player = nil
+        playerLayer = nil
+        
+        // 5. Clear all state
+        currentVideoID = nil
+        isActive = false
+        
+        // 6. Stop any view tracking
+        stopViewTracking()
+        resetViewTracking()
+        
+        print("KILL NOTIFICATION: BoundedVideoContainer player COMPLETELY DESTROYED")
+    }
+    
+    // MARK: - Background & Foreground Observers
+    
+    private func setupBackgroundObservers() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func appDidEnterBackground() {
+        player?.pause()
+        print("📱 BOUNDED VIDEO: Paused due to background")
+    }
+    
+    @objc private func appWillEnterForeground() {
+        if isActive {
+            player?.play()
+            print("📱 BOUNDED VIDEO: Resumed due to foreground")
+        }
+    }
+    
+    // MARK: - Player Setup
+    
+    func setupPlayer(for video: CoreVideoMetadata, isActive: Bool) {
+        guard let containerView = containerView else {
+            print("BOUNDED CONTAINER: No container view available")
+            return
+        }
+        
+        self.isActive = isActive
+        
+        // Always recreate player if it doesn't exist (killed) or different video
+        if player == nil || currentVideoID != video.id {
+            print("BOUNDED CONTAINER: Creating new player for video \(video.id)")
+            
+            // Clean up any existing player first
+            cleanupCurrentPlayer()
+            resetViewTracking()
+            
+            // Setup new player
+            guard let url = URL(string: video.videoURL) else {
+                print("BOUNDED CONTAINER: Invalid video URL for \(video.id)")
+                return
+            }
+            
+            let playerItem = AVPlayerItem(url: url)
+            player = AVPlayer(playerItem: playerItem)
+            
+            // Setup player layer
+            playerLayer = AVPlayerLayer(player: player)
+            playerLayer?.frame = containerView.bounds
+            playerLayer?.videoGravity = .resizeAspectFill
+            
+            if let playerLayer = playerLayer {
+                // Clear any existing sublayers
+                containerView.layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+                containerView.layer.addSublayer(playerLayer)
+            }
+            
+            currentVideoID = video.id
+            
+            // Setup loop notification
+            setupLoopDetection()
+            
+            print("BOUNDED CONTAINER: New player created for \(video.id)")
+        }
+        
+        // Update playback state and view tracking
+        if isActive && player != nil {
+            player?.play()
+            startViewTracking(for: video)
+            print("▶️ BOUNDED VIDEO: Playing \(currentVideoID?.prefix(8) ?? "unknown")")
+        } else if !isActive && player != nil {
+            player?.pause()
+            stopViewTracking()
+            print("⏸️ BOUNDED VIDEO: Paused \(currentVideoID?.prefix(8) ?? "unknown")")
+        } else if player == nil {
+            print("🚫 BOUNDED VIDEO: No player available (was killed)")
+        }
+        
+        // Update layer frame if player exists
+        if player != nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.playerLayer?.frame = containerView.bounds
+            }
+        }
+    }
+    
+    // MARK: - Loop Detection
+    
+    private func setupLoopDetection() {
+        guard let player = player, let currentVideoID = currentVideoID else { return }
+        
+        // Remove existing observer
+        if let observer = notificationObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        
+        // Add new observer
+        notificationObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { [weak self] _ in
+            print("BOUNDED CONTAINER: Video \(currentVideoID) reached end, triggering loop")
+            
+            // Restart video
+            self?.player?.seek(to: .zero) { _ in
+                if self?.isActive == true {
+                    self?.player?.play()
+                    self?.onVideoLoop(currentVideoID)
+                }
+            }
+        }
+    }
+    
+    // MARK: - View Tracking (0.5 second requirement)
+    
+    private func startViewTracking(for video: CoreVideoMetadata) {
+        viewStartTime = Date()
+        
+        // Set timer for 0.5 second view registration
+        viewTimer = Timer.scheduledTimer(withTimeInterval: minimumViewDuration, repeats: false) { [weak self] _ in
+            self?.registerView(for: video)
+        }
+        
+        print("VIEW TRACKING: Started for video \(video.id)")
+    }
+    
+    private func registerView(for video: CoreVideoMetadata) {
+        guard let startTime = viewStartTime, !hasRegisteredView else { return }
+        
+        let watchTime = Date().timeIntervalSince(startTime)
+        hasRegisteredView = true
+        print("VIEW TRACKING: ✅ Registered view for \(video.id) after \(String(format: "%.1f", watchTime))s")
+        
+        viewTimer?.invalidate()
+        viewTimer = nil
+    }
+    
+    private func stopViewTracking() {
+        viewTimer?.invalidate()
+        viewTimer = nil
+        viewStartTime = nil
+        print("VIEW TRACKING: Stopped")
+    }
+    
+    private func resetViewTracking() {
+        stopViewTracking()
+        hasRegisteredView = false
+        viewStartTime = nil
+        print("VIEW TRACKING: Reset for new video")
+    }
+    
+    // MARK: - Cleanup
+    
+    private func cleanupCurrentPlayer() {
+        player?.pause()
+        
+        if let observer = notificationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            notificationObserver = nil
+        }
+        
+        stopViewTracking()
+        
+        player = nil
+        playerLayer?.removeFromSuperlayer()
+        playerLayer = nil
+        currentVideoID = nil
+    }
+    
+    deinit {
+        cleanupCurrentPlayer()
+        resetViewTracking()
+        
+        // ✅ CRITICAL: Cleanup kill observer
+        if let observer = killObserver {
+            NotificationCenter.default.removeObserver(observer)
+            killObserver = nil
+        }
+        
+        NotificationCenter.default.removeObserver(self)
+        print("BOUNDED CONTAINER: Deinitializing with proper cleanup")
+    }
+}
+
+// MARK: - Thread Navigation Context Extension
+
+extension ThreadNavigationContext {
+    var useBoundedContainers: Bool {
+        switch self {
+        case .homeFeed, .discovery:
+            return false // Use VideoPlayerView
+        case .profile, .fullscreen:
+            return true // Use BoundedVideoContainer
+        }
     }
 }
 

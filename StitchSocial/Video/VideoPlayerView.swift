@@ -42,6 +42,10 @@ struct VideoPlayerView: View {
     @State private var batteryOptimizationActive: Bool = false
     @State private var performanceTimer: Timer?
     
+    // MARK: - Floating Bubble State
+    @State private var showFloatingBubble = false
+    @State private var currentPlaybackTime: TimeInterval = 0
+    
     // MARK: - Default Initializer (Backward Compatible)
     init(video: CoreVideoMetadata, isActive: Bool, onEngagement: ((InteractionType) -> Void)?) {
         self.video = video
@@ -112,7 +116,7 @@ struct VideoPlayerView: View {
                 .ignoresSafeArea(.all)
                 .gesture(
                     // Thread navigation gestures with OPTIMIZATION constraints
-                    DragGesture(minimumDistance: OptimizationConfig.UI.minGestureDistance)
+                    DragGesture(minimumDistance: 50)
                         .onChanged { value in
                             if isActive && shouldAllowNavigation() && !memoryPressureDetected {
                                 handleThreadDrag(value: value)
@@ -137,249 +141,278 @@ struct VideoPlayerView: View {
                             handleOverlayAction(action)
                         }
                     )
-                } else if isActive && batteryOptimizationActive {
-                    // Minimal overlay for battery optimization
-                    batteryOptimizedOverlay(geometry: geometry)
-                } else {
-                    // Minimal grid overlay
-                    gridModeOverlay(geometry: geometry)
+                } else if batteryOptimizationActive {
+                    // Minimal overlay during battery optimization
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Image(systemName: "battery.25")
+                                .font(.title2)
+                                .foregroundColor(.orange)
+                            Text("Power Saving")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                        .padding()
+                        .background(Color.black.opacity(0.7))
+                        .cornerRadius(8)
+                    }
                 }
                 
-                // Thread position indicator (contextual display)
-                if isActive && shouldShowPositionIndicator() && !batteryOptimizationActive {
+                // Thread Position Indicator (overlay only if enabled)
+                if shouldShowPositionIndicator() && isActive {
                     threadPositionIndicator
                 }
+                
+                // Memory pressure warning overlay
+                if memoryPressureDetected {
+                    memoryPressureOverlay
+                }
+                
+                // Floating bubble notification for thread navigation
+                if showFloatingBubble && isActive {
+                    FloatingBubbleNotification.parentVideoWithReplies(
+                        videoDuration: video.duration,
+                        currentPosition: currentPlaybackTime,
+                        replyCount: (totalStitchesInThread ?? 1) - 1,
+                        currentStitchIndex: 0, // Always 0 for parent video detection
+                        onViewReplies: handleStitchReveal,
+                        onDismiss: {
+                            showFloatingBubble = false
+                        }
+                    )
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .leading).combined(with: .opacity)
+                    ))
+                }
             }
         }
-        .navigationBarHidden(true)
-        .statusBarHidden(isActive)
-        .ignoresSafeArea(.all)
         .onAppear {
-            setupVideoPlayer()
+            setupVideo()
             setupOptimizationMonitoring()
+            
+            // TEMP: Test bubble after 3 seconds for debugging
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                print("🧪 TESTING: Forcing bubble to show")
+                showFloatingBubble = true
+            }
         }
         .onDisappear {
-            cleanupPlayer()
-            cleanupOptimizationMonitoring()
+            cleanupOptimizations()
         }
-        .onChange(of: isActive) { _, active in
-            if active && !memoryPressureDetected {
-                forcePlay()
-            } else {
-                pauseVideo()
+        .onChange(of: video.id) { _, newVideoID in
+            if newVideoID != currentVideoID {
+                setupVideo()
+                currentVideoID = newVideoID
             }
+        }
+        .onChange(of: isActive) { _, newValue in
+            if newValue {
+                playerManager.play()
+            } else {
+                playerManager.pause()
+            }
+            
+            // Check bubble visibility when active state changes
+            updateFloatingBubbleVisibility()
+        }
+        .onChange(of: currentPlaybackTime) { _, newTime in
+            // Check bubble visibility as time updates
+            updateFloatingBubbleVisibility()
         }
     }
     
-    // MARK: - OPTIMIZATION Monitoring Setup
+    // MARK: - Private Methods
+    
+    private func setupVideo() {
+        guard video.id != currentVideoID else { return }
+        
+        print("VIDEO PLAYER: Setting up video: \(video.title)")
+        
+        // Set up playback time monitoring
+        playerManager.onTimeUpdate = { time in
+            currentPlaybackTime = time
+            print("⏰ TIME UPDATE: \(time) / \(video.duration)")
+            updateFloatingBubbleVisibility()
+        }
+        
+        // Configure optimization settings based on battery and performance
+        let enableHardwareDecoding = !batteryOptimizationActive
+        let enablePreloading = !memoryPressureDetected
+        
+        // Setup video with optimization settings
+        playerManager.setupVideo(
+            url: video.videoURL,
+            enableHardwareDecoding: enableHardwareDecoding,
+            enablePreloading: enablePreloading
+        )
+        
+        // Update playback state
+        if isActive {
+            playerManager.play()
+        } else {
+            playerManager.pause()
+        }
+        
+        currentVideoID = video.id
+    }
     
     private func setupOptimizationMonitoring() {
-        // Setup memory pressure monitoring
-        NotificationCenter.default.addObserver(
-            forName: UIApplication.didReceiveMemoryWarningNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            self.handleMemoryWarning()
+        // Monitor every 5 seconds for optimization opportunities
+        performanceTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+            checkMemoryPressure()
+            checkBatteryStatus()
         }
-        
-        // Setup battery monitoring using OptimizationConfig threshold
-        UIDevice.current.isBatteryMonitoringEnabled = true
-        NotificationCenter.default.addObserver(
-            forName: UIDevice.batteryLevelDidChangeNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            self.checkBatteryOptimization()
-        }
-        
-        // Setup performance monitoring timer using OptimizationConfig interval
-        performanceTimer = Timer.scheduledTimer(withTimeInterval: OptimizationConfig.Performance.gcInterval, repeats: true) { _ in
-            Task { @MainActor in
-                await self.performOptimizationCleanup()
-            }
-        }
-        
-        print("✅ VIDEO PLAYER OPTIMIZATION: Monitoring setup - cleanup every \(OptimizationConfig.Performance.gcInterval)s")
     }
     
-    private func cleanupOptimizationMonitoring() {
+    private func cleanupOptimizations() {
         performanceTimer?.invalidate()
         performanceTimer = nil
-        UIDevice.current.isBatteryMonitoringEnabled = false
-        NotificationCenter.default.removeObserver(self)
-        print("🧹 VIDEO PLAYER OPTIMIZATION: Monitoring cleanup complete")
+        playerManager.cleanup()
     }
     
-    private func handleMemoryWarning() {
-        memoryPressureDetected = true
-        playerManager.enableOptimizationMode()
-        print("⚠️ VIDEO PLAYER OPTIMIZATION: Memory warning - enabling restrictions")
+    private func checkMemoryPressure() {
+        // Simple memory pressure detection
+        var memoryInfo = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
         
-        // Reset memory pressure flag using OptimizationConfig interval
-        DispatchQueue.main.asyncAfter(deadline: .now() + OptimizationConfig.Performance.gcInterval) {
-            self.memoryPressureDetected = false
-            self.playerManager.disableOptimizationMode()
-            print("✅ VIDEO PLAYER OPTIMIZATION: Memory pressure cleared")
+        let result = withUnsafeMutablePointer(to: &memoryInfo) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
         }
-    }
-    
-    private func checkBatteryOptimization() {
-        let batteryLevel = UIDevice.current.batteryLevel
-        let threshold = Float(OptimizationConfig.Performance.batteryOptimizationThreshold)
         
-        batteryOptimizationActive = batteryLevel <= threshold && batteryLevel > 0
-        
-        if batteryOptimizationActive {
-            print("🔋 VIDEO PLAYER OPTIMIZATION: Battery optimization active (\(Int(batteryLevel * 100))%)")
-        } else if !batteryOptimizationActive && batteryLevel > threshold {
-            print("🔋 VIDEO PLAYER OPTIMIZATION: Battery optimization disabled (\(Int(batteryLevel * 100))%)")
-        }
-    }
-    
-    private func performOptimizationCleanup() async {
-        print("🧹 VIDEO PLAYER OPTIMIZATION: Periodic cleanup performed")
-        // Cleanup logic would go here
-    }
-    
-    // MARK: - Battery Optimized Overlay
-    
-    private func batteryOptimizedOverlay(geometry: GeometryProxy) -> some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                VStack(alignment: .trailing) {
-                    Image(systemName: "battery.25")
-                        .font(.title2)
-                        .foregroundColor(.orange)
-                    Text("Power Saving")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                }
-                .padding()
-                .background(Color.black.opacity(0.7))
-                .cornerRadius(8)
+        if result == KERN_SUCCESS {
+            let memoryUsage = memoryInfo.resident_size
+            let memoryThreshold: UInt64 = 500 * 1024 * 1024 // 500MB
+            
+            if memoryUsage > memoryThreshold && !memoryPressureDetected {
+                print("📱 OPTIMIZATION: Memory pressure detected - \(memoryUsage / 1024 / 1024)MB")
+                memoryPressureDetected = true
+            } else if memoryUsage < memoryThreshold && memoryPressureDetected {
+                memoryPressureDetected = false
             }
         }
     }
     
-    // MARK: - Contextual Navigation Logic
+    private func checkBatteryStatus() {
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        let batteryLevel = UIDevice.current.batteryLevel
+        let batteryState = UIDevice.current.batteryState
+        
+        let shouldOptimizeForBattery = (batteryLevel < 0.2 && batteryState != .charging)
+        
+        if shouldOptimizeForBattery != batteryOptimizationActive {
+            batteryOptimizationActive = shouldOptimizeForBattery
+            print("🔋 OPTIMIZATION: Battery optimization \(batteryOptimizationActive ? "enabled" : "disabled")")
+        }
+    }
     
     private func shouldAllowNavigation() -> Bool {
-        guard let context = navigationContext else {
-            return threadVideos != nil
-        }
-        
-        switch context {
-        case .homeFeed:
-            return true
-        case .discovery:
-            return true
-        case .profileGrid:
-            return threadVideos != nil
-        case .standalone:
-            return false
-        }
+        return !memoryPressureDetected && !batteryOptimizationActive
     }
     
     private func shouldShowPositionIndicator() -> Bool {
-        guard let threadVideos = threadVideos, threadVideos.count > 1 else {
+        guard let threadVideos = threadVideos, let currentThreadPosition = currentThreadPosition else {
             return false
         }
-        
-        guard let context = navigationContext else {
-            return true
-        }
-        
-        switch context {
-        case .homeFeed, .discovery:
-            return true
-        case .profileGrid:
-            return true
-        case .standalone:
-            return false
-        }
+        return threadVideos.count > 1
     }
-    
-    // MARK: - Thread Position Indicator
     
     private var threadPositionIndicator: some View {
         VStack {
+            Spacer()
             HStack {
                 Spacer()
                 
-                if let threadVideos = threadVideos {
-                    HStack(spacing: 4) {
-                        Text("\(currentIndex + 1)")
-                            .font(.system(size: 12, weight: .bold))
+                if let current = currentThreadPosition,
+                   let total = totalStitchesInThread {
+                    
+                    VStack(spacing: 4) {
+                        Text("\(current)/\(total)")
+                            .font(.system(size: 10, weight: .bold))
                             .foregroundColor(.white)
                         
-                        Text("/")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.white.opacity(0.6))
-                        
-                        Text("\(threadVideos.count)")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.white)
+                        // Progress bar
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.3))
+                                
+                                Rectangle()
+                                    .fill(Color.white)
+                                    .frame(width: geo.size.width * CGFloat(current) / CGFloat(total))
+                            }
+                        }
+                        .frame(height: 2)
+                        .cornerRadius(1)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(Color.black.opacity(0.6))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                            )
-                    )
+                    .padding(.horizontal, 16)
+                    .frame(width: 80)
                 }
+                Spacer()
             }
-            .padding(.top, 60)
-            .padding(.trailing, 20)
-            
-            Spacer()
+            .padding(.bottom, 100)
         }
     }
     
-    // MARK: - Thread Navigation Gesture Handling with OPTIMIZATION
+    private var memoryPressureOverlay: some View {
+        VStack {
+            HStack {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                Text("Memory Warning")
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.black.opacity(0.8))
+            .cornerRadius(8)
+            
+            Spacer()
+        }
+        .padding(.top, 50)
+    }
+    
+    private func handleOverlayAction(_ action: ContextualOverlayAction) {
+        switch action {
+        case .profile:
+            print("VIDEO PLAYER: Profile action")
+        case .more:
+            print("VIDEO PLAYER: More action")
+        default:
+            print("VIDEO PLAYER: Other action")
+        }
+    }
     
     private func handleThreadDrag(value: DragGesture.Value) {
-        let horizontalMovement = abs(value.translation.width)
-        let verticalMovement = abs(value.translation.height)
+        let horizontalThreshold: CGFloat = 100
+        let verticalThreshold: CGFloat = 50
         
-        // Use OptimizationConfig for gesture sensitivity
-        let minDistance = OptimizationConfig.UI.minGestureDistance
-        
-        if gestureDirection == .none {
-            if horizontalMovement > minDistance && horizontalMovement > verticalMovement * 1.5 {
-                gestureDirection = .horizontal
-            } else if verticalMovement > minDistance && verticalMovement > horizontalMovement * 1.5 {
-                if navigationContext == .homeFeed || navigationContext == .discovery {
-                    gestureDirection = .vertical
-                }
-            }
+        if abs(value.translation.width) > abs(value.translation.height) {
+            gestureDirection = .horizontal
+        } else if abs(value.translation.height) > verticalThreshold {
+            gestureDirection = .vertical
         }
     }
     
     private func handleThreadDragEnd(value: DragGesture.Value) {
-        // Use OptimizationConfig for gesture thresholds
-        let threshold = OptimizationConfig.UI.minGestureDistance * 5 // 100px default
+        let threshold: CGFloat = 100
         
         switch gestureDirection {
         case .horizontal:
             if value.translation.width > threshold {
-                navigateToPrevious()
+                onNavigate?(.horizontal, -1)
             } else if value.translation.width < -threshold {
-                navigateToNext()
+                onNavigate?(.horizontal, 1)
             }
         case .vertical:
-            if navigationContext == .homeFeed || navigationContext == .discovery {
-                if value.translation.height > threshold {
-                    onNavigate?(.vertical, -1)
-                } else if value.translation.height < -threshold {
-                    onNavigate?(.vertical, 1)
-                }
+            if value.translation.height > threshold {
+                onNavigate?(.vertical, -1)
+            } else if value.translation.height < -threshold {
+                onNavigate?(.vertical, 1)
             }
         case .none:
             break
@@ -388,218 +421,191 @@ struct VideoPlayerView: View {
         gestureDirection = .none
     }
     
+    private func hasNextStitchInThread() -> Bool {
+        guard let threadVideos = threadVideos else { return false }
+        return currentIndex < threadVideos.count - 1
+    }
+    
     private func navigateToNext() {
-        guard let threadVideos = threadVideos,
-              currentIndex < threadVideos.count - 1 else { return }
+        guard hasNextStitchInThread() else { return }
         
         let newIndex = currentIndex + 1
         onNavigate?(.horizontal, newIndex)
         
-        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
         impactFeedback.impactOccurred()
     }
     
-    private func navigateToPrevious() {
-        guard currentIndex > 0 else { return }
-        
-        let newIndex = currentIndex - 1
-        onNavigate?(.horizontal, newIndex)
-        
-        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-        impactFeedback.impactOccurred()
+    private func handleStitchReveal() {
+        // Navigate to next video in thread
+        navigateToNext()
+        showFloatingBubble = false
     }
-
-    // MARK: - Grid Mode Overlay
     
-    private func gridModeOverlay(geometry: GeometryProxy) -> some View {
-        ZStack {
-            if video.duration > 0 {
-                Text(formatDuration(video.duration))
-                    .font(.caption2)
-                    .foregroundColor(.white)
-                    .padding(4)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(4)
-                    .position(x: geometry.size.width - 30, y: 15)
+    private func updateFloatingBubbleVisibility() {
+        let shouldShow = shouldShowFloatingBubble()
+        
+        // Debug logging
+        print("🔄 BUBBLE UPDATE: shouldShow=\(shouldShow), currentlyShowing=\(showFloatingBubble)")
+        
+        if shouldShow != showFloatingBubble {
+            print("🎬 BUBBLE STATE CHANGE: \(showFloatingBubble) -> \(shouldShow)")
+            withAnimation(.easeInOut(duration: 0.3)) {
+                showFloatingBubble = shouldShow
             }
-            
-            HStack(spacing: 4) {
-                Image(systemName: "heart.fill")
-                    .font(.caption2)
-                    .foregroundColor(.red)
-                Text("\(video.hypeCount)")
-                    .font(.caption2)
-                    .foregroundColor(.white)
-            }
-            .padding(4)
-            .background(Color.black.opacity(0.7))
-            .cornerRadius(4)
-            .position(x: 35, y: geometry.size.width - 15)
         }
     }
     
-    // MARK: - Helper Methods
-    
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let minutes = Int(duration) / 60
-        let seconds = Int(duration) % 60
-        return String(format: "%d:%02d", minutes, seconds)
-    }
-    
-    private func handleOverlayAction(_ action: ContextualOverlayAction) {
-        switch action {
-        case .engagement(let engagementType):
-            let interactionType: InteractionType
-            switch engagementType {
-            case .hype:
-                interactionType = .hype
-            case .cool:
-                interactionType = .cool
-            case .share:
-                interactionType = .share
-            case .reply:
-                interactionType = .reply
-            case .stitch:
-                interactionType = .reply
-            }
-            onEngagement?(interactionType)
-            
-        default:
-            print("Overlay action: \(action)")
-        }
-    }
-    
-    // MARK: - Player Setup and Control with OPTIMIZATION
-    
-    private func setupVideoPlayer() {
-        guard let videoURL = URL(string: video.videoURL) else {
-            print("Invalid video URL: \(video.videoURL)")
-            return
+    private func shouldShowFloatingBubble() -> Bool {
+        // Debug logging to help diagnose the issue
+        print("🔍 BUBBLE DEBUG:")
+        print("  - totalStitchesInThread: \(totalStitchesInThread ?? 0)")
+        print("  - currentThreadPosition: \(currentThreadPosition ?? 0)")
+        print("  - video.duration: \(video.duration)")
+        print("  - currentPlaybackTime: \(currentPlaybackTime)")
+        print("  - isActive: \(isActive)")
+        
+        // Check if this is a parent video with replies
+        guard let totalStitches = totalStitchesInThread, totalStitches > 1 else {
+            print("  ❌ No replies (totalStitches: \(totalStitchesInThread ?? 0))")
+            return false
         }
         
-        guard currentVideoID != video.id else {
-            print("VIDEO: Already setup for this video")
-            return
+        // For now, let's be more permissive with the thread position check
+        // Comment out the strict parent check to see if that's the issue
+        // guard let threadPosition = currentThreadPosition, threadPosition == 1 else {
+        //     print("  ❌ Not parent video (position: \(currentThreadPosition ?? 0))")
+        //     return false
+        // }
+        
+        guard video.duration > 0 else {
+            print("  ❌ Invalid duration")
+            return false
         }
         
-        print("VIDEO PLAYER OPTIMIZATION: Setting up player for '\(video.title)'")
-        playerManager.setupPlayer(with: videoURL)
-        currentVideoID = video.id
+        // Show bubble when video reaches 70% completion
+        let triggerTime = video.duration * 0.7
+        let shouldShow = currentPlaybackTime >= triggerTime
         
-        if isActive && !memoryPressureDetected {
-            forceAutoplay()
-        }
+        print("  - triggerTime (70%): \(triggerTime)")
+        print("  - shouldShow: \(shouldShow)")
+        
+        return shouldShow
     }
     
-    private func forceAutoplay() {
-        // Use battery optimization for delay timing
-        let delay = batteryOptimizationActive ? 0.3 : 0.1
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            forcePlay()
-            print("VIDEO PLAYER OPTIMIZATION: Autoplay initiated")
-        }
+    private func getNextStitchTitle() -> String? {
+        guard let threadVideos = threadVideos,
+              currentIndex < threadVideos.count - 1 else { return nil }
+        return threadVideos[currentIndex + 1].title
     }
     
-    private func forcePlay() {
-        playerManager.forcePlay()
-    }
-    
-    private func pauseVideo() {
-        playerManager.pause()
-    }
-    
-    private func cleanupPlayer() {
-        playerManager.cleanup()
+    private func getNextStitchCreator() -> String? {
+        guard let threadVideos = threadVideos,
+              currentIndex < threadVideos.count - 1 else { return nil }
+        return threadVideos[currentIndex + 1].creatorName
     }
 }
 
-// MARK: - OPTIMIZED Video Player Manager
+// MARK: - Video Player Manager (OPTIMIZED)
+
 @MainActor
 class VideoPlayerManager: ObservableObject {
     @Published var player: AVPlayer?
-    @Published var isPlaying: Bool = false
-    @Published var isMuted: Bool = false
+    @Published var isPlaying = false
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
     
-    // OPTIMIZATION State
-    @Published var optimizationModeActive: Bool = false
-    
     private var timeObserver: Any?
+    private var statusObserver: NSKeyValueObservation?
+    private var killObserver: NSObjectProtocol?
+    private var uiInteractionObservers: [NSObjectProtocol] = []
     private var cancellables = Set<AnyCancellable>()
-    private var currentVideoURL: URL?
+    private var currentVideoURL: String?
     
-    // OPTIMIZATION: Track concurrent operations using OptimizationConfig
-    private static var globalActivePlayerCount: Int = 0
+    // OPTIMIZATION: Global player count to manage memory
+    private static var globalActivePlayerCount = 0
     
-    func setupPlayer(with url: URL) {
-        guard currentVideoURL != url else {
-            print("VIDEO: Reusing existing player for same URL")
-            return
+    // Callback to update parent view's playback time
+    var onTimeUpdate: ((TimeInterval) -> Void)?
+    
+    deinit {
+        Task { @MainActor in
+            cleanup()
         }
-        
-        // Check concurrent player limits from OptimizationConfig
-        guard Self.globalActivePlayerCount < OptimizationConfig.Performance.maxVideoProcessingTasks else {
-            print("🚫 VIDEO PLAYER OPTIMIZATION: Player creation blocked - at limit (\(Self.globalActivePlayerCount)/\(OptimizationConfig.Performance.maxVideoProcessingTasks))")
+    }
+    
+    func setupVideo(url: String, enableHardwareDecoding: Bool = true, enablePreloading: Bool = true) {
+        // Skip if URL hasn't changed
+        if url == currentVideoURL && player != nil {
+            print("VIDEO PLAYER OPTIMIZATION: Skipping duplicate setup for \(url)")
             return
         }
         
         cleanup()
         
-        Task.detached(priority: .userInitiated) {
-            let playerItem = AVPlayerItem(url: url)
-            
-            // Apply optimization settings using OptimizationConfig
-            if await self.optimizationModeActive {
-                playerItem.preferredForwardBufferDuration = 2.0
-            } else {
-                playerItem.preferredForwardBufferDuration = 5.0
-            }
-            
-            let player = AVPlayer(playerItem: playerItem)
-            
-            await MainActor.run {
-                self.player = player
-                self.currentVideoURL = url
-                
-                Self.globalActivePlayerCount += 1
-                
-                self.setupTimeObserver()
-                self.setupPublishers()
-                self.setupLooping()
-                
-                print("VIDEO PLAYER OPTIMIZATION: Player created (\(Self.globalActivePlayerCount)/\(OptimizationConfig.Performance.maxVideoProcessingTasks))")
-            }
+        // Check concurrent player limits
+        guard Self.globalActivePlayerCount < 10 else {
+            print("🚫 VIDEO PLAYER OPTIMIZATION: Player creation blocked - at limit (\(Self.globalActivePlayerCount)/10)")
+            return
         }
+        
+        guard let videoURL = URL(string: url) else {
+            print("VIDEO MANAGER: Invalid URL: \(url)")
+            return
+        }
+        
+        print("VIDEO MANAGER: Setting up video: \(url)")
+        currentVideoURL = url
+        
+        // Create player item with optimization settings
+        let playerItem = AVPlayerItem(url: videoURL)
+        
+        // Apply optimization settings
+        if !enableHardwareDecoding {
+            // Force software decoding for low memory situations
+            playerItem.videoComposition = nil
+        }
+        
+        // Create player
+        player = AVPlayer(playerItem: playerItem)
+        
+        if !enablePreloading {
+            // Disable automatic preloading to save memory/battery
+            player?.automaticallyWaitsToMinimizeStalling = false
+        } else {
+            // Optimize for better playback experience
+            player?.automaticallyWaitsToMinimizeStalling = true
+        }
+        
+        // Increment global count
+        Self.globalActivePlayerCount += 1
+        print("VIDEO PLAYER OPTIMIZATION: Player created (\(Self.globalActivePlayerCount) active)")
+        
+        setupTimeObserver()
+        setupLooping()
+        setupPublishers()
+        setupKillObserver()
     }
     
-    func enableOptimizationMode() {
-        optimizationModeActive = true
-        
-        // Reduce buffer duration under optimization
-        if let currentItem = player?.currentItem {
-            currentItem.preferredForwardBufferDuration = 1.0
-        }
-        
-        print("⚠️ VIDEO PLAYER OPTIMIZATION: Optimization mode enabled")
+    func play() {
+        guard let player = player else { return }
+        player.play()
+        isPlaying = true
+        print("VIDEO MANAGER: Playing")
     }
     
-    func disableOptimizationMode() {
-        optimizationModeActive = false
-        
-        // Restore normal buffer duration
-        if let currentItem = player?.currentItem {
-            currentItem.preferredForwardBufferDuration = 5.0
-        }
-        
-        print("✅ VIDEO PLAYER OPTIMIZATION: Optimization mode disabled")
+    func pause() {
+        guard let player = player else { return }
+        player.pause()
+        isPlaying = false
+        print("VIDEO MANAGER: Paused")
     }
     
     private func setupTimeObserver() {
         guard let player = player else { return }
         
-        // Use OptimizationConfig for update frequency
-        let maxFPS = OptimizationConfig.Performance.maxUIUpdateFrequency
+        // Use optimization config for update frequency
+        let maxFPS = 30.0
         let interval = 1.0 / Double(maxFPS)
         
         timeObserver = player.addPeriodicTimeObserver(
@@ -607,6 +613,7 @@ class VideoPlayerManager: ObservableObject {
             queue: .main
         ) { [weak self] time in
             self?.currentTime = time.seconds
+            self?.onTimeUpdate?(time.seconds)
         }
     }
     
@@ -628,13 +635,70 @@ class VideoPlayerManager: ObservableObject {
         
         player.currentItem?.publisher(for: \.duration)
             .map { duration in
-                duration.isValid && !duration.isIndefinite ? duration.seconds : 0.0
+                duration.isValid && !duration.isIndefinite ?
+                    duration.seconds : 0.0
             }
             .assign(to: &$duration)
         
         player.publisher(for: \.timeControlStatus)
             .map { $0 == .playing }
             .assign(to: &$isPlaying)
+    }
+    
+    private func setupKillObserver() {
+        // Add observer for kill notifications
+        killObserver = NotificationCenter.default.addObserver(
+            forName: .RealkillAllVideoPlayers,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.player?.pause()
+            self.isPlaying = false
+            print("🛑 VIDEO PLAYER MANAGER: Killed and paused due to kill notification")
+        }
+        
+        // Add observers for all UI interactions that should pause videos
+        setupUIInteractionObservers()
+    }
+    
+    private func setupUIInteractionObservers() {
+        let notificationNames = [
+            // Profile and fullscreen presentations
+            "NavigateToProfile",
+            "showingProfileFullscreen",
+            
+            // Recording interfaces
+            "PresentRecording",
+            "showingStitchRecording",
+            "showingReplyRecording",
+            
+            // Thread and navigation
+            "NavigateToThread",
+            "NavigateToFullscreen",
+            
+            // Profile management
+            "profileManagement",
+            "profileSettings",
+            
+            // Any fullscreen modal
+            "presentFullscreen",
+            "showingFullscreenModal"
+        ]
+        
+        for notificationName in notificationNames {
+            let observer = NotificationCenter.default.addObserver(
+                forName: NSNotification.Name(notificationName),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self = self else { return }
+                self.player?.pause()
+                self.isPlaying = false
+                print("🛑 VIDEO PLAYER MANAGER: Paused due to UI interaction: \(notificationName)")
+            }
+            uiInteractionObservers.append(observer)
+        }
     }
     
     func forcePlay() {
@@ -653,14 +717,15 @@ class VideoPlayerManager: ObservableObject {
         print("VIDEO: Play executed - Status: \(player.timeControlStatus.rawValue)")
     }
     
-    func pause() {
-        player?.pause()
-    }
-    
     func cleanup() {
         if let observer = timeObserver {
             player?.removeTimeObserver(observer)
             timeObserver = nil
+        }
+        
+        if let observer = killObserver {
+            NotificationCenter.default.removeObserver(observer)
+            killObserver = nil
         }
         
         player?.pause()
