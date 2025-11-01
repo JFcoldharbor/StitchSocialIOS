@@ -1277,14 +1277,42 @@ class BoundedVideoUIView: UIView {
     private var playerLayer: AVPlayerLayer?
     private var notificationObserver: NSObjectProtocol?
     private var timeObserver: Any?
+    private var killObserver: NSObjectProtocol? // ADDED: Kill notification observer
     private var currentVideoID: String?
     private var lastShouldPlay: Bool = false
     var onVideoLoop: ((String) -> Void)?
     var onVideoPositionUpdate: ((TimeInterval) -> Void)?
     
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupKillObserver() // ADDED: Setup kill observer on init
+    }
+    
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupKillObserver() // ADDED: Setup kill observer on init
+    }
+    
     override func layoutSubviews() {
         super.layoutSubviews()
         playerLayer?.frame = bounds
+    }
+    
+    // ADDED: Setup kill notification observer
+    private func setupKillObserver() {
+        killObserver = NotificationCenter.default.addObserver(
+            forName: .RealkillAllVideoPlayers,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleKillNotification()
+        }
+    }
+    
+    // ADDED: Handle kill notification
+    private func handleKillNotification() {
+        player?.pause()
+        print("🛑 BOUNDED VIDEO: Killed player via notification")
     }
     
     func setupVideo(video: CoreVideoMetadata, isActive: Bool, shouldPlay: Bool) {
@@ -1389,6 +1417,11 @@ class BoundedVideoUIView: UIView {
     
     deinit {
         cleanupCurrentPlayer()
+        
+        // ADDED: Remove kill observer on deinit
+        if let killObserver = killObserver {
+            NotificationCenter.default.removeObserver(killObserver)
+        }
     }
 }
 

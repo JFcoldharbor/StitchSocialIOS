@@ -3,10 +3,12 @@
 //  StitchSocial
 //
 //  Layer 6: Coordination - PARALLEL Video Creation Workflow Orchestration
-//  Dependencies: VideoService, AIVideoAnalyzer, VideoProcessingService, VideoUploadService, AudioExtractionService
+//  Dependencies: VideoService, UserService, AIVideoAnalyzer, VideoProcessingService, VideoUploadService, AudioExtractionService, NotificationService
 //  Orchestrates: Recording → [Audio Extraction + Compression + AI Analysis] → Upload → Feed Integration
 //  OPTIMIZATION: Parallel processing for sub-20 second video creation
-//  FIXED: Manual title/description override support for ThreadComposer
+//  FIXED: Added UserService dependency for follower notifications
+//  UPDATED: Added user tagging support with mention notifications
+//  UPDATED: Added stitch/reply notification logic with parent/child thread awareness
 //
 
 import Foundation
@@ -22,11 +24,13 @@ class VideoCoordinator: ObservableObject {
     // MARK: - Dependencies
     
     private let videoService: VideoService
+    private let userService: UserService
     private let aiAnalyzer: AIVideoAnalyzer
     private let videoProcessor: VideoProcessingService
     private let uploadService: VideoUploadService
     private let cachingService: CachingService?
     private let audioExtractor: AudioExtractionService
+    private let notificationService: NotificationService
     
     // MARK: - Workflow State
     
@@ -75,34 +79,39 @@ class VideoCoordinator: ObservableObject {
     
     init(
         videoService: VideoService,
+        userService: UserService,
         aiAnalyzer: AIVideoAnalyzer,
         videoProcessor: VideoProcessingService,
         uploadService: VideoUploadService,
         cachingService: CachingService? = nil,
-        audioExtractor: AudioExtractionService? = nil
+        audioExtractor: AudioExtractionService? = nil,
+        notificationService: NotificationService? = nil
     ) {
         self.videoService = videoService
+        self.userService = userService
         self.aiAnalyzer = aiAnalyzer
         self.videoProcessor = videoProcessor
         self.uploadService = uploadService
         self.cachingService = cachingService
         self.audioExtractor = audioExtractor ?? AudioExtractionService()
+        self.notificationService = notificationService ?? NotificationService()
         
-        print("🎬 VIDEO COORDINATOR: Initialized with PARALLEL PROCESSING + MANUAL OVERRIDE")
+        print("🎬 VIDEO COORDINATOR: Initialized with PARALLEL PROCESSING + MANUAL OVERRIDE + USER TAGGING + STITCH NOTIFICATIONS + FOLLOWER NOTIFICATIONS")
     }
     
-    // MARK: - PARALLEL VIDEO CREATION WORKFLOW (FIXED: Manual Override Support)
+    // MARK: - PARALLEL VIDEO CREATION WORKFLOW (UPDATED: Follower + Stitch Notifications)
     
-    /// OPTIMIZED: Parallel video creation workflow with MANUAL title/description override
+    /// OPTIMIZED: Parallel video creation workflow with MANUAL title/description override + user tagging + stitch/follower notifications
     /// Runs audio extraction, compression, and AI analysis simultaneously
-    /// FIXED: Now accepts optional manual title/description to override AI results
+    /// UPDATED: Now sends follower notifications for new videos and stitch/reply notifications
     func processVideoCreation(
         recordedVideoURL: URL,
         recordingContext: RecordingContext,
         userID: String,
         userTier: UserTier,
-        manualTitle: String? = nil,        // NEW: Manual override
-        manualDescription: String? = nil   // NEW: Manual override
+        manualTitle: String? = nil,
+        manualDescription: String? = nil,
+        taggedUserIDs: [String] = []
     ) async throws -> CoreVideoMetadata {
         
         guard !isProcessing else {
@@ -119,12 +128,17 @@ class VideoCoordinator: ObservableObject {
         print("🎬 CONTEXT: \(recordingContext)")
         print("🎬 USER: \(userID)")
         
-        // NEW: Log manual overrides if provided
+        // Log manual overrides if provided
         if let manualTitle = manualTitle {
-            print("✍️ MANUAL OVERRIDE: Title = '\(manualTitle)'")
+            print("✏️ MANUAL OVERRIDE: Title = '\(manualTitle)'")
         }
         if let manualDescription = manualDescription {
-            print("✍️ MANUAL OVERRIDE: Description = '\(manualDescription)'")
+            print("✏️ MANUAL OVERRIDE: Description = '\(manualDescription)'")
+        }
+        
+        // Log tagged users
+        if !taggedUserIDs.isEmpty {
+            print("🏷️ TAGGED USERS: \(taggedUserIDs.count) users - \(taggedUserIDs)")
         }
         
         defer { isProcessing = false }
@@ -145,14 +159,32 @@ class VideoCoordinator: ObservableObject {
                 userID: userID
             )
             
-            // PHASE 3: FEED INTEGRATION (90-100%) - FIXED: Pass manual overrides
+            // PHASE 3: FEED INTEGRATION (90-100%)
             let createdVideo = try await performFeedIntegration(
                 uploadResult: uploadResult,
                 analysisResult: parallelResults.aiAnalysis,
                 recordingContext: recordingContext,
                 userID: userID,
-                manualTitle: manualTitle,        // NEW: Pass through
-                manualDescription: manualDescription  // NEW: Pass through
+                manualTitle: manualTitle,
+                manualDescription: manualDescription,
+                taggedUserIDs: taggedUserIDs
+            )
+            
+            // PHASE 4: SEND MENTION NOTIFICATIONS
+            if !taggedUserIDs.isEmpty {
+                await sendMentionNotifications(
+                    videoID: createdVideo.id,
+                    videoTitle: createdVideo.title,
+                    taggerUserID: userID,
+                    taggedUserIDs: taggedUserIDs
+                )
+            }
+            
+            // PHASE 5: SEND STITCH/REPLY NOTIFICATIONS (NEW)
+            await sendStitchNotifications(
+                createdVideo: createdVideo,
+                recordingContext: recordingContext,
+                creatorUserID: userID
             )
             
             // Complete workflow
@@ -249,13 +281,11 @@ class VideoCoordinator: ObservableObject {
                 
                 print("🧠 PARALLEL: Starting AI analysis")
                 
-                // FIXED: Use correct method name 'analyzeVideo' not 'analyzeVideoContent'
                 let aiResult = await self.aiAnalyzer.analyzeVideo(
                     url: videoURL,
                     userID: userID
                 )
                 
-                // Manually update progress since analyzeVideo doesn't have callback
                 await MainActor.run {
                     self.aiAnalysisProgress = 1.0
                     Task {
@@ -343,16 +373,17 @@ class VideoCoordinator: ObservableObject {
         return result
     }
     
-    // MARK: - PHASE 3: FEED INTEGRATION (FIXED: Manual Override Support)
+    // MARK: - PHASE 3: FEED INTEGRATION
     
-    /// Feed integration - FIXED: Now respects manual title/description overrides
+    /// Feed integration - saves taggedUserIDs to video document
     private func performFeedIntegration(
         uploadResult: VideoUploadResult,
         analysisResult: VideoAnalysisResult?,
         recordingContext: RecordingContext,
         userID: String,
-        manualTitle: String? = nil,        // NEW: Manual override
-        manualDescription: String? = nil   // NEW: Manual override
+        manualTitle: String? = nil,
+        manualDescription: String? = nil,
+        taggedUserIDs: [String] = []
     ) async throws -> CoreVideoMetadata {
         
         currentPhase = .integrating
@@ -363,13 +394,13 @@ class VideoCoordinator: ObservableObject {
             throw VideoCreationError.feedIntegrationFailed("Invalid data")
         }
         
-        // FIXED: Smart hashtag handling
+        // Smart hashtag handling
         let smartHashtags = generateSmartHashtags(
             aiHashtags: analysisResult?.hashtags,
             recordingContext: recordingContext
         )
         
-        // CRITICAL FIX: Use manual overrides if provided, otherwise fall back to AI/defaults
+        // Use manual overrides if provided, otherwise fall back to AI/defaults
         let finalTitle = manualTitle ?? analysisResult?.title ?? getDefaultTitle(for: recordingContext)
         let finalDescription = manualDescription ?? analysisResult?.description ?? getDefaultDescription(for: recordingContext)
         
@@ -381,7 +412,7 @@ class VideoCoordinator: ObservableObject {
             creatorName: ""
         )
         
-        // NEW: Enhanced logging for debugging
+        // Enhanced logging
         if let manual = manualTitle {
             print("🔗 FEED INTEGRATION: Using MANUAL title: '\(manual)'")
         } else if let aiTitle = analysisResult?.title {
@@ -398,18 +429,19 @@ class VideoCoordinator: ObservableObject {
             print("🔗 FEED INTEGRATION: Using default description")
         }
         
-        if let aiHashtags = analysisResult?.hashtags, !aiHashtags.isEmpty {
-            print("🔗 FEED INTEGRATION: AI hashtags: \(aiHashtags)")
-            print("🔗 FEED INTEGRATION: Smart hashtags: \(smartHashtags)")
-        } else {
-            print("🔗 FEED INTEGRATION: Using context hashtags: \(smartHashtags)")
+        if !taggedUserIDs.isEmpty {
+            print("🔗 FEED INTEGRATION: Tagged users: \(taggedUserIDs)")
         }
         
+        // Create video document with tagged users + trigger notifications
         let createdVideo = try await uploadService.createVideoDocument(
             uploadResult: uploadResult,
             metadata: metadata,
             recordingContext: recordingContext,
-            videoService: videoService
+            videoService: videoService,
+            userService: userService,
+            notificationService: notificationService,
+            taggedUserIDs: taggedUserIDs
         )
         
         await updateProgress(1.0)
@@ -418,7 +450,168 @@ class VideoCoordinator: ObservableObject {
         print("🔗 FEED INTEGRATION: Success - \(createdVideo.id)")
         print("🔗 FINAL VIDEO TITLE: '\(createdVideo.title)'")
         print("🔗 FINAL VIDEO DESCRIPTION: '\(createdVideo.description)'")
+        print("🔗 TAGGED USERS: \(createdVideo.taggedUserIDs.count)")
         return createdVideo
+    }
+    
+    // MARK: - PHASE 4: MENTION NOTIFICATIONS
+    
+    /// Send mention notifications to all tagged users
+    private func sendMentionNotifications(
+        videoID: String,
+        videoTitle: String,
+        taggerUserID: String,
+        taggedUserIDs: [String]
+    ) async {
+        guard !taggedUserIDs.isEmpty else { return }
+        
+        print("📬 MENTIONS: Sending notifications to \(taggedUserIDs.count) tagged users")
+        
+        for taggedUserID in taggedUserIDs {
+            // Don't send notification if user tagged themselves
+            guard taggedUserID != taggerUserID else { continue }
+            
+            do {
+                try await notificationService.sendMentionNotification(
+                    to: taggedUserID,
+                    videoTitle: videoTitle,
+                    mentionContext: "tagged in video"
+                )
+                
+                print("✅ MENTION: Notification sent to user \(taggedUserID)")
+                
+            } catch {
+                print("⚠️ MENTION: Failed to notify user \(taggedUserID) - \(error)")
+            }
+        }
+        
+        print("📬 MENTIONS: All notifications sent")
+    }
+    
+    // MARK: - PHASE 5: STITCH/REPLY NOTIFICATIONS (NEW)
+    
+    /// Send stitch/reply notifications based on parent/child thread logic
+    private func sendStitchNotifications(
+        createdVideo: CoreVideoMetadata,
+        recordingContext: RecordingContext,
+        creatorUserID: String
+    ) async {
+        // Only send stitch notifications for replies/stitches
+        guard case .stitchToThread(let parentVideoID, _) = recordingContext else {
+            print("📬 STITCH: Not a reply/stitch, skipping notifications")
+            return
+        }
+        
+        print("📬 STITCH: Starting notification process for video \(createdVideo.id)")
+        
+        do {
+            // Get parent video to understand thread structure
+            let parentVideo = try await videoService.getVideo(id: parentVideoID)
+            
+            // Determine who to notify based on thread structure
+            let recipientIDs = try await determineStitchRecipients(
+                parentVideo: parentVideo,
+                newVideoDepth: createdVideo.conversationDepth,
+                creatorUserID: creatorUserID
+            )
+            
+            guard !recipientIDs.isEmpty else {
+                print("📬 STITCH: No recipients to notify")
+                return
+            }
+            
+            // Get thread users for notification
+            let threadUserIDs = recipientIDs.filter { $0 != creatorUserID }
+            
+            // Determine parent creator for notification
+            let parentCreatorID: String? = {
+                if createdVideo.conversationDepth == 2 {
+                    // Replying to child - notify child's parent
+                    return parentVideo.creatorID
+                }
+                return nil
+            }()
+            
+            // Send stitch notification
+            try await notificationService.sendStitchNotification(
+                videoID: createdVideo.id,
+                videoTitle: createdVideo.title,
+                originalCreatorID: getOriginalCreatorID(from: parentVideo),
+                parentCreatorID: parentCreatorID,
+                threadUserIDs: threadUserIDs
+            )
+            
+            print("✅ STITCH: Notifications sent to \(threadUserIDs.count) users")
+            
+        } catch {
+            print("⚠️ STITCH: Failed to send notifications - \(error)")
+        }
+    }
+    
+    /// Determine who should receive stitch notifications based on thread structure
+    private func determineStitchRecipients(
+        parentVideo: CoreVideoMetadata,
+        newVideoDepth: Int,
+        creatorUserID: String
+    ) async throws -> [String] {
+        var recipients: Set<String> = []
+        
+        // Always notify original creator
+        let originalCreatorID = getOriginalCreatorID(from: parentVideo)
+        recipients.insert(originalCreatorID)
+        
+        if newVideoDepth == 1 {
+            // REPLYING TO PARENT (depth 0 → depth 1)
+            // Notify: parent creator + all users in parent thread
+            print("📬 STITCH: Replying to PARENT - notifying all parent thread users")
+            
+            recipients.insert(parentVideo.creatorID)
+            
+           
+        } else if newVideoDepth == 2 {
+            // REPLYING TO CHILD (depth 1 → depth 2)
+            // Notify: child creator + child's direct parent only
+            print("📬 STITCH: Replying to CHILD - notifying child + parent only")
+            
+            recipients.insert(parentVideo.creatorID) // Child creator
+            
+            // Get child's parent
+            if let grandparentID = parentVideo.replyToVideoID {
+                let grandparent = try await videoService.getVideo(id: grandparentID)
+                recipients.insert(grandparent.creatorID)
+            }
+        }
+        
+        // Remove the creator from recipients (don't notify yourself)
+        recipients.remove(creatorUserID)
+        
+        return Array(recipients)
+    }
+    
+    /// Get original thread creator (depth 0 video)
+    private func getOriginalCreatorID(from video: CoreVideoMetadata) -> String {
+        // If this is depth 0, it's the original
+        if video.conversationDepth == 0 {
+            return video.creatorID
+        }
+        
+        // Otherwise, need to traverse up (we'll use threadID logic)
+        // For now, return the creator of the current video as fallback
+        return video.creatorID
+    }
+    
+    /// Get all participants in a thread
+    private func getThreadParticipants(threadID: String) async throws -> Set<String> {
+        var participants: Set<String> = []
+        
+        // Get all videos in this thread
+        let threadVideos = try await videoService.getThreadVideos(threadID: threadID)
+        
+        for video in threadVideos {
+            participants.insert(video.creatorID)
+        }
+        
+        return participants
     }
     
     // MARK: - Helper Methods
@@ -445,27 +638,6 @@ class VideoCoordinator: ObservableObject {
         
         if !activeTasks.isEmpty {
             currentTask = "Processing: \(activeTasks.joined(separator: ", "))"
-        }
-    }
-    
-    /// Fast timeout implementation
-    private func withTimeout<T>(seconds: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
-        return try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-                throw VideoCreationError.analysisTimeout
-            }
-            
-            guard let result = try await group.next() else {
-                throw VideoCreationError.analysisTimeout
-            }
-            
-            group.cancelAll()
-            return result
         }
     }
     

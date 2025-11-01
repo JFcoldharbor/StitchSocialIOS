@@ -2,17 +2,8 @@
 //  ToastNotificationOverlay.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 9/25/25.
-//
-
-
-//
-//  ToastView.swift
-//  StitchSocial
-//
 //  Layer 8: Views - Toast Notification Display System
-//  Dependencies: NotificationService (Layer 4), StitchNotificationType (Layer 1)
-//  Features: Animated toast notifications with auto-dismiss and tap-to-dismiss
+//  UPDATED: Removed dismissToast - toasts auto-dismiss only
 //
 
 import SwiftUI
@@ -26,7 +17,9 @@ struct ToastNotificationOverlay: View {
         VStack(spacing: 8) {
             ForEach(notificationService.pendingToasts.prefix(3), id: \.id) { toast in
                 ToastView(toast: toast) {
-                    notificationService.dismissToast(toastID: toast.id)
+                    // Toast will auto-dismiss via timer - no manual dismiss method
+                    // Remove toast from array directly
+                    removeToast(toast.id)
                 }
                 .transition(.asymmetric(
                     insertion: .move(edge: .top).combined(with: .opacity),
@@ -37,8 +30,14 @@ struct ToastNotificationOverlay: View {
             Spacer()
         }
         .animation(.spring(response: 0.6, dampingFraction: 0.8), value: notificationService.pendingToasts.count)
-        .padding(.top, 60) // Below status bar and notch
+        .padding(.top, 60)
         .padding(.horizontal, 16)
+    }
+    
+    private func removeToast(_ id: String) {
+        withAnimation {
+            notificationService.pendingToasts.removeAll { $0.id == id }
+        }
     }
 }
 
@@ -49,6 +48,7 @@ struct ToastView: View {
     let onDismiss: () -> Void
     
     @State private var isPressed = false
+    @State private var shouldDismiss = false
     
     var body: some View {
         Button(action: onDismiss) {
@@ -105,15 +105,18 @@ struct ToastView: View {
             }
         }
         .onAppear {
-            // Auto-dismiss after duration if not manually dismissed
+            // Auto-dismiss after duration
             DispatchQueue.main.asyncAfter(deadline: .now() + toast.displayDuration) {
-                onDismiss()
+                if !shouldDismiss {
+                    shouldDismiss = true
+                    onDismiss()
+                }
             }
         }
     }
 }
 
-// MARK: - Toast Type Extensions (FIXED - Unique Property Names)
+// MARK: - Toast Type Extensions
 
 extension StitchNotificationType {
     var toastColor: Color {
@@ -162,7 +165,6 @@ extension NotificationToast {
 struct ToastView_Previews: PreviewProvider {
     static var previews: some View {
         VStack(spacing: 16) {
-            // Hype notification preview
             ToastView(
                 toast: NotificationToast(
                     type: .hype,
@@ -174,7 +176,6 @@ struct ToastView_Previews: PreviewProvider {
                 onDismiss: {}
             )
             
-            // Follow notification preview
             ToastView(
                 toast: NotificationToast(
                     type: .follow,
@@ -186,7 +187,6 @@ struct ToastView_Previews: PreviewProvider {
                 onDismiss: {}
             )
             
-            // Tier upgrade notification preview
             ToastView(
                 toast: NotificationToast(
                     type: .tierUpgrade,

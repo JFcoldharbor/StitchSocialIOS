@@ -5,6 +5,7 @@
 //  Layer 4: Core Services - Complete User Management Service
 //  Dependencies: Firebase Firestore, Firebase Storage, FirebaseSchema, SpecialUserEntry, UserTier
 //  Features: CRUD operations, Profile editing, Following system, Auto-follow support, Clout management
+//  FIXED: Proper tier detection from SpecialUserEntry instead of forcing topCreator
 //
 
 import Foundation
@@ -43,19 +44,31 @@ class UserService: ObservableObject {
         let finalUsername = username ?? generateUsername(from: email, id: id)
         let finalDisplayName = displayName ?? finalUsername
         
-        // Detect if user is special (founder, celebrity, etc.)
+        // FIXED: Detect special user and use their configured tier
         let specialUserEntry = SpecialUsersConfig.detectSpecialUser(email: email)
-        let initialTier: UserTier = specialUserEntry != nil ? .topCreator : .rookie
-        let initialClout = specialUserEntry?.startingClout ?? 0
+        
+        // CRITICAL FIX: Use actual tier from SpecialUserEntry, not forced topCreator
+        let initialTier: UserTier = {
+            if let tierRawValue = specialUserEntry?.tierRawValue {
+                return UserTier(rawValue: tierRawValue) ?? .rookie
+            }
+            return .rookie
+        }()
+        
+        let initialClout = specialUserEntry?.startingClout ?? OptimizationConfig.User.defaultStartingClout
         let isSpecialUser = specialUserEntry != nil
-        print("USER SERVICE: Creating user with tier \(initialTier.displayName)")
+        
+        // Use custom bio if special user
+        let initialBio = specialUserEntry?.customBio ?? ""
+        
+        print("USER SERVICE: Creating user with tier \(initialTier.displayName), clout: \(initialClout)")
         
         let userData: [String: Any] = [
             FirebaseSchema.UserDocument.id: id,
             FirebaseSchema.UserDocument.email: email,
             FirebaseSchema.UserDocument.username: finalUsername,
             FirebaseSchema.UserDocument.displayName: finalDisplayName,
-            FirebaseSchema.UserDocument.bio: "",
+            FirebaseSchema.UserDocument.bio: initialBio,
             FirebaseSchema.UserDocument.tier: initialTier.rawValue,
             FirebaseSchema.UserDocument.clout: initialClout,
             FirebaseSchema.UserDocument.followerCount: 0,
@@ -73,6 +86,7 @@ class UserService: ObservableObject {
             id: id,
             username: finalUsername,
             displayName: finalDisplayName,
+            bio: initialBio,
             tier: initialTier,
             clout: initialClout,
             isVerified: isSpecialUser,
@@ -586,11 +600,12 @@ class UserService: ObservableObject {
         
         let username = data[FirebaseSchema.UserDocument.username] as? String ?? "unknown"
         let displayName = data[FirebaseSchema.UserDocument.displayName] as? String ?? "User"
-        let bio = data[FirebaseSchema.UserDocument.bio] as? String ?? ""  // Extract bio but don't use it yet
+        let bio = data[FirebaseSchema.UserDocument.bio] as? String ?? ""
         let tierRawValue = data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie"
         let tier = UserTier(rawValue: tierRawValue) ?? .rookie
         let clout = data[FirebaseSchema.UserDocument.clout] as? Int ?? 0
         let isVerified = data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false
+        let isPrivate = data[FirebaseSchema.UserDocument.isPrivate] as? Bool ?? false
         let profileImageURL = data[FirebaseSchema.UserDocument.profileImageURL] as? String
         let createdAt = (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
         
@@ -598,9 +613,11 @@ class UserService: ObservableObject {
             id: id,
             username: username,
             displayName: displayName,
+            bio: bio,
             tier: tier,
             clout: clout,
             isVerified: isVerified,
+            isPrivate: isPrivate,
             profileImageURL: profileImageURL,
             createdAt: createdAt
         )

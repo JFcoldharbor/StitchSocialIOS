@@ -2,25 +2,28 @@
 //  NotificationService.swift
 //  StitchSocial
 //
-//  Layer 4: Core Services - Complete Notification Management with Cloud Functions
-//  Dependencies: UserTier (Layer 1), Config (Layer 3), FirebaseSchema (Layer 3)
-//  COMPLETE: Firebase Cloud Functions integration for push notifications
+//  Layer 4: Core Services - Notification Management with Cloud Functions
+//  Codebase: stitchnoti
+//  Region: us-central1
+//  Database: stitchfin
+//  FIXED: Use Firebase Callable Functions SDK instead of direct HTTP
+//  UPDATED: Added sendNewVideoNotification for follower notifications
 //
 
 import Foundation
+import SwiftUI
 import FirebaseFirestore
 import FirebaseAuth
 import FirebaseFunctions
 import FirebaseMessaging
 
-/// Notification service with Firebase Cloud Functions for push notifications
 @MainActor
 class NotificationService: ObservableObject {
     
     // MARK: - Dependencies
     
     private let db = Firestore.firestore(database: Config.Firebase.databaseName)
-    private let functions = Functions.functions()
+    private var functions: Functions
     
     // MARK: - Published State
     
@@ -28,498 +31,493 @@ class NotificationService: ObservableObject {
     @Published var lastError: Error?
     @Published var pendingToasts: [NotificationToast] = []
     
+    // MARK: - Configuration
+    
+    private let notificationsCollection = "notifications"
+    private let functionPrefix = "stitchnoti_"
+    
     // MARK: - Real-time Listener
     
     private var notificationListener: ListenerRegistration?
     
-    // MARK: - Configuration
-    
-    private let toastDisplayDuration: TimeInterval = 4.0
-    private let maxToastsDisplayed = 3
-    private let notificationsCollection = "notifications"
-    
     // MARK: - Initialization
     
     init() {
-        print("🔔 NOTIFICATION SERVICE: Initialized with Cloud Functions integration")
+        // Configure for us-central1 region
+        self.functions = Functions.functions(region: "us-central1")
+        
+        print("📬 NOTIFICATION SERVICE: Initialized")
+        print("🔧 REGION: us-central1")
+        print("🔧 PREFIX: \(functionPrefix)")
     }
     
-    // MARK: - FIREBASE IMPLEMENTATION WITH CLOUD FUNCTIONS
+    // MARK: - Authenticated Function Calls
     
-    /// Load notifications with Firebase pagination
+    /// Call Cloud Function using Firebase Callable Functions SDK (handles auth automatically)
+    private func callFunction(name: String, data: [String: Any] = [:]) async throws -> Any? {
+        // Verify authentication
+        guard let user = Auth.auth().currentUser else {
+            throw NSError(domain: "NotificationService", code: 401, userInfo: [
+                NSLocalizedDescriptionKey: "User not authenticated"
+            ])
+        }
+        
+        let functionName = "\(functionPrefix)\(name)"
+        print("📞 CALLING: \(functionName)")
+        print("🔑 AUTH UID: \(user.uid)")
+        
+        do {
+            // ✅ Use Firebase Callable Functions SDK (handles auth automatically)
+            let callable = functions.httpsCallable(functionName)
+            
+            let result = try await callable.call(data)
+            
+            print("✅ SUCCESS: \(functionName)")
+            return result.data
+            
+        } catch {
+            print("❌ ERROR: \(functionName) failed - \(error)")
+            throw error
+        }
+    }
+    
+    // MARK: - Test Functions
+    
+    /// Send test push notification
+    func sendTestPush() async throws {
+        print("🧪 TEST: Sending test push notification")
+        
+        let result = try await callFunction(name: "sendTestPush")
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ TEST PUSH: Sent successfully")
+        } else {
+            throw NSError(domain: "NotificationService", code: 500, userInfo: [
+                NSLocalizedDescriptionKey: "Test push failed"
+            ])
+        }
+    }
+    
+    /// Check FCM token status
+    func checkToken() async throws -> [String: Any] {
+        print("🔍 CHECK: Verifying FCM token")
+        
+        let result = try await callFunction(name: "checkToken")
+        
+        guard let tokenData = result as? [String: Any] else {
+            throw NSError(domain: "NotificationService", code: 500, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid token check response"
+            ])
+        }
+        
+        print("✅ TOKEN CHECK: \(tokenData)")
+        return tokenData
+    }
+    
+    // MARK: - First Engagement Notifications
+    
+    /// Send first hype notification to creator
+    func sendFirstHypeNotification(
+        to creatorID: String,
+        videoID: String,
+        videoTitle: String,
+        senderUsername: String
+    ) async throws {
+        print("🔥 FIRST HYPE: Sending to creator \(creatorID)")
+        
+        let data: [String: Any] = [
+            "recipientID": creatorID,
+            "videoID": videoID,
+            "videoTitle": videoTitle,
+            "senderUsername": senderUsername
+        ]
+        
+        let result = try await callFunction(name: "sendFirstHype", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ FIRST HYPE: Notification sent")
+        }
+    }
+    
+    /// Send first cool notification to creator
+    func sendFirstCoolNotification(
+        to creatorID: String,
+        videoID: String,
+        videoTitle: String,
+        senderUsername: String
+    ) async throws {
+        print("❄️ FIRST COOL: Sending to creator \(creatorID)")
+        
+        let data: [String: Any] = [
+            "recipientID": creatorID,
+            "videoID": videoID,
+            "videoTitle": videoTitle,
+            "senderUsername": senderUsername
+        ]
+        
+        let result = try await callFunction(name: "sendFirstCool", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ FIRST COOL: Notification sent")
+        }
+    }
+    
+    // MARK: - Milestone Notifications
+    
+    /// Send milestone notification
+    func sendMilestoneNotification(
+        milestone: Int,
+        videoID: String,
+        videoTitle: String,
+        creatorID: String,
+        followerIDs: [String] = [],
+        engagerIDs: [String] = []
+    ) async throws {
+        
+        let milestoneEmoji: String
+        let milestoneName: String
+        
+        switch milestone {
+        case 10:
+            milestoneEmoji = "🔥"
+            milestoneName = "Heating Up"
+        case 400:
+            milestoneEmoji = "👀"
+            milestoneName = "Must See"
+        case 1000:
+            milestoneEmoji = "🌶️"
+            milestoneName = "Hot"
+        case 15000:
+            milestoneEmoji = "🚀"
+            milestoneName = "Viral"
+        default:
+            print("⚠️ MILESTONE: Invalid milestone \(milestone)")
+            return
+        }
+        
+        print("\(milestoneEmoji) MILESTONE: Sending \(milestoneName) notification")
+        
+        let data: [String: Any] = [
+            "milestone": milestone,
+            "milestoneName": milestoneName,
+            "milestoneEmoji": milestoneEmoji,
+            "videoID": videoID,
+            "videoTitle": videoTitle,
+            "creatorID": creatorID,
+            "followerIDs": followerIDs,
+            "engagerIDs": engagerIDs
+        ]
+        
+        let result = try await callFunction(name: "sendMilestone", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ MILESTONE: \(milestoneName) notification sent")
+        }
+    }
+    
+    // MARK: - Stitch/Reply Notifications
+    
+    /// Send stitch/reply notifications with parent/child logic
+    func sendStitchNotification(
+        videoID: String,
+        videoTitle: String,
+        originalCreatorID: String,
+        parentCreatorID: String?,
+        threadUserIDs: [String]
+    ) async throws {
+        print("💬 STITCH: Sending reply/stitch notifications")
+        
+        let data: [String: Any] = [
+            "videoID": videoID,
+            "videoTitle": videoTitle,
+            "originalCreatorID": originalCreatorID,
+            "parentCreatorID": parentCreatorID ?? "",
+            "threadUserIDs": threadUserIDs
+        ]
+        
+        let result = try await callFunction(name: "sendStitch", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ STITCH: Notifications sent to \(threadUserIDs.count + 1) users")
+        }
+    }
+    
+    // MARK: - New Video Notifications
+    
+    /// Notify all followers when creator uploads new video
+    func sendNewVideoNotification(
+        creatorID: String,
+        creatorUsername: String,
+        videoID: String,
+        videoTitle: String,
+        followerIDs: [String]
+    ) async throws {
+        print("🎬 NEW VIDEO: Notifying \(followerIDs.count) followers")
+        
+        let data: [String: Any] = [
+            "creatorID": creatorID,
+            "creatorUsername": creatorUsername,
+            "videoID": videoID,
+            "videoTitle": videoTitle,
+            "followerIDs": followerIDs
+        ]
+        
+        let result = try await callFunction(name: "sendNewVideo", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ NEW VIDEO: Notifications sent to \(followerIDs.count) followers")
+        }
+    }
+    
+    // MARK: - Legacy Notification Sending
+    
+    /// Send engagement notification (hype/cool) - LEGACY
+    func sendEngagementNotification(
+        to recipientID: String,
+        engagementType: String,
+        videoTitle: String
+    ) async throws {
+        print("🔥 ENGAGEMENT: Sending \(engagementType) notification")
+        
+        let data: [String: Any] = [
+            "recipientID": recipientID,
+            "engagementType": engagementType,
+            "videoTitle": videoTitle
+        ]
+        
+        let result = try await callFunction(name: "sendEngagement", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ ENGAGEMENT: Notification sent")
+        }
+    }
+    
+    /// Send mention notification
+    func sendMentionNotification(
+        to recipientID: String,
+        videoTitle: String,
+        mentionContext: String
+    ) async throws {
+        print("📌 MENTION: Sending mention notification")
+        
+        let data: [String: Any] = [
+            "recipientID": recipientID,
+            "videoTitle": videoTitle,
+            "mentionContext": mentionContext
+        ]
+        
+        let result = try await callFunction(name: "sendMention", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ MENTION: Notification sent")
+        }
+    }
+    
+    /// Send reply notification - LEGACY
+    func sendReplyNotification(
+        to recipientID: String,
+        videoTitle: String
+    ) async throws {
+        print("💬 REPLY: Sending reply notification")
+        
+        let data: [String: Any] = [
+            "recipientID": recipientID,
+            "videoTitle": videoTitle
+        ]
+        
+        let result = try await callFunction(name: "sendReply", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ REPLY: Notification sent")
+        }
+    }
+    
+    /// Send follow notification
+    func sendFollowNotification(to recipientID: String) async throws {
+        print("👤 FOLLOW: Sending follow notification")
+        
+        let data: [String: Any] = [
+            "recipientID": recipientID
+        ]
+        
+        let result = try await callFunction(name: "sendFollow", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ FOLLOW: Notification sent")
+        }
+    }
+    
+    // MARK: - Load Notifications
+    
     func loadNotifications(
         for userID: String,
         limit: Int = 20,
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> NotificationLoadResult {
-        print("🔔 LOADING: Notifications for user \(userID)")
         
-        isLoading = true
-        defer { isLoading = false }
+        print("📧 LOAD: Fetching \(limit) notifications for user \(userID)")
         
-        do {
-            var query = db.collection(notificationsCollection)
-                .whereField("recipientID", isEqualTo: userID)
-                .order(by: "createdAt", descending: true)
-                .limit(to: limit)
+        var query = db.collection(notificationsCollection)
+            .whereField("recipientID", isEqualTo: userID)
+            .order(by: "createdAt", descending: true)
+            .limit(to: limit)
+        
+        if let lastDoc = lastDocument {
+            query = query.start(afterDocument: lastDoc)
+        }
+        
+        let snapshot = try await query.getDocuments()
+        
+        let notifications = snapshot.documents.compactMap { doc -> StitchNotification? in
+            let data = doc.data()
             
-            if let lastDoc = lastDocument {
-                query = query.start(afterDocument: lastDoc)
-            }
-            
-            let snapshot = try await query.getDocuments()
-            
-            let notifications = try snapshot.documents.compactMap { doc -> StitchNotification? in
-                let data = doc.data()
-                
-                return StitchNotification(
-                    id: data["id"] as? String ?? doc.documentID,
-                    recipientID: data["recipientID"] as? String ?? "",
-                    senderID: data["senderID"] as? String ?? "",
-                    type: StitchNotificationType(rawValue: data["type"] as? String ?? "system") ?? .system,
-                    title: data["title"] as? String ?? "",
-                    message: data["message"] as? String ?? "",
-                    payload: data["payload"] as? [String: String] ?? [:],
-                    isRead: data["isRead"] as? Bool ?? false,
-                    createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
-                    expiresAt: (data["expiresAt"] as? Timestamp)?.dateValue()
-                )
-            }
-            
-            let hasMore = notifications.count == limit
-            let lastDoc = hasMore ? snapshot.documents.last : nil
-            
-            print("🔔 LOADED: \(notifications.count) notifications")
-            return NotificationLoadResult(
-                notifications: notifications,
-                lastDocument: lastDoc,
-                hasMore: hasMore
+            return StitchNotification(
+                id: data["id"] as? String ?? doc.documentID,
+                recipientID: data["recipientID"] as? String ?? "",
+                senderID: data["senderID"] as? String ?? "",
+                type: StitchNotificationType(rawValue: data["type"] as? String ?? "system") ?? .system,
+                title: data["title"] as? String ?? "",
+                message: data["message"] as? String ?? "",
+                payload: data["payload"] as? [String: String] ?? [:],
+                isRead: data["isRead"] as? Bool ?? false,
+                createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
+                readAt: (data["readAt"] as? Timestamp)?.dateValue(),
+                expiresAt: (data["expiresAt"] as? Timestamp)?.dateValue()
             )
-            
-        } catch {
-            print("❌ LOAD NOTIFICATIONS ERROR: \(error)")
-            lastError = error
-            throw error
         }
-    }
-    
-    // MARK: - Create Notifications with FCM Token for Cloud Function
-    
-    /// Create notification that includes FCM token for Cloud Function processing
-    func createNotification(
-        recipientID: String,
-        senderID: String,
-        type: StitchNotificationType,
-        title: String,
-        message: String,
-        payload: [String: String] = [:]
-    ) async throws {
-        print("🔔 CREATING: \(type.rawValue) notification from \(senderID) to \(recipientID)")
         
-        // Don't send notification to self
-        guard senderID != recipientID else { return }
+        let hasMore = snapshot.documents.count == limit
         
-        // Get recipient's FCM token first
-        let fcmToken = await getFCMToken(for: recipientID)
+        print("✅ LOAD: Loaded \(notifications.count) notifications, hasMore: \(hasMore)")
         
-        let notification = StitchNotification(
-            recipientID: recipientID,
-            senderID: senderID,
-            type: type,
-            title: title,
-            message: message,
-            payload: payload,
-            expiresAt: Date().addingTimeInterval(30 * 24 * 60 * 60) // 30 days
+        return NotificationLoadResult(
+            notifications: notifications,
+            lastDocument: snapshot.documents.last,
+            hasMore: hasMore
         )
+    }
+    
+    // MARK: - Mark as Read
+    
+    func markAsRead(_ notificationID: String) async throws {
+        print("✅ MARK READ: Notification \(notificationID)")
         
-        do {
-            // Create notification document with FCM token - Cloud Function will auto-send push
-            let data: [String: Any] = [
-                "id": notification.id,
-                "recipientID": notification.recipientID,
-                "senderID": notification.senderID,
-                "type": notification.type.rawValue,
-                "title": notification.title,
-                "message": notification.message,
-                "payload": notification.payload,
-                "isRead": notification.isRead,
-                "createdAt": FieldValue.serverTimestamp(),
-                "expiresAt": notification.expiresAt ?? NSNull(),
-                "fcmToken": fcmToken ?? "", // Cloud Function needs this
-                "pushStatus": "pending" // Cloud Function will update this
-            ]
-            
-            try await db.collection(notificationsCollection)
-                .document(notification.id)
-                .setData(data)
-            
-            print("✅ CREATED: Notification \(notification.id) with FCM token - Cloud Function will handle push")
-            
-            // Show immediate in-app toast if recipient is current user
-            if recipientID == Auth.auth().currentUser?.uid {
-                let senderUsername = payload["senderUsername"] ?? "Someone"
-                showToast(
-                    type: type,
-                    title: title,
-                    message: message,
-                    senderUsername: senderUsername,
-                    payload: payload
-                )
-            }
-            
-        } catch {
-            print("❌ CREATE NOTIFICATION ERROR: \(error)")
-            lastError = error
-            throw error
-        }
-    }
-    
-    // MARK: - FCM Token Management
-    
-    /// Store FCM token for user (called by AuthService)
-    func storeFCMToken(for userID: String) async throws {
-        do {
-            // Get current FCM token from Firebase Messaging
-            let token = try await Messaging.messaging().token()
-            
-            // Store in userTokens collection
-            try await db.collection("userTokens").document(userID).setData([
-                "fcmToken": token,
-                "updatedAt": FieldValue.serverTimestamp(),
-                "platform": "ios",
-                "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
-                "isActive": true
-            ], merge: true)
-            
-            print("✅ FCM: Token stored for user \(userID)")
-            
-        } catch {
-            print("❌ FCM: Failed to store token for user \(userID): \(error)")
-            throw error
-        }
-    }
-    
-    /// Get FCM token for user from userTokens collection
-    private func getFCMToken(for userID: String) async -> String? {
-        do {
-            let doc = try await db.collection("userTokens").document(userID).getDocument()
-            
-            guard doc.exists, let data = doc.data() else {
-                print("📱 FCM: No token document found for user \(userID)")
-                return nil
-            }
-            
-            let token = data["fcmToken"] as? String
-            print("📱 FCM: Retrieved token for user \(userID): \(token?.prefix(20) ?? "nil")...")
-            return token
-            
-        } catch {
-            print("📱 FCM: Error getting token for user \(userID): \(error)")
-            return nil
-        }
-    }
-    
-    // MARK: - Test Notification via Cloud Function
-    
-    /// Send test notification using your existing Cloud Function
-    func sendTestNotification() async throws {
-        guard let currentUser = Auth.auth().currentUser else {
-            throw NotificationError.userNotFound
-        }
-        
-        do {
-            let callable = functions.httpsCallable("sendTestNotification")
-            let result = try await callable.call([
-                "recipientID": currentUser.uid,
-                "title": "🔥 Test Notification",
-                "body": "Your push notifications are working perfectly!"
+        try await db.collection(notificationsCollection)
+            .document(notificationID)
+            .updateData([
+                "isRead": true,
+                "readAt": FieldValue.serverTimestamp()
             ])
-            
-            print("✅ FCM: Test notification sent via Cloud Function")
-            
-        } catch {
-            print("❌ FCM: Failed to send test notification: \(error)")
-            throw error
-        }
     }
     
-    // MARK: - Mark as Read (Multiple Method Names for Compatibility)
-    
-    /// Mark notification as read
-    func markAsRead(notificationID: String) async throws {
-        do {
-            try await db.collection(notificationsCollection)
-                .document(notificationID)
-                .updateData([
-                    "isRead": true,
-                    "readAt": FieldValue.serverTimestamp()
-                ])
-            
-            print("✅ MARKED AS READ: \(notificationID)")
-            
-        } catch {
-            print("❌ MARK AS READ ERROR: \(error)")
-            lastError = error
-            throw error
-        }
-    }
-    
-    /// Mark notification as read (alternative method name for ViewModel compatibility)
-    func markNotificationAsRead(notificationID: String) async throws {
-        try await markAsRead(notificationID: notificationID)
-    }
-    
-    /// Mark all notifications as read for user
     func markAllAsRead(for userID: String) async throws {
-        do {
-            let unreadQuery = db.collection(notificationsCollection)
-                .whereField("recipientID", isEqualTo: userID)
-                .whereField("isRead", isEqualTo: false)
-            
-            let snapshot = try await unreadQuery.getDocuments()
-            
-            let batch = db.batch()
-            for doc in snapshot.documents {
-                batch.updateData([
-                    "isRead": true,
-                    "readAt": FieldValue.serverTimestamp()
-                ], forDocument: doc.reference)
-            }
-            
-            try await batch.commit()
-            print("✅ MARKED ALL AS READ: \(snapshot.documents.count) notifications")
-            
-        } catch {
-            print("❌ MARK ALL AS READ ERROR: \(error)")
-            lastError = error
-            throw error
+        print("✅ MARK ALL READ: User \(userID)")
+        
+        let snapshot = try await db.collection(notificationsCollection)
+            .whereField("recipientID", isEqualTo: userID)
+            .whereField("isRead", isEqualTo: false)
+            .getDocuments()
+        
+        let batch = db.batch()
+        
+        for document in snapshot.documents {
+            batch.updateData([
+                "isRead": true,
+                "readAt": FieldValue.serverTimestamp()
+            ], forDocument: document.reference)
         }
-    }
-    
-    /// Mark all notifications as read (alternative method name for ViewModel compatibility)
-    func markAllNotificationsAsRead(for userID: String) async throws {
-        try await markAllAsRead(for: userID)
-    }
-    
-    /// Get unread notification count for user
-    func getUnreadCount(for userID: String) async throws -> Int {
-        do {
-            let unreadQuery = db.collection(notificationsCollection)
-                .whereField("recipientID", isEqualTo: userID)
-                .whereField("isRead", isEqualTo: false)
-            
-            let snapshot = try await unreadQuery.getDocuments()
-            return snapshot.documents.count
-            
-        } catch {
-            print("❌ GET UNREAD COUNT ERROR: \(error)")
-            lastError = error
-            throw error
-        }
+        
+        try await batch.commit()
+        print("✅ MARK ALL READ: Updated \(snapshot.documents.count) notifications")
     }
     
     // MARK: - Real-time Listener
     
-    /// Start real-time notification listener
-    func startNotificationListener(for userID: String) {
-        print("🔔 STARTING: Real-time listener for \(userID)")
+    func startListening(for userID: String, onUpdate: @escaping ([StitchNotification]) -> Void) {
+        stopListening()
         
         notificationListener = db.collection(notificationsCollection)
             .whereField("recipientID", isEqualTo: userID)
-            .whereField("isRead", isEqualTo: false)
             .order(by: "createdAt", descending: true)
+            .limit(to: 50)
             .addSnapshotListener { [weak self] snapshot, error in
+                guard let self = self else { return }
+                
                 if let error = error {
-                    print("❌ LISTENER ERROR: \(error)")
+                    print("❌ LISTENER: Error - \(error)")
                     return
                 }
                 
-                guard let snapshot = snapshot else { return }
-                
-                // Handle new notifications
-                for change in snapshot.documentChanges {
-                    if change.type == .added {
-                        let data = change.document.data()
-                        let notification = StitchNotification(
-                            id: data["id"] as? String ?? change.document.documentID,
-                            recipientID: data["recipientID"] as? String ?? "",
-                            senderID: data["senderID"] as? String ?? "",
-                            type: StitchNotificationType(rawValue: data["type"] as? String ?? "system") ?? .system,
-                            title: data["title"] as? String ?? "",
-                            message: data["message"] as? String ?? "",
-                            payload: data["payload"] as? [String: String] ?? [:],
-                            isRead: data["isRead"] as? Bool ?? false,
-                            createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
-                            expiresAt: (data["expiresAt"] as? Timestamp)?.dateValue()
-                        )
-                        
-                        Task { @MainActor in
-                            self?.handleNewNotification(notification)
-                        }
-                    }
+                guard let snapshot = snapshot else {
+                    print("⚠️ LISTENER: No snapshot")
+                    return
                 }
+                
+                let notifications = snapshot.documents.compactMap { doc -> StitchNotification? in
+                    let data = doc.data()
+                    
+                    return StitchNotification(
+                        id: data["id"] as? String ?? doc.documentID,
+                        recipientID: data["recipientID"] as? String ?? "",
+                        senderID: data["senderID"] as? String ?? "",
+                        type: StitchNotificationType(rawValue: data["type"] as? String ?? "system") ?? .system,
+                        title: data["title"] as? String ?? "",
+                        message: data["message"] as? String ?? "",
+                        payload: data["payload"] as? [String: String] ?? [:],
+                        isRead: data["isRead"] as? Bool ?? false,
+                        createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
+                        readAt: (data["readAt"] as? Timestamp)?.dateValue(),
+                        expiresAt: (data["expiresAt"] as? Timestamp)?.dateValue()
+                    )
+                }
+                
+                onUpdate(notifications)
             }
+        
+        print("👂 LISTENER: Started for user \(userID)")
     }
     
-    /// Stop notification listener
-    func stopNotificationListener() {
+    func stopListening() {
         notificationListener?.remove()
         notificationListener = nil
-        print("🔔 STOPPED: Real-time listener")
+        print("🛑 LISTENER: Stopped")
     }
     
-    /// Handle new notification from real-time listener
-    private func handleNewNotification(_ notification: StitchNotification) {
-        print("🔔 NEW NOTIFICATION: \(notification.type.rawValue)")
-        
-        let senderUsername = notification.payload["senderUsername"] ?? "Someone"
-        
-        // Show toast notification
-        showToast(
-            type: notification.type,
-            title: notification.title,
-            message: notification.message,
-            senderUsername: senderUsername,
-            payload: notification.payload
-        )
+    // MARK: - Debug
+    
+    func debugConfiguration() {
+        print("🔍 DEBUG: Notification Service Configuration")
+        print("  - Database: \(Config.Firebase.databaseName)")
+        print("  - Region: us-central1")
+        print("  - Function Prefix: \(functionPrefix)")
+        print("  - User: \(Auth.auth().currentUser?.uid ?? "none")")
     }
-    
-    // MARK: - Toast Notifications
-    
-    /// Show toast notification overlay
-    private func showToast(
-        type: StitchNotificationType,
-        title: String,
-        message: String,
-        senderUsername: String,
-        payload: [String: String]
-    ) {
-        let toast = NotificationToast(
-            type: type,
-            title: title,
-            message: message,
-            senderUsername: senderUsername,
-            payload: payload
-        )
-        
-        // Add to pending toasts
-        pendingToasts.append(toast)
-        
-        // Limit number of toasts displayed
-        if pendingToasts.count > maxToastsDisplayed {
-            pendingToasts.removeFirst()
-        }
-        
-        // Auto-dismiss after duration
-        Task {
-            let duration = getToastDuration(for: type)
-            try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
-            dismissToast(toastID: toast.id)
-        }
-    }
-    
-    /// Dismiss specific toast
-    func dismissToast(toastID: String) {
-        pendingToasts.removeAll { $0.id == toastID }
-        print("🍞 DISMISSED TOAST: \(toastID)")
-    }
-    
-    /// Clear all toasts
-    func clearAllToasts() {
-        pendingToasts.removeAll()
-        print("🍞 CLEARED ALL TOASTS")
-    }
-    
-    /// Get toast duration based on type
-    private func getToastDuration(for type: StitchNotificationType) -> TimeInterval {
-        switch type {
-        case .hype, .cool: return 3.0
-        case .follow: return 4.0
-        case .reply, .mention: return 5.0
-        case .tierUpgrade, .milestone: return 6.0
-        case .system: return 8.0
-        }
-    }
-    
-    // MARK: - Convenience Methods for Common Notifications
-    
-    /// Create hype notification
-    func notifyHype(videoID: String, videoTitle: String, recipientID: String, senderID: String, senderUsername: String) async throws {
-        try await createNotification(
-            recipientID: recipientID,
-            senderID: senderID,
-            type: StitchNotificationType.hype,
-            title: "🔥 Your video got hyped!",
-            message: "\(senderUsername) hyped your video",
-            payload: [
-                "videoID": videoID,
-                "videoTitle": videoTitle,
-                "senderUsername": senderUsername
-            ]
-        )
-    }
-    
-    /// Create follow notification
-    func notifyFollow(recipientID: String, senderID: String, senderUsername: String) async throws {
-        try await createNotification(
-            recipientID: recipientID,
-            senderID: senderID,
-            type: StitchNotificationType.follow,
-            title: "👥 New Follower",
-            message: "\(senderUsername) started following you",
-            payload: [
-                "senderUsername": senderUsername
-            ]
-        )
-    }
-    
-    /// Create reply notification
-    func notifyReply(videoID: String, videoTitle: String, recipientID: String, senderID: String, senderUsername: String) async throws {
-        try await createNotification(
-            recipientID: recipientID,
-            senderID: senderID,
-            type: StitchNotificationType.reply,
-            title: "💬 New Reply",
-            message: "\(senderUsername) replied to your video",
-            payload: [
-                "videoID": videoID,
-                "videoTitle": videoTitle,
-                "senderUsername": senderUsername
-            ]
-        )
-    }
-    
-    /// Create tier upgrade notification
-    func notifyTierUpgrade(userID: String, newTier: UserTier) async throws {
-        try await createNotification(
-            recipientID: userID,
-            senderID: "system",
-            type: StitchNotificationType.tierUpgrade,
-            title: "🎉 Tier Upgraded!",
-            message: "You've reached \(newTier.displayName) tier!",
-            payload: [
-                "newTier": newTier.rawValue,
-                "tierName": newTier.displayName
-            ]
-        )
-    }
-    
-    // MARK: - Error Handling
-    
-    enum NotificationError: Error, LocalizedError {
-        case invalidNotification
-        case userNotFound
-        case firebaseError(Error)
-        
-        var errorDescription: String? {
-            switch self {
-            case .invalidNotification:
-                return "Invalid notification data"
-            case .userNotFound:
-                return "User not found"
-            case .firebaseError(let error):
-                return "Firebase error: \(error.localizedDescription)"
-            }
-        }
-    }
+}
+
+// MARK: - Supporting Types
+
+struct NotificationLoadResult {
+    let notifications: [StitchNotification]
+    let lastDocument: DocumentSnapshot?
+    let hasMore: Bool
 }

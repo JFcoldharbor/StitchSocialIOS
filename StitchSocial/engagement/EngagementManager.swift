@@ -3,8 +3,9 @@
 //  StitchSocial
 //
 //  Layer 6: Coordination - Main Engagement Processing Manager WITH FIREBASE PERSISTENCE
-//  Dependencies: EngagementCalculator (Layer 5), VideoService (Layer 4), UserService (Layer 4)
+//  Dependencies: VideoEngagementService (Layer 4), VideoService (Layer 4), UserService (Layer 4)
 //  Features: Progressive tapping, hype rating management, notification integration, FIREBASE PERSISTENCE
+//  FIXED: Added NotificationCenter posts to trigger UI updates after engagement
 //
 
 import Foundation
@@ -62,8 +63,8 @@ class EngagementManager: ObservableObject {
     // MARK: - Dependencies
     
     private let videoService: VideoService
+    private let videoEngagementService: VideoEngagementService
     private let userService: UserService
-    private let notificationService: NotificationService?
     
     // MARK: - Published State
     
@@ -78,12 +79,25 @@ class EngagementManager: ObservableObject {
     
     // MARK: - Initialization
     
-    init(videoService: VideoService, userService: UserService, notificationService: NotificationService? = nil) {
+    init(
+        videoService: VideoService,
+        userService: UserService,
+        videoEngagementService: VideoEngagementService? = nil
+    ) {
         self.videoService = videoService
         self.userService = userService
-        self.notificationService = notificationService
         
-        print("🎯 ENGAGEMENT MANAGER: Initialized with Firebase persistence")
+        // Create VideoEngagementService if not provided
+        if let providedService = videoEngagementService {
+            self.videoEngagementService = providedService
+        } else {
+            self.videoEngagementService = VideoEngagementService(
+                videoService: videoService,
+                userService: userService
+            )
+        }
+        
+        print("🎯 ENGAGEMENT MANAGER: Initialized with VideoEngagementService + Firebase persistence")
     }
     
     // MARK: - Public Interface
@@ -112,7 +126,7 @@ class EngagementManager: ObservableObject {
         let key = "\(videoID)_\(userID)"
         
         do {
-            if let loadedState = try await videoService.loadEngagementState(key: key) {
+            if let loadedState = try await videoEngagementService.loadEngagementState(key: key) {
                 await MainActor.run {
                     engagementStates[key] = loadedState
                     print("🔄 ENGAGEMENT MANAGER: Loaded state from Firebase for \(key)")
@@ -128,7 +142,7 @@ class EngagementManager: ObservableObject {
         let key = "\(state.videoID)_\(state.userID)"
         
         do {
-            try await videoService.saveEngagementState(key: key, state: state)
+            try await videoEngagementService.saveEngagementState(key: key, state: state)
             print("💾 ENGAGEMENT MANAGER: Saved state to Firebase for \(key)")
         } catch {
             print("❌ ENGAGEMENT MANAGER: Failed to save state to Firebase for \(key): \(error)")
@@ -155,9 +169,6 @@ class EngagementManager: ObservableObject {
         
         lastEngagementTime[videoID] = Date()
         
-        // Get current video
-        let video = try await videoService.getVideo(id: videoID)
-        
         // Get engagement state (will load from Firebase if needed)
         var state = getEngagementState(videoID: videoID, userID: userID)
         
@@ -171,32 +182,33 @@ class EngagementManager: ObservableObject {
         await saveEngagementStateToFirebase(state)
         
         if wasComplete {
-            // Engagement complete - update database
+            // Engagement complete - deduct hype rating
             userHypeRating = EngagementCalculator.applyHypeRatingCost(currentRating: userHypeRating, cost: cost)
             
-            let newHypeCount = video.hypeCount + 1
-            try await videoService.updateVideoEngagement(
+            // Use VideoEngagementService to complete engagement
+            // This handles: video update, clout award, milestone detection, and notifications
+            let result = try await videoEngagementService.processProgressiveTap(
                 videoID: videoID,
-                hypeCount: newHypeCount,
-                coolCount: video.coolCount,
-                viewCount: video.viewCount,
-                temperature: "warm",
-                lastEngagementAt: Date()
+                userID: userID,
+                engagementType: .hype,
+                userTier: userTier
             )
-            
-            // Award clout
-            let clout = EngagementCalculator.calculateCloutReward(giverTier: userTier)
-            try await userService.awardClout(userID: video.creatorID, amount: clout)
             
             // Mark engagement complete and save again
             state.completeHypeEngagement()
             engagementStates["\(videoID)_\(userID)"] = state
             await saveEngagementStateToFirebase(state)
             
-            // Send notification
-            await sendHypeNotification(videoID: videoID, userID: userID, creatorID: video.creatorID)
-            
             print("🔥 ENGAGEMENT MANAGER: Hype engagement completed and persisted")
+            print("🔥 Result: \(result.message)")
+            
+            // ✅ FIXED: Post notification to trigger UI update
+            NotificationCenter.default.post(
+                name: NSNotification.Name("VideoEngagementUpdated"),
+                object: nil,
+                userInfo: ["videoID": videoID]
+            )
+            
             return true
         }
         
@@ -218,9 +230,6 @@ class EngagementManager: ObservableObject {
         
         lastEngagementTime[videoID] = Date()
         
-        // Get current video
-        let video = try await videoService.getVideo(id: videoID)
-        
         // Get engagement state (will load from Firebase if needed)
         var state = getEngagementState(videoID: videoID, userID: userID)
         
@@ -234,19 +243,14 @@ class EngagementManager: ObservableObject {
         await saveEngagementStateToFirebase(state)
         
         if wasComplete {
-            // Engagement complete - update database
-            let newCoolCount = video.coolCount + 1
-            try await videoService.updateVideoEngagement(
+            // Use VideoEngagementService to complete engagement
+            // This handles: video update, clout award, milestone detection, and notifications
+            let result = try await videoEngagementService.processProgressiveTap(
                 videoID: videoID,
-                hypeCount: video.hypeCount,
-                coolCount: newCoolCount,
-                viewCount: video.viewCount,
-                temperature: "cool",
-                lastEngagementAt: Date()
+                userID: userID,
+                engagementType: .cool,
+                userTier: userTier
             )
-            
-            // Award negative clout
-            try await userService.awardClout(userID: video.creatorID, amount: -5)
             
             // Mark engagement complete and save again
             state.completeCoolEngagement()
@@ -254,6 +258,15 @@ class EngagementManager: ObservableObject {
             await saveEngagementStateToFirebase(state)
             
             print("❄️ ENGAGEMENT MANAGER: Cool engagement completed and persisted")
+            print("❄️ Result: \(result.message)")
+            
+            // ✅ FIXED: Post notification to trigger UI update
+            NotificationCenter.default.post(
+                name: NSNotification.Name("VideoEngagementUpdated"),
+                object: nil,
+                userInfo: ["videoID": videoID]
+            )
+            
             return true
         }
         
@@ -346,40 +359,6 @@ class EngagementManager: ObservableObject {
         
         if !keysToRemove.isEmpty {
             print("🧹 ENGAGEMENT MANAGER: Cleared \(keysToRemove.count) old states")
-        }
-    }
-    
-    // MARK: - Private Helpers
-    
-    /// Send hype notification to video creator
-    private func sendHypeNotification(videoID: String, userID: String, creatorID: String) async {
-        guard let notificationService = notificationService else { return }
-        
-        do {
-            let video = try await videoService.getVideo(id: videoID)
-            let senderUsername = await getCurrentUsername(userID: userID)
-            
-            try await notificationService.notifyHype(
-                videoID: videoID,
-                videoTitle: video.title,
-                recipientID: creatorID,
-                senderID: userID,
-                senderUsername: senderUsername
-            )
-            
-            print("📢 NOTIFICATION: Sent hype notification for video \(videoID)")
-        } catch {
-            print("❌ NOTIFICATION ERROR: Failed to send hype notification - \(error)")
-        }
-    }
-    
-    /// Get current username for notifications
-    private func getCurrentUsername(userID: String) async -> String {
-        do {
-            let user = try await userService.getUser(id: userID)
-            return user?.username ?? "Someone"
-        } catch {
-            return "Someone"
         }
     }
 }

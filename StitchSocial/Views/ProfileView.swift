@@ -17,12 +17,11 @@ struct ProfileView: View {
     @StateObject private var viewModel: ProfileViewModel
     private let userService: UserService
     
-    // MARK: - UI State
+    // MARK: - State Variables (Updated for Stitchers)
     
     @State private var scrollOffset: CGFloat = 0
     @State private var showStickyTabBar = false
-    @State private var showingFollowingList = false
-    @State private var showingFollowersList = false
+    @State private var showingFollowersList = false // Now shows Stitchers view
     @State private var showingSettings = false
     @State private var showingEditProfile = false
     @State private var showingVideoPlayer = false
@@ -253,11 +252,8 @@ struct ThreadVideoNavigationView: View {
                 await viewModel.refreshProfile()
             }
         }
-        .sheet(isPresented: $showingFollowingList) {
-            followingSheet
-        }
         .sheet(isPresented: $showingFollowersList) {
-            followersSheet
+            stitchersSheet
         }
         .sheet(isPresented: $showingSettings) {
             settingsSheet
@@ -554,13 +550,14 @@ struct ThreadVideoNavigationView: View {
         HStack(spacing: 30) {
             statItem(title: "Videos", value: "\(viewModel.userVideos.count)")
             
-            Button(action: { showingFollowersList = true }) {
-                statItem(title: "Followers", value: "\(viewModel.followersList.count)")
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            Button(action: { showingFollowingList = true }) {
-                statItem(title: "Following", value: "\(viewModel.followingList.count)")
+            Button(action: {
+                Task {
+                    await viewModel.loadFollowers()
+                    await viewModel.loadFollowing()
+                }
+                showingFollowersList = true
+            }) {
+                statItem(title: "Stitchers", value: "\(viewModel.followersList.count)")
             }
             .buttonStyle(PlainButtonStyle())
             
@@ -839,45 +836,35 @@ struct ThreadVideoNavigationView: View {
     
     // MARK: - Sheet Views
     
-    private var followingSheet: some View {
+    private var stitchersSheet: some View {
         NavigationView {
-            UserListView(
-                title: "Following",
-                users: viewModel.followingList,
-                isLoading: viewModel.isLoadingFollowing
+            ProfileStitchersListView(
+                followersList: viewModel.followersList,
+                followingList: viewModel.followingList,
+                isLoadingFollowers: viewModel.isLoadingFollowers,
+                isLoadingFollowing: viewModel.isLoadingFollowing
             )
-            .navigationTitle("Following")
+            .navigationTitle("Stitchers")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showingFollowingList = false }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: { showingFollowersList = false }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.caption)
+                            Text("Back")
+                                .font(.caption)
+                        }
                         .foregroundColor(.cyan)
+                    }
                 }
             }
         }
         .onAppear {
-            Task { await viewModel.loadFollowing() }
-        }
-    }
-
-    private var followersSheet: some View {
-        NavigationView {
-            UserListView(
-                title: "Followers",
-                users: viewModel.followersList,
-                isLoading: viewModel.isLoadingFollowers
-            )
-            .navigationTitle("Followers")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showingFollowersList = false }
-                        .foregroundColor(.cyan)
-                }
+            Task {
+                await viewModel.loadFollowers()
+                await viewModel.loadFollowing()
             }
-        }
-        .onAppear {
-            Task { await viewModel.loadFollowers() }
         }
     }
 
@@ -889,14 +876,13 @@ struct ThreadVideoNavigationView: View {
     private var editProfileSheet: some View {
         Group {
             if let user = viewModel.currentUser {
-                EditProfileView(
+                NewEditProfileView(
                     userService: userService,
-                    user: Binding(
-                        get: { user },
-                        set: { newUser in
-                            viewModel.currentUser = newUser
-                        }
-                    )
+                    currentUser: user,
+                    onSave: { updatedUser in
+                        viewModel.currentUser = updatedUser
+                        showingEditProfile = false
+                    }
                 )
             }
         }
@@ -1143,6 +1129,177 @@ struct ThreadVideoNavigationView: View {
 
 // MARK: - Supporting Views and Extensions
 
+// ProfileStitchersListView - Renamed to avoid conflicts with CreatorProfileView
+struct ProfileStitchersListView: View {
+    let followersList: [BasicUserInfo]
+    let followingList: [BasicUserInfo]
+    let isLoadingFollowers: Bool
+    let isLoadingFollowing: Bool
+    
+    @State private var selectedTab = 0
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Tab Bar
+            HStack(spacing: 0) {
+                Button(action: { selectedTab = 0 }) {
+                    VStack(spacing: 8) {
+                        HStack(spacing: 4) {
+                            Text("Followers")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(selectedTab == 0 ? .white : .gray)
+                            
+                            Text("(\(followersList.count))")
+                                .font(.system(size: 14))
+                                .foregroundColor(.gray)
+                        }
+                        
+                        Rectangle()
+                            .fill(selectedTab == 0 ? Color.cyan : Color.clear)
+                            .frame(height: 2)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                
+                Button(action: { selectedTab = 1 }) {
+                    VStack(spacing: 8) {
+                        HStack(spacing: 4) {
+                            Text("Following")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(selectedTab == 1 ? .white : .gray)
+                            
+                            Text("(\(followingList.count))")
+                                .font(.system(size: 14))
+                                .foregroundColor(.gray)
+                        }
+                        
+                        Rectangle()
+                            .fill(selectedTab == 1 ? Color.cyan : Color.clear)
+                            .frame(height: 2)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .background(Color.black)
+            .padding(.top, 10)
+            
+            Divider()
+                .background(Color.gray.opacity(0.3))
+            
+            // Content
+            ZStack {
+                Color.black.ignoresSafeArea()
+                
+                if selectedTab == 0 {
+                    // Followers tab
+                    if isLoadingFollowers {
+                        ProgressView()
+                            .tint(.white)
+                    } else if followersList.isEmpty {
+                        VStack {
+                            Text("No Followers")
+                                .foregroundColor(.white)
+                        }
+                    } else {
+                        ScrollView {
+                            LazyVStack {
+                                ForEach(followersList, id: \.id) { user in
+                                    ProfileUserRowView(user: user)
+                                }
+                            }
+                            .padding()
+                        }
+                    }
+                } else {
+                    // Following tab
+                    if isLoadingFollowing {
+                        ProgressView()
+                            .tint(.white)
+                    } else if followingList.isEmpty {
+                        VStack {
+                            Text("Not Following Anyone")
+                                .foregroundColor(.white)
+                        }
+                    } else {
+                        ScrollView {
+                            LazyVStack {
+                                ForEach(followingList, id: \.id) { user in
+                                    ProfileUserRowView(user: user)
+                                }
+                            }
+                            .padding()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ProfileUserRowView - Individual user row with interaction
+struct ProfileUserRowView: View {
+    let user: BasicUserInfo
+    @State private var showingProfile = false
+    
+    var body: some View {
+        HStack {
+            Button(action: { showingProfile = true }) {
+                AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
+                    .frame(width: 50, height: 50)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Button(action: { showingProfile = true }) {
+                VStack(alignment: .leading) {
+                    Text(user.displayName)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    
+                    Text("@\(user.username)")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Spacer()
+            
+            // Follow/Unfollow button (if not current user)
+            Button(action: {
+                // TODO: Implement follow toggle
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.plus.fill")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                    
+                    Text("Follow")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.cyan)
+                )
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .sheet(isPresented: $showingProfile) {
+            CreatorProfileView(userID: user.id)
+                .navigationBarHidden(true)
+        }
+    }
+}
+
 // Extension to ProfileViewModel for thread navigation
 extension ProfileViewModel {
     /// Load thread children for navigation
@@ -1204,380 +1361,5 @@ struct UserListView: View {
     }
 }
 
-// MARK: - Edit Profile View Implementation
-
-struct EditProfileView: View {
-    
-    // MARK: - Dependencies
-    
-    let userService: UserService
-    @Binding var user: BasicUserInfo
-    
-    // MARK: - Form State
-    
-    @State private var displayName: String = ""
-    @State private var username: String = ""
-    @State private var bio: String = ""
-    @State private var isPrivate: Bool = false
-    
-    // MARK: - Image Picker State
-    
-    @State private var selectedPhoto: PhotosPickerItem?
-    @State private var profileImageData: Data?
-    @State private var profileImageURL: String?
-    
-    // MARK: - UI State
-    
-    @State private var isLoading = false
-    @State private var showingSuccessMessage = false
-    @State private var hasChanges = false
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationView {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                
-                ScrollView {
-                    VStack(spacing: 24) {
-                        profileImageSection
-                        formFieldsSection
-                        privacySection
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 30)
-                }
-                
-                if isLoading {
-                    loadingOverlay
-                }
-            }
-            .navigationTitle("Edit Profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundColor(.gray)
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        Task { await saveProfile() }
-                    }
-                    .foregroundColor(.cyan)
-                    .disabled(isLoading || !hasChanges)
-                }
-            }
-        }
-        .onAppear {
-            loadCurrentProfile()
-        }
-        .onChange(of: selectedPhoto) { _, newValue in
-            loadSelectedPhoto(newValue)
-        }
-        .onChange(of: displayName) { _, _ in checkForChanges() }
-        .onChange(of: username) { _, _ in checkForChanges() }
-        .onChange(of: bio) { _, _ in checkForChanges() }
-        .onChange(of: isPrivate) { _, _ in checkForChanges() }
-        .alert("Profile Updated", isPresented: $showingSuccessMessage) {
-            Button("OK") { dismiss() }
-        }
-    }
-    
-    // MARK: - Profile Image Section
-    
-    private var profileImageSection: some View {
-        VStack(spacing: 16) {
-            PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                ZStack {
-                    if let data = profileImageData, let uiImage = UIImage(data: data) {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 100, height: 100)
-                            .clipShape(Circle())
-                    } else {
-                        AsyncThumbnailView.avatar(url: profileImageURL ?? "")
-                            .frame(width: 100, height: 100)
-                            .clipShape(Circle())
-                    }
-                    
-                    Circle()
-                        .fill(Color.black.opacity(0.5))
-                        .frame(width: 100, height: 100)
-                        .overlay(
-                            Image(systemName: "camera.fill")
-                                .font(.title2)
-                                .foregroundColor(.white)
-                        )
-                }
-            }
-            
-            Text("Change Photo")
-                .font(.caption)
-                .foregroundColor(.cyan)
-        }
-    }
-    
-    // MARK: - Form Fields Section
-    
-    private var formFieldsSection: some View {
-        VStack(spacing: 20) {
-            formField(
-                title: "Display Name",
-                text: $displayName,
-                placeholder: "Your display name",
-                maxLength: 50
-            )
-            
-            formField(
-                title: "Username",
-                text: $username,
-                placeholder: "username",
-                maxLength: 30,
-                prefix: "@"
-            )
-            
-            // Bio field
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Bio")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    Spacer()
-                    
-                    Text("\(bio.count)/150")
-                        .font(.caption)
-                        .foregroundColor(bio.count > 150 ? .red : .gray)
-                }
-                
-                ZStack(alignment: .topLeading) {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white.opacity(0.1))
-                        .frame(height: 100)
-                    
-                    TextEditor(text: $bio)
-                        .font(.body)
-                        .foregroundColor(.white)
-                        .background(Color.clear)
-                        .padding(12)
-                        .scrollContentBackground(.hidden)
-                    
-                    if bio.isEmpty {
-                        Text("Tell people about yourself...")
-                            .font(.body)
-                            .foregroundColor(.gray)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 20)
-                            .allowsHitTesting(false)
-                    }
-                }
-            }
-        }
-    }
-    
-    // MARK: - Privacy Section
-    
-    private var privacySection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Privacy")
-                .font(.headline)
-                .foregroundColor(.white)
-            
-            Toggle(isOn: $isPrivate) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Private Account")
-                        .font(.body)
-                        .foregroundColor(.white)
-                    
-                    Text("Only followers can see your videos")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-            }
-            .toggleStyle(SwitchToggleStyle(tint: .cyan))
-        }
-        .padding(.vertical, 8)
-    }
-    
-    // MARK: - Form Field Helper
-    
-    private func formField(
-        title: String,
-        text: Binding<String>,
-        placeholder: String,
-        maxLength: Int,
-        prefix: String = ""
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(.white)
-                
-                Spacer()
-                
-                Text("\(text.wrappedValue.count)/\(maxLength)")
-                    .font(.caption)
-                    .foregroundColor(text.wrappedValue.count > maxLength ? .red : .gray)
-            }
-            
-            HStack {
-                if !prefix.isEmpty {
-                    Text(prefix)
-                        .font(.body)
-                        .foregroundColor(.gray)
-                }
-                
-                TextField(placeholder, text: text)
-                    .font(.body)
-                    .foregroundColor(.white)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .onChange(of: text.wrappedValue) { _, newValue in
-                        if newValue.count > maxLength {
-                            text.wrappedValue = String(newValue.prefix(maxLength))
-                        }
-                    }
-            }
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.white.opacity(0.1))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(text.wrappedValue.count > maxLength ? .red : Color.clear, lineWidth: 1)
-            )
-        }
-    }
-    
-    // MARK: - Loading Overlay
-    
-    private var loadingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.7)
-                .ignoresSafeArea()
-            
-            VStack(spacing: 16) {
-                ProgressView()
-                    .scaleEffect(1.2)
-                    .tint(.white)
-                
-                Text("Saving profile...")
-                    .font(.headline)
-                    .foregroundColor(.white)
-            }
-            .padding(32)
-            .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(Color.black.opacity(0.8))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
-            )
-        }
-    }
-    
-    // MARK: - Methods
-    
-    private func loadCurrentProfile() {
-        displayName = user.displayName
-        username = user.username
-        profileImageURL = user.profileImageURL
-        
-        // Load extended profile data for bio and privacy
-        Task {
-            do {
-                if let profile = try await userService.getExtendedProfile(id: user.id) {
-                    await MainActor.run {
-                        bio = profile.bio
-                        isPrivate = profile.isPrivate
-                    }
-                }
-            } catch {
-                print("Failed to load extended profile: \(error)")
-            }
-        }
-    }
-    
-    private func loadSelectedPhoto(_ photoItem: PhotosPickerItem?) {
-        guard let photoItem = photoItem else { return }
-        
-        Task {
-            do {
-                if let data = try await photoItem.loadTransferable(type: Data.self) {
-                    await MainActor.run {
-                        profileImageData = data
-                        checkForChanges()
-                    }
-                }
-            } catch {
-                print("Failed to load photo: \(error)")
-            }
-        }
-    }
-    
-    private func checkForChanges() {
-        let hasDisplayNameChanged = displayName != user.displayName
-        let hasUsernameChanged = username != user.username
-        let hasImageChanged = profileImageData != nil
-        
-        hasChanges = hasDisplayNameChanged || hasUsernameChanged || hasImageChanged
-    }
-    
-    private func showError(_ message: String) {
-        print("Edit Profile Error: \(message)")
-    }
-    
-    private func saveProfile() async {
-        guard hasChanges else { return }
-        
-        isLoading = true
-        
-        do {
-            var updatedImageURL = user.profileImageURL
-            
-            // Upload new profile image if selected
-            if let imageData = profileImageData {
-                updatedImageURL = try await userService.updateProfileImage(
-                    userID: user.id,
-                    imageData: imageData
-                )
-                print("Profile image uploaded: \(updatedImageURL ?? "nil")")
-            }
-            
-            // Update profile data
-            try await userService.updateProfile(
-                userID: user.id,
-                displayName: displayName.isEmpty ? nil : displayName,
-                bio: bio.isEmpty ? nil : bio,
-                isPrivate: isPrivate,
-                username: username.isEmpty ? nil : username
-            )
-            
-            // Update local user object
-            await MainActor.run {
-                user = BasicUserInfo(
-                    id: user.id,
-                    username: username.isEmpty ? user.username : username,
-                    displayName: displayName.isEmpty ? user.displayName : displayName,
-                    tier: user.tier,
-                    clout: user.clout,
-                    isVerified: user.isVerified,
-                    profileImageURL: updatedImageURL,
-                    createdAt: user.createdAt
-                )
-                isLoading = false
-                showingSuccessMessage = true
-            }
-            
-        } catch {
-            await MainActor.run {
-                isLoading = false
-            }
-            print("Failed to save profile: \(error)")
-        }
-    }
-}
+// MARK: - EditProfileView is imported from separate file
+// EditProfileView.swift should be a separate file in the project

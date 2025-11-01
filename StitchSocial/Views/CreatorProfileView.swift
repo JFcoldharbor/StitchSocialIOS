@@ -2,10 +2,10 @@
 //  CreatorProfileView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - External User Profile Display with Advanced Optimization
-//  Dependencies: UserService, FollowManager, VideoService, BatchingService, CachingService (Layer 4-7)
+//  Layer 8: Views - External User Profile Display (View-Only)
+//  Dependencies: UserService, FollowManager, VideoService (Layer 4-7)
 //  Features: Follow/unfollow, share, report, IDENTICAL layout to ProfileView
-//  OPTIMIZATIONS: Instant loading, caching, batching, background preloading
+//  VISUAL PARITY: Hype meter, badges, verification, same layout as ProfileView
 //
 
 import SwiftUI
@@ -18,11 +18,9 @@ struct CreatorProfileView: View {
     
     let userID: String
     
-    // MARK: - Dependencies (OPTIMIZED)
+    // MARK: - Dependencies
     
     @StateObject private var followManager = FollowManager()
-    @StateObject private var cachingService = CachingService()
-    @StateObject private var batchingService = BatchingService()
     private let userService = UserService()
     private let videoService = VideoService()
     
@@ -30,15 +28,19 @@ struct CreatorProfileView: View {
     
     @State private var user: BasicUserInfo?
     @State private var userVideos: [CoreVideoMetadata] = []
-    @State private var isLoading = false // Changed: Start with false for instant display
+    @State private var followersList: [BasicUserInfo] = []
+    @State private var followingList: [BasicUserInfo] = []
+    @State private var isLoading = true
+    @State private var isLoadingFollowers = false
+    @State private var isLoadingFollowing = false
     @State private var errorMessage: String?
-    @State private var isShowingPlaceholder = true // NEW: Placeholder state
     
     // MARK: - Video Player State
     
     @State private var showingVideoPlayer = false
     @State private var selectedVideo: CoreVideoMetadata?
     @State private var selectedVideoIndex = 0
+    @State private var isLoadingVideos = false
     
     // MARK: - UI State
     
@@ -47,7 +49,6 @@ struct CreatorProfileView: View {
     @State private var selectedTab = 0
     @State private var showingShareSheet = false
     @State private var showingReportSheet = false
-    @State private var showingFollowingList = false
     @State private var showingFollowersList = false
     @State private var isShowingFullBio = false
     
@@ -55,14 +56,6 @@ struct CreatorProfileView: View {
     
     @State private var shimmerOffset: CGFloat = 0
     @State private var hypeProgress: CGFloat = 0
-    
-    // MARK: - OPTIMIZATION State
-    
-    @State private var isLoadingVideos = false
-    @State private var isLoadingFollowing = false
-    @State private var isLoadingFollowers = false
-    @State private var loadStartTime: Date = Date()
-    @State private var cacheHit = false
     
     // MARK: - Dismiss
     
@@ -75,7 +68,7 @@ struct CreatorProfileView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
                 
-                if isLoading && !isShowingPlaceholder {
+                if isLoading {
                     loadingView
                 } else if let user = user {
                     profileContent(user: user)
@@ -86,9 +79,8 @@ struct CreatorProfileView: View {
         }
         .navigationBarHidden(true)
         .onAppear {
-            loadStartTime = Date()
             Task {
-                await optimizedProfileLoad()
+                await loadUserProfile()
             }
         }
         .sheet(isPresented: $showingShareSheet) {
@@ -101,18 +93,16 @@ struct CreatorProfileView: View {
                 reportSheet(for: user)
             }
         }
-        .sheet(isPresented: $showingFollowingList) {
-            followingListSheet
-        }
         .sheet(isPresented: $showingFollowersList) {
             followersListSheet
         }
         .fullScreenCover(isPresented: $showingVideoPlayer) {
             if let selectedVideo = selectedVideo {
-                VideoPlayerView(
+                FullscreenVideoView(
                     video: selectedVideo,
-                    isActive: true,
-                    onEngagement: { _ in }
+                    onDismiss: {
+                        showingVideoPlayer = false
+                    }
                 )
             }
         }
@@ -145,7 +135,7 @@ struct CreatorProfileView: View {
             
             Button("Try Again") {
                 Task {
-                    await optimizedProfileLoad()
+                    await loadUserProfile()
                 }
             }
             .foregroundColor(.cyan)
@@ -174,233 +164,6 @@ struct CreatorProfileView: View {
                     stickyTabBar
                 }
             }
-        }
-        .opacity(isShowingPlaceholder ? 0.7 : 1.0) // Visual feedback for placeholder
-        .overlay(
-            // Cache hit indicator
-            cacheHitIndicator,
-            alignment: .topTrailing
-        )
-    }
-    
-    // MARK: - Cache Hit Indicator (Debug)
-    
-    private var cacheHitIndicator: some View {
-        Group {
-            if cacheHit {
-                HStack(spacing: 4) {
-                    Image(systemName: "bolt.fill")
-                        .font(.caption2)
-                    Text("CACHED")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                }
-                .foregroundColor(.green)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.green.opacity(0.2))
-                .cornerRadius(8)
-                .padding(.top, 50)
-                .padding(.trailing, 16)
-            }
-        }
-    }
-    
-    // MARK: - OPTIMIZED LOADING SYSTEM
-    
-    /// Instant profile loading with advanced optimizations
-    private func optimizedProfileLoad() async {
-        print("🚀 CREATOR PROFILE: Starting optimized load for \(userID)")
-        
-        // STEP 1: Check cache for instant display
-        if let cachedUser = await getCachedUserProfile() {
-            await showCachedProfile(cachedUser)
-            
-            // Load enhancements in background
-            Task {
-                await loadProfileEnhancementsInBackground()
-            }
-            return
-        }
-        
-        // STEP 2: Show optimized placeholder immediately
-        await showOptimizedPlaceholder()
-        
-        // STEP 3: Load real profile with batching optimization
-        Task {
-            await loadRealProfileWithBatching()
-        }
-        
-        print("🚀 CREATOR PROFILE: UI ready with placeholder in <100ms")
-    }
-    
-    /// Get cached user profile using CachingService
-    private func getCachedUserProfile() async -> BasicUserInfo? {
-        // Note: CachingService uses UserProfileData, but we need BasicUserInfo
-        // For now, return nil to skip cache until we have proper conversion
-        // TODO: Implement UserProfileData to BasicUserInfo conversion
-        return nil
-    }
-    
-    /// Show cached profile with instant display
-    private func showCachedProfile(_ cachedUser: BasicUserInfo) async {
-        await MainActor.run {
-            self.user = cachedUser
-            self.isShowingPlaceholder = false
-            print("⚡ CREATOR PROFILE: Instant display from cache")
-        }
-    }
-    
-    /// Show optimized placeholder for instant feedback
-    private func showOptimizedPlaceholder() async {
-        await MainActor.run {
-            self.user = BasicUserInfo(
-                id: userID,
-                username: "loading...",
-                displayName: "Loading Profile...",
-                tier: .rookie,
-                clout: 0,
-                isVerified: false,
-                profileImageURL: nil
-            )
-            self.isShowingPlaceholder = true
-            print("📱 CREATOR PROFILE: Showing optimized placeholder")
-        }
-    }
-    
-    /// Load real profile with BatchingService optimization
-    private func loadRealProfileWithBatching() async {
-        do {
-            print("📦 CREATOR PROFILE: Loading with batching optimization...")
-            
-            // Use BatchingService for efficient user loading
-            let users = try await batchingService.batchLoadUserProfiles(userIDs: [userID])
-            
-            guard let userProfile = users.first else {
-                await MainActor.run {
-                    self.errorMessage = "User not found"
-                    self.isLoading = false
-                }
-                return
-            }
-            
-            // Cache the loaded user immediately (Note: Temporarily disabled due to type mismatch)
-            // TODO: Convert BasicUserInfo to UserProfileData for caching
-            // cachingService.cacheUser(userProfile)
-            
-            await MainActor.run {
-                self.user = userProfile
-                self.isShowingPlaceholder = false
-                
-                let loadTime = Date().timeIntervalSince(loadStartTime)
-                print("✅ CREATOR PROFILE: Real profile loaded in \(Int(loadTime * 1000))ms")
-            }
-            
-            // Load videos and social data concurrently
-            await loadProfileEnhancementsInBackground()
-            
-        } catch {
-            await MainActor.run {
-                self.errorMessage = error.localizedDescription
-                self.isLoading = false
-                print("❌ CREATOR PROFILE: Load failed - \(error.localizedDescription)")
-            }
-        }
-    }
-    
-    /// Load profile enhancements in background with optimization
-    private func loadProfileEnhancementsInBackground() async {
-        print("🔧 CREATOR PROFILE: Loading enhancements in background...")
-        
-        // Load all enhancements concurrently using TaskGroup
-        await withTaskGroup(of: Void.self) { group in
-            
-            // Load user videos with caching
-            group.addTask {
-                await self.loadUserVideosOptimized()
-            }
-            
-            // Load follow state
-            group.addTask {
-                await self.followManager.loadFollowState(for: self.userID)
-            }
-            
-            // Start animations
-            group.addTask {
-                await self.startProfileAnimations()
-            }
-            
-            // Preload related content
-            group.addTask {
-                await self.preloadRelatedContent()
-            }
-        }
-        
-        print("✅ CREATOR PROFILE: Background enhancements complete")
-    }
-    
-    /// Load user videos with optimization and caching
-    private func loadUserVideosOptimized() async {
-        await MainActor.run {
-            self.isLoadingVideos = true
-        }
-        
-        do {
-            // Load with optimized pagination (no caching for now due to method availability)
-            let videosResult = try await videoService.getUserVideos(userID: userID)
-            let videos = videosResult.items
-            
-            // TODO: Add video caching when proper cache methods are available
-            // For now, just store in state
-            
-            await MainActor.run {
-                self.userVideos = videos
-                self.isLoadingVideos = false
-                print("📹 CREATOR PROFILE: Loaded \(videos.count) videos")
-            }
-            
-        } catch {
-            await MainActor.run {
-                self.isLoadingVideos = false
-                print("❌ CREATOR PROFILE: Videos load failed - \(error.localizedDescription)")
-            }
-        }
-    }
-    
-    /// Preload related content for better user experience
-    private func preloadRelatedContent() async {
-        // Preload related content for better user experience
-        guard let user = user else { return }
-        
-        // Preload profile images and thumbnails (simplified without cache hits)
-        if let profileImageURL = user.profileImageURL, !profileImageURL.isEmpty {
-            print("🖼️ CREATOR PROFILE: Preloading profile image")
-        }
-        
-        // Preload first few video thumbnails
-        let thumbnailURLs = userVideos.prefix(10).compactMap { $0.thumbnailURL }.filter { !$0.isEmpty }
-        print("🎭 CREATOR PROFILE: Preloading \(thumbnailURLs.count) thumbnails")
-        
-        // Log preloading stats
-        print("📊 CREATOR PROFILE: Preload complete - \(thumbnailURLs.count) assets")
-    }
-    
-    /// Start profile animations with optimization awareness
-    private func startProfileAnimations() async {
-        guard let user = user else { return }
-        
-        await MainActor.run {
-            // Animate hype meter on appear
-            withAnimation(.easeInOut(duration: 1.5)) {
-                hypeProgress = calculateHypeLevel(user: user)
-            }
-            
-            // Start shimmer animation
-            withAnimation(.linear(duration: 2.0).repeatForever(autoreverses: false)) {
-                shimmerOffset = 200
-            }
-            
-            print("✨ CREATOR PROFILE: Animations started")
         }
     }
     
@@ -643,22 +406,34 @@ struct CreatorProfileView: View {
                 }
             }
             .frame(height: 12)
+            .onAppear {
+                // Animate hype meter on appear
+                withAnimation(.easeInOut(duration: 1.5)) {
+                    hypeProgress = calculateHypeLevel(user: user)
+                }
+                
+                // Start shimmer animation
+                withAnimation(.linear(duration: 2.0).repeatForever(autoreverses: false)) {
+                    shimmerOffset = 200
+                }
+            }
         }
     }
     
-    // MARK: - Stats Row (OPTIMIZED: Using cached counts)
+    // MARK: - Stats Row
     
     private func statsRow(user: BasicUserInfo) -> some View {
         HStack(spacing: 40) {
-            CreatorStatView(title: "Videos", count: userVideos.count)
+            CreatorStatView(title: "Threads", count: userVideos.count)
             
-            Button(action: { showingFollowersList = true }) {
-                CreatorStatView(title: "Followers", count: 0) // TODO: Load actual follower count
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            Button(action: { showingFollowingList = true }) {
-                CreatorStatView(title: "Following", count: 0) // TODO: Load actual following count
+            Button(action: {
+                Task {
+                    await loadFollowers()
+                    await loadFollowing()
+                }
+                showingFollowersList = true
+            }) {
+                CreatorStatView(title: "Stitchers", count: followersList.count + followingList.count)
             }
             .buttonStyle(PlainButtonStyle())
             
@@ -667,11 +442,11 @@ struct CreatorProfileView: View {
         .padding(.horizontal, 20)
     }
     
-    // MARK: - Action Buttons Row (OPTIMIZED: Better loading states)
+    // MARK: - Action Buttons Row
     
     private func actionButtonsRow(user: BasicUserInfo) -> some View {
         HStack(spacing: 12) {
-            // Follow/Following button with optimized states
+            // Follow/Following button
             Button(action: {
                 Task {
                     await followManager.toggleFollow(for: user.id)
@@ -702,16 +477,16 @@ struct CreatorProfileView: View {
             }
             .disabled(followManager.isLoading(user.id))
             
-            // Message button
+            // Subscribe button
             Button(action: {
-                // TODO: Implement messaging
+                // TODO: Implement subscription
             }) {
                 HStack(spacing: 8) {
-                    Image(systemName: "message.fill")
+                    Image(systemName: "bell.fill")
                         .font(.subheadline)
                         .fontWeight(.semibold)
                     
-                    Text("Message")
+                    Text("Subscribe")
                         .font(.subheadline)
                         .fontWeight(.semibold)
                 }
@@ -733,7 +508,7 @@ struct CreatorProfileView: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 CreatorTabButton(
-                    title: "Videos",
+                    title: "Threads",
                     count: userVideos.count,
                     isSelected: selectedTab == 0
                 ) {
@@ -741,7 +516,7 @@ struct CreatorProfileView: View {
                 }
                 
                 CreatorTabButton(
-                    title: "Threads",
+                    title: "Stitches",
                     count: getThreadCount(),
                     isSelected: selectedTab == 1
                 ) {
@@ -762,7 +537,7 @@ struct CreatorProfileView: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 CreatorTabButton(
-                    title: "Videos",
+                    title: "Threads",
                     count: userVideos.count,
                     isSelected: selectedTab == 0
                 ) {
@@ -770,7 +545,7 @@ struct CreatorProfileView: View {
                 }
                 
                 CreatorTabButton(
-                    title: "Threads",
+                    title: "Stitches",
                     count: getThreadCount(),
                     isSelected: selectedTab == 1
                 ) {
@@ -785,27 +560,21 @@ struct CreatorProfileView: View {
         .background(Color.black)
     }
     
-    // MARK: - Video Grid Section (OPTIMIZED: Lazy loading)
+    // MARK: - Video Grid Section
     
     private var videoGridSection: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 3), spacing: 1) {
             ForEach(Array(filteredVideos().enumerated()), id: \.element.id) { index, video in
-                CreatorVideoThumbnailView(video: video)
-                    .aspectRatio(9/16, contentMode: .fill)
-                    .clipped()
-                    .onTapGesture {
-                        selectedVideo = video
-                        selectedVideoIndex = index
-                        showingVideoPlayer = true
-                    }
-                    .onAppear {
-                        // Preload thumbnail for better performance
-                        let thumbnailURL = video.thumbnailURL ?? ""
-                        if !thumbnailURL.isEmpty {
-                            // Trigger thumbnail preload
-                            print("🎭 Preloading thumbnail: \(thumbnailURL)")
-                        }
-                    }
+                VideoThumbnailView(
+                    video: video,
+                    showEngagementBadge: true
+                ) {
+                    selectedVideo = video
+                    selectedVideoIndex = index
+                    showingVideoPlayer = true
+                }
+                .aspectRatio(9/16, contentMode: .fill)
+                .clipped()
             }
         }
         .padding(.top, 20)
@@ -827,6 +596,102 @@ struct CreatorProfileView: View {
         )
     }
     
+    // MARK: - Load Functions
+    
+    private func loadUserProfile() async {
+        isLoading = true
+        errorMessage = nil
+        
+        do {
+            // Load user profile
+            if let userProfile = try await userService.getUser(id: userID) {
+                await MainActor.run {
+                    self.user = userProfile
+                }
+                
+                // Load user videos
+                let videosResult = try await videoService.getUserVideos(userID: userID)
+                await MainActor.run {
+                    self.userVideos = videosResult.items
+                    self.isLoading = false
+                }
+                
+                // Load follow status
+                await followManager.loadFollowState(for: userID)
+                
+                // Load initial follower/following counts
+                await loadFollowers()
+                await loadFollowing()
+                
+            } else {
+                await MainActor.run {
+                    self.errorMessage = "User not found"
+                    self.isLoading = false
+                }
+            }
+            
+        } catch {
+            await MainActor.run {
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+            }
+        }
+    }
+    
+    private func loadFollowers() async {
+        guard !isLoadingFollowers else { return }
+        
+        await MainActor.run {
+            isLoadingFollowers = true
+        }
+        
+        do {
+            // Get follower IDs using UserService
+            let followerIDs = try await userService.getFollowerIDs(userID: userID)
+            
+            // Convert IDs to BasicUserInfo objects
+            let followers = try await userService.getUsers(ids: followerIDs)
+            
+            await MainActor.run {
+                self.followersList = followers
+                self.isLoadingFollowers = false
+            }
+            
+        } catch {
+            await MainActor.run {
+                self.isLoadingFollowers = false
+            }
+            print("Error loading followers: \(error)")
+        }
+    }
+    
+    private func loadFollowing() async {
+        guard !isLoadingFollowing else { return }
+        
+        await MainActor.run {
+            isLoadingFollowing = true
+        }
+        
+        do {
+            // Get following IDs using UserService
+            let followingIDs = try await userService.getFollowingIDs(userID: userID)
+            
+            // Convert IDs to BasicUserInfo objects
+            let following = try await userService.getUsers(ids: followingIDs)
+            
+            await MainActor.run {
+                self.followingList = following
+                self.isLoadingFollowing = false
+            }
+            
+        } catch {
+            await MainActor.run {
+                self.isLoadingFollowing = false
+            }
+            print("Error loading following: \(error)")
+        }
+    }
+    
     // MARK: - Helper Functions
     
     private func getBioText(user: BasicUserInfo) -> String {
@@ -839,6 +704,7 @@ struct CreatorProfileView: View {
         case .rising: return 25.0
         case .veteran: return 40.0
         case .influencer: return 55.0
+        case .ambassador: return 62.5
         case .elite: return 70.0
         case .partner: return 80.0
         case .legendary: return 90.0
@@ -849,10 +715,10 @@ struct CreatorProfileView: View {
     
     private func filteredVideos() -> [CoreVideoMetadata] {
         if selectedTab == 0 {
-            // All videos
+            // All threads
             return userVideos
         } else {
-            // Thread starter videos only
+            // Thread starter videos only (now called "Stitches")
             return userVideos.filter { $0.replyToVideoID == nil }
         }
     }
@@ -877,6 +743,7 @@ struct CreatorProfileView: View {
         case .rising: return [.blue, .cyan]
         case .veteran: return [.purple, .pink]
         case .influencer: return [.orange, .yellow]
+        case .ambassador: return [.indigo, .blue]
         case .elite: return [.red, .orange]
         case .partner: return [.yellow, .orange]
         case .legendary: return [.red, .purple]
@@ -892,6 +759,7 @@ struct CreatorProfileView: View {
         case .rising: return "arrow.up.circle.fill"
         case .veteran: return "star.fill"
         case .influencer: return "flame.fill"
+        case .ambassador: return "shield.fill"
         case .elite: return "crown.fill"
         case .partner: return "handshake.fill"
         case .legendary: return "trophy.fill"
@@ -991,44 +859,140 @@ struct CreatorProfileView: View {
         }
     }
     
-    private var followingListSheet: some View {
-        NavigationView {
-            CreatorUserListView(
-                title: "Following",
-                users: [], // TODO: Load following list
-                isLoading: false
-            )
-            .navigationTitle("Following")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showingFollowingList = false }
-                        .foregroundColor(.cyan)
-                }
-            }
-        }
-    }
-    
     private var followersListSheet: some View {
         NavigationView {
-            CreatorUserListView(
-                title: "Followers",
-                users: [], // TODO: Load followers list
-                isLoading: false
+            StitchersListView(
+                followersList: followersList,
+                followingList: followingList,
+                isLoadingFollowers: isLoadingFollowers,
+                isLoadingFollowing: isLoadingFollowing
             )
-            .navigationTitle("Followers")
+            .navigationTitle("Stitchers")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { showingFollowersList = false }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: { showingFollowersList = false }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                                .font(.caption)
+                            Text("Back")
+                                .font(.caption)
+                        }
                         .foregroundColor(.cyan)
+                    }
                 }
             }
         }
     }
 }
 
-// MARK: - Supporting Views (RENAMED to avoid conflicts)
+// MARK: - Supporting Views
+
+struct StitchersListView: View {
+    let followersList: [BasicUserInfo]
+    let followingList: [BasicUserInfo]
+    let isLoadingFollowers: Bool
+    let isLoadingFollowing: Bool
+    
+    @State private var selectedTab = 0
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Tab Bar
+            HStack(spacing: 0) {
+                Button(action: { selectedTab = 0 }) {
+                    VStack(spacing: 8) {
+                        HStack(spacing: 4) {
+                            Text("Followers")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(selectedTab == 0 ? .white : .gray)
+                            
+                            Text("(\(followersList.count))")
+                                .font(.system(size: 14))
+                                .foregroundColor(.gray)
+                        }
+                        
+                        Rectangle()
+                            .fill(selectedTab == 0 ? Color.cyan : Color.clear)
+                            .frame(height: 2)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                
+                Button(action: { selectedTab = 1 }) {
+                    VStack(spacing: 8) {
+                        HStack(spacing: 4) {
+                            Text("Following")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(selectedTab == 1 ? .white : .gray)
+                            
+                            Text("(\(followingList.count))")
+                                .font(.system(size: 14))
+                                .foregroundColor(.gray)
+                        }
+                        
+                        Rectangle()
+                            .fill(selectedTab == 1 ? Color.cyan : Color.clear)
+                            .frame(height: 2)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .background(Color.black)
+            .padding(.top, 10)
+            
+            Divider()
+                .background(Color.gray.opacity(0.3))
+            
+            // Content
+            ZStack {
+                Color.black.ignoresSafeArea()
+                
+                if selectedTab == 0 {
+                    // Followers tab
+                    if isLoadingFollowers {
+                        ProgressView()
+                            .tint(.white)
+                    } else if followersList.isEmpty {
+                        VStack {
+                            Text("No Followers")
+                                .foregroundColor(.white)
+                        }
+                    } else {
+                        ScrollView {
+                            LazyVStack {
+                                ForEach(followersList, id: \.id) { user in
+                                    CreatorUserRowView(user: user)
+                                }
+                            }
+                            .padding()
+                        }
+                    }
+                } else {
+                    // Following tab
+                    if isLoadingFollowing {
+                        ProgressView()
+                            .tint(.white)
+                    } else if followingList.isEmpty {
+                        VStack {
+                            Text("Not Following Anyone")
+                                .foregroundColor(.white)
+                        }
+                    } else {
+                        ScrollView {
+                            LazyVStack {
+                                ForEach(followingList, id: \.id) { user in
+                                    CreatorUserRowView(user: user)
+                                }
+                            }
+                            .padding()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 struct CreatorStatView: View {
     let title: String
@@ -1086,43 +1050,81 @@ struct CreatorTabButton: View {
     }
 }
 
-struct CreatorVideoThumbnailView: View {
-    let video: CoreVideoMetadata
+struct CreatorUserRowView: View {
+    let user: BasicUserInfo
+    @StateObject private var followManager = FollowManager()
+    @State private var showingProfile = false
+    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
-        AsyncThumbnailView.videoThumbnail(url: video.thumbnailURL)
-            .overlay(
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        
-                        // View count overlay
-                        HStack(spacing: 4) {
-                            Image(systemName: "play.fill")
-                                .font(.caption2)
-                            Text(formatCount(video.viewCount))
-                                .font(.caption2)
-                                .fontWeight(.semibold)
-                        }
+        HStack {
+            Button(action: { showingProfile = true }) {
+                AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
+                    .frame(width: 50, height: 50)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    )
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Button(action: { showingProfile = true }) {
+                VStack(alignment: .leading) {
+                    Text(user.displayName)
+                        .font(.headline)
                         .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(4)
-                        .padding(4)
+                    
+                    Text("@\(user.username)")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            Spacer()
+            
+            // Follow/Unfollow button
+            Button(action: {
+                Task {
+                    await followManager.toggleFollow(for: user.id)
+                }
+            }) {
+                HStack(spacing: 6) {
+                    if followManager.isLoading(user.id) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .tint(followManager.isFollowing(user.id) ? .gray : .cyan)
+                    } else {
+                        Image(systemName: followManager.isFollowing(user.id) ? "person.check.fill" : "person.plus.fill")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        
+                        Text(followManager.isFollowing(user.id) ? "Following" : "Follow")
+                            .font(.caption)
+                            .fontWeight(.semibold)
                     }
                 }
-            )
-    }
-    
-    private func formatCount(_ count: Int) -> String {
-        if count >= 1_000_000 {
-            return String(format: "%.1fM", Double(count) / 1_000_000)
-        } else if count >= 1_000 {
-            return String(format: "%.1fK", Double(count) / 1_000)
-        } else {
-            return String(count)
+                .foregroundColor(followManager.isFollowing(user.id) ? .gray : .white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(followManager.isFollowing(user.id) ? Color.gray.opacity(0.3) : Color.cyan)
+                )
+            }
+            .disabled(followManager.isLoading(user.id))
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .onAppear {
+            Task {
+                await followManager.loadFollowState(for: user.id)
+            }
+        }
+        .sheet(isPresented: $showingProfile) {
+            CreatorProfileView(userID: user.id)
+                .navigationBarHidden(true)
         }
     }
 }
@@ -1158,135 +1160,6 @@ struct CreatorReportOptionButton: View {
     }
 }
 
-struct CreatorUserListView: View {
-    let title: String
-    let users: [BasicUserInfo]
-    let isLoading: Bool
-    
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            if isLoading {
-                ProgressView()
-                    .tint(.white)
-            } else if users.isEmpty {
-                VStack {
-                    Text("No \(title)")
-                        .foregroundColor(.white)
-                }
-            } else {
-                ScrollView {
-                    LazyVStack {
-                        ForEach(users, id: \.id) { user in
-                            CreatorUserRowView(user: user)
-                        }
-                    }
-                    .padding()
-                }
-            }
-        }
-    }
-}
-
-struct CreatorUserRowView: View {
-    let user: BasicUserInfo
-    
-    var body: some View {
-        HStack {
-            AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
-                .frame(width: 50, height: 50)
-                .clipShape(Circle())
-                .overlay(
-                    Circle()
-                        .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                )
-            
-            VStack(alignment: .leading) {
-                Text(user.displayName)
-                    .font(.headline)
-                    .foregroundColor(.white)
-                
-                Text("@\(user.username)")
-                    .font(.subheadline)
-                    .foregroundColor(.gray)
-            }
-            
-            Spacer()
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-    }
-}
-
-// MARK: - Creator Stacked Badges Component (FIXED)
-
-struct CreatorStackedBadges: View {
-    let badges: [CreatorBadgeInfo]
-    let maxVisible: Int
-    let onTap: () -> Void
-    
-    init(badges: [CreatorBadgeInfo] = [], maxVisible: Int = 3, onTap: @escaping () -> Void = {}) {
-        self.badges = badges
-        self.maxVisible = maxVisible
-        self.onTap = onTap
-    }
-    
-    var body: some View {
-        HStack(spacing: -8) {
-            ForEach(Array(badges.prefix(maxVisible).enumerated()), id: \.element.id) { index, badge in
-                badgeView(for: badge, at: index)
-            }
-            
-            if badges.count > maxVisible {
-                overflowBadge
-            }
-        }
-        .onTapGesture {
-            onTap()
-        }
-    }
-    
-    // MARK: - Helper Views (Broken down to fix type checking)
-    
-    private func badgeView(for badge: CreatorBadgeInfo, at index: Int) -> some View {
-        AsyncImage(url: URL(string: badge.imageURL)) { image in
-            image
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-        } placeholder: {
-            Circle()
-                .fill(Color.gray.opacity(0.3))
-                .overlay(
-                    Image(systemName: "star.fill")
-                        .font(.caption2)
-                        .foregroundColor(.gray)
-                )
-        }
-        .frame(width: 24, height: 24)
-        .background(Color.black)
-        .clipShape(Circle())
-        .overlay(badgeStroke)
-        .zIndex(Double(maxVisible - index))
-    }
-    
-    private var badgeStroke: some View {
-        Circle()
-            .stroke(Color.black, lineWidth: 2)
-    }
-    
-    private var overflowBadge: some View {
-        Text("+\(badges.count - maxVisible)")
-            .font(.caption2)
-            .fontWeight(.bold)
-            .foregroundColor(.white)
-            .frame(width: 24, height: 24)
-            .background(Color.gray)
-            .clipShape(Circle())
-            .overlay(badgeStroke)
-    }
-}
-
 // MARK: - Preference Key for Scroll Tracking
 
 struct CreatorScrollOffsetPreferenceKey: PreferenceKey {
@@ -1297,7 +1170,7 @@ struct CreatorScrollOffsetPreferenceKey: PreferenceKey {
     }
 }
 
-// MARK: - Supporting Types (to avoid redeclaration)
+// MARK: - Supporting Types
 
 struct CreatorBadgeInfo: Identifiable {
     let id = UUID()

@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleGetInfoString</key>
+    <string></string>
     <key>CFBundleIconName</key>
     <string>AppIcon</string>
     <key>CFBundleURLTypes</key>
@@ -16,7 +18,9 @@
         </dict>
     </array>
     <key>FirebaseAppDelegateProxyEnabled</key>
-    <false/>
+    <true/>
+    <key>FirebaseMessagingAutoInitEnabled</key>
+    <true/>
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
     <key>NSAppTransportSecurity</key>
@@ -35,10 +39,29 @@
                 <key>NSExceptionAllowsInsecureHTTPLoads</key>
                 <true/>
             </dict>
+            <key>fcm.googleapis.com</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
         </dict>
     </dict>
     <key>NSUserNotificationsUsageDescription</key>
     <string>Stitch Social sends notifications for new content, hypes, and community interactions.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Stitch Social needs camera access to record videos for your posts.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Stitch Social needs microphone access to record audio with your videos.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>Stitch Social needs photo library access to save and share your videos.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>Stitch Social needs permission to add media to your photo library.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Stitch Social uses your location to tag posts and discover nearby content.</string>
+    <key>NSLocationAlwaysUsageDescription</key>
+    <string>Stitch Social uses your location to enhance content discovery even when the app is in the background.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Stitch Social uses speech recognition to transcribe audio for accessibility and search.</string>
     <key>UIApplicationSceneManifest</key>
     <dict>
         <key>UIApplicationSupportsMultipleScenes</key>
@@ -62,20 +85,5 @@
     </array>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <true/>
-    <!-- NEW: Lock orientation to portrait only -->
-    <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
-    <key>UISupportedInterfaceOrientations~ipad</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-        <string>UIInterfaceOrientationPortraitUpsideDown</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-    </array>
 </dict>
 </plist>

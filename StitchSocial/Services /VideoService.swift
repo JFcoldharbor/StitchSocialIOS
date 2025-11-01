@@ -2,9 +2,10 @@
 //  VideoService.swift
 //  StitchSocial
 //
-//  Layer 4: Core Services - Complete Video Management with Progressive Tapping System
+//  Layer 4: Core Services - Video CRUD and Thread Management
 //  Dependencies: Firebase Firestore, Firebase Storage, FirebaseSchema
-//  Features: Thread hierarchy, progressive tapping, engagement tracking, temperature calculation
+//  Features: Thread hierarchy, video data operations, temperature calculation, user tagging, viewer tracking
+//  CLEANED: Engagement logic moved to VideoEngagementService
 //
 
 import Foundation
@@ -12,49 +13,7 @@ import FirebaseFirestore
 import FirebaseStorage
 import FirebaseAuth
 
-// MARK: - Progressive Tapping Support Structures
-
-/// Tap progress state for progressive tapping
-struct TapProgressState {
-    let currentTaps: Int
-    let requiredTaps: Int
-    let isComplete: Bool
-    let progress: Double
-    let milestone: TapMilestone?
-    
-    init(currentTaps: Int, requiredTaps: Int) {
-        self.currentTaps = currentTaps
-        self.requiredTaps = requiredTaps
-        self.isComplete = currentTaps >= requiredTaps
-        self.progress = requiredTaps > 0 ? min(1.0, Double(currentTaps) / Double(requiredTaps)) : 0.0
-        
-        // Detect milestone
-        if progress >= 1.0 {
-            self.milestone = .complete
-        } else if progress >= 0.75 {
-            self.milestone = .threeQuarters
-        } else if progress >= 0.5 {
-            self.milestone = .half
-        } else if progress >= 0.25 {
-            self.milestone = .quarter
-        } else {
-            self.milestone = nil
-        }
-    }
-}
-
-/// Progressive tapping result
-struct ProgressiveTapResult {
-    let isComplete: Bool
-    let progress: Double
-    let milestone: TapMilestone?
-    let message: String
-    let newVideoHypeCount: Int?
-    let newVideoCoolCount: Int?
-    let cloutAwarded: Int?
-}
-
-// MARK: - Supporting Data Structures (Global Scope)
+// MARK: - Supporting Data Structures
 
 /// Swipe direction for preloading optimization
 enum SwipeDirection {
@@ -101,16 +60,6 @@ struct UserEngagementStatus {
     }
 }
 
-/// Engagement update data for batch operations
-struct EngagementUpdate {
-    let videoID: String
-    let hypeCount: Int
-    let coolCount: Int
-    let viewCount: Int
-    let temperature: String
-    let lastEngagementAt: Date
-}
-
 /// Comprehensive video analytics
 struct VideoAnalytics {
     let videoID: String
@@ -134,7 +83,7 @@ struct PaginatedResult<T> {
 
 // MARK: - VideoService Class
 
-/// Complete video management service with progressive tapping system
+/// Video CRUD and thread management service
 @MainActor
 class VideoService: ObservableObject {
     
@@ -147,225 +96,6 @@ class VideoService: ObservableObject {
     
     @Published var isLoading: Bool = false
     @Published var lastError: StitchError?
-    
-    // MARK: - Progressive Tapping System (NEW)
-    
-    /// Process progressive tap (main entry point for engagement)
-    func processProgressiveTap(
-        videoID: String,
-        userID: String,
-        engagementType: InteractionType,
-        userTier: UserTier
-    ) async throws -> ProgressiveTapResult {
-        
-        print("🎯 VIDEO SERVICE: Processing \(engagementType.rawValue) tap for video \(videoID)")
-        
-        // Get current tap progress
-        let currentProgress = try await getTapProgress(videoID: videoID, userID: userID, type: engagementType)
-        
-        // Calculate required taps based on user's total engagements with this video
-        let totalEngagements = try await getTotalEngagements(videoID: videoID, userID: userID)
-        let requiredTaps = calculateProgressiveTaps(engagementNumber: totalEngagements + 1)
-        
-        // Update tap count
-        let newTapCount = currentProgress.currentTaps + 1
-        let newProgress = TapProgressState(currentTaps: newTapCount, requiredTaps: requiredTaps)
-        
-        // Save updated progress
-        try await updateTapProgress(
-            videoID: videoID,
-            userID: userID,
-            type: engagementType,
-            currentTaps: newTapCount,
-            requiredTaps: requiredTaps
-        )
-        
-        if newProgress.isComplete {
-            // Complete engagement!
-            let result = try await completeEngagement(
-                videoID: videoID,
-                userID: userID,
-                type: engagementType,
-                userTier: userTier
-            )
-            
-            // Reset tap progress for next engagement
-            try await resetTapProgress(videoID: videoID, userID: userID, type: engagementType)
-            
-            print("✅ VIDEO SERVICE: \(engagementType.rawValue) engagement completed!")
-            
-            return ProgressiveTapResult(
-                isComplete: true,
-                progress: 1.0,
-                milestone: .complete,
-                message: "\(engagementType.rawValue.capitalized) added!",
-                newVideoHypeCount: result.newHypeCount,
-                newVideoCoolCount: result.newCoolCount,
-                cloutAwarded: result.cloutAwarded
-            )
-            
-        } else {
-            // Still tapping...
-            print("🔄 VIDEO SERVICE: \(engagementType.rawValue) progress: \(newTapCount)/\(requiredTaps)")
-            
-            return ProgressiveTapResult(
-                isComplete: false,
-                progress: newProgress.progress,
-                milestone: newProgress.milestone,
-                message: "Keep tapping... (\(newTapCount)/\(requiredTaps))",
-                newVideoHypeCount: nil,
-                newVideoCoolCount: nil,
-                cloutAwarded: nil
-            )
-        }
-    }
-    
-    /// Get current tap progress from tap_progress collection
-    private func getTapProgress(videoID: String, userID: String, type: InteractionType) async throws -> TapProgressState {
-        let progressID = "\(videoID)_\(userID)_\(type.rawValue)"
-        let document = try await db.collection(FirebaseSchema.Collections.tapProgress).document(progressID).getDocument()
-        
-        if document.exists, let data = document.data() {
-            let currentTaps = data[FirebaseSchema.TapProgressDocument.currentTaps] as? Int ?? 0
-            let requiredTaps = data[FirebaseSchema.TapProgressDocument.requiredTaps] as? Int ?? 1
-            return TapProgressState(currentTaps: currentTaps, requiredTaps: requiredTaps)
-        } else {
-            // No progress yet - determine required taps
-            let totalEngagements = try await getTotalEngagements(videoID: videoID, userID: userID)
-            let requiredTaps = calculateProgressiveTaps(engagementNumber: totalEngagements + 1)
-            return TapProgressState(currentTaps: 0, requiredTaps: requiredTaps)
-        }
-    }
-    
-    /// Update tap count in tap_progress collection
-    private func updateTapProgress(
-        videoID: String,
-        userID: String,
-        type: InteractionType,
-        currentTaps: Int,
-        requiredTaps: Int
-    ) async throws {
-        let progressID = "\(videoID)_\(userID)_\(type.rawValue)"
-        
-        let progressData: [String: Any] = [
-            FirebaseSchema.TapProgressDocument.videoID: videoID,
-            FirebaseSchema.TapProgressDocument.userID: userID,
-            FirebaseSchema.TapProgressDocument.engagementType: type.rawValue,
-            FirebaseSchema.TapProgressDocument.currentTaps: currentTaps,
-            FirebaseSchema.TapProgressDocument.requiredTaps: requiredTaps,
-            FirebaseSchema.TapProgressDocument.lastTapTime: Timestamp(),
-            FirebaseSchema.TapProgressDocument.isCompleted: currentTaps >= requiredTaps,
-            FirebaseSchema.TapProgressDocument.updatedAt: Timestamp()
-        ]
-        
-        try await db.collection(FirebaseSchema.Collections.tapProgress).document(progressID).setData(progressData, merge: true)
-    }
-    
-    /// Complete engagement - award clout, update video counts, create final interaction record
-    private func completeEngagement(
-        videoID: String,
-        userID: String,
-        type: InteractionType,
-        userTier: UserTier
-    ) async throws -> (newHypeCount: Int, newCoolCount: Int, cloutAwarded: Int) {
-        
-        // Get current video
-        let video = try await getVideo(id: videoID)
-        
-        // Calculate clout reward
-        let cloutAwarded = calculateCloutReward(giverTier: userTier)
-        
-        // Update video counts
-        let newHypeCount = type == .hype ? video.hypeCount + 1 : video.hypeCount
-        let newCoolCount = type == .cool ? video.coolCount + 1 : video.coolCount
-        
-        // Perform updates in transaction
-        try await db.runTransaction { transaction, errorPointer in
-            // Update video engagement counts
-            let videoRef = self.db.collection(FirebaseSchema.Collections.videos).document(videoID)
-            transaction.updateData([
-                FirebaseSchema.VideoDocument.hypeCount: newHypeCount,
-                FirebaseSchema.VideoDocument.coolCount: newCoolCount,
-                FirebaseSchema.VideoDocument.lastEngagementAt: Timestamp(),
-                FirebaseSchema.VideoDocument.updatedAt: Timestamp()
-            ], forDocument: videoRef)
-            
-            // Create final interaction record (only completed engagements)
-            let interactionID = FirebaseSchema.DocumentIDPatterns.generateInteractionID(
-                videoID: videoID, userID: userID, type: type.rawValue
-            )
-            let interactionRef = self.db.collection(FirebaseSchema.Collections.interactions).document(interactionID)
-            transaction.setData([
-                FirebaseSchema.InteractionDocument.userID: userID,
-                FirebaseSchema.InteractionDocument.videoID: videoID,
-                FirebaseSchema.InteractionDocument.engagementType: type.rawValue,
-                FirebaseSchema.InteractionDocument.timestamp: Timestamp(),
-                FirebaseSchema.InteractionDocument.isCompleted: true
-            ], forDocument: interactionRef)
-            
-            return nil
-        }
-        
-        // Award clout to video creator (separate operation to avoid transaction complexity)
-        try await awardCloutToCreator(creatorID: video.creatorID, amount: cloutAwarded)
-        
-        return (newHypeCount: newHypeCount, newCoolCount: newCoolCount, cloutAwarded: cloutAwarded)
-    }
-    
-    /// Reset tap progress after successful engagement
-    private func resetTapProgress(videoID: String, userID: String, type: InteractionType) async throws {
-        let progressID = "\(videoID)_\(userID)_\(type.rawValue)"
-        try await db.collection(FirebaseSchema.Collections.tapProgress).document(progressID).delete()
-    }
-    
-    /// Award clout to video creator
-    private func awardCloutToCreator(creatorID: String, amount: Int) async throws {
-        let userRef = db.collection(FirebaseSchema.Collections.users).document(creatorID)
-        try await userRef.updateData([
-            FirebaseSchema.UserDocument.clout: FieldValue.increment(Int64(amount)),
-            FirebaseSchema.UserDocument.updatedAt: Timestamp()
-        ])
-        print("💰 VIDEO SERVICE: Awarded \(amount) clout to creator \(creatorID)")
-    }
-    
-    /// Get total engagements for a user with a specific video
-    private func getTotalEngagements(videoID: String, userID: String) async throws -> Int {
-        let snapshot = try await db.collection(FirebaseSchema.Collections.interactions)
-            .whereField(FirebaseSchema.InteractionDocument.videoID, isEqualTo: videoID)
-            .whereField(FirebaseSchema.InteractionDocument.userID, isEqualTo: userID)
-            .whereField(FirebaseSchema.InteractionDocument.isCompleted, isEqualTo: true)
-            .getDocuments()
-        
-        return snapshot.documents.count
-    }
-    
-    /// Calculate progressive tap requirement
-    private func calculateProgressiveTaps(engagementNumber: Int) -> Int {
-        if engagementNumber <= 4 {
-            return 1  // First 4 engagements are instant
-        }
-        
-        // Progressive: 5th = 2, 6th = 4, 7th = 8, 8th = 16, etc.
-        let progressiveIndex = engagementNumber - 4 - 1  // 0-based index for progression
-        let requirement = 2 * Int(pow(2.0, Double(progressiveIndex)))
-        return min(requirement, 256)  // Cap at 256
-    }
-    
-    /// Calculate clout reward based on user tier
-    private func calculateCloutReward(giverTier: UserTier) -> Int {
-        switch giverTier {
-        case .rookie: return 1
-        case .rising: return 3
-        case .veteran: return 10
-        case .influencer: return 25
-        case .elite: return 50
-        case .partner: return 100
-        case .legendary: return 250
-        case .topCreator: return 500
-        case .founder: return 1000
-        case .coFounder: return 1000
-        }
-    }
     
     // MARK: - Create Operations
     
@@ -401,7 +131,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.description: description,
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
-            FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,  // Use validated Firebase UID
+            FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,
             FirebaseSchema.VideoDocument.creatorName: creatorName,
             FirebaseSchema.VideoDocument.createdAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
@@ -416,6 +146,14 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.coolCount: 0,
             FirebaseSchema.VideoDocument.replyCount: 0,
             FirebaseSchema.VideoDocument.shareCount: 0,
+            
+            // Milestone tracking
+            FirebaseSchema.VideoDocument.firstHypeReceived: false,
+            FirebaseSchema.VideoDocument.firstCoolReceived: false,
+            FirebaseSchema.VideoDocument.milestone10Reached: false,
+            FirebaseSchema.VideoDocument.milestone400Reached: false,
+            FirebaseSchema.VideoDocument.milestone1000Reached: false,
+            FirebaseSchema.VideoDocument.milestone15000Reached: false,
             
             // Content metadata
             FirebaseSchema.VideoDocument.duration: duration,
@@ -457,7 +195,7 @@ class VideoService: ObservableObject {
             throw StitchError.authenticationError("No authenticated user found")
         }
         
-        // Ensure we're using the actual Firebase UID, not any other ID
+        // Ensure we're using the actual Firebase UID
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
@@ -482,7 +220,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.description: description,
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
-            FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,  // Use validated Firebase UID
+            FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,
             FirebaseSchema.VideoDocument.creatorName: creatorName,
             FirebaseSchema.VideoDocument.createdAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
@@ -498,6 +236,14 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.coolCount: 0,
             FirebaseSchema.VideoDocument.replyCount: 0,
             FirebaseSchema.VideoDocument.shareCount: 0,
+            
+            // Milestone tracking
+            FirebaseSchema.VideoDocument.firstHypeReceived: false,
+            FirebaseSchema.VideoDocument.firstCoolReceived: false,
+            FirebaseSchema.VideoDocument.milestone10Reached: false,
+            FirebaseSchema.VideoDocument.milestone400Reached: false,
+            FirebaseSchema.VideoDocument.milestone1000Reached: false,
+            FirebaseSchema.VideoDocument.milestone15000Reached: false,
             
             // Content metadata
             FirebaseSchema.VideoDocument.duration: duration,
@@ -544,6 +290,18 @@ class VideoService: ObservableObject {
         }
         
         return createCoreVideoMetadata(from: data, id: id)
+    }
+    
+    /// Get thread videos (for VideoCoordinator stitch notifications)
+    func getThreadVideos(threadID: String) async throws -> [CoreVideoMetadata] {
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: threadID)
+            .order(by: FirebaseSchema.VideoDocument.conversationDepth)
+            .getDocuments()
+        
+        return snapshot.documents.map { doc in
+            createCoreVideoMetadata(from: doc.data(), id: doc.documentID)
+        }
     }
     
     /// Get following feed with pagination
@@ -663,7 +421,6 @@ class VideoService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
-        // Get all threads for discovery feed
         var query = db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
@@ -679,7 +436,6 @@ class VideoService: ObservableObject {
         for doc in snapshot.documents {
             guard let video = try? createCoreVideoMetadata(from: doc.data(), id: doc.documentID) else { continue }
             
-            // Load child videos for this thread
             let childVideos = try await getThreadChildren(threadID: video.id)
             
             let threadData = ThreadData(
@@ -704,7 +460,6 @@ class VideoService: ObservableObject {
             throw StitchError.validationError("Video not found")
         }
         
-        // Get interaction data
         let interactionSnapshot = try await db.collection(FirebaseSchema.Collections.interactions)
             .whereField(FirebaseSchema.InteractionDocument.videoID, isEqualTo: videoID)
             .getDocuments()
@@ -744,7 +499,7 @@ class VideoService: ObservableObject {
     
     // MARK: - Update Operations
     
-    /// Update video engagement counts
+    /// Update video engagement counts (simple update only, no logic)
     func updateVideoEngagement(
         videoID: String,
         hypeCount: Int,
@@ -770,7 +525,19 @@ class VideoService: ObservableObject {
         print("VIDEO SERVICE: Updated engagement for \(videoID)")
     }
     
-    /// Record user interaction (LEGACY - use processProgressiveTap instead)
+    /// Update video tags
+    func updateVideoTags(videoID: String, taggedUserIDs: [String]) async throws {
+        try await db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .updateData([
+                FirebaseSchema.VideoDocument.taggedUserIDs: taggedUserIDs,
+                FirebaseSchema.VideoDocument.updatedAt: Timestamp()
+            ])
+        
+        print("🏷️ VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
+    }
+    
+    /// Record user interaction (views and shares only)
     func recordUserInteraction(
         videoID: String,
         userID: String,
@@ -778,14 +545,12 @@ class VideoService: ObservableObject {
         watchTime: TimeInterval = 0
     ) async throws {
         
-        // For views, require minimum 5 seconds watch time
         if interactionType == .view {
             guard watchTime >= 5.0 else {
-                print("VIDEO SERVICE: View not counted - insufficient watch time (\(String(format: "%.1f", watchTime))s, need 5.0s)")
+                print("VIDEO SERVICE: View not counted - insufficient watch time")
                 return
             }
             
-            // Generate unique ID with timestamp for multiple views
             let timestamp = Int(Date().timeIntervalSince1970 * 1000)
             let interactionID = "\(videoID)_\(userID)_view_\(timestamp)"
             
@@ -799,19 +564,13 @@ class VideoService: ObservableObject {
             ]
             
             try await db.collection(FirebaseSchema.Collections.interactions).document(interactionID).setData(interactionData)
-            
-            // Update video view count
             try await incrementVideoViewCount(videoID: videoID)
             
-            print("VIDEO SERVICE: Recorded view interaction for \(videoID) (watch time: \(String(format: "%.1f", watchTime))s)")
+            print("VIDEO SERVICE: Recorded view interaction")
             
         } else if interactionType == .share {
-            // For shares, use standard duplicate prevention
             let hasShared = try await hasUserInteracted(userID: userID, videoID: videoID, interactionType: .share)
-            guard !hasShared else {
-                print("VIDEO SERVICE: User \(userID) already shared video \(videoID)")
-                return
-            }
+            guard !hasShared else { return }
             
             let interactionID = FirebaseSchema.DocumentIDPatterns.generateInteractionID(
                 videoID: videoID, userID: userID, type: interactionType.rawValue
@@ -821,16 +580,12 @@ class VideoService: ObservableObject {
                 FirebaseSchema.InteractionDocument.userID: userID,
                 FirebaseSchema.InteractionDocument.videoID: videoID,
                 FirebaseSchema.InteractionDocument.engagementType: interactionType.rawValue,
-                "watchTime": watchTime,
                 FirebaseSchema.InteractionDocument.timestamp: Timestamp(),
                 FirebaseSchema.InteractionDocument.isCompleted: true
             ]
             
             try await db.collection(FirebaseSchema.Collections.interactions).document(interactionID).setData(interactionData)
-            print("VIDEO SERVICE: Recorded share interaction for \(videoID)")
-            
-        } else {
-            print("WARNING VIDEO SERVICE: Use processProgressiveTap for \(interactionType.rawValue) engagements")
+            print("VIDEO SERVICE: Recorded share interaction")
         }
     }
     
@@ -843,7 +598,7 @@ class VideoService: ObservableObject {
         ])
     }
     
-    /// Convenience method for tracking views with watch time validation
+    /// Convenience method for tracking views
     func trackVideoView(videoID: String, userID: String, watchTime: TimeInterval) async throws {
         try await recordUserInteraction(
             videoID: videoID,
@@ -853,7 +608,7 @@ class VideoService: ObservableObject {
         )
     }
     
-    /// Check if user has already interacted with video
+    /// Check if user has interacted with video
     func hasUserInteracted(
         userID: String,
         videoID: String,
@@ -872,7 +627,9 @@ class VideoService: ObservableObject {
         return document.exists
     }
     
-    /// Save engagement state to Firebase (for EngagementCoordinator)
+    // MARK: - Legacy Support (for EngagementManager compatibility)
+    
+    /// Save engagement state to Firebase
     func saveEngagementState(key: String, state: VideoEngagementState) async throws {
         let data: [String: Any] = [
             "videoID": state.videoID,
@@ -888,10 +645,9 @@ class VideoService: ObservableObject {
         ]
         
         try await db.collection("engagement_states").document(key).setData(data)
-        print("VIDEO SERVICE: Saved engagement state for key \(key)")
     }
     
-    /// Load engagement state from Firebase (for EngagementCoordinator)
+    /// Load engagement state from Firebase
     func loadEngagementState(key: String) async throws -> VideoEngagementState? {
         let document = try await db.collection("engagement_states").document(key).getDocument()
         
@@ -912,14 +668,12 @@ class VideoService: ObservableObject {
             return nil
         }
         
-        // Create VideoEngagementState with basic parameters and then update it
         var state = VideoEngagementState(
             videoID: videoID,
             userID: userID,
             createdAt: lastEngagementTimestamp.dateValue()
         )
         
-        // Update the state with loaded values
         state.totalEngagements = totalEngagements
         state.hypeEngagements = hypeEngagements
         state.coolEngagements = coolEngagements
@@ -936,10 +690,7 @@ class VideoService: ObservableObject {
     func updateVideoTemperature(videoID: String) async throws {
         let document = try await db.collection(FirebaseSchema.Collections.videos).document(videoID).getDocument()
         
-        guard document.exists, let videoData = document.data() else {
-            print("VIDEO SERVICE: Could not load video data for temperature update")
-            return
-        }
+        guard document.exists, let videoData = document.data() else { return }
         
         let hypeCount = videoData[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0
         let coolCount = videoData[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
@@ -947,12 +698,9 @@ class VideoService: ObservableObject {
         let createdAt = (videoData[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
         
         let ageInMinutes = Date().timeIntervalSince(createdAt) / 60.0
-        
-        // Get creator tier for accurate temperature calculation
         let creatorID = videoData[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
         let creatorTier = try await getUserTier(userID: creatorID)
         
-        // Calculate temperature using local method
         let temperature = calculateVideoTemperature(
             hypeCount: hypeCount,
             coolCount: coolCount,
@@ -965,78 +713,36 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.temperature: temperature.rawValue,
             FirebaseSchema.VideoDocument.updatedAt: Timestamp()
         ])
-        
-        print("VIDEO SERVICE: Temperature updated to \(temperature.rawValue) for video \(videoID)")
     }
     
     // MARK: - Delete Operations
     
     /// Delete video and all related data
     func deleteVideo(videoID: String) async throws {
-        print("VIDEO SERVICE: Starting deletion of video \(videoID)")
-        
         let videoDoc = try await db.collection(FirebaseSchema.Collections.videos).document(videoID).getDocument()
         
         guard videoDoc.exists, let videoData = videoDoc.data() else {
             throw StitchError.validationError("Video not found")
         }
         
-        // Check if this is a parent video (thread)
         let conversationDepth = videoData[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
         
         if conversationDepth == 0 {
-            // This is a parent video - delete entire thread
             try await deleteEntireThread(threadID: videoID)
         } else {
-            // This is a child video - delete only this video
             try await deleteSingleVideo(videoID: videoID, videoData: videoData)
         }
-        
-        print("VIDEO SERVICE: Completed deletion of video \(videoID)")
     }
     
-    /// Delete entire thread (parent + all children)
+    /// Delete entire thread
     private func deleteEntireThread(threadID: String) async throws {
-        do {
-            // Get all videos in thread
-            let threadSnapshot = try await db.collection(FirebaseSchema.Collections.videos)
-                .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: threadID)
-                .getDocuments()
+        let threadSnapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: threadID)
+            .getDocuments()
+        
+        for document in threadSnapshot.documents {
+            let videoData = document.data()
             
-            print("VIDEO SERVICE: Deleting thread with \(threadSnapshot.documents.count) videos")
-            
-            // Delete each video and its storage files
-            for document in threadSnapshot.documents {
-                let videoData = document.data()
-                
-                // Delete storage files
-                if let videoURL = videoData[FirebaseSchema.VideoDocument.videoURL] as? String {
-                    try? await deleteFromStorage(url: videoURL)
-                }
-                
-                if let thumbnailURL = videoData[FirebaseSchema.VideoDocument.thumbnailURL] as? String {
-                    try? await deleteFromStorage(url: thumbnailURL)
-                }
-                
-                // Delete video document
-                try await document.reference.delete()
-            }
-            
-            // Clean up related data
-            await cleanupRelatedData(videoID: threadID)
-            
-            print("VIDEO SERVICE: Deleted thread \(threadID)")
-            
-        } catch {
-            print("VIDEO SERVICE: Failed to delete thread: \(error)")
-            throw StitchError.processingError("Failed to delete thread: \(error.localizedDescription)")
-        }
-    }
-    
-    /// Delete single video
-    private func deleteSingleVideo(videoID: String, videoData: [String: Any]) async throws {
-        do {
-            // Delete storage files
             if let videoURL = videoData[FirebaseSchema.VideoDocument.videoURL] as? String {
                 try? await deleteFromStorage(url: videoURL)
             }
@@ -1045,34 +751,38 @@ class VideoService: ObservableObject {
                 try? await deleteFromStorage(url: thumbnailURL)
             }
             
-            // Update parent reply count if this is a child video
-            if let parentID = videoData[FirebaseSchema.VideoDocument.replyToVideoID] as? String {
-                try? await db.collection(FirebaseSchema.Collections.videos)
-                    .document(parentID)
-                    .updateData([
-                        FirebaseSchema.VideoDocument.replyCount: FieldValue.increment(Int64(-1)),
-                        FirebaseSchema.VideoDocument.updatedAt: Timestamp()
-                    ])
-            }
-            
-            // Delete video document
-            try await db.collection(FirebaseSchema.Collections.videos).document(videoID).delete()
-            
-            // Clean up related data
-            await cleanupRelatedData(videoID: videoID)
-            
-            print("VIDEO SERVICE: Deleted video \(videoID)")
-            
-        } catch {
-            print("VIDEO SERVICE: Failed to delete video: \(error)")
-            throw StitchError.processingError("Failed to delete video: \(error.localizedDescription)")
+            try await document.reference.delete()
         }
+        
+        await cleanupRelatedData(videoID: threadID)
+    }
+    
+    /// Delete single video
+    private func deleteSingleVideo(videoID: String, videoData: [String: Any]) async throws {
+        if let videoURL = videoData[FirebaseSchema.VideoDocument.videoURL] as? String {
+            try? await deleteFromStorage(url: videoURL)
+        }
+        
+        if let thumbnailURL = videoData[FirebaseSchema.VideoDocument.thumbnailURL] as? String {
+            try? await deleteFromStorage(url: thumbnailURL)
+        }
+        
+        if let parentID = videoData[FirebaseSchema.VideoDocument.replyToVideoID] as? String {
+            try? await db.collection(FirebaseSchema.Collections.videos)
+                .document(parentID)
+                .updateData([
+                    FirebaseSchema.VideoDocument.replyCount: FieldValue.increment(Int64(-1)),
+                    FirebaseSchema.VideoDocument.updatedAt: Timestamp()
+                ])
+        }
+        
+        try await db.collection(FirebaseSchema.Collections.videos).document(videoID).delete()
+        await cleanupRelatedData(videoID: videoID)
     }
     
     /// Clean up interactions and engagement states
     private func cleanupRelatedData(videoID: String) async {
         do {
-            // Delete interactions
             let interactionDocs = try await db.collection(FirebaseSchema.Collections.interactions)
                 .whereField(FirebaseSchema.InteractionDocument.videoID, isEqualTo: videoID)
                 .getDocuments()
@@ -1081,7 +791,6 @@ class VideoService: ObservableObject {
                 try await doc.reference.delete()
             }
             
-            // Delete tap progress records
             let tapProgressDocs = try await db.collection(FirebaseSchema.Collections.tapProgress)
                 .whereField(FirebaseSchema.TapProgressDocument.videoID, isEqualTo: videoID)
                 .getDocuments()
@@ -1089,9 +798,6 @@ class VideoService: ObservableObject {
             for doc in tapProgressDocs.documents {
                 try await doc.reference.delete()
             }
-            
-            print("VIDEO SERVICE: Deleted \(interactionDocs.documents.count) interaction records and \(tapProgressDocs.documents.count) tap progress records")
-            
         } catch {
             print("VIDEO SERVICE: Failed to clean up related data: \(error)")
         }
@@ -1103,7 +809,7 @@ class VideoService: ObservableObject {
         try await storageRef.delete()
     }
     
-    // MARK: - Preloading and Performance
+    // MARK: - Preloading
     
     /// Preload threads for smooth swiping
     func preloadThreadsForNavigation(
@@ -1132,10 +838,7 @@ class VideoService: ObservableObject {
         
         for index in preloadRange {
             _ = threads[index]
-            print("VIDEO SERVICE: Preloaded thread \(index) structure")
         }
-        
-        print("VIDEO SERVICE: Optimized preload for \(direction) navigation")
     }
     
     // MARK: - Private Helper Methods
@@ -1177,7 +880,7 @@ class VideoService: ObservableObject {
         )
     }
     
-    /// Calculate video temperature locally (no dependencies)
+    /// Calculate video temperature
     private func calculateVideoTemperature(
         hypeCount: Int,
         coolCount: Int,
@@ -1186,24 +889,21 @@ class VideoService: ObservableObject {
         creatorTier: UserTier
     ) -> Temperature {
         
-        // Calculate engagement ratio
         let totalEngagement = hypeCount + coolCount
         let engagementRate = viewCount > 0 ? Double(totalEngagement) / Double(viewCount) : 0.0
         
-        // Calculate velocity (engagements per hour)
         let ageInHours = ageInMinutes / 60.0
         let velocity = ageInHours > 0 ? Double(totalEngagement) / ageInHours : 0.0
         
-        // Calculate positivity ratio
         let positivityRatio = totalEngagement > 0 ? Double(hypeCount) / Double(totalEngagement) : 0.5
         
-        // Creator tier multiplier
         let tierMultiplier: Double
         switch creatorTier {
         case .rookie: tierMultiplier = 1.0
         case .rising: tierMultiplier = 1.2
         case .veteran: tierMultiplier = 1.5
         case .influencer: tierMultiplier = 2.0
+        case .ambassador: tierMultiplier = 2.2
         case .elite: tierMultiplier = 2.5
         case .partner: tierMultiplier = 3.0
         case .legendary: tierMultiplier = 4.0
@@ -1211,13 +911,9 @@ class VideoService: ObservableObject {
         case .founder, .coFounder: tierMultiplier = 6.0
         }
         
-        // Time decay factor (newer content gets boost)
-        let timeFactor = ageInHours < 24 ? 1.0 : max(0.5, 1.0 - (ageInHours - 24) / 168) // Week decay
-        
-        // Calculate score
+        let timeFactor = ageInHours < 24 ? 1.0 : max(0.5, 1.0 - (ageInHours - 24) / 168)
         let score = (engagementRate * 40 + velocity * 30 + positivityRatio * 20) * tierMultiplier * timeFactor
         
-        // Map to temperature
         if score >= 60 { return .blazing }
         if score >= 40 { return .hot }
         if score >= 20 { return .warm }
@@ -1225,7 +921,7 @@ class VideoService: ObservableObject {
         return .cold
     }
     
-    /// Get user tier for temperature calculations
+    /// Get user tier
     private func getUserTier(userID: String) async throws -> UserTier {
         do {
             let userDoc = try await db.collection(FirebaseSchema.Collections.users).document(userID).getDocument()
@@ -1234,40 +930,7 @@ class VideoService: ObservableObject {
             let tierString = userData[FirebaseSchema.UserDocument.tier] as? String ?? "rookie"
             return UserTier(rawValue: tierString) ?? .rookie
         } catch {
-            print("VIDEO SERVICE: Failed to get user tier for \(userID): \(error)")
             return .rookie
         }
-    }
-    
-    /// Calculate video temperature based on engagement (simple version)
-    private func calculateTemperature(hypeCount: Int, coolCount: Int, viewCount: Int) -> String {
-        guard viewCount > 0 else { return "cold" }
-        
-        let engagementRate = Double(hypeCount + coolCount) / Double(viewCount)
-        
-        if engagementRate >= 0.7 { return "hot" }
-        if engagementRate >= 0.4 { return "warm" }
-        if engagementRate >= 0.2 { return "cool" }
-        return "cold"
-    }
-}
-
-// MARK: - Extensions for Array Chunking
-extension Array {
-    func Mychunked(into size: Int) -> [[Element]] {
-        return stride(from: 0, to: count, by: size).map {
-            Array(self[$0..<Swift.min($0 + size, count)])
-        }
-    }
-}
-
-// MARK: - Hello World Test Extension
-extension VideoService {
-    
-    /// Test video service functionality
-    func helloWorldTest() {
-        print("🎯 VIDEO SERVICE: Progressive tapping system ready!")
-        print("🎯 VIDEO SERVICE: Features: Tap progress tracking, separate collections, no duplicates")
-        print("🎯 VIDEO SERVICE: Collections: tap_progress, interactions, videos")
     }
 }

@@ -29,6 +29,11 @@ struct ProfileVideoGrid: View {
     let onVideoDelete: ((CoreVideoMetadata) -> Void)?
     let isCurrentUserProfile: Bool
     
+    // MARK: - Preloading Dependencies
+    
+    @StateObject private var preloadingService = VideoPreloadingService()
+    @State private var hasPreloadedInitialVideos = false
+    
     // MARK: - State
     
     @State private var showingDeleteConfirmation = false
@@ -46,6 +51,12 @@ struct ProfileVideoGrid: View {
             }
         }
         .id(selectedTab)
+        .onAppear {
+            preloadInitialVideos()
+        }
+        .onChange(of: selectedTab) { _ in
+            preloadTabVideos()
+        }
         .alert("Delete Video", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) {
                 videoToDelete = nil
@@ -82,6 +93,9 @@ struct ProfileVideoGrid: View {
             video: video,
             showEngagementBadge: true
         ) {
+            // Preload adjacent videos before navigation
+            preloadAdjacentVideos(currentIndex: index)
+            
             // Pass video, index, and full videos array for thread navigation
             onVideoTap(video, index, videos)
         }
@@ -98,6 +112,12 @@ struct ProfileVideoGrid: View {
                             .tint(.white)
                             .scaleEffect(1.2)
                     )
+            }
+        }
+        .onAppear {
+            // Preload when video becomes visible in grid
+            if index < 9 { // First 9 visible videos (3x3 grid)
+                preloadVideoIfNeeded(video)
             }
         }
     }
@@ -165,6 +185,85 @@ struct ProfileVideoGrid: View {
                 isDeletingVideo = false
                 videoToDelete = nil
             }
+        }
+    }
+    
+    // MARK: - Video Preloading System
+    
+    /// Preload first batch of videos when grid appears
+    private func preloadInitialVideos() {
+        guard !hasPreloadedInitialVideos, !videos.isEmpty else { return }
+        
+        hasPreloadedInitialVideos = true
+        
+        Task {
+            // Preload first 6 videos (2 rows) with high priority
+            let initialVideos = Array(videos.prefix(6))
+            
+            print("🎬 GRID PRELOAD: Starting initial preload of \(initialVideos.count) videos")
+            
+            await withTaskGroup(of: Void.self) { group in
+                for (index, video) in initialVideos.enumerated() {
+                    group.addTask {
+                        let priority: PreloadPriority = index < 3 ? .high : .normal
+                        await self.preloadingService.preloadVideo(video, priority: priority)
+                    }
+                }
+            }
+            
+            print("🎬 GRID PRELOAD: Initial preload completed")
+        }
+    }
+    
+    /// Preload videos when tab changes
+    private func preloadTabVideos() {
+        Task {
+            // Preload first 3 videos of new tab
+            let tabVideos = Array(videos.prefix(3))
+            
+            for video in tabVideos {
+                await preloadingService.preloadVideo(video, priority: .normal)
+            }
+            
+            print("🎬 GRID PRELOAD: Tab switched, preloaded \(tabVideos.count) videos")
+        }
+    }
+    
+    /// Preload individual video if not already cached
+    private func preloadVideoIfNeeded(_ video: CoreVideoMetadata) {
+        Task {
+            // Check if already has player
+            if preloadingService.getPlayer(for: video) == nil {
+                await preloadingService.preloadVideo(video, priority: .low)
+                print("🎬 GRID PRELOAD: Lazy loaded video \(video.id)")
+            }
+        }
+    }
+    
+    /// Preload adjacent videos before navigation
+    private func preloadAdjacentVideos(currentIndex: Int) {
+        Task {
+            var adjacentVideos: [CoreVideoMetadata] = []
+            
+            // Previous video
+            if currentIndex > 0 {
+                adjacentVideos.append(videos[currentIndex - 1])
+            }
+            
+            // Next 2 videos
+            for i in 1...2 {
+                let nextIndex = currentIndex + i
+                if nextIndex < videos.count {
+                    adjacentVideos.append(videos[nextIndex])
+                }
+            }
+            
+            // Preload with normal priority
+            for video in adjacentVideos {
+                await preloadingService.preloadVideo(video, priority: .normal)
+            }
+            
+            print("🎬 GRID PRELOAD: Adjacent preload completed for index \(currentIndex)")
         }
     }
 }

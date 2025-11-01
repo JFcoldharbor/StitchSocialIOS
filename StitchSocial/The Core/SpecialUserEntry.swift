@@ -4,7 +4,7 @@
 //
 //  Foundation layer - References existing UserTier and BadgeType
 //  Centralized configuration for all special users (founders, celebrities, ambassadors)
-//  Updated: Complete list with all existing users, auto-follow James Fortune only
+//  Updated: Added Puma, ohshitsad, Walt, email.euni with proper tier values
 //
 
 import Foundation
@@ -88,10 +88,9 @@ struct SpecialUsersConfig {
     
     // MARK: - Special Users Database - COMPLETE UPDATED LIST
     
-    /// Complete list of all special users - Updated with all existing users
-    /// REMOVED: sandra@stitchsocial.me, justin@stitchsocial.me
-    /// ADDED: ironmanfitness662@yahoo.com, dpalance28@gmail.com, kiakallen@gmail.com, janpaulmedina@gmail.com
-    /// KEPT: All existing users (afterflashpoint, floyd sullivan, etc.)
+    /// Complete list of all special users
+    /// UPDATED: Added Puma, ohshitsad, Walt, email.euni
+    /// FIXED: Changed tierRawValue from "celebrity" to "ambassador" for Black Ink users
     static let specialUsersList: [String: SpecialUserEntry] = [
         
         // MARK: - FOUNDER (AUTO-FOLLOW ONLY)
@@ -195,12 +194,66 @@ struct SpecialUsersConfig {
             priority: 550
         ),
         
+        // MARK: - BLACK INK AMBASSADORS
+        
+        "pumanyc213@gmail.com": SpecialUserEntry(
+            email: "pumanyc213@gmail.com",
+            role: .ambassador,
+            tierRawValue: "ambassador",
+            startingClout: 20000,
+            customTitle: "Black Ink Ambassador 🎨",
+            customBio: "Black Ink Original Cast Member | Father | Cannabis Expert | Ambassador to Stitch",
+            badgeRawValues: ["ambassador_crown", "verified", "tv_star"],
+            specialPerks: ["verified_badge", "exclusive_features", "priority_support"],
+            isAutoFollowed: false,
+            priority: 700
+        ),
+        
+        "ohshitsad@gmail.com": SpecialUserEntry(
+            email: "ohshitsad@gmail.com",
+            role: .ambassador,
+            tierRawValue: "ambassador",
+            startingClout: 15000,
+            customTitle: "Black Ink Tattoo Artist 🎨",
+            customBio: "Original Black Ink Cast | Tattoo Artist Enthusiast | Ambassador to Stitch",
+            badgeRawValues: ["ambassador_crown", "verified", "tv_star"],
+            specialPerks: ["verified_badge", "exclusive_features", "priority_support"],
+            isAutoFollowed: false,
+            priority: 700
+        ),
+        
+        "everythingaboutwalt@gmail.com": SpecialUserEntry(
+            email: "everythingaboutwalt@gmail.com",
+            role: .ambassador,
+            tierRawValue: "ambassador",
+            startingClout: 15000,
+            customTitle: "Black Ink Ambassador 🎨",
+            customBio: "Black Ink Cast Member | Ambassador to Stitch",
+            badgeRawValues: ["ambassador_crown", "verified", "tv_star"],
+            specialPerks: ["verified_badge", "exclusive_features", "priority_support"],
+            isAutoFollowed: false,
+            priority: 700
+        ),
+        
+        "dennis.mcdonald5@icloud.com": SpecialUserEntry(
+            email: "dennis.mcdonald5@icloud.com",
+            role: .ambassador,
+            tierRawValue: "ambassador",
+            startingClout: 12500,
+            customTitle: "Actor 🎬",
+            customBio: "Actor | Known for Bad Boys | Ambassador to Stitch",
+            badgeRawValues: ["ambassador_crown", "verified", "film_star"],
+            specialPerks: ["verified_badge", "exclusive_features", "priority_support"],
+            isAutoFollowed: false,
+            priority: 700
+        ),
+        
         // MARK: - CELEBRITY AMBASSADORS
         
         "teddyruks@gmail.com": SpecialUserEntry(
             email: "teddyruks@gmail.com",
             role: .celebrity,
-            tierRawValue: "top_creator",
+            tierRawValue: "elite",
             startingClout: 20000,
             customTitle: "Celebrity Ambassador ⭐",
             customBio: "Reality TV Star | Black Ink Crew 🖋️ | Celebrity Ambassador for Stitch Social",
@@ -213,7 +266,7 @@ struct SpecialUsersConfig {
         "chaneyvisionent@gmail.com": SpecialUserEntry(
             email: "chaneyvisionent@gmail.com",
             role: .celebrity,
-            tierRawValue: "top_creator",
+            tierRawValue: "elite",
             startingClout: 20000,
             customTitle: "TV Legend Ambassador 📺",
             customBio: "Poot from The Wire 🎭 | Actor & Producer | Chaney Vision Entertainment",
@@ -223,25 +276,12 @@ struct SpecialUsersConfig {
             priority: 700
         ),
         
-        "pumanyc213@gmail.com": SpecialUserEntry(
-            email: "pumanyc213@gmail.com",
-            role: .ambassador,
-            tierRawValue: "celebrity",
-            startingClout: 20000,
-            customTitle: "Black Ink Ambassador 🎨",
-            customBio: "Black Ink Original Cast Member | Father | Cannabis Expert | Ambassador to Stitch",
-            badgeRawValues: ["celebrity_crown", "verified", "tv_star"],
-            specialPerks: ["verified_badge", "exclusive_features", "priority_support"],
-            isAutoFollowed: false,
-            priority: 700
-        ),
-        
         // MARK: - MUSIC INDUSTRY / RAE SREMMURD FAMILY
         
         "afterflaspoint@icloud.com": SpecialUserEntry(
             email: "afterflaspoint@icloud.com",
             role: .celebrity,
-            tierRawValue: "top_creator",
+            tierRawValue: "elite",
             startingClout: 25000,
             customTitle: "Diamond Selling Artist, Streamer 🎵",
             customBio: "1/2 of the dynamic group Rae Sremmurd 👑 | Music Industry Veteran",
@@ -262,19 +302,6 @@ struct SpecialUsersConfig {
             specialPerks: ["affiliate_support", "exclusive_features", "family_connection"],
             isAutoFollowed: false,
             priority: 350
-        ),
-        
-        "ohshitsad@gmail.com": SpecialUserEntry(
-            email: "ohshitsad@gmail.com",
-            role: .ambassador,
-            tierRawValue: "celebrity",
-            startingClout: 15000,
-            customTitle: "Black Ink Tattoo Artist 🎨",
-            customBio: "Original Black Ink Cast | Tattoo Artist Enthusiast | Ambassador to Stitch",
-            badgeRawValues: ["celebrity_crown", "verified", "tv_star"],
-            specialPerks: ["verified_badge", "exclusive_features", "priority_support"],
-            isAutoFollowed: false,
-            priority: 700
         ),
         
         // MARK: - TECH AFFILIATES
@@ -409,6 +436,7 @@ extension SpecialUsersConfig {
         print("   Total Special Users: \(stats.totalSpecialUsers)")
         print("   Founders: \(stats.foundersCount)")
         print("   Co-Founders: \(stats.coFoundersCount)")
+        print("   Ambassadors: \(stats.ambassadorsCount)")
         print("   Influencers: \(stats.influencersCount)")
         print("   Advisors: \(stats.advisorsCount)")
         print("   Celebrities: \(stats.celebritiesCount)")
@@ -416,7 +444,7 @@ extension SpecialUsersConfig {
         print("   Auto-Follow Users: \(stats.autoFollowCount)")
         print("   Total Starting Clout: \(stats.totalStartingClout)")
         print("   Average Starting Clout: \(Int(stats.averageStartingClout))")
-        print("   Music Industry Users: \(getAllUsers(containing: "sremmurd").count)")
+        print("   Black Ink Cast: \(getAllUsers(containing: "black ink").count)")
     }
     
     /// Get users containing specific text in bio/title
@@ -492,47 +520,28 @@ extension SpecialUsersConfig {
 
 /*
  
- COMPLETE SPECIAL USERS LIST (11 total):
+ COMPLETE SPECIAL USERS LIST (15 total):
  
  ✅ james@stitchsocial.me - Founder (AUTO-FOLLOW ONLY)
  ✅ bernadette@stitchsocial.me - Co-Founder
- ✅ ironmanfitness662@yahoo.com - Fitness Influencer (15k) - NEW
- ✅ dpalance28@gmail.com - Social Influencer (15k) - NEW
- ✅ kiakallen@gmail.com - Social Influencer (15k) - NEW
- ✅ janpaulmedina@gmail.com - Strategic Advisor (15k) - NEW
+ ✅ ironmanfitness662@yahoo.com - Fitness Influencer (15k)
+ ✅ dpalance28@gmail.com - Social Influencer (15k)
+ ✅ email.euni@gmail.com - Influencer (12.5k) - NEW
+ ✅ kiakallen@gmail.com - Social Influencer (15k)
+ ✅ janpaulmedina@gmail.com - Strategic Advisor (15k)
+ ✅ pumanyc213@gmail.com - Black Ink Ambassador (20k) - NEW
+ ✅ ohshitsad@gmail.com - Black Ink Ambassador (15k) - NEW
+ ✅ everythingaboutwalt@gmail.com - Black Ink Ambassador (15k) - NEW
  ✅ teddyruks@gmail.com - Celebrity Ambassador (20k)
  ✅ chaneyvisionent@gmail.com - TV Legend Ambassador (20k)
  ✅ afterflaspoint@icloud.com - Music Artist/Rae Sremmurd (25k)
  ✅ floydjrsullivan@yahoo.com - Music Family/Brother (12k)
  ✅ srbentleyga@gmail.com - Tech Developer (5k)
  
- TO ADD NEW USERS:
- 
- 1. ADD NEW INFLUENCER (15k clout):
-    "email@domain.com": SpecialUserEntry(
-        email: "email@domain.com",
-        role: .influencer,
-        tierRawValue: "influencer",
-        startingClout: 15000,
-        customTitle: "Your Title Here ⭐",
-        customBio: "Your bio here",
-        badgeRawValues: ["influencer_crown", "verified"],
-        specialPerks: ["verified_badge", "exclusive_features"],
-        isAutoFollowed: false,  // NEVER true except for James
-        priority: 500
-    )
- 
- 2. ADD NEW CELEBRITY (20k+ clout):
-    Similar to teddyruks@gmail.com template above
-    
- 3. MODIFY EXISTING USER:
-    Find user in list, update fields, save file
- 
- CRITICAL RULES:
- - ONLY james@stitchsocial.me should have isAutoFollowed: true
- - New influencers/advisors get 15k starting clout
- - All new users get isAutoFollowed: false
- - Celebrities keep 20k+ clout, music industry gets higher amounts
- - Family connections (Rae Sremmurd) get special perks
+ CRITICAL NOTES:
+ - Black Ink users now use tierRawValue: "ambassador" (15k-20k range)
+ - Teddy Ruks, Chaney, and Rae Sremmurd use tierRawValue: "elite" (20k+)
+ - All users have isAutoFollowed: false EXCEPT James Fortune
+ - Ambassador badges changed from "celebrity_crown" to "ambassador_crown"
  
  */

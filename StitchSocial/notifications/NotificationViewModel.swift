@@ -3,8 +3,8 @@
 //  StitchSocial
 //
 //  Layer 7: ViewModels - Notification Management
-//  Dependencies: NotificationService (Layer 4), AuthService (Layer 4)
-//  FIXED: All compilation errors resolved
+//  FIXED: Retain cycle in startListening closure with [weak self]
+//  FIXED: Line 130 - Removed extraneous notificationID: label
 //
 
 import Foundation
@@ -12,155 +12,92 @@ import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 
-// MARK: - Missing Types (Fixed)
-
-/// Result structure for loading notifications with pagination
-struct NotificationLoadResult {
-    let notifications: [StitchNotification]
-    let lastDocument: DocumentSnapshot?
-    let hasMore: Bool
-    
-    init(notifications: [StitchNotification], lastDocument: DocumentSnapshot? = nil, hasMore: Bool = false) {
-        self.notifications = notifications
-        self.lastDocument = lastDocument
-        self.hasMore = hasMore
-    }
-}
-
-/// UI-compatible notification data for views
-struct NotificationDisplayData: Identifiable, Codable {
-    let id: String
-    let recipientID: String
-    let senderID: String
-    let senderUsername: String
-    let senderProfileImageURL: String?
-    let notificationType: StitchNotificationType
-    let title: String
-    let message: String
-    let payload: [String: String]
-    let isRead: Bool
-    let createdAt: Date
-    let expiresAt: Date?
-    
-    init(from notification: StitchNotification, senderUsername: String, senderProfileImageURL: String? = nil) {
-        self.id = notification.id
-        self.recipientID = notification.recipientID
-        self.senderID = notification.senderID
-        self.senderUsername = senderUsername
-        self.senderProfileImageURL = senderProfileImageURL
-        self.notificationType = notification.type
-        self.title = notification.title
-        self.message = notification.message
-        self.payload = notification.payload
-        self.isRead = notification.isRead
-        self.createdAt = notification.createdAt
-        self.expiresAt = notification.expiresAt
-    }
-}
-
-/// Notification view model with service integration
 @MainActor
 class NotificationViewModel: ObservableObject {
     
-    // MARK: - Dependencies (Fixed - No Redeclaration)
+    // MARK: - Dependencies
     
     private let notificationService: NotificationService
-    private let authService: AuthService?
+    private var currentUserID: String? {
+        return Auth.auth().currentUser?.uid
+    }
     
     // MARK: - Published State
     
-    @Published var notifications: [NotificationDisplayData] = []
+    @Published var allNotifications: [StitchNotification] = []
     @Published var filteredNotifications: [NotificationDisplayData] = []
-    @Published var isLoading = false
-    @Published var hasMoreNotifications = true
-    @Published var currentFilter: StitchNotificationTab = .all
+    @Published var unreadCount: Int = 0
+    @Published var isLoading: Bool = false
     @Published var errorMessage: String?
+    @Published var selectedTab: StitchNotificationTab = .all
     
-    // MARK: - Private Properties
+    // MARK: - Pagination
     
-    private var currentUserID: String {
-        authService?.currentUser?.id ?? Auth.auth().currentUser?.uid ?? ""
-    }
-    private let notificationsPerPage = 20
     private var lastDocument: DocumentSnapshot?
-    private var allNotificationsLoaded = false
+    @Published var hasMoreNotifications: Bool = false
     
-    // MARK: - Computed Properties
+    // MARK: - Initialization
     
-    var unreadCount: Int {
-        notifications.filter { !$0.isRead }.count
-    }
-    
-    // MARK: - Initialization (Fixed - Dependency Injection)
-    
-    init(notificationService: NotificationService? = nil, authService: AuthService? = nil) {
-        self.notificationService = notificationService ?? NotificationService()
-        self.authService = authService
-        
+    init(notificationService: NotificationService) {
+        self.notificationService = notificationService
         print("📧 NOTIFICATION VM: Initialized with service integration")
+        
+        // Start real-time listener
+        startListening()
     }
     
-    // MARK: - Public Methods
+    deinit {
+        print("🔴 NOTIFICATION VM: DEINIT STARTED")
+        
+        // Stop listener synchronously - don't use Task
+        let service = self.notificationService
+        
+        // Force immediate cleanup
+        DispatchQueue.main.async {
+            service.stopListening()
+            print("🔴 NOTIFICATION VM: DEINIT COMPLETE")
+        }
+    }
     
-    /// Load initial notifications from service
+    // MARK: - Load Notifications
+    
     func loadNotifications() async {
-        guard !currentUserID.isEmpty else {
-            print("⚠️ NOTIFICATION VM: No user ID available")
+        guard let userID = currentUserID else {
+            print("⚠️ NOTIFICATION VM: No user ID")
             return
         }
         
         isLoading = true
         errorMessage = nil
-        lastDocument = nil
-        allNotificationsLoaded = false
         
         do {
             let result = try await notificationService.loadNotifications(
-                for: currentUserID,
-                limit: notificationsPerPage,
-                lastDocument: nil
+                for: userID,
+                limit: 20,
+                lastDocument: nil as DocumentSnapshot?
             )
             
-            await MainActor.run {
-                // Convert to display format
-                self.notifications = result.notifications.map { stitchNotif in
-                    convertToDisplayData(stitchNotif)
-                }
-                
-                self.lastDocument = result.lastDocument
-                self.hasMoreNotifications = result.hasMore
-                self.allNotificationsLoaded = !result.hasMore
-                
-                // Apply current filter
-                self.filterNotifications(by: self.currentFilter)
-                
-                print("📧 NOTIFICATION VM: Loaded \(self.notifications.count) notifications")
-            }
+            allNotifications = result.notifications
+            lastDocument = result.lastDocument
+            hasMoreNotifications = result.hasMore
+            
+            updateFilteredNotifications()
+            updateUnreadCount()
+            
+            print("📧 NOTIFICATION VM: Loaded \(allNotifications.count) notifications")
             
         } catch {
-            await MainActor.run {
-                self.errorMessage = "Failed to load notifications: \(error.localizedDescription)"
-                print("❌ NOTIFICATION VM: Load failed - \(error)")
-            }
+            errorMessage = "Failed to load notifications: \(error.localizedDescription)"
+            print("❌ NOTIFICATION VM: Load failed - \(error)")
         }
         
         isLoading = false
     }
     
-    /// Refresh notifications (pull-to-refresh)
-    func refreshNotifications() async {
-        await loadNotifications()
-    }
-    
-    /// Load more notifications (pagination)
     func loadMoreNotifications() async {
-        guard hasMoreNotifications && !isLoading && !allNotificationsLoaded else {
-            print("📧 NOTIFICATION VM: No more notifications to load")
-            return
-        }
-        
-        guard let lastDoc = lastDocument else {
-            print("⚠️ NOTIFICATION VM: No last document for pagination")
+        guard let userID = currentUserID,
+              hasMoreNotifications,
+              !isLoading else {
             return
         }
         
@@ -168,197 +105,147 @@ class NotificationViewModel: ObservableObject {
         
         do {
             let result = try await notificationService.loadNotifications(
-                for: currentUserID,
-                limit: notificationsPerPage,
-                lastDocument: lastDoc
+                for: userID,
+                limit: 20,
+                lastDocument: lastDocument
             )
             
-            await MainActor.run {
-                // Append new notifications
-                let newNotifications = result.notifications.map { stitchNotif in
-                    convertToDisplayData(stitchNotif)
-                }
-                
-                self.notifications.append(contentsOf: newNotifications)
-                self.lastDocument = result.lastDocument
-                self.hasMoreNotifications = result.hasMore
-                self.allNotificationsLoaded = !result.hasMore
-                
-                // Reapply filter to include new notifications
-                self.filterNotifications(by: self.currentFilter)
-                
-                print("📧 NOTIFICATION VM: Loaded \(newNotifications.count) more notifications")
-            }
+            allNotifications.append(contentsOf: result.notifications)
+            lastDocument = result.lastDocument
+            hasMoreNotifications = result.hasMore
+            
+            updateFilteredNotifications()
+            
+            print("📧 NOTIFICATION VM: Loaded \(result.notifications.count) more notifications")
             
         } catch {
-            await MainActor.run {
-                self.errorMessage = "Failed to load more notifications: \(error.localizedDescription)"
-                print("❌ NOTIFICATION VM: Load more failed - \(error)")
-            }
+            print("❌ NOTIFICATION VM: Load more failed - \(error)")
         }
         
         isLoading = false
     }
     
-    /// Mark notification as read
+    func refreshNotifications() async {
+        lastDocument = nil
+        hasMoreNotifications = false
+        await loadNotifications()
+    }
+    
+    // MARK: - Mark as Read
+    
     func markAsRead(_ notificationID: String) async {
         do {
-            // Update on server first
-            try await notificationService.markNotificationAsRead(notificationID: notificationID)
+            // FIXED: Removed notificationID: label
+            try await notificationService.markAsRead(notificationID)
             
-            // Update local state
-            await MainActor.run {
-                if let index = notifications.firstIndex(where: { $0.id == notificationID }) {
-                    var updatedNotification = notifications[index]
-                    // Create new instance with updated read status
-                    let newNotification = NotificationDisplayData(
-                        from: StitchNotification(
-                            id: updatedNotification.id,
-                            recipientID: updatedNotification.recipientID,
-                            senderID: updatedNotification.senderID,
-                            type: updatedNotification.notificationType,
-                            title: updatedNotification.title,
-                            message: updatedNotification.message,
-                            payload: updatedNotification.payload,
-                            isRead: true,
-                            createdAt: updatedNotification.createdAt,
-                            expiresAt: updatedNotification.expiresAt
-                        ),
-                        senderUsername: updatedNotification.senderUsername,
-                        senderProfileImageURL: updatedNotification.senderProfileImageURL
-                    )
-                    
-                    notifications[index] = newNotification
-                }
-                
-                // Reapply filter
-                filterNotifications(by: currentFilter)
-            }
+            // Reload to get updated state from Firestore
+            await refreshNotifications()
             
-            print("📧 NOTIFICATION VM: Marked \(notificationID) as read")
+            print("✅ NOTIFICATION VM: Marked as read - \(notificationID)")
             
         } catch {
-            await MainActor.run {
-                errorMessage = "Failed to mark notification as read: \(error.localizedDescription)"
-                print("❌ NOTIFICATION VM: Mark as read failed - \(error)")
-            }
+            print("❌ NOTIFICATION VM: Mark as read failed - \(error)")
         }
     }
     
-    /// Mark all notifications as read
     func markAllAsRead() async {
-        guard !currentUserID.isEmpty else { return }
+        guard let userID = currentUserID else { return }
+        
+        isLoading = true
         
         do {
-            // Update on server first
-            try await notificationService.markAllNotificationsAsRead(for: currentUserID)
+            try await notificationService.markAllAsRead(for: userID)
             
-            // Update local state
-            await MainActor.run {
-                notifications = notifications.map { notification in
-                    NotificationDisplayData(
-                        from: StitchNotification(
-                            id: notification.id,
-                            recipientID: notification.recipientID,
-                            senderID: notification.senderID,
-                            type: notification.notificationType,
-                            title: notification.title,
-                            message: notification.message,
-                            payload: notification.payload,
-                            isRead: true,
-                            createdAt: notification.createdAt,
-                            expiresAt: notification.expiresAt
-                        ),
-                        senderUsername: notification.senderUsername,
-                        senderProfileImageURL: notification.senderProfileImageURL
-                    )
-                }
-                
-                // Reapply filter
-                filterNotifications(by: currentFilter)
-            }
+            // Reload to get updated state from Firestore
+            await refreshNotifications()
             
-            print("📧 NOTIFICATION VM: Marked all notifications as read")
+            print("✅ NOTIFICATION VM: Marked all as read")
             
         } catch {
-            await MainActor.run {
-                errorMessage = "Failed to mark all notifications as read: \(error.localizedDescription)"
-                print("❌ NOTIFICATION VM: Mark all as read failed - \(error)")
-            }
+            errorMessage = "Failed to mark all as read: \(error.localizedDescription)"
+            print("❌ NOTIFICATION VM: Mark all as read failed - \(error)")
         }
+        
+        isLoading = false
     }
     
-    /// Filter notifications by tab
-    func filterNotifications(by tab: StitchNotificationTab) {
-        currentFilter = tab
+    // MARK: - Filtering
+    
+    func selectTab(_ tab: StitchNotificationTab) {
+        selectedTab = tab
+        updateFilteredNotifications()
+    }
+    
+    private func updateFilteredNotifications() {
+        var filtered = allNotifications
         
-        switch tab {
+        // Filter by tab
+        switch selectedTab {
         case .all:
-            filteredNotifications = notifications
+            break
+        case .unread:
+            filtered = filtered.filter { !$0.isRead }
         case .hypes:
-            filteredNotifications = notifications.filter {
-                $0.notificationType == .hype || $0.notificationType == .cool
-            }
+            filtered = filtered.filter { $0.type == .hype }
         case .follows:
-            filteredNotifications = notifications.filter {
-                $0.notificationType == .follow
-            }
+            filtered = filtered.filter { $0.type == .follow }
         case .replies:
-            filteredNotifications = notifications.filter {
-                $0.notificationType == .reply || $0.notificationType == .mention
-            }
+            filtered = filtered.filter { $0.type == .reply }
+        case .system:
+            filtered = filtered.filter { $0.type == .system }
         }
         
-        print("📧 NOTIFICATION VM: Filtered to \(filteredNotifications.count) notifications for \(tab.displayName)")
+        // Convert to display data
+        filteredNotifications = filtered.map { notification in
+            NotificationDisplayData(
+                id: notification.id,
+                title: notification.title,
+                message: notification.message,
+                notificationType: notification.type,
+                senderUsername: notification.payload["senderUsername"] ?? "Unknown",
+                isRead: notification.isRead,
+                createdAt: notification.createdAt
+            )
+        }
+        
+        print("📧 NOTIFICATION VM: Filtered to \(filteredNotifications.count) notifications for \(selectedTab.displayName)")
     }
     
-    /// Get unread count from server
-    func updateUnreadCount() async {
-        guard !currentUserID.isEmpty else { return }
+    private func updateUnreadCount() {
+        unreadCount = allNotifications.filter { !$0.isRead }.count
+    }
+    
+    // MARK: - Real-time Listener (FIXED)
+    
+    private func startListening() {
+        guard let userID = currentUserID else {
+            print("⚠️ NOTIFICATION VM: Cannot start listener - no user ID")
+            return
+        }
         
-        do {
-            let count = try await notificationService.getUnreadCount(for: currentUserID)
+        // ✅ FIXED: Added [weak self] to prevent retain cycle
+        notificationService.startListening(for: userID) { [weak self] notifications in
+            guard let self = self else { return }
             
-            await MainActor.run {
-                // Update from server takes precedence
-                print("📧 NOTIFICATION VM: Updated unread count to \(count)")
+            Task { @MainActor in
+                self.allNotifications = notifications
+                self.updateFilteredNotifications()
+                self.updateUnreadCount()
+                
+                print("🔔 NOTIFICATION VM: Real-time update - \(notifications.count) notifications")
             }
-            
-        } catch {
-            print("❌ NOTIFICATION VM: Failed to update unread count - \(error)")
         }
     }
-    
-    // MARK: - Private Helpers
-    
-    /// Convert StitchNotification to NotificationDisplayData for UI compatibility
-    private func convertToDisplayData(_ stitchNotif: StitchNotification) -> NotificationDisplayData {
-        // Extract username from payload or use senderID as fallback
-        let senderUsername = extractUsername(from: stitchNotif.payload) ?? stitchNotif.senderID
-        let senderProfileImage = extractProfileImage(from: stitchNotif.payload)
-        
-        return NotificationDisplayData(
-            from: stitchNotif,
-            senderUsername: senderUsername,
-            senderProfileImageURL: senderProfileImage
-        )
-    }
-    
-    /// Extract username from notification payload
-    private func extractUsername(from payload: [String: String]) -> String? {
-        // Try different possible keys for username
-        if let username = payload["senderUsername"] { return username }
-        if let username = payload["followerUsername"] { return username }
-        if let username = payload["replierUsername"] { return username }
-        return nil
-    }
-    
-    /// Extract profile image URL from notification payload
-    private func extractProfileImage(from payload: [String: String]) -> String? {
-        // Try different possible keys for profile image
-        if let imageURL = payload["senderProfileImageURL"] { return imageURL }
-        if let imageURL = payload["followerProfileImageURL"] { return imageURL }
-        if let imageURL = payload["replierProfileImageURL"] { return imageURL }
-        return nil
-    }
+}
+
+// MARK: - Display Data
+
+struct NotificationDisplayData: Identifiable {
+    let id: String
+    let title: String
+    let message: String
+    let notificationType: StitchNotificationType
+    let senderUsername: String
+    let isRead: Bool
+    let createdAt: Date
 }

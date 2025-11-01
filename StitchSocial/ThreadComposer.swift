@@ -6,10 +6,15 @@
 //  Dependencies: VideoCoordinator (Layer 6), CoreVideoMetadata (Layer 1), BoundedVideoContainer
 //  Features: Working video preview, hashtag input, metadata editing, AI result integration
 //  FIXED: Now passes manual title/description to VideoCoordinator
+//  UPDATED: Added user tagging system
+//  FIXED: Removed duplicate VideoPlayerContainer/VideoPlayerUIView declarations
+//  WORKING: User-provided exact working version
 //
 
 import SwiftUI
 import AVFoundation
+import AVKit  // ADD THIS for VideoPlayer
+import Combine
 
 struct ThreadComposer: View {
     
@@ -25,6 +30,7 @@ struct ThreadComposer: View {
     
     @StateObject private var videoCoordinator = VideoCoordinator(
         videoService: VideoService(),
+        userService: UserService(),
         aiAnalyzer: AIVideoAnalyzer(),
         videoProcessor: VideoProcessingService(),
         uploadService: VideoUploadService(),
@@ -34,12 +40,16 @@ struct ThreadComposer: View {
     @State private var title: String = ""
     @State private var description: String = ""
     @State private var hashtags: [String] = []
+    @State private var taggedUserIDs: [String] = []  // NEW: Tagged users
     @State private var isCreating = false
     @State private var showError = false
     @State private var errorMessage = ""
     
     // Hashtag input state
     @State private var newHashtagText = ""
+    
+    // NEW: User tagging state
+    @State private var showingUserTagSheet = false
     
     // Video preview state - FIXED: Single player reference
     @State private var sharedPlayer: AVPlayer?
@@ -49,11 +59,15 @@ struct ThreadComposer: View {
     @State private var isAnalyzing = false
     @State private var hasAnalyzed = false
     
+    // Combine cancellables for player monitoring
+    @State private var cancellables = Set<AnyCancellable>()
+    
     // MARK: - Constants
     
     private let maxTitleLength = 100
     private let maxDescriptionLength = 300
     private let maxHashtags = 10
+    private let maxTaggedUsers = 5  // NEW
     
     var body: some View {
         ZStack {
@@ -85,6 +99,18 @@ struct ThreadComposer: View {
         } message: {
             Text(errorMessage)
         }
+        .sheet(isPresented: $showingUserTagSheet) {
+            UserTagSheet(
+                onSelectUsers: { userIDs in
+                    taggedUserIDs = userIDs
+                    showingUserTagSheet = false
+                },
+                onDismiss: {
+                    showingUserTagSheet = false
+                },
+                alreadyTaggedIDs: taggedUserIDs
+            )
+        }
     }
     
     // MARK: - Composer Interface
@@ -104,6 +130,7 @@ struct ThreadComposer: View {
                     titleEditor
                     descriptionEditor
                     hashtagEditor
+                    userTagEditor  // NEW: User tagging section
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
@@ -144,12 +171,13 @@ struct ThreadComposer: View {
         .padding(.top, 8)
     }
     
-    // MARK: - Video Preview (FIXED: Single Player)
+    // MARK: - Video Preview (Simple inline player for composer)
     
     private var videoPreview: some View {
         ZStack {
             if let player = sharedPlayer {
-                VideoPlayerContainer(player: player, isPlaying: $isPlaying)
+                // Simple VideoPlayer for preview
+                VideoPlayer(player: player)
                     .aspectRatio(9/16, contentMode: .fit)
                     .background(Color.black)
                     .clipped()
@@ -166,6 +194,7 @@ struct ThreadComposer: View {
                             )
                     )
                     .shadow(color: Color.blue.opacity(0.2), radius: 8, x: 0, y: 4)
+                    .disabled(true) // Disable built-in controls
             } else {
                 Rectangle()
                     .fill(Color.black)
@@ -206,8 +235,12 @@ struct ThreadComposer: View {
             }
             
             TextField("Enter video title...", text: $title)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .onChange(of: title) { newValue in
+                .padding(12)
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(8)
+                .foregroundColor(.white)
+                .accentColor(.blue)
+                .onChange(of: title) { _, newValue in
                     if newValue.count > maxTitleLength {
                         title = String(newValue.prefix(maxTitleLength))
                     }
@@ -229,17 +262,34 @@ struct ThreadComposer: View {
                     .foregroundColor(description.count > maxDescriptionLength ? .red : .gray)
             }
             
-            TextEditor(text: $description)
-                .frame(height: 100)
-                .padding(8)
-                .background(Color.white.opacity(0.1))
-                .cornerRadius(8)
-                .foregroundColor(.white)
-                .onChange(of: description) { newValue in
-                    if newValue.count > maxDescriptionLength {
-                        description = String(newValue.prefix(maxDescriptionLength))
+            ZStack(alignment: .topLeading) {
+                // Background
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.white.opacity(0.1))
+                    .frame(height: 100)
+                
+                // TextEditor
+                TextEditor(text: $description)
+                    .frame(height: 100)
+                    .padding(8)
+                    .background(Color.clear)
+                    .foregroundColor(.white)
+                    .scrollContentBackground(.hidden) // Hide default white background
+                    .onChange(of: description) { _, newValue in
+                        if newValue.count > maxDescriptionLength {
+                            description = String(newValue.prefix(maxDescriptionLength))
+                        }
                     }
+                
+                // Placeholder text
+                if description.isEmpty {
+                    Text("Enter description...")
+                        .foregroundColor(.gray)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 16)
+                        .allowsHitTesting(false)
                 }
+            }
         }
     }
     
@@ -278,7 +328,11 @@ struct ThreadComposer: View {
             if hashtags.count < maxHashtags {
                 HStack {
                     TextField("Add hashtag...", text: $newHashtagText)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .padding(12)
+                        .background(Color.white.opacity(0.1))
+                        .cornerRadius(8)
+                        .foregroundColor(.white)
+                        .accentColor(.blue)
                         .onSubmit {
                             addHashtag()
                         }
@@ -297,33 +351,85 @@ struct ThreadComposer: View {
         }
     }
     
+    // MARK: - NEW: User Tag Editor
+    
+    private var userTagEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Tag Users")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                Text("\(taggedUserIDs.count)/\(maxTaggedUsers)")
+                    .font(.caption)
+                    .foregroundColor(taggedUserIDs.count >= maxTaggedUsers ? .orange : .gray)
+            }
+            
+            // Show tagged users
+            if !taggedUserIDs.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(taggedUserIDs, id: \.self) { userID in
+                            TaggedUserChip(userID: userID) {
+                                removeTag(userID)
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Tag users button
+            Button {
+                showingUserTagSheet = true
+            } label: {
+                HStack {
+                    Image(systemName: "person.badge.plus")
+                        .font(.system(size: 16))
+                    
+                    Text(taggedUserIDs.isEmpty ? "Tag Users" : "Edit Tags")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .foregroundColor(.cyan)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+                )
+            }
+            .disabled(taggedUserIDs.count >= maxTaggedUsers && taggedUserIDs.isEmpty)
+        }
+    }
+    
     // MARK: - Post Button
     
     private var postButton: some View {
-        VStack(spacing: 12) {
-            Button("Post Thread") {
-                createThread()
-            }
-            .font(.headline)
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(
-                Group {
-                    if canPost {
-                        LinearGradient(
-                            colors: [Color.blue, Color.purple],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    } else {
-                        Color.gray.opacity(0.3)
-                    }
-                }
-            )
-            .cornerRadius(20)
-            .disabled(!canPost)
+        Button("Post Thread") {
+            createThread()
         }
+        .font(.headline)
+        .foregroundColor(.white)
+        .frame(maxWidth: .infinity)
+        .frame(height: 50)
+        .background(
+            Group {
+                if canPost {
+                    LinearGradient(
+                        colors: [Color.blue, Color.purple],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                } else {
+                    Color.gray.opacity(0.3)
+                }
+            }
+        )
+        .cornerRadius(20)
+        .disabled(!canPost)
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 12)
@@ -370,35 +476,77 @@ struct ThreadComposer: View {
     private func setupSharedVideoPlayer() {
         print("🎬 SETUP: Creating shared video player")
         let player = AVPlayer(url: recordedVideoURL)
+        
+        // Configure player for optimal autoplay
         player.isMuted = false
         player.actionAtItemEnd = .none
+        player.automaticallyWaitsToMinimizeStalling = false // Faster startup
         
         sharedPlayer = player
-        isPlaying = true
-        player.play()
         
-        // Loop video
+        // Start playing immediately
+        player.play()
+        isPlaying = true
+        
+        // Setup looping with proper notification handling
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: player.currentItem,
             queue: .main
         ) { _ in
-            player.seek(to: .zero)
-            if self.isPlaying {
-                player.play()
+            Task { @MainActor in
+                guard let player = self.sharedPlayer else { return }
+                
+                player.seek(to: .zero) { _ in
+                    if self.isPlaying {
+                        player.play()
+                    }
+                }
             }
         }
         
-        print("🎬 SETUP: Player ready and playing")
+        // Monitor player status for debugging
+        player.currentItem?.publisher(for: \.status)
+            .sink { status in
+                print("🎬 PLAYER STATUS: \(status)")
+                switch status {
+                case .readyToPlay:
+                    print("🎬 READY TO PLAY: Player is ready")
+                case .failed:
+                    print("❌ PLAYER FAILED: \(player.currentItem?.error?.localizedDescription ?? "Unknown error")")
+                case .unknown:
+                    print("🤔 PLAYER STATUS: Unknown")
+                @unknown default:
+                    print("🔄 PLAYER STATUS: Other")
+                }
+            }
+            .store(in: &cancellables)
+        
+        // Monitor time control status
+        player.publisher(for: \.timeControlStatus)
+            .sink { status in
+                DispatchQueue.main.async {
+                    self.isPlaying = (status == .playing)
+                    print("🎬 TIME CONTROL: \(status.rawValue) - isPlaying: \(self.isPlaying)")
+                }
+            }
+            .store(in: &cancellables)
+        
+        print("🎬 SETUP: Player ready and should start playing")
     }
     
     private func togglePlayback() {
-        guard let player = sharedPlayer else { return }
+        guard let player = sharedPlayer else {
+            print("❌ TOGGLE: No player available")
+            return
+        }
         
         if isPlaying {
+            print("⏸️ PAUSING playback")
             player.pause()
             isPlaying = false
         } else {
+            print("▶️ STARTING playback")
             player.play()
             isPlaying = true
         }
@@ -409,8 +557,9 @@ struct ThreadComposer: View {
         sharedPlayer?.pause()
         sharedPlayer = nil
         isPlaying = false
+        cancellables.removeAll()
         NotificationCenter.default.removeObserver(self)
-        print("🧹 CLEANUP: Player removed")
+        print("🧹 CLEANUP: Player removed and observers cleared")
     }
     
     // MARK: - Hashtag Methods
@@ -429,6 +578,14 @@ struct ThreadComposer: View {
     
     private func removeHashtag(_ hashtag: String) {
         hashtags.removeAll { $0 == hashtag }
+    }
+    
+    // MARK: - NEW: User Tagging Methods
+    
+    private func removeTag(_ userID: String) {
+        withAnimation(.spring(response: 0.3)) {
+            taggedUserIDs.removeAll { $0 == userID }
+        }
     }
     
     // MARK: - AI Analysis View
@@ -538,7 +695,7 @@ struct ThreadComposer: View {
     }
     
     private func skipAIAnalysis() {
-        print("⏭ THREAD COMPOSER: AI analysis skipped by user")
+        print("⏭️ THREAD COMPOSER: AI analysis skipped by user")
         isAnalyzing = false
         hasAnalyzed = true
         setupInitialContent()
@@ -586,7 +743,7 @@ struct ThreadComposer: View {
         }
     }
     
-    // MARK: - Thread Creation (FIXED: Pass Manual Title/Description)
+    // MARK: - Thread Creation (UPDATED: Pass Tagged Users)
     
     private func createThread() {
         guard !isCreating else { return }
@@ -603,9 +760,10 @@ struct ThreadComposer: View {
                 let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
                 let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
                 
-                print("✍️ MANUAL CONTENT: Passing to VideoCoordinator")
-                print("✍️ TITLE: '\(trimmedTitle)'")
-                print("✍️ DESCRIPTION: '\(trimmedDescription)'")
+                print("✏️ MANUAL CONTENT: Passing to VideoCoordinator")
+                print("✏️ TITLE: '\(trimmedTitle)'")
+                print("✏️ DESCRIPTION: '\(trimmedDescription)'")
+                print("🏷️ TAGGED USERS: \(taggedUserIDs.count) users")
                 
                 // Get current user info from AuthService
                 let authService = AuthService()
@@ -620,14 +778,16 @@ struct ThreadComposer: View {
                     recordingContext: recordingContext,
                     userID: currentUserID,
                     userTier: currentUserTier,
-                    manualTitle: trimmedTitle.isEmpty ? nil : trimmedTitle,        // NEW: Pass manual title
-                    manualDescription: trimmedDescription.isEmpty ? nil : trimmedDescription  // NEW: Pass manual description
+                    manualTitle: trimmedTitle.isEmpty ? nil : trimmedTitle,
+                    manualDescription: trimmedDescription.isEmpty ? nil : trimmedDescription,
+                    taggedUserIDs: taggedUserIDs  // NEW: Pass tagged users
                 )
                 
                 await MainActor.run {
                     print("✅ THREAD CREATION: Success!")
                     print("✅ FINAL TITLE: '\(createdVideo.title)'")
                     print("✅ FINAL DESCRIPTION: '\(createdVideo.description)'")
+                    print("✅ TAGGED USERS: \(createdVideo.taggedUserIDs.count)")
                     isCreating = false
                     onVideoCreated(createdVideo)
                 }
@@ -644,52 +804,6 @@ struct ThreadComposer: View {
                     sharedPlayer?.play()
                 }
             }
-        }
-    }
-}
-
-// MARK: - Video Player Container
-
-struct VideoPlayerContainer: UIViewRepresentable {
-    let player: AVPlayer
-    @Binding var isPlaying: Bool
-    
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.backgroundColor = .black
-        
-        let playerLayer = AVPlayerLayer(player: player)
-        playerLayer.videoGravity = .resizeAspectFill
-        playerLayer.frame = view.bounds
-        view.layer.addSublayer(playerLayer)
-        
-        context.coordinator.playerLayer = playerLayer
-        context.coordinator.containerView = view
-        
-        return view
-    }
-    
-    func updateUIView(_ uiView: UIView, context: Context) {
-        if let playerLayer = context.coordinator.playerLayer {
-            playerLayer.frame = uiView.bounds
-        }
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    class Coordinator {
-        var parent: VideoPlayerContainer
-        var playerLayer: AVPlayerLayer?
-        var containerView: UIView?
-        
-        init(_ parent: VideoPlayerContainer) {
-            self.parent = parent
-        }
-        
-        deinit {
-            NotificationCenter.default.removeObserver(self)
         }
     }
 }

@@ -3,7 +3,7 @@
 //  CleanBeta
 //
 //  Created by James Garmon on 7/11/25.
-//  REVERTED: Removed duplicate notification types - they exist elsewhere
+//  UPDATED: Added ambassador tier for 15k-20k clout range
 //
 
 import Foundation
@@ -17,6 +17,7 @@ enum UserTier: String, CaseIterable, Codable {
     case rising = "rising"
     case veteran = "veteran"
     case influencer = "influencer"
+    case ambassador = "ambassador"      // NEW: 15k-20k range
     case elite = "elite"
     case partner = "partner"
     case legendary = "legendary"
@@ -30,6 +31,7 @@ enum UserTier: String, CaseIterable, Codable {
         case .rising: return "Rising"
         case .veteran: return "Veteran"
         case .influencer: return "Influencer"
+        case .ambassador: return "Ambassador"
         case .elite: return "Elite"
         case .partner: return "Partner"
         case .legendary: return "Legendary"
@@ -44,7 +46,8 @@ enum UserTier: String, CaseIterable, Codable {
         case .rookie: return 0...999
         case .rising: return 1000...4999
         case .veteran: return 5000...9999
-        case .influencer: return 10000...19999
+        case .influencer: return 10000...14999      // ADJUSTED for ambassador
+        case .ambassador: return 15000...19999      // NEW tier
         case .elite: return 20000...49999
         case .partner: return 50000...99999
         case .legendary: return 100000...499999
@@ -59,6 +62,7 @@ enum UserTier: String, CaseIterable, Codable {
         switch self {
         case .rookie, .rising, .veteran, .elite, .legendary: return nil
         case .influencer: return "influencer_crown"
+        case .ambassador: return "ambassador_crown"     // NEW badge
         case .partner: return "partner_crown"
         case .topCreator: return "top_creator_crown"
         case .founder: return "founder_crown"
@@ -72,6 +76,7 @@ enum UserTier: String, CaseIterable, Codable {
         case .rising: return 1_000
         case .veteran: return 10_000
         case .influencer: return 100_000
+        case .ambassador: return 150_000            // NEW: between influencer and elite
         case .elite: return 250_000
         case .partner: return 750_000
         case .legendary: return 2_000_000
@@ -96,7 +101,8 @@ enum UserTier: String, CaseIterable, Codable {
         case .rookie: return .rising
         case .rising: return .veteran
         case .veteran: return .influencer
-        case .influencer: return .elite
+        case .influencer: return .ambassador        // NEW progression
+        case .ambassador: return .elite             // NEW progression
         case .elite: return .partner
         case .partner: return .legendary
         case .legendary: return .topCreator

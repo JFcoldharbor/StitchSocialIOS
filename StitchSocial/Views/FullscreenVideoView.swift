@@ -4,7 +4,8 @@
 //
 //  Layer 8: Views - Clean Fullscreen Video Player with Thread Navigation
 //  Dependencies: SwiftUI, AVFoundation, AVKit
-//  Features: Horizontal child navigation only, clean UI, actual video playback
+//  Features: Horizontal child navigation, clean UI, actual video playback, view tracking, video kill on recording
+//  FIXED: Removed [weak self] from struct, removed duplicate notification extension
 //
 
 import SwiftUI
@@ -151,7 +152,7 @@ struct FullscreenVideoView: View {
             // Bottom contextual overlay
             ContextualVideoOverlay(
                 video: currentVideo,
-                context: .profileOther,  // ✅ CORRECT - shows full overlay
+                context: .profileOther,
                 currentUserID: currentUserID,
                 threadVideo: currentVideoIndex > 0 ? currentThread?.parentVideo : nil,
                 isVisible: true,
@@ -336,95 +337,120 @@ struct FullscreenVideoView: View {
     }
     
     // MARK: - Action Handling
-    
-    private func handleOverlayAction(_ action: ContextualOverlayAction) {
-        switch action {
-        case .profile(let userID):
-            NotificationCenter.default.post(
-                name: NSNotification.Name("NavigateToProfile"),
-                object: nil,
-                userInfo: ["userID": userID]
+        
+        private func handleOverlayAction(_ action: ContextualOverlayAction) {
+            switch action {
+            case .profile(let userID):
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("NavigateToProfile"),
+                    object: nil,
+                    userInfo: ["userID": userID]
+                )
+                
+            case .thread(let threadID):
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("NavigateToThread"),
+                    object: nil,
+                    userInfo: ["threadID": threadID]
+                )
+                
+            case .engagement(let type):
+                print("FULLSCREEN: Engagement \(type) for video \(currentVideo.id)")
+                let impact = UIImpactFeedbackGenerator(style: .medium)
+                impact.impactOccurred()
+                
+            case .follow, .unfollow, .followToggle:
+                print("FULLSCREEN: Follow action for creator \(currentVideo.creatorID)")
+                
+            case .share:
+                shareVideo()
+                
+            case .reply:
+                presentReplyInterface()
+                
+            case .stitch:
+                presentStitchInterface()
+                
+            case .viewers:
+                print("FULLSCREEN: Viewers action for video \(currentVideo.id)")
+                // Sheet is handled by ContextualVideoOverlay, just log here
+                
+            case .more, .profileManagement, .profileSettings:
+                print("FULLSCREEN: More options requested")
+            }
+        }
+        
+        private func shareVideo() {
+            let shareText = "Check out this video by \(currentVideo.creatorName) on Stitch Social!"
+            let shareURL = URL(string: "https://stitchsocial.app/video/\(currentVideo.id)")!
+            
+            let activityController = UIActivityViewController(
+                activityItems: [shareText, shareURL],
+                applicationActivities: nil
             )
             
-        case .thread(let threadID):
+            if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+               let window = windowScene.windows.first,
+               let rootViewController = window.rootViewController {
+                
+                activityController.popoverPresentationController?.sourceView = window
+                activityController.popoverPresentationController?.sourceRect = CGRect(
+                    x: window.bounds.midX,
+                    y: window.bounds.midY,
+                    width: 0,
+                    height: 0
+                )
+                
+                rootViewController.present(activityController, animated: true)
+            }
+        }
+        
+        private func presentReplyInterface() {
+            // CRITICAL: Kill all video players before opening recording interface
             NotificationCenter.default.post(
-                name: NSNotification.Name("NavigateToThread"),
-                object: nil,
-                userInfo: ["threadID": threadID]
+                name: .RealkillAllVideoPlayers,
+                object: nil
             )
             
-        case .engagement(let type):
-            print("FULLSCREEN: Engagement \(type) for video \(currentVideo.id)")
-            let impact = UIImpactFeedbackGenerator(style: .medium)
-            impact.impactOccurred()
+            print("🛑 FULLSCREEN: Killed all video players before reply")
             
-        case .follow, .unfollow, .followToggle:
-            print("FULLSCREEN: Follow action for creator \(currentVideo.creatorID)")
+            // Small delay to ensure videos are stopped
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("PresentRecording"),
+                    object: nil,
+                    userInfo: [
+                        "context": "replyToVideo",
+                        "videoID": self.currentVideo.id,
+                        "threadID": self.currentVideo.threadID ?? self.currentVideo.id
+                    ]
+                )
+            }
+        }
+        
+        private func presentStitchInterface() {
+            // CRITICAL: Kill all video players before opening recording interface
+            NotificationCenter.default.post(
+                name: .RealkillAllVideoPlayers,
+                object: nil
+            )
             
-        case .share:
-            shareVideo()
+            print("🛑 FULLSCREEN: Killed all video players before stitch")
             
-        case .reply:
-            presentReplyInterface()
-            
-        case .stitch:
-            presentStitchInterface()
-            
-        case .more, .profileManagement, .profileSettings:
-            print("FULLSCREEN: More options requested")
+            // Small delay to ensure videos are stopped
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("PresentRecording"),
+                    object: nil,
+                    userInfo: [
+                        "context": "stitchVideo",
+                        "videoID": self.currentVideo.id,
+                        "threadID": self.currentVideo.threadID ?? self.currentVideo.id
+                    ]
+                )
+            }
         }
     }
-    
-    private func shareVideo() {
-        let shareText = "Check out this video by \(currentVideo.creatorName) on Stitch Social!"
-        let shareURL = URL(string: "https://stitchsocial.app/video/\(currentVideo.id)")!
-        
-        let activityController = UIActivityViewController(
-            activityItems: [shareText, shareURL],
-            applicationActivities: nil
-        )
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first,
-           let rootViewController = window.rootViewController {
-            
-            activityController.popoverPresentationController?.sourceView = window
-            activityController.popoverPresentationController?.sourceRect = CGRect(
-                x: window.bounds.midX,
-                y: window.bounds.midY,
-                width: 0,
-                height: 0
-            )
-            
-            rootViewController.present(activityController, animated: true)
-        }
-    }
-    
-    private func presentReplyInterface() {
-        NotificationCenter.default.post(
-            name: NSNotification.Name("PresentRecording"),
-            object: nil,
-            userInfo: [
-                "context": "replyToVideo",
-                "videoID": currentVideo.id,
-                "threadID": currentVideo.threadID ?? currentVideo.id
-            ]
-        )
-    }
-    
-    private func presentStitchInterface() {
-        NotificationCenter.default.post(
-            name: NSNotification.Name("PresentRecording"),
-            object: nil,
-            userInfo: [
-                "context": "stitchVideo",
-                "videoID": currentVideo.id,
-                "threadID": currentVideo.threadID ?? currentVideo.id
-            ]
-        )
-    }
-}
-
 // MARK: - Video Player Component
 
 struct VideoPlayerComponent: View {
@@ -435,6 +461,8 @@ struct VideoPlayerComponent: View {
     @State private var playerItem: AVPlayerItem?
     @State private var isLoading = true
     @State private var hasError = false
+    @State private var hasTrackedView = false
+    @State private var killObserver: NSObjectProtocol?
     @State private var cancellables = Set<AnyCancellable>()
     
     var body: some View {
@@ -453,6 +481,27 @@ struct VideoPlayerComponent: View {
         }
         .onAppear {
             setupPlayer()
+            
+            // Track view when video appears in fullscreen
+            if isActive, !hasTrackedView, let userID = Auth.auth().currentUser?.uid {
+                hasTrackedView = true
+                
+                Task {
+                    // Wait 5 seconds for qualified view
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    
+                    // Only track if still active
+                    if isActive {
+                        let videoService = VideoService()
+                        try? await videoService.trackVideoView(
+                            videoID: video.id,
+                            userID: userID,
+                            watchTime: 5.0
+                        )
+                        print("📊 VIEW TRACKED: \(video.id.prefix(8)) in Fullscreen")
+                    }
+                }
+            }
         }
         .onDisappear {
             cleanupPlayer()
@@ -477,15 +526,18 @@ struct VideoPlayerComponent: View {
         playerItem = AVPlayerItem(asset: asset)
         player = AVPlayer(playerItem: playerItem)
         
+        // CRITICAL: Setup kill notification observer
+        setupKillObserver()
+        
         // Configure for looping
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
             queue: .main
         ) { _ in
-            player?.seek(to: .zero)
-            if isActive {
-                player?.play()
+            self.player?.seek(to: .zero)
+            if self.isActive {
+                self.player?.play()
             }
         }
         
@@ -495,13 +547,13 @@ struct VideoPlayerComponent: View {
             .sink { status in
                 switch status {
                 case .readyToPlay:
-                    isLoading = false
-                    if isActive {
-                        player?.play()
+                    self.isLoading = false
+                    if self.isActive {
+                        self.player?.play()
                     }
                 case .failed:
-                    hasError = true
-                    isLoading = false
+                    self.hasError = true
+                    self.isLoading = false
                 case .unknown:
                     break
                 @unknown default:
@@ -511,11 +563,32 @@ struct VideoPlayerComponent: View {
             .store(in: &cancellables)
     }
     
+    private func setupKillObserver() {
+        killObserver = NotificationCenter.default.addObserver(
+            forName: .RealkillAllVideoPlayers,
+            object: nil,
+            queue: .main
+        ) { _ in
+            self.handleKillNotification()
+        }
+    }
+    
+    private func handleKillNotification() {
+        player?.pause()
+        print("🛑 FULLSCREEN PLAYER: Killed player via notification for video \(video.id.prefix(8))")
+    }
+    
     private func cleanupPlayer() {
         player?.pause()
         player = nil
         playerItem = nil
         cancellables.removeAll()
+        
+        // Remove all observers
+        if let observer = killObserver {
+            NotificationCenter.default.removeObserver(observer)
+            killObserver = nil
+        }
         NotificationCenter.default.removeObserver(self)
     }
     

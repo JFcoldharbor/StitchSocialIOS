@@ -1,438 +1,511 @@
 //
-//  UserService.swift
+//  EditProfileView.swift
 //  StitchSocial
 //
-//  Layer 4: Core Services - User Management with Complete Profile Editing Support
-//  Dependencies: Firebase Firestore, Firebase Storage, SpecialUserEntry
-//  Features: User CRUD, following system, profile editing (bio, photo, username, display name)
+//  Layer 8: Views - Complete Profile Editing Interface
+//  Dependencies: SwiftUI, PhotosUI, UserService, BasicUserInfo
+//  Features: Text editing, image upload, validation, save/cancel
 //
 
-import Foundation
-import FirebaseFirestore
-import FirebaseStorage
+import SwiftUI
+import PhotosUI
 
-/// Service for user management and operations with complete profile editing support
-@MainActor
-class MyUserService: ObservableObject {
+struct NewEditProfileView: View {
     
-    // MARK: - Properties
+    // MARK: - Dependencies
     
-    private let db = Firestore.firestore(database: Config.Firebase.databaseName)
-    private let storage = Storage.storage()
+    @ObservedObject var userService: UserService
+    let currentUser: BasicUserInfo
+    let onSave: (BasicUserInfo) -> Void
     
-    // MARK: - Published State
+    // MARK: - State
     
-    @Published var isLoading: Bool = false
-    @Published var lastError: StitchError?
+    @State private var displayName: String
+    @State private var username: String
+    @State private var bio: String
+    @State private var isPrivate: Bool
     
-    // MARK: - Core User Operations
+    // Image handling
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var profileImageData: Data?
+    @State private var showingImagePicker = false
     
-    /// Create new user profile
-    func createUser(
-        id: String,
-        email: String,
-        displayName: String? = nil,
-        profileImageURL: String? = nil,
-        isSpecialUser: Bool = false
-    ) async throws -> BasicUserInfo {
+    // UI state
+    @State private var isSaving = false
+    @State private var showingError = false
+    @State private var errorMessage = ""
+    @State private var hasChanges = false
+    
+    // Validation
+    @State private var usernameError: String?
+    @State private var displayNameError: String?
+    @State private var bioError: String?
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    // MARK: - Initialization
+    
+    init(userService: UserService, currentUser: BasicUserInfo, onSave: @escaping (BasicUserInfo) -> Void) {
+        self.userService = userService
+        self.currentUser = currentUser
+        self.onSave = onSave
         
-        let username = generateUsername(from: email, id: id)
-        let now = Timestamp()
-        
-        // Determine initial tier and clout
-        let initialTier: UserTier = isSpecialUser ? .founder : .rookie
-        let initialClout = isSpecialUser ? 50000 : 0
-        
-        let userData: [String: Any] = [
-            FirebaseSchema.UserDocument.email: email,
-            FirebaseSchema.UserDocument.username: username,
-            FirebaseSchema.UserDocument.displayName: displayName ?? username,
-            FirebaseSchema.UserDocument.bio: isSpecialUser ? "Founder of Stitch Social | Building the future of social video" : "",
-            FirebaseSchema.UserDocument.profileImageURL: profileImageURL ?? "",
-            FirebaseSchema.UserDocument.tier: initialTier.rawValue,
-            FirebaseSchema.UserDocument.clout: initialClout,
-            FirebaseSchema.UserDocument.isVerified: isSpecialUser,
-            FirebaseSchema.UserDocument.createdAt: now,
-            FirebaseSchema.UserDocument.updatedAt: now,
-            FirebaseSchema.UserDocument.followerCount: 0,
-            FirebaseSchema.UserDocument.followingCount: 0,
-            FirebaseSchema.UserDocument.videoCount: 0,
-            FirebaseSchema.UserDocument.threadCount: 0,
-            FirebaseSchema.UserDocument.totalHypesReceived: 0,
-            FirebaseSchema.UserDocument.totalCoolsReceived: 0,
-            FirebaseSchema.UserDocument.isPrivate: false,
-            FirebaseSchema.UserDocument.isBanned: false
-        ]
-        
-        try await db.collection(FirebaseSchema.Collections.users).document(id).setData(userData)
-        
-        let user = BasicUserInfo(
-            id: id,
-            username: username,
-            displayName: displayName ?? username,
-            tier: initialTier,
-            clout: initialClout,
-            isVerified: isSpecialUser,
-            profileImageURL: profileImageURL
-        )
-        
-        print("USER SERVICE: Created user \(username) with tier \(initialTier.displayName)")
-        return user
+        // Initialize state with current values
+        _displayName = State(initialValue: currentUser.displayName)
+        _username = State(initialValue: currentUser.username)
+        _bio = State(initialValue: currentUser.bio ?? "")
+        _isPrivate = State(initialValue: currentUser.isPrivate ?? false)
     }
     
-    /// Get user by ID
-    func getUser(id: String) async throws -> BasicUserInfo? {
-        
-        let document = try await db.collection(FirebaseSchema.Collections.users).document(id).getDocument()
-        
-        guard document.exists, let data = document.data() else {
-            print("USER SERVICE: User not found: \(id)")
-            return nil
-        }
-        
-        let user = createBasicUserInfo(from: data, id: id)
-        print("USER SERVICE: Loaded user \(user.username)")
-        return user
-    }
+    // MARK: - Body
     
-    /// Get extended profile data for editing - COMPLETE IMPLEMENTATION
-    func getExtendedProfile(id: String) async throws -> UserProfileData? {
-        let document = try await db.collection(FirebaseSchema.Collections.users).document(id).getDocument()
-        
-        guard document.exists, let data = document.data() else {
-            print("USER SERVICE: Extended profile not found: \(id)")
-            return nil
-        }
-        
-        let basicUser = createBasicUserInfo(from: data, id: id)
-        let profileData = UserProfileData(from: basicUser, extended: data)
-        
-        print("USER SERVICE: Loaded extended profile for \(basicUser.username)")
-        return profileData
-    }
-    
-    /// Update user profile - COMPLETE SUPPORT FOR ALL FIELDS
-    func updateProfile(
-        userID: String,
-        displayName: String? = nil,
-        bio: String? = nil,
-        isPrivate: Bool? = nil,
-        username: String? = nil
-    ) async throws {
-        
-        // Validate username uniqueness if provided
-        if let newUsername = username {
-            let isUnique = try await isUsernameUnique(username: newUsername, excludeUserID: userID)
-            guard isUnique else {
-                throw StitchError.validationError("Username '\(newUsername)' is already taken")
-            }
-        }
-        
-        var updates: [String: Any] = [
-            FirebaseSchema.UserDocument.updatedAt: Timestamp()
-        ]
-        
-        if let displayName = displayName {
-            updates[FirebaseSchema.UserDocument.displayName] = displayName
-        }
-        
-        if let bio = bio {
-            updates[FirebaseSchema.UserDocument.bio] = bio
-        }
-        
-        if let isPrivate = isPrivate {
-            updates[FirebaseSchema.UserDocument.isPrivate] = isPrivate
-        }
-        
-        if let username = username {
-            updates[FirebaseSchema.UserDocument.username] = username
-        }
-        
-        try await db.collection(FirebaseSchema.Collections.users).document(userID).updateData(updates)
-        
-        print("USER SERVICE: Updated profile for \(userID)")
-        print("USER SERVICE: Updated fields: \(updates.keys.sorted())")
-    }
-    
-    /// Upload profile image - COMPLETE IMPLEMENTATION
-    func uploadProfileImage(userID: String, imageData: Data) async throws -> String {
-        
-        // Validate image size
-        let maxSize = OptimizationConfig.User.maxProfileImageSize
-        guard Int64(imageData.count) <= maxSize else {
-            throw StitchError.validationError("Image too large. Maximum size is \(maxSize / (1024 * 1024))MB")
-        }
-        
-        let storageRef = storage.reference().child("profile_images/\(userID).jpg")
-        
-        let metadata = StorageMetadata()
-        metadata.contentType = "image/jpeg"
-        metadata.customMetadata = [
-            "userID": userID,
-            "uploadedAt": "\(Date().timeIntervalSince1970)"
-        ]
-        
-        // Upload image
-        _ = try await storageRef.putDataAsync(imageData, metadata: metadata)
-        let url = try await storageRef.downloadURL()
-        let urlString = url.absoluteString
-        
-        // Update user document with new image URL
-        try await db.collection(FirebaseSchema.Collections.users).document(userID).updateData([
-            FirebaseSchema.UserDocument.profileImageURL: urlString,
-            FirebaseSchema.UserDocument.updatedAt: Timestamp()
-        ])
-        
-        print("USER SERVICE: Profile image uploaded for \(userID)")
-        print("USER SERVICE: New image URL: \(urlString)")
-        return urlString
-    }
-    
-    /// Check if username is unique - HELPER FOR VALIDATION
-    func isUsernameUnique(username: String, excludeUserID: String? = nil) async throws -> Bool {
-        let query = db.collection(FirebaseSchema.Collections.users)
-            .whereField(FirebaseSchema.UserDocument.username, isEqualTo: username)
-            .limit(to: 1)
-        
-        let snapshot = try await query.getDocuments()
-        
-        // If no documents found, username is unique
-        guard !snapshot.documents.isEmpty else {
-            return true
-        }
-        
-        // If excluding a specific user ID (for updates), check if the found user is the excluded one
-        if let excludeID = excludeUserID {
-            let foundUserID = snapshot.documents.first?.documentID
-            return foundUserID == excludeID
-        }
-        
-        // Username is taken
-        return false
-    }
-    
-    /// Update user clout
-    func updateClout(userID: String, cloutChange: Int) async throws {
-        let userRef = db.collection(FirebaseSchema.Collections.users).document(userID)
-        
-        try await userRef.updateData([
-            FirebaseSchema.UserDocument.clout: FieldValue.increment(Int64(cloutChange)),
-            FirebaseSchema.UserDocument.updatedAt: Timestamp()
-        ])
-        
-        // Get new clout for tier check
-        let document = try await userRef.getDocument()
-        if let newClout = document.data()?[FirebaseSchema.UserDocument.clout] as? Int {
-            await checkTierUpgrade(userID: userID, newClout: newClout)
-        }
-        
-        print("USER SERVICE: Updated clout by \(cloutChange) for user \(userID)")
-    }
-    
-    // MARK: - Following System (Subcollection-based)
-    
-    /// Follow a user
-    func followUser(followerID: String, followingID: String) async throws {
-        guard followerID != followingID else {
-            throw StitchError.validationError("Cannot follow yourself")
-        }
-        
-        let batch = db.batch()
-        
-        // Add to follower's following subcollection
-        let followingRef = db.collection(FirebaseSchema.Collections.users)
-            .document(followerID)
-            .collection("following")
-            .document(followingID)
-        
-        // Add to following user's followers subcollection
-        let followerRef = db.collection(FirebaseSchema.Collections.users)
-            .document(followingID)
-            .collection("followers")
-            .document(followerID)
-        
-        let timestamp = Timestamp()
-        
-        batch.setData([
-            "userId": followingID,
-            "followedAt": timestamp
-        ], forDocument: followingRef)
-        
-        batch.setData([
-            "userId": followerID,
-            "followedAt": timestamp
-        ], forDocument: followerRef)
-        
-        // Update counts
-        let followerUserRef = db.collection(FirebaseSchema.Collections.users).document(followerID)
-        let followingUserRef = db.collection(FirebaseSchema.Collections.users).document(followingID)
-        
-        batch.updateData([
-            FirebaseSchema.UserDocument.followingCount: FieldValue.increment(Int64(1)),
-            FirebaseSchema.UserDocument.updatedAt: timestamp
-        ], forDocument: followerUserRef)
-        
-        batch.updateData([
-            FirebaseSchema.UserDocument.followerCount: FieldValue.increment(Int64(1)),
-            FirebaseSchema.UserDocument.updatedAt: timestamp
-        ], forDocument: followingUserRef)
-        
-        try await batch.commit()
-        print("USER SERVICE: \(followerID) followed \(followingID)")
-    }
-    
-    /// Unfollow a user
-    func unfollowUser(followerID: String, followingID: String) async throws {
-        let batch = db.batch()
-        
-        // Remove from follower's following subcollection
-        let followingRef = db.collection(FirebaseSchema.Collections.users)
-            .document(followerID)
-            .collection("following")
-            .document(followingID)
-        
-        // Remove from following user's followers subcollection
-        let followerRef = db.collection(FirebaseSchema.Collections.users)
-            .document(followingID)
-            .collection("followers")
-            .document(followerID)
-        
-        batch.deleteDocument(followingRef)
-        batch.deleteDocument(followerRef)
-        
-        // Update counts
-        let timestamp = Timestamp()
-        let followerUserRef = db.collection(FirebaseSchema.Collections.users).document(followerID)
-        let followingUserRef = db.collection(FirebaseSchema.Collections.users).document(followingID)
-        
-        batch.updateData([
-            FirebaseSchema.UserDocument.followingCount: FieldValue.increment(Int64(-1)),
-            FirebaseSchema.UserDocument.updatedAt: timestamp
-        ], forDocument: followerUserRef)
-        
-        batch.updateData([
-            FirebaseSchema.UserDocument.followerCount: FieldValue.increment(Int64(-1)),
-            FirebaseSchema.UserDocument.updatedAt: timestamp
-        ], forDocument: followingUserRef)
-        
-        try await batch.commit()
-        print("USER SERVICE: \(followerID) unfollowed \(followingID)")
-    }
-    
-    /// Check if user is following another user
-    func isFollowing(followerID: String, followingID: String) async throws -> Bool {
-        let document = try await db.collection(FirebaseSchema.Collections.users)
-            .document(followerID)
-            .collection("following")
-            .document(followingID)
-            .getDocument()
-        
-        return document.exists
-    }
-    
-    /// Get following IDs for HomeFeedService
-    func getFollowingIDs(userID: String) async throws -> [String] {
-        print("USER SERVICE: Loading following IDs for user: \(userID)")
-        
-        let snapshot = try await db.collection(FirebaseSchema.Collections.users)
-            .document(userID)
-            .collection("following")
-            .getDocuments()
-        
-        let followingIDs = snapshot.documents.map { $0.documentID }
-        
-        print("USER SERVICE: Found \(followingIDs.count) following IDs")
-        return followingIDs
-    }
-    
-    /// Get users that the given user is following
-    func getFollowing(userID: String, limit: Int = 50) async throws -> [BasicUserInfo] {
-        let followingDocs = try await db.collection(FirebaseSchema.Collections.users)
-            .document(userID)
-            .collection("following")
-            .order(by: "followedAt", descending: true)
-            .limit(to: limit)
-            .getDocuments()
-        
-        var users: [BasicUserInfo] = []
-        
-        for doc in followingDocs.documents {
-            let followingUserID = doc.documentID
-            if let user = try await getUser(id: followingUserID) {
-                users.append(user)
-            }
-        }
-        
-        return users
-    }
-    
-    /// Get followers of the given user
-    func getFollowers(userID: String, limit: Int = 50) async throws -> [BasicUserInfo] {
-        let followerDocs = try await db.collection(FirebaseSchema.Collections.users)
-            .document(userID)
-            .collection("followers")
-            .order(by: "followedAt", descending: true)
-            .limit(to: limit)
-            .getDocuments()
-        
-        var users: [BasicUserInfo] = []
-        
-        for doc in followerDocs.documents {
-            let followerUserID = doc.documentID
-            if let user = try await getUser(id: followerUserID) {
-                users.append(user)
-            }
-        }
-        
-        return users
-    }
-    
-    // MARK: - Helper Methods
-    
-    /// Create BasicUserInfo from Firestore data
-    private func createBasicUserInfo(from data: [String: Any], id: String) -> BasicUserInfo {
-        let tierRawValue = data[FirebaseSchema.UserDocument.tier] as? String ?? UserTier.rookie.rawValue
-        let tier = UserTier(rawValue: tierRawValue) ?? .rookie
-        
-        return BasicUserInfo(
-            id: id,
-            username: data[FirebaseSchema.UserDocument.username] as? String ?? "unknown",
-            displayName: data[FirebaseSchema.UserDocument.displayName] as? String ?? "Unknown User",
-            tier: tier,
-            clout: data[FirebaseSchema.UserDocument.clout] as? Int ?? 0,
-            isVerified: data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false,
-            profileImageURL: data[FirebaseSchema.UserDocument.profileImageURL] as? String,
-            createdAt: (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
-        )
-    }
-    
-    /// Generate username from email and ID
-    private func generateUsername(from email: String, id: String) -> String {
-        if !email.isEmpty {
-            let emailPrefix = String(email.split(separator: "@").first ?? "user")
-            return "\(emailPrefix)_\(String(id.prefix(6)))"
-        } else {
-            return "user_\(String(id.prefix(8)))"
-        }
-    }
-    
-    /// Check and apply tier upgrades
-    private func checkTierUpgrade(userID: String, newClout: Int) async {
-        let currentTier = UserTier.allCases.first { tier in
-            tier.cloutRange.contains(newClout) && tier.isAchievableTier
-        }
-        
-        if let newTier = currentTier {
-            do {
-                try await db.collection(FirebaseSchema.Collections.users).document(userID).updateData([
-                    FirebaseSchema.UserDocument.tier: newTier.rawValue,
-                    FirebaseSchema.UserDocument.updatedAt: Timestamp()
-                ])
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Color.black.ignoresSafeArea()
                 
-                print("USER SERVICE: Tier upgraded to \(newTier.displayName)")
-            } catch {
-                print("USER SERVICE: Failed to upgrade tier: \(error)")
+                if isSaving {
+                    savingView
+                } else {
+                    editingContent
+                }
             }
         }
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarHidden(true)
+        .alert("Error", isPresented: $showingError) {
+            Button("OK") { }
+        } message: {
+            Text(errorMessage)
+        }
+        .onChange(of: selectedPhotoItem) { newItem in
+            Task {
+                await loadSelectedImage()
+            }
+        }
+        .onChange(of: displayName) { _ in checkForChanges() }
+        .onChange(of: username) { _ in
+            checkForChanges()
+            validateUsername()
+        }
+        .onChange(of: bio) { _ in
+            checkForChanges()
+            validateBio()
+        }
+        .onChange(of: isPrivate) { _ in checkForChanges() }
+    }
+    
+    // MARK: - Main Content
+    
+    private var editingContent: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                
+                // Navigation Header
+                navigationHeader
+                
+                // Profile Image Section
+                profileImageSection
+                
+                // Form Fields
+                formFields
+                
+                // Privacy Toggle
+                privacySection
+                
+                Spacer(minLength: 100)
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+    
+    // MARK: - Navigation Header
+    
+    private var navigationHeader: some View {
+        HStack {
+            Button("Cancel") {
+                dismiss()
+            }
+            .foregroundColor(.gray)
+            
+            Spacer()
+            
+            Text("Edit Profile")
+                .font(.headline)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+            
+            Spacer()
+            
+            Button("Save") {
+                Task {
+                    await saveProfile()
+                }
+            }
+            .foregroundColor(hasChanges && isFormValid ? .cyan : .gray)
+            .fontWeight(.semibold)
+            .disabled(!hasChanges || !isFormValid)
+        }
+        .padding(.top, 10)
+    }
+    
+    // MARK: - Profile Image Section
+    
+    private var profileImageSection: some View {
+        VStack(spacing: 16) {
+            
+            // Current/New Image
+            ZStack {
+                if let imageData = profileImageData, let uiImage = UIImage(data: imageData) {
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 120, height: 120)
+                        .clipShape(Circle())
+                } else if let profileImageURL = currentUser.profileImageURL, !profileImageURL.isEmpty {
+                    AsyncImage(url: URL(string: profileImageURL)) { image in
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } placeholder: {
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .overlay(
+                                Image(systemName: "person.fill")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.gray)
+                            )
+                    }
+                    .frame(width: 120, height: 120)
+                    .clipShape(Circle())
+                } else {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .frame(width: 120, height: 120)
+                        .overlay(
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 40))
+                                .foregroundColor(.gray)
+                        )
+                }
+                
+                // Edit overlay
+                Circle()
+                    .fill(Color.black.opacity(0.6))
+                    .frame(width: 120, height: 120)
+                    .overlay(
+                        Image(systemName: "camera.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(.white)
+                    )
+            }
+            .onTapGesture {
+                showingImagePicker = true
+            }
+            .photosPicker(isPresented: $showingImagePicker, selection: $selectedPhotoItem, matching: .images)
+            
+            Text("Tap to change photo")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+    }
+    
+    // MARK: - Form Fields
+    
+    private var formFields: some View {
+        VStack(spacing: 20) {
+            
+            // Display Name
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Display Name")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white)
+                
+                TextField("Your display name", text: $displayName)
+                    .textFieldStyle(ProfileTextFieldStyle())
+                    .autocapitalization(.words)
+                
+                if let error = displayNameError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+            }
+            
+            // Username
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Username")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.white)
+                
+                TextField("@username", text: $username)
+                    .textFieldStyle(ProfileTextFieldStyle())
+                    .autocapitalization(.none)
+                    .autocorrectionDisabled()
+                
+                if let error = usernameError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                } else {
+                    Text("This is how others will find you")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+            
+            // Bio
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Bio")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    Text("\(bio.count)/150")
+                        .font(.caption)
+                        .foregroundColor(bio.count > 150 ? .red : .gray)
+                }
+                
+                TextField("Tell people about yourself...", text: $bio, axis: .vertical)
+                    .textFieldStyle(ProfileTextFieldStyle())
+                    .lineLimit(3...6)
+                
+                if let error = bioError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Privacy Section
+    
+    private var privacySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Private Account")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.white)
+                    
+                    Text("Only approved followers can see your content")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+                
+                Spacer()
+                
+                Toggle("", isOn: $isPrivate)
+                    .toggleStyle(SwitchToggleStyle(tint: .cyan))
+            }
+            .padding(.vertical, 8)
+        }
+    }
+    
+    // MARK: - Saving View
+    
+    private var savingView: some View {
+        VStack(spacing: 20) {
+            ProgressView()
+                .tint(.cyan)
+                .scaleEffect(1.2)
+            
+            Text("Saving profile...")
+                .font(.headline)
+                .foregroundColor(.white)
+        }
+    }
+    
+    // MARK: - Validation
+    
+    private func validateUsername() {
+        usernameError = nil
+        
+        if username.isEmpty {
+            usernameError = "Username cannot be empty"
+            return
+        }
+        
+        if username.count < 3 {
+            usernameError = "Username must be at least 3 characters"
+            return
+        }
+        
+        if username.count > 20 {
+            usernameError = "Username must be 20 characters or less"
+            return
+        }
+        
+        let validCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_"))
+        if username.unicodeScalars.contains(where: { !validCharacters.contains($0) }) {
+            usernameError = "Username can only contain letters, numbers, and underscores"
+            return
+        }
+    }
+    
+    private func validateDisplayName() {
+        displayNameError = nil
+        
+        if displayName.isEmpty {
+            displayNameError = "Display name cannot be empty"
+            return
+        }
+        
+        if displayName.count > 30 {
+            displayNameError = "Display name must be 30 characters or less"
+            return
+        }
+    }
+    
+    private func validateBio() {
+        bioError = nil
+        
+        if bio.count > 150 {
+            bioError = "Bio must be 150 characters or less"
+            return
+        }
+    }
+    
+    private var isFormValid: Bool {
+        return usernameError == nil &&
+               displayNameError == nil &&
+               bioError == nil &&
+               !username.isEmpty &&
+               !displayName.isEmpty
+    }
+    
+    // MARK: - Change Detection
+    
+    private func checkForChanges() {
+        hasChanges = displayName != currentUser.displayName ||
+                    username != currentUser.username ||
+                    bio != (currentUser.bio ?? "") ||
+                    isPrivate != (currentUser.isPrivate ?? false) ||
+                    profileImageData != nil
+        
+        // Validate on change
+        validateDisplayName()
+    }
+    
+    // MARK: - Image Handling
+    
+    private func loadSelectedImage() async {
+        guard let selectedPhotoItem = selectedPhotoItem else { return }
+        
+        do {
+            if let data = try await selectedPhotoItem.loadTransferable(type: Data.self) {
+                await MainActor.run {
+                    self.profileImageData = data
+                    checkForChanges()
+                }
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = "Failed to load image: \(error.localizedDescription)"
+                self.showingError = true
+            }
+        }
+    }
+    
+    // MARK: - Save Profile
+    
+    private func saveProfile() async {
+        guard isFormValid else { return }
+        
+        await MainActor.run {
+            isSaving = true
+        }
+        
+        do {
+            var imageURL: String? = currentUser.profileImageURL
+            
+            // Upload new image if selected
+            if let imageData = profileImageData {
+                imageURL = try await userService.updateProfileImage(
+                    userID: currentUser.id,
+                    imageData: imageData
+                )
+            }
+            
+            // Update profile data
+            try await userService.updateProfile(
+                userID: currentUser.id,
+                displayName: displayName,
+                bio: bio.isEmpty ? nil : bio,
+                isPrivate: isPrivate,
+                username: username != currentUser.username ? username : nil
+            )
+            
+            // Create updated user info
+            let updatedUser = BasicUserInfo(
+                id: currentUser.id,
+                username: username,
+                displayName: displayName,
+                bio: bio.isEmpty ? "" : bio,
+                tier: currentUser.tier,
+                clout: currentUser.clout,
+                isVerified: currentUser.isVerified,
+                isPrivate: isPrivate,
+                profileImageURL: imageURL ?? "",
+                createdAt: currentUser.createdAt
+            )
+            
+            await MainActor.run {
+                isSaving = false
+                onSave(updatedUser)
+                dismiss()
+            }
+            
+        } catch {
+            await MainActor.run {
+                isSaving = false
+                errorMessage = "Failed to save profile: \(error.localizedDescription)"
+                showingError = true
+            }
+        }
+    }
+}
+
+// MARK: - Custom Text Field Style
+
+struct ProfileTextFieldStyle: TextFieldStyle {
+    func _body(configuration: TextField<Self._Label>) -> some View {
+        configuration
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.gray.opacity(0.15))
+            )
+            .foregroundColor(.white)
+            .font(.body)
+    }
+}
+
+// MARK: - Preview
+
+#Preview {
+    NewEditProfileView(
+        userService: UserService(),
+        currentUser: BasicUserInfo(
+            id: "test",
+            username: "testuser",
+            displayName: "Test User",
+            bio: "This is a test bio",
+            tier: .rookie,
+            clout: 100,
+            isVerified: false,
+            profileImageURL: ""
+        )
+    ) { user in
+        // Handle save callback
     }
 }

@@ -2,24 +2,18 @@
 //  BoundedVideoContainer.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 9/19/25.
-//
-
-
-//
-//  BoundedVideoContainer.swift
-//  StitchSocial
-//
-//  Layer 8: Views - Optimized Video Container for Thread Navigation
+//  Layer 8: Views - Context-Aware Video Container for Thread Navigation
 //  Dependencies: AVFoundation, CoreVideoMetadata, ThreadData
-//  Features: Background/foreground handling, memory efficient, loop detection
+//  Features: Background/foreground handling, memory efficient, loop detection, context-aware kill notifications
 //  Purpose: Lightweight video player for continuous scrolling experiences
+//  FIXED: Profile grid thumbnails immune to kill notifications
 //
 
 import SwiftUI
 import AVFoundation
+import ObjectiveC
 
-// MARK: - BoundedVideoContainer
+// MARK: - Context-Aware BoundedVideoContainer
 
 struct MyBoundedVideoContainer: UIViewRepresentable {
     let video: CoreVideoMetadata
@@ -27,12 +21,13 @@ struct MyBoundedVideoContainer: UIViewRepresentable {
     let isActive: Bool
     let containerID: String
     let onVideoLoop: (String) -> Void
+    let context: VideoPlayerContext  // ✅ NEW: Context awareness
     
     func makeUIView(context: Context) -> UIView {
         let containerView = UIView()
         containerView.backgroundColor = UIColor.black
         
-        // Create coordinator
+        // Create coordinator with context
         let coordinator = context.coordinator
         coordinator.containerView = containerView
         coordinator.setupPlayer(for: video, isActive: isActive)
@@ -50,11 +45,11 @@ struct MyBoundedVideoContainer: UIViewRepresentable {
     }
     
     func makeCoordinator() -> VideoContainerCoordinator {
-        VideoContainerCoordinator(onVideoLoop: onVideoLoop)
+        VideoContainerCoordinator(onVideoLoop: onVideoLoop, context: self.context)
     }
 }
 
-// MARK: - Video Container Coordinator
+// MARK: - Context-Aware Video Container Coordinator
 
 class VideoContainerCoordinator: NSObject {
     var containerView: UIView?
@@ -63,12 +58,104 @@ class VideoContainerCoordinator: NSObject {
     var currentVideoID: String?
     var isActive: Bool = false
     var notificationObserver: NSObjectProtocol?
+    var killObserver: NSObjectProtocol?  // ✅ NEW: Kill notification observer
     let onVideoLoop: (String) -> Void
     
-    init(onVideoLoop: @escaping (String) -> Void) {
+    // ✅ NEW: Context awareness
+    private let playerContext: VideoPlayerContext
+    
+    // View tracking properties
+    private var viewTimer: Timer?
+    private var viewStartTime: Date?
+    private var hasRegisteredView: Bool = false
+    private let minimumViewDuration: TimeInterval = 0.5
+    
+    init(onVideoLoop: @escaping (String) -> Void, context: VideoPlayerContext) {
         self.onVideoLoop = onVideoLoop
+        self.playerContext = context
         super.init()
+        setupKillObserver()
+        setupBackgroundObservers()
+        
+        print("🎬 BOUNDED VIDEO [\(context.description)]: Initialized")
     }
+    
+    // MARK: - ✅ Context-Aware Kill Observer Setup
+    
+    private func setupKillObserver() {
+        // Profile grid thumbnails DON'T respond to kill notifications
+        guard playerContext != .profileGrid else {
+            print("✅ BOUNDED VIDEO [profileGrid]: Skipping kill observer - thumbnails are immune")
+            return
+        }
+        
+        killObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("killAllVideoPlayers"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            print("🛑 BOUNDED VIDEO [\(self.playerContext.description)]: Received kill signal")
+            self.killPlayer()
+        }
+        print("✅ BOUNDED VIDEO [\(playerContext.description)]: Kill observer active")
+    }
+    
+    private func killPlayer() {
+        print("🛑 BOUNDED VIDEO [\(playerContext.description)]: Killing player for video \(currentVideoID ?? "unknown")")
+        
+        // Complete destruction
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        
+        if let observer = notificationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            notificationObserver = nil
+        }
+        
+        playerLayer?.removeFromSuperlayer()
+        player = nil
+        playerLayer = nil
+        currentVideoID = nil
+        isActive = false
+        
+        stopViewTracking()
+        resetViewTracking()
+        
+        print("✅ BOUNDED VIDEO [\(playerContext.description)]: Player destroyed")
+    }
+    
+    // MARK: - Background & Foreground Observers
+    
+    private func setupBackgroundObservers() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func appDidEnterBackground() {
+        player?.pause()
+        print("📱 BOUNDED VIDEO [\(playerContext.description)]: Paused (background)")
+    }
+    
+    @objc private func appWillEnterForeground() {
+        if isActive {
+            player?.play()
+            print("📱 BOUNDED VIDEO [\(playerContext.description)]: Resumed (foreground)")
+        }
+    }
+    
+    // MARK: - Player Setup
     
     func setupPlayer(for video: CoreVideoMetadata, isActive: Bool) {
         guard let containerView = containerView else { return }
@@ -78,9 +165,13 @@ class VideoContainerCoordinator: NSObject {
         // Clean up existing player if different video
         if currentVideoID != video.id {
             cleanupCurrentPlayer()
+            resetViewTracking()
             
             // Setup new player
-            guard let url = URL(string: video.videoURL) else { return }
+            guard let url = URL(string: video.videoURL) else {
+                print("❌ BOUNDED VIDEO [\(playerContext.description)]: Invalid URL")
+                return
+            }
             
             let playerItem = AVPlayerItem(url: url)
             player = AVPlayer(playerItem: playerItem)
@@ -98,29 +189,90 @@ class VideoContainerCoordinator: NSObject {
             currentVideoID = video.id
             
             // Setup loop notification
-            notificationObserver = NotificationCenter.default.addObserver(
-                forName: .AVPlayerItemDidPlayToEndTime,
-                object: player?.currentItem,
-                queue: .main
-            ) { [weak self] _ in
-                self?.player?.seek(to: .zero)
-                if self?.isActive == true {
-                    self?.player?.play()
-                    self?.onVideoLoop(video.id)
-                }
-            }
+            setupLoopDetection(for: video)
+            
+            print("✅ BOUNDED VIDEO [\(playerContext.description)]: Player created for \(video.id.prefix(8))")
         }
         
         // Update playback state
-        if isActive {
+        if isActive && player != nil {
             player?.play()
-        } else {
+            startViewTracking(for: video)
+            print("▶️ BOUNDED VIDEO [\(playerContext.description)]: Playing")
+        } else if !isActive && player != nil {
             player?.pause()
+            stopViewTracking()
+            print("⏸️ BOUNDED VIDEO [\(playerContext.description)]: Paused")
+        } else if player == nil {
+            print("🚫 BOUNDED VIDEO [\(playerContext.description)]: No player (was killed)")
         }
         
         // Update layer frame
         playerLayer?.frame = containerView.bounds
     }
+    
+    // MARK: - Loop Detection
+    
+    private func setupLoopDetection(for video: CoreVideoMetadata) {
+        guard let player = player else { return }
+        
+        if let observer = notificationObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        
+        notificationObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: player.currentItem,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            
+            self.player?.seek(to: .zero)
+            if self.isActive {
+                self.player?.play()
+                self.onVideoLoop(video.id)
+            }
+            
+            print("🔄 BOUNDED VIDEO [\(self.playerContext.description)]: Video looped")
+        }
+    }
+    
+    // MARK: - View Tracking
+    
+    private func startViewTracking(for video: CoreVideoMetadata) {
+        viewStartTime = Date()
+        
+        viewTimer = Timer.scheduledTimer(withTimeInterval: minimumViewDuration, repeats: false) { [weak self] _ in
+            self?.registerView(for: video)
+        }
+        
+        print("👁️ VIEW TRACKING [\(playerContext.description)]: Started for \(video.id.prefix(8))")
+    }
+    
+    private func registerView(for video: CoreVideoMetadata) {
+        guard let startTime = viewStartTime, !hasRegisteredView else { return }
+        
+        let watchTime = Date().timeIntervalSince(startTime)
+        hasRegisteredView = true
+        print("✅ VIEW TRACKING [\(playerContext.description)]: Registered after \(String(format: "%.1f", watchTime))s")
+        
+        viewTimer?.invalidate()
+        viewTimer = nil
+    }
+    
+    private func stopViewTracking() {
+        viewTimer?.invalidate()
+        viewTimer = nil
+        viewStartTime = nil
+    }
+    
+    private func resetViewTracking() {
+        stopViewTracking()
+        hasRegisteredView = false
+        viewStartTime = nil
+    }
+    
+    // MARK: - Cleanup
     
     private func cleanupCurrentPlayer() {
         player?.pause()
@@ -130,6 +282,8 @@ class VideoContainerCoordinator: NSObject {
             notificationObserver = nil
         }
         
+        stopViewTracking()
+        
         player = nil
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
@@ -138,5 +292,30 @@ class VideoContainerCoordinator: NSObject {
     
     deinit {
         cleanupCurrentPlayer()
+        resetViewTracking()
+        
+        // Cleanup kill observer
+        if let observer = killObserver {
+            NotificationCenter.default.removeObserver(observer)
+            killObserver = nil
+        }
+        
+        NotificationCenter.default.removeObserver(self)
+        print("🗑️ BOUNDED VIDEO [\(playerContext.description)]: Deinitialized")
+    }
+}
+
+// MARK: - VideoPlayerContext Extension (Add description if not present)
+
+extension VideoPlayerContext {
+    var description: String {
+        switch self {
+        case .homeFeed: return "Home Feed"
+        case .discovery: return "Discovery"
+        case .profileGrid: return "Profile Grid"
+        case .threadView: return "Thread View"
+        case .fullscreen: return "Fullscreen"
+        case .standalone: return "Standalone"
+        }
     }
 }

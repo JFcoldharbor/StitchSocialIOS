@@ -421,6 +421,7 @@ extension Color {
         case .rising: return .blue
         case .veteran: return .gray
         case .influencer: return .purple
+        case .ambassador: return .indigo      // Single color, not array
         case .elite: return .purple
         case .partner: return .orange
         case .legendary: return .red

@@ -50,14 +50,22 @@ class SearchViewModel: ObservableObject {
         }
     }
     
-    // UPDATED: Setup follow callbacks for better integration
+    // CRITICAL FIX: Setup follow callbacks to force UI refresh
     private func setupFollowCallbacks() {
         followManager.onFollowStateChanged = { [weak self] userID, isFollowing in
             print("🔗 SEARCH: User \(userID) follow state changed to \(isFollowing)")
+            // Force UI refresh when follow state changes
+            Task { @MainActor in
+                self?.objectWillChange.send()
+            }
         }
         
         followManager.onFollowError = { [weak self] userID, error in
             print("❌ SEARCH: Follow error for user \(userID): \(error)")
+            // Force UI refresh on error too
+            Task { @MainActor in
+                self?.objectWillChange.send()
+            }
         }
     }
     
@@ -87,6 +95,7 @@ class SearchViewModel: ObservableObject {
                 
                 // UPDATED: Use FollowManager to load follow states
                 await followManager.loadFollowStatesForUsers(users)
+                print("🔄 SEARCH: Loaded follow states for \(users.count) search results")
                 
             } catch {
                 await MainActor.run {
@@ -124,6 +133,7 @@ class SearchViewModel: ObservableObject {
             
             // UPDATED: Use FollowManager to load follow states for suggested users
             await followManager.loadFollowStatesForUsers(users)
+            print("🔄 SEARCH: Loaded follow states for \(users.count) suggested users")
             
         } catch {
             await MainActor.run {
@@ -133,9 +143,24 @@ class SearchViewModel: ObservableObject {
         }
     }
     
-    // REMOVED: toggleFollow - now handled by FollowManager
-    // REMOVED: loadFollowStates - now handled by FollowManager
-    // REMOVED: loadFollowStatesForSuggested - now handled by FollowManager
+    // CRITICAL FIX: Add method to load follow states from Firebase
+    func loadFollowStatesFromFirebase() async {
+        print("🔄 SEARCH: Loading follow states from Firebase...")
+        
+        // Load follow states for suggested users
+        if !suggestedUsers.isEmpty {
+            print("🔄 SEARCH: Loading states for \(suggestedUsers.count) suggested users")
+            await followManager.loadFollowStates(for: suggestedUsers.map { $0.id })
+        }
+        
+        // Load follow states for search results
+        if !userResults.isEmpty {
+            print("🔄 SEARCH: Loading states for \(userResults.count) search results")
+            await followManager.loadFollowStates(for: userResults.map { $0.id })
+        }
+        
+        print("✅ SEARCH: Finished loading follow states from Firebase")
+    }
     
     func showProfile(for user: BasicUserInfo) {
         selectedUser = user
@@ -178,6 +203,12 @@ struct SearchView: View {
         .sheet(isPresented: $viewModel.showingProfile) {
             if let user = viewModel.selectedUser {
                 CreatorProfileView(userID: user.id)
+            }
+        }
+        .onAppear {
+            // CRITICAL FIX: Load follow states from Firebase when view appears
+            Task {
+                await viewModel.loadFollowStatesFromFirebase()
             }
         }
     }
@@ -267,7 +298,7 @@ struct SearchView: View {
     }
     
     private var videoResultsSection: some View {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
             ForEach(viewModel.videoResults, id: \.id) { video in
                 VideoSearchCardView(video: video)
             }
@@ -409,10 +440,13 @@ struct UserSearchRowView: View {
                 Spacer()
                 
                 if !isCurrentUser {
-                    // UPDATED: Use FollowManager for follow button
+                    // CRITICAL FIX: Add id to force view refresh when follow state changes
                     Button {
                         Task {
+                            print("🔗 SEARCH: Follow button tapped for user \(user.id)")
+                            print("🔗 SEARCH: Current follow state before tap: \(isFollowing)")
                             await followManager.toggleFollow(for: user.id)
+                            print("🔗 SEARCH: Current follow state after tap: \(followManager.isFollowing(user.id))")
                         }
                     } label: {
                         Group {
@@ -432,6 +466,7 @@ struct UserSearchRowView: View {
                         .cornerRadius(20)
                     }
                     .disabled(isLoading)
+                    .id("\(user.id)_\(isFollowing)_\(isLoading)") // CRITICAL FIX: Force refresh when state changes
                 }
             }
             .padding(.horizontal, 16)

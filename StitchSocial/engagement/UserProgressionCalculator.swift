@@ -5,6 +5,7 @@
 //  Layer 5: Business Logic - Pure User Progression Calculation Functions
 //  Dependencies: UserTier (Layer 1) ONLY
 //  Features: Tier advancement, badge eligibility, clout calculation
+//  UPDATED: Added ambassador tier level support
 //
 
 import Foundation
@@ -36,19 +37,20 @@ struct UserProgressionCalculator {
         return getTierLevel(tier1) > getTierLevel(tier2)
     }
     
-    /// Get numeric level for tier comparison
+    /// Get numeric level for tier comparison - UPDATED with ambassador
     static func getTierLevel(_ tier: UserTier) -> Int {
         switch tier {
         case .rookie: return 1
         case .rising: return 2
         case .veteran: return 3
         case .influencer: return 4
-        case .elite: return 5
-        case .partner: return 6
-        case .legendary: return 7
-        case .topCreator: return 8
-        case .founder: return 9
-        case .coFounder: return 10
+        case .ambassador: return 5        // NEW tier level
+        case .elite: return 6             // ADJUSTED from 5
+        case .partner: return 7           // ADJUSTED from 6
+        case .legendary: return 8         // ADJUSTED from 7
+        case .topCreator: return 9        // ADJUSTED from 8
+        case .founder: return 10          // ADJUSTED from 9
+        case .coFounder: return 11        // ADJUSTED from 10
         }
     }
     

@@ -3,6 +3,7 @@
 //  StitchSocial
 //
 //  TikTok-style infinite scroll with intelligent content batching
+//  FIXED: Removed engagement from swipe cards - browse only
 //
 
 import SwiftUI
@@ -92,7 +93,7 @@ class DiscoveryViewModel: ObservableObject {
     private var allAvailableVideos: [CoreVideoMetadata] = []
     private var lastDocument: DocumentSnapshot?
     
-    // MARK: - Initial Loading
+    // MARK: - Initial Loading - ✅ MIXED RECENT + OLD CONTENT
     
     func loadInitialContent() async {
         guard !loadingState.isInitialLoading else { return }
@@ -101,24 +102,52 @@ class DiscoveryViewModel: ObservableObject {
         defer { loadingState.isInitialLoading = false }
         
         do {
-            print("🎯 DISCOVERY: Loading initial batch (\(initialBatchSize) videos)")
+            print("🎯 DISCOVERY: Loading mixed content (recent 24hrs + random old)")
             
-            // FIXED: Use fast parent-only loading
-            let result = try await videoService.getDiscoveryParentThreadsOnly(limit: initialBatchSize)
+            // Load MORE videos than needed to ensure variety
+            let fetchLimit = initialBatchSize * 3 // Get 120 videos
+            let result = try await videoService.getDiscoveryParentThreadsOnly(limit: fetchLimit)
             let loadedVideos = result.threads.map { $0.parentVideo }
             
             await MainActor.run {
-                allAvailableVideos = loadedVideos
+                // ✅ SPLIT: 30% recent (last 24hrs), 70% random older
+                let now = Date()
+                let twentyFourHoursAgo = now.addingTimeInterval(-24 * 60 * 60)
+                
+                // ✅ CRITICAL: Filter out videos with empty IDs before processing
+                let validVideos = loadedVideos.filter { !$0.id.isEmpty }
+                
+                if validVideos.count < loadedVideos.count {
+                    print("⚠️ DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
+                }
+                
+                // Separate recent vs old
+                let recentVideos = validVideos.filter { $0.createdAt >= twentyFourHoursAgo }
+                let olderVideos = validVideos.filter { $0.createdAt < twentyFourHoursAgo }
+                
+                print("📊 DISCOVERY: Found \(recentVideos.count) recent, \(olderVideos.count) older")
+                
+                // Calculate mix ratios
+                let recentCount = min(Int(Double(initialBatchSize) * 0.3), recentVideos.count)
+                let olderCount = initialBatchSize - recentCount
+                
+                // Take samples and shuffle
+                let selectedRecent = Array(recentVideos.shuffled().prefix(recentCount))
+                let selectedOlder = Array(olderVideos.shuffled().prefix(olderCount))
+                
+                // Combine and shuffle again for maximum randomness
+                allAvailableVideos = (selectedRecent + selectedOlder).shuffled()
+                
                 lastDocument = result.lastDocument
                 loadingState.hasMoreContent = result.hasMore
-                loadingState.totalLoaded = loadedVideos.count
+                loadingState.totalLoaded = allAvailableVideos.count
                 loadingState.loadingBatch = 1
                 
-                // Apply category filter and light shuffle
+                // Apply category filter and shuffle
                 applyFilterAndShuffle()
                 
                 errorMessage = nil
-                print("✅ DISCOVERY: Initial load complete - \(filteredVideos.count) videos ready")
+                print("✅ DISCOVERY: Loaded \(filteredVideos.count) videos (recent + resurfaced old)")
             }
         } catch {
             await MainActor.run {
@@ -152,31 +181,52 @@ class DiscoveryViewModel: ObservableObject {
         do {
             print("🔥 DISCOVERY: Loading more content (batch \(loadingState.loadingBatch + 1))")
             
-            // FIXED: Use fast parent-only loading
+            // Load extra to ensure mix
+            let fetchLimit = subsequentBatchSize * 3 // Get 60 videos
             let result = try await videoService.getDiscoveryParentThreadsOnly(
-                limit: subsequentBatchSize,
+                limit: fetchLimit,
                 lastDocument: lastDocument
             )
             let newVideos = result.threads.map { $0.parentVideo }
             
             await MainActor.run {
-                // Add to available videos
-                allAvailableVideos.append(contentsOf: newVideos)
+                // ✅ SAME LOGIC: 30% recent, 70% old
+                let now = Date()
+                let twentyFourHoursAgo = now.addingTimeInterval(-24 * 60 * 60)
+                
+                // ✅ CRITICAL: Filter out videos with empty IDs
+                let validVideos = newVideos.filter { !$0.id.isEmpty }
+                
+                if validVideos.count < newVideos.count {
+                    print("⚠️ DISCOVERY: Filtered out \(newVideos.count - validVideos.count) videos with empty IDs")
+                }
+                
+                let recentVideos = validVideos.filter { $0.createdAt >= twentyFourHoursAgo }
+                let olderVideos = validVideos.filter { $0.createdAt < twentyFourHoursAgo }
+                
+                let recentCount = min(Int(Double(subsequentBatchSize) * 0.3), recentVideos.count)
+                let olderCount = subsequentBatchSize - recentCount
+                
+                let selectedRecent = Array(recentVideos.shuffled().prefix(recentCount))
+                let selectedOlder = Array(olderVideos.shuffled().prefix(olderCount))
+                
+                let shuffledNew = (selectedRecent + selectedOlder).shuffled()
+                allAvailableVideos.append(contentsOf: shuffledNew)
+                
                 lastDocument = result.lastDocument
                 loadingState.hasMoreContent = result.hasMore
-                loadingState.totalLoaded += newVideos.count
+                loadingState.totalLoaded += shuffledNew.count
                 loadingState.loadingBatch += 1
                 loadingState.lastLoadTime = Date()
                 
-                // Apply filter and add to current feed
-                let newFilteredVideos = applyCurrentFilter(to: newVideos)
-                let lightShuffledNew = lightShuffle(videos: newFilteredVideos)
-                filteredVideos.append(contentsOf: lightShuffledNew)
+                // Apply filter and add to feed
+                let newFilteredVideos = applyCurrentFilter(to: shuffledNew)
+                let diversifiedNew = diversifyShuffle(videos: newFilteredVideos)
+                filteredVideos.append(contentsOf: diversifiedNew)
                 
-                // Memory management - remove old videos if cache gets too large
                 manageMemory()
                 
-                print("✅ DISCOVERY: Loaded \(newVideos.count) more videos (total: \(filteredVideos.count))")
+                print("✅ DISCOVERY: Loaded \(shuffledNew.count) more videos (recent + old)")
             }
         } catch {
             print("❌ DISCOVERY: Failed to load more content: \(error)")
@@ -224,7 +274,7 @@ class DiscoveryViewModel: ObservableObject {
     
     private func applyFilterAndShuffle() {
         let filtered = applyCurrentFilter(to: allAvailableVideos)
-        filteredVideos = lightShuffle(videos: filtered)
+        filteredVideos = diversifyShuffle(videos: filtered)
         print("🔄 DISCOVERY: Applied \(currentCategory.displayName) filter - \(filteredVideos.count) videos")
     }
     
@@ -243,104 +293,61 @@ class DiscoveryViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Light Shuffle (Fast Performance)
+    // MARK: - MAXIMUM RANDOMIZATION - True Discovery
     
-    private func lightShuffle(videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
-        var shuffled = videos.shuffled()
+    private func diversifyShuffle(videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
+        guard videos.count > 1 else { return videos }
         
-        // Simple rule: prevent same creator back-to-back
+        // Group by creator
+        var creatorBuckets: [String: [CoreVideoMetadata]] = [:]
+        for video in videos {
+            creatorBuckets[video.creatorID, default: []].append(video)
+        }
+        
+        // Shuffle each creator's videos
+        var shuffledBuckets = creatorBuckets.mapValues { $0.shuffled() }
+        
+        // Build result with MAXIMUM variety
         var result: [CoreVideoMetadata] = []
-        var remaining = shuffled
+        var recentCreators: [String] = [] // Track last 5 creators
+        let maxRecentTracking = 5
         
-        while !remaining.isEmpty {
-            let lastCreatorID = result.last?.creatorID
+        while !shuffledBuckets.isEmpty {
+            // Find creators NOT in recent list
+            let availableCreators = shuffledBuckets.keys.filter { !recentCreators.contains($0) }
             
-            if let differentIndex = remaining.firstIndex(where: { $0.creatorID != lastCreatorID }) {
-                result.append(remaining.remove(at: differentIndex))
+            let chosenCreatorID: String
+            if !availableCreators.isEmpty {
+                // Pick random from available creators
+                chosenCreatorID = availableCreators.randomElement()!
             } else {
-                result.append(remaining.removeFirst())
+                // All creators used recently - pick random from any
+                chosenCreatorID = shuffledBuckets.keys.randomElement()!
+                recentCreators.removeAll() // Reset tracking
+            }
+            
+            // Take one video from chosen creator
+            if var creatorVideos = shuffledBuckets[chosenCreatorID], !creatorVideos.isEmpty {
+                let video = creatorVideos.removeFirst()
+                result.append(video)
+                
+                // Update recent creators tracking
+                recentCreators.append(chosenCreatorID)
+                if recentCreators.count > maxRecentTracking {
+                    recentCreators.removeFirst()
+                }
+                
+                // Update or remove bucket
+                if creatorVideos.isEmpty {
+                    shuffledBuckets.removeValue(forKey: chosenCreatorID)
+                } else {
+                    shuffledBuckets[chosenCreatorID] = creatorVideos
+                }
             }
         }
         
+        print("🎲 DISCOVERY: Ultra-randomized \(result.count) videos with max variety")
         return result
-    }
-    
-    // MARK: - Engagement Updates
-    
-    func updateVideoEngagement(videoID: String, type: InteractionType) {
-        // Update in both arrays efficiently
-        updateVideoInArray(&allAvailableVideos, videoID: videoID, type: type)
-        updateVideoInArray(&filteredVideos, videoID: videoID, type: type)
-        print("📊 DISCOVERY: Updated \(type.rawValue) for video \(videoID)")
-    }
-    
-    private func updateVideoInArray(_ array: inout [CoreVideoMetadata], videoID: String, type: InteractionType) {
-        guard let index = array.firstIndex(where: { $0.id == videoID }) else { return }
-        
-        var updatedVideo = array[index]
-        switch type {
-        case .hype:
-            updatedVideo = CoreVideoMetadata(
-                id: updatedVideo.id,
-                title: updatedVideo.title,
-                videoURL: updatedVideo.videoURL,
-                thumbnailURL: updatedVideo.thumbnailURL,
-                creatorID: updatedVideo.creatorID,
-                creatorName: updatedVideo.creatorName,
-                createdAt: updatedVideo.createdAt,
-                threadID: updatedVideo.threadID,
-                replyToVideoID: updatedVideo.replyToVideoID,
-                conversationDepth: updatedVideo.conversationDepth,
-                viewCount: updatedVideo.viewCount,
-                hypeCount: updatedVideo.hypeCount + 1,
-                coolCount: updatedVideo.coolCount,
-                replyCount: updatedVideo.replyCount,
-                shareCount: updatedVideo.shareCount,
-                temperature: updatedVideo.temperature,
-                qualityScore: updatedVideo.qualityScore,
-                engagementRatio: updatedVideo.engagementRatio,
-                velocityScore: updatedVideo.velocityScore,
-                trendingScore: updatedVideo.trendingScore,
-                duration: updatedVideo.duration,
-                aspectRatio: updatedVideo.aspectRatio,
-                fileSize: updatedVideo.fileSize,
-                discoverabilityScore: updatedVideo.discoverabilityScore,
-                isPromoted: updatedVideo.isPromoted,
-                lastEngagementAt: updatedVideo.lastEngagementAt
-            )
-        case .cool:
-            updatedVideo = CoreVideoMetadata(
-                id: updatedVideo.id,
-                title: updatedVideo.title,
-                videoURL: updatedVideo.videoURL,
-                thumbnailURL: updatedVideo.thumbnailURL,
-                creatorID: updatedVideo.creatorID,
-                creatorName: updatedVideo.creatorName,
-                createdAt: updatedVideo.createdAt,
-                threadID: updatedVideo.threadID,
-                replyToVideoID: updatedVideo.replyToVideoID,
-                conversationDepth: updatedVideo.conversationDepth,
-                viewCount: updatedVideo.viewCount,
-                hypeCount: updatedVideo.hypeCount,
-                coolCount: updatedVideo.coolCount + 1,
-                replyCount: updatedVideo.replyCount,
-                shareCount: updatedVideo.shareCount,
-                temperature: updatedVideo.temperature,
-                qualityScore: updatedVideo.qualityScore,
-                engagementRatio: updatedVideo.engagementRatio,
-                velocityScore: updatedVideo.velocityScore,
-                trendingScore: updatedVideo.trendingScore,
-                duration: updatedVideo.duration,
-                aspectRatio: updatedVideo.aspectRatio,
-                fileSize: updatedVideo.fileSize,
-                discoverabilityScore: updatedVideo.discoverabilityScore,
-                isPromoted: updatedVideo.isPromoted,
-                lastEngagementAt: updatedVideo.lastEngagementAt
-            )
-        default:
-            break
-        }
-        array[index] = updatedVideo
     }
 }
 
@@ -350,10 +357,7 @@ struct DiscoveryView: View {
     // MARK: - State
     @StateObject private var viewModel = DiscoveryViewModel()
     @EnvironmentObject private var authService: AuthService
-    @StateObject private var engagementManager = EngagementManager(
-        videoService: VideoService(),
-        userService: UserService()
-    )
+    // ✅ REMOVED: engagementManager - not needed for swipe cards
     
     @State private var selectedCategory: DiscoveryCategory = .all
     @State private var discoveryMode: DiscoveryMode = .swipe
@@ -398,7 +402,7 @@ struct DiscoveryView: View {
                     }
                 }
             } else {
-                // Fullscreen Mode
+                // Fullscreen Mode (engagement enabled here)
                 if let video = selectedVideo {
                     FullscreenVideoView(video: video) {
                         withAnimation(.easeInOut(duration: 0.4)) {
@@ -524,34 +528,38 @@ struct DiscoveryView: View {
     private var contentView: some View {
         switch discoveryMode {
         case DiscoveryMode.swipe:
-            DiscoverySwipeCards(
-                videos: viewModel.filteredVideos,
-                currentIndex: $currentSwipeIndex,
-                onVideoTap: { video in
-                    selectedVideo = video
-                    withAnimation(.easeInOut(duration: 0.4)) {
-                        isFullscreenMode = true
+            ZStack(alignment: .top) {
+                // ✅ FIXED: No onEngagement - swipe cards are browse-only
+                DiscoverySwipeCards(
+                    videos: viewModel.filteredVideos,
+                    currentIndex: $currentSwipeIndex,
+                    onVideoTap: { video in
+                        selectedVideo = video
+                        withAnimation(.easeInOut(duration: 0.4)) {
+                            isFullscreenMode = true
+                        }
+                    },
+                    onNavigateToProfile: { userID in
+                        // Handle profile navigation
+                    },
+                    onNavigateToThread: { threadID in
+                        // Handle thread navigation
                     }
-                },
-                onEngagement: { type, video in
-                    handleEngagement(type, video: video)
-                },
-                onNavigateToProfile: { userID in
-                    // Handle profile navigation
-                },
-                onNavigateToThread: { threadID in
-                    // Handle thread navigation
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.clear)
+                .onChange(of: currentSwipeIndex) { oldValue, newValue in
+                    print("🎯 DISCOVERY: Swipe \(oldValue) → \(newValue)")
+                    
+                    // Trigger progressive loading when user gets close to end
+                    Task {
+                        await viewModel.checkAndLoadMore(currentIndex: newValue)
+                    }
                 }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.clear)
-            .onChange(of: currentSwipeIndex) { oldValue, newValue in
-                print("🎯 DISCOVERY: Swipe \(oldValue) → \(newValue)")
                 
-                // Trigger progressive loading when user gets close to end
-                Task {
-                    await viewModel.checkAndLoadMore(currentIndex: newValue)
-                }
+                // ✅ NEW: Swipe Instructions Indicator
+                swipeInstructionsIndicator
+                    .padding(.top, 20)
             }
             
         case DiscoveryMode.grid:
@@ -576,6 +584,58 @@ struct DiscoveryView: View {
                 isLoadingMore: viewModel.loadingState.isLoadingMore
             )
         }
+    }
+    
+    // MARK: - ✅ NEW: Swipe Instructions Indicator
+    
+    private var swipeInstructionsIndicator: some View {
+        HStack(spacing: 20) {
+            // Left swipe instruction
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.left")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Next")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundColor(.white.opacity(0.8))
+            
+            Divider()
+                .frame(height: 16)
+                .background(Color.white.opacity(0.3))
+            
+            // Right swipe instruction
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Back")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundColor(.white.opacity(0.8))
+            
+            Divider()
+                .frame(height: 16)
+                .background(Color.white.opacity(0.3))
+            
+            // Tap instruction
+            HStack(spacing: 6) {
+                Image(systemName: "hand.tap.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                Text("Fullscreen")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .foregroundColor(.white.opacity(0.8))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.black.opacity(0.5))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+        )
+        .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
     }
     
     // MARK: - Loading Views
@@ -632,13 +692,6 @@ struct DiscoveryView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.clear)
-    }
-    
-    // MARK: - Helper Methods
-    
-    private func handleEngagement(_ type: InteractionType, video: CoreVideoMetadata) {
-        print("🎯 DISCOVERY: Handling \(type.rawValue) engagement for video: \(video.title)")
-        viewModel.updateVideoEngagement(videoID: video.id, type: type)
     }
 }
 

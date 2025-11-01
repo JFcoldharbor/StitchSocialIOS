@@ -13,6 +13,7 @@
 //  Layer 5: Business Logic - Pure Hype Rating and Temperature Calculation Functions
 //  Dependencies: NONE (Pure functions only)
 //  Features: Temperature calculation, viral prediction, trending detection, content scoring
+//  UPDATED: Added ambassador tier multiplier (1.65 between influencer and elite)
 //
 
 import Foundation
@@ -285,9 +286,9 @@ struct HypeRatingCalculator {
         let longevity = calculateContentLongevity(contentAge, snapshot)
         
         // Weighted quality score
-        let overallScore = (engagementQuality * 0.4) + 
-                          (interactionDepth * 0.25) + 
-                          (creatorCredibility * 0.2) + 
+        let overallScore = (engagementQuality * 0.4) +
+                          (interactionDepth * 0.25) +
+                          (creatorCredibility * 0.2) +
                           (longevity * 0.15)
         
         return ContentQualityScore(
@@ -301,13 +302,14 @@ struct HypeRatingCalculator {
     
     // MARK: - Helper Functions
     
-    /// Calculate creator tier influence multiplier
+    /// Calculate creator tier influence multiplier - UPDATED with ambassador tier
     private static func calculateCreatorTierMultiplier(_ tier: UserTier) -> Double {
         switch tier {
         case .rookie: return 0.8
         case .rising: return 1.0
         case .veteran: return 1.2
         case .influencer: return 1.5
+        case .ambassador: return 1.65      // NEW: Between influencer and elite
         case .elite: return 1.8
         case .partner: return 2.0
         case .legendary: return 2.5
@@ -445,13 +447,14 @@ struct HypeRatingCalculator {
         return min(1.0, weightedDepth / (total * 2.0))
     }
     
-    /// Calculate creator credibility
+    /// Calculate creator credibility - UPDATED with ambassador tier
     private static func calculateCreatorCredibility(_ tier: UserTier) -> Double {
         switch tier {
         case .rookie: return 0.3
         case .rising: return 0.4
         case .veteran: return 0.6
         case .influencer: return 0.8
+        case .ambassador: return 0.85      // NEW: Between influencer and elite
         case .elite: return 0.9
         case .partner: return 0.95
         case .legendary: return 0.98
@@ -533,7 +536,7 @@ struct ViralPrediction: Codable {
     let confidence: Double
     
     var description: String {
-        let confidenceText = confidence > 0.8 ? "High confidence" : 
+        let confidenceText = confidence > 0.8 ? "High confidence" :
                             confidence > 0.6 ? "Medium confidence" : "Low confidence"
         return "\(category.displayName) (\(confidenceText))"
     }
@@ -654,6 +657,7 @@ extension HypeRatingCalculator {
         
         Metrics: 150 hypes, 20 cools, 35 shares, 12 replies, 1200 views
         Algorithm Status: All calculation functions operational
+        Ambassador Tier Multiplier: 1.65 (added)
         
         Status: Layer 5 HypeRatingCalculator ready for production! 🔥
         """

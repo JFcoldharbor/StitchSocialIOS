@@ -2,14 +2,15 @@
 //  ContextualVideoOverlay.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Universal Contextual Video Overlay with All Fixes Applied
-//  Dependencies: EngagementService, UserService, AuthService, FollowManager
-//  Features: Static overlay, special user permissions, context-aware profile navigation
+//  Layer 8: Views - Universal Contextual Video Overlay with Viewer Tracking
+//  Dependencies: EngagementService, UserService, AuthService, FollowManager, VideoService
+//  Features: Static overlay, special user permissions, context-aware profile navigation, viewer tracking
+//  UPDATED: Added eye icon button to view who watched the video
 //
 
 import SwiftUI
 
-/// Universal overlay that adapts to different viewing contexts with all fixes applied
+/// Universal overlay that adapts to different viewing contexts with viewer tracking
 struct ContextualVideoOverlay: View {
     
     // MARK: - Properties
@@ -31,6 +32,7 @@ struct ContextualVideoOverlay: View {
         userService: UserService()
     )
     @StateObject private var floatingIconManager = FloatingIconManager()
+    @StateObject private var videoService = VideoService()
     
     // MARK: - Cached User Data (Static Cache Shared Across All Overlays)
     
@@ -52,6 +54,7 @@ struct ContextualVideoOverlay: View {
     
     @State private var showingProfileFullscreen = false
     @State private var showingThreadView = false
+    @State private var showingViewers = false  // NEW: Viewers sheet
     @State private var selectedUserID: String? {
         didSet {
             print("🔍 STATE: selectedUserID changed from \(oldValue ?? "nil") to \(selectedUserID ?? "nil")")
@@ -437,6 +440,14 @@ struct ContextualVideoOverlay: View {
                 userService: userService
             )
         }
+        .sheet(isPresented: $showingViewers) {
+            WhoViewedSheet(
+                videoID: video.id,
+                onDismiss: {
+                    showingViewers = false
+                }
+            )
+        }
         .fullScreenCover(isPresented: $showingStitchRecording) {
             RecordingView(
                 recordingContext: getStitchRecordingContext(),
@@ -511,15 +522,67 @@ struct ContextualVideoOverlay: View {
             
             Spacer()
             
-            // Special user actions - compact top-right placement
-            if currentUserIsSpecial || currentUserIsFounder {
-                VStack(spacing: 8) {
+            // Top-right action buttons
+            VStack(spacing: 8) {
+                // Special user actions
+                if currentUserIsSpecial || currentUserIsFounder {
                     moreOptionsButton
                 }
             }
         }
         .padding(.top, 8)
         .padding(.horizontal, 12)
+    }
+    
+    // MARK: - NEW: Viewers Button
+    
+    private var viewersButton: some View {
+        Button {
+            print("👁️ VIEWERS: Button tapped")
+            print("👁️ VIEWERS: showingViewers = \(showingViewers)")
+            print("👁️ VIEWERS: videoID = \(video.id)")
+            showingViewers = true
+            print("👁️ VIEWERS: showingViewers set to true")
+            onAction?(.viewers)
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color.black.opacity(0.4))
+                    .frame(width: 36, height: 36)
+                
+                Circle()
+                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    .frame(width: 36, height: 36)
+                
+                // Eye icon with badge
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "eye.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.white)
+                    
+                    // View count badge
+                    if let engagement = videoEngagement, engagement.viewCount > 0 {
+                        Text("\(formatCountCompact(engagement.viewCount))")
+                            .font(.system(size: 7, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(
+                                Capsule()
+                                    .fill(Color.purple)
+                            )
+                            .offset(x: 8, y: -8)
+                    }
+                }
+            }
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onAppear {
+            print("👁️ VIEWERS BUTTON: Appeared")
+            print("👁️ VIEWERS BUTTON: isUserVideo = \(isUserVideo)")
+            print("👁️ VIEWERS BUTTON: video.creatorID = \(video.creatorID)")
+            print("👁️ VIEWERS BUTTON: currentUserID = \(currentUserID ?? "nil")")
+        }
     }
     
     // MARK: - Creator Pill - Tappable with proper profile navigation
@@ -645,20 +708,54 @@ struct ContextualVideoOverlay: View {
         .buttonStyle(ContextualScaleButtonStyle())
     }
     
-    // MARK: - Metadata Row
+    // MARK: - Metadata Row (UPDATED: Views tappable)
     
     private var metadataRow: some View {
         HStack(spacing: 8) {
             if let engagement = videoEngagement {
-                // LIVE DATA - Views count
-                HStack(spacing: 4) {
-                    Image(systemName: "eye.fill")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                    
-                    Text("\(formatCount(engagement.viewCount)) views")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
+                // LIVE DATA - Views count (TAPPABLE - opens WhoViewedSheet - CREATOR ONLY)
+                if isUserVideo {
+                    Button {
+                        print("👁️ VIEWS: Tapped views button")
+                        showingViewers = true
+                        onAction?(.viewers)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "eye.fill")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.white.opacity(0.7))
+                            
+                            Text("\(formatCount(engagement.viewCount)) views")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.white.opacity(0.9))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.purple.opacity(0.2))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.purple.opacity(0.4), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .onAppear {
+                        print("👁️ VIEWS BUTTON: Appeared (creator-only)")
+                        print("👁️ VIEWS BUTTON: isUserVideo = \(isUserVideo)")
+                    }
+                } else {
+                    // Non-creator view (not tappable)
+                    HStack(spacing: 4) {
+                        Image(systemName: "eye.fill")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.white.opacity(0.7))
+                        
+                        Text("\(formatCount(engagement.viewCount)) views")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.white.opacity(0.9))
+                    }
                 }
                 
                 // Separator
@@ -707,7 +804,101 @@ struct ContextualVideoOverlay: View {
         }
     }
     
-    // MARK: - Bottom Section (CORRECT ORDER: Title, Description, Metadata, Buttons)
+    // MARK: - NEW: Tagged Users Row
+    
+    private var taggedUsersRow: some View {
+        HStack(spacing: 8) {
+            // "Tagged:" label
+            HStack(spacing: 4) {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.purple.opacity(0.8))
+                
+                Text("Tagged:")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+            }
+            
+            // Scrollable tagged users
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(video.taggedUserIDs.prefix(5), id: \.self) { userID in
+                        taggedUserAvatar(userID: userID)
+                    }
+                }
+            }
+            
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+    }
+    
+    // MARK: - Tagged User Avatar
+    
+    private func taggedUserAvatar(userID: String) -> some View {
+        Button {
+            // Navigate to tagged user profile
+            selectedUserID = userID
+            
+            // Kill videos
+            NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+            NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
+            NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                showingProfileFullscreen = true
+                onAction?(.profile(userID))
+            }
+        } label: {
+            HStack(spacing: 4) {
+                // Avatar
+                AsyncImage(url: URL(string: Self.getCachedUserData(userID: userID)?.profileImageURL ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .overlay(
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 8))
+                                .foregroundColor(.gray)
+                        )
+                }
+                .frame(width: 20, height: 20)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color.purple.opacity(0.6), lineWidth: 1.5)
+                )
+                
+                // Username
+                if let cached = Self.getCachedUserData(userID: userID) {
+                    Text("@\(cached.displayName)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.black.opacity(0.4))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.purple.opacity(0.3), lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onAppear {
+            // Trigger cache load for this user
+            _ = Self.getCachedUserData(userID: userID)
+        }
+    }
+    
+    // MARK: - Bottom Section (CORRECT ORDER: Title, Description, Tagged Users, Metadata, Buttons)
     
     private var bottomSection: some View {
         VStack(spacing: 12) {
@@ -735,6 +926,11 @@ struct ContextualVideoOverlay: View {
                     Spacer()
                 }
                 .padding(.horizontal, 12)
+            }
+            
+            // Row 2.5: Tagged users (if available)
+            if !video.taggedUserIDs.isEmpty {
+                taggedUsersRow
             }
             
             // Row 3: Metadata and follow button (closer together)
@@ -1038,6 +1234,18 @@ struct ContextualVideoOverlay: View {
             return String(format: "%.1fB", Double(count) / 1000000000.0).replacingOccurrences(of: ".0", with: "")
         }
     }
+    
+    // NEW: Compact format for badge
+    private func formatCountCompact(_ count: Int) -> String {
+        switch count {
+        case 0..<1000:
+            return "\(count)"
+        case 1000..<10000:
+            return String(format: "%.1fK", Double(count) / 1000.0).replacingOccurrences(of: ".0", with: "")
+        default:
+            return "\(count / 1000)K"
+        }
+    }
 }
 
 // MARK: - Supporting Types
@@ -1064,6 +1272,7 @@ enum ContextualOverlayAction {
     case more
     case profileManagement
     case profileSettings
+    case viewers  // NEW
 }
 
 enum EngagementType {

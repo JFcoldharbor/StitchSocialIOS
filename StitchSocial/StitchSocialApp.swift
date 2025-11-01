@@ -20,25 +20,25 @@ struct StitchSocialApp: App {
                 .overlay(
                     // Toast notification overlay above all content
                     AppToastOverlay(notificationService: notificationService)
-                        .allowsHitTesting(false) // Don't block touches to main content
+                        .allowsHitTesting(false)
                 )
                 .onAppear {
-                    // Inject notification service into auth service
-                    authService.setNotificationService(notificationService)
+                    // REMOVED: setNotificationService - method no longer exists
+                    // REMOVED: startNotificationListener - handled by NotificationViewModel
                     
-                    // Start notification listener if user already authenticated
-                    if let currentUserID = Auth.auth().currentUser?.uid {
-                        print("📔 APP STARTUP: Starting notification listener for user \(currentUserID)")
-                        notificationService.startNotificationListener(for: currentUserID)
-                    } else {
-                        print("📔 APP STARTUP: No authenticated user found")
-                    }
+                    // FCM and notification listeners are now automatic:
+                    // - FCMPushManager handles token registration
+                    // - NotificationViewModel handles real-time listener
+                    
+                    print("📱 APP STARTUP: Services initialized")
+                    print("📱 FCM: Automatic via FCMPushManager")
+                    print("📱 Notifications: Automatic via NotificationViewModel")
                 }
         }
     }
 }
 
-// MARK: - App Toast Overlay (Renamed to avoid conflicts)
+// MARK: - App Toast Overlay
 
 struct AppToastOverlay: View {
     @ObservedObject var notificationService: NotificationService
@@ -47,7 +47,8 @@ struct AppToastOverlay: View {
         VStack(spacing: 8) {
             ForEach(notificationService.pendingToasts.prefix(3), id: \.id) { toast in
                 AppToastCard(toast: toast) {
-                    notificationService.dismissToast(toastID: toast.id)
+                    // FIXED: Remove toast directly from array
+                    removeToast(toast.id)
                 }
                 .transition(.asymmetric(
                     insertion: .move(edge: .top).combined(with: .opacity),
@@ -58,18 +59,25 @@ struct AppToastOverlay: View {
             Spacer()
         }
         .animation(.spring(response: 0.6, dampingFraction: 0.8), value: notificationService.pendingToasts.count)
-        .padding(.top, 60) // Below status bar and notch
+        .padding(.top, 60)
         .padding(.horizontal, 16)
+    }
+    
+    private func removeToast(_ id: String) {
+        withAnimation {
+            notificationService.pendingToasts.removeAll { $0.id == id }
+        }
     }
 }
 
-// MARK: - App Toast Card (Renamed to avoid conflicts)
+// MARK: - App Toast Card
 
 struct AppToastCard: View {
     let toast: NotificationToast
     let onDismiss: () -> Void
     
     @State private var isPressed = false
+    @State private var shouldDismiss = false
     
     var body: some View {
         Button(action: onDismiss) {
@@ -126,15 +134,18 @@ struct AppToastCard: View {
             }
         }
         .onAppear {
-            // Auto-dismiss after duration if not manually dismissed
+            // Auto-dismiss after duration
             DispatchQueue.main.asyncAfter(deadline: .now() + toast.appToastDuration) {
-                onDismiss()
+                if !shouldDismiss {
+                    shouldDismiss = true
+                    onDismiss()
+                }
             }
         }
     }
 }
 
-// MARK: - Toast Type Extensions (App-specific names to avoid conflicts)
+// MARK: - Toast Type Extensions
 
 extension StitchNotificationType {
     var appToastColor: Color {

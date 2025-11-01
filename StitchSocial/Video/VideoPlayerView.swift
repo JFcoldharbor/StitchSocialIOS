@@ -2,9 +2,10 @@
 //  VideoPlayerView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Video Player with OptimizationConfig Integration (COMPATIBLE VERSION)
+//  Layer 8: Views - Video Player with OptimizationConfig Integration (FIXED VERSION)
 //  Dependencies: AVFoundation, CoreVideoMetadata, InteractionType, ContextualVideoOverlay
 //  Features: Proper video display, ContextualVideoOverlay integration, thread navigation, edge-to-edge display
+//  FIXED: Removed profile notification listeners that caused thumbnail kill storm
 //
 
 import SwiftUI
@@ -175,7 +176,7 @@ struct VideoPlayerView: View {
                         videoDuration: video.duration,
                         currentPosition: currentPlaybackTime,
                         replyCount: (totalStitchesInThread ?? 1) - 1,
-                        currentStitchIndex: 0, // Always 0 for parent video detection
+                        currentStitchIndex: 0,
                         onViewReplies: handleStitchReveal,
                         onDismiss: {
                             showFloatingBubble = false
@@ -191,12 +192,6 @@ struct VideoPlayerView: View {
         .onAppear {
             setupVideo()
             setupOptimizationMonitoring()
-            
-            // TEMP: Test bubble after 3 seconds for debugging
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                print("🧪 TESTING: Forcing bubble to show")
-                showFloatingBubble = true
-            }
         }
         .onDisappear {
             cleanupOptimizations()
@@ -213,12 +208,9 @@ struct VideoPlayerView: View {
             } else {
                 playerManager.pause()
             }
-            
-            // Check bubble visibility when active state changes
             updateFloatingBubbleVisibility()
         }
         .onChange(of: currentPlaybackTime) { _, newTime in
-            // Check bubble visibility as time updates
             updateFloatingBubbleVisibility()
         }
     }
@@ -230,25 +222,20 @@ struct VideoPlayerView: View {
         
         print("VIDEO PLAYER: Setting up video: \(video.title)")
         
-        // Set up playback time monitoring
         playerManager.onTimeUpdate = { time in
             currentPlaybackTime = time
-            print("⏰ TIME UPDATE: \(time) / \(video.duration)")
             updateFloatingBubbleVisibility()
         }
         
-        // Configure optimization settings based on battery and performance
         let enableHardwareDecoding = !batteryOptimizationActive
         let enablePreloading = !memoryPressureDetected
         
-        // Setup video with optimization settings
         playerManager.setupVideo(
             url: video.videoURL,
             enableHardwareDecoding: enableHardwareDecoding,
             enablePreloading: enablePreloading
         )
         
-        // Update playback state
         if isActive {
             playerManager.play()
         } else {
@@ -259,7 +246,6 @@ struct VideoPlayerView: View {
     }
     
     private func setupOptimizationMonitoring() {
-        // Monitor every 5 seconds for optimization opportunities
         performanceTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
             checkMemoryPressure()
             checkBatteryStatus()
@@ -273,7 +259,6 @@ struct VideoPlayerView: View {
     }
     
     private func checkMemoryPressure() {
-        // Simple memory pressure detection
         var memoryInfo = mach_task_basic_info()
         var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
         
@@ -285,7 +270,7 @@ struct VideoPlayerView: View {
         
         if result == KERN_SUCCESS {
             let memoryUsage = memoryInfo.resident_size
-            let memoryThreshold: UInt64 = 500 * 1024 * 1024 // 500MB
+            let memoryThreshold: UInt64 = 500 * 1024 * 1024
             
             if memoryUsage > memoryThreshold && !memoryPressureDetected {
                 print("📱 OPTIMIZATION: Memory pressure detected - \(memoryUsage / 1024 / 1024)MB")
@@ -334,7 +319,6 @@ struct VideoPlayerView: View {
                             .font(.system(size: 10, weight: .bold))
                             .foregroundColor(.white)
                         
-                        // Progress bar
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 Rectangle()
@@ -437,7 +421,6 @@ struct VideoPlayerView: View {
     }
     
     private func handleStitchReveal() {
-        // Navigate to next video in thread
         navigateToNext()
         showFloatingBubble = false
     }
@@ -445,11 +428,7 @@ struct VideoPlayerView: View {
     private func updateFloatingBubbleVisibility() {
         let shouldShow = shouldShowFloatingBubble()
         
-        // Debug logging
-        print("🔄 BUBBLE UPDATE: shouldShow=\(shouldShow), currentlyShowing=\(showFloatingBubble)")
-        
         if shouldShow != showFloatingBubble {
-            print("🎬 BUBBLE STATE CHANGE: \(showFloatingBubble) -> \(shouldShow)")
             withAnimation(.easeInOut(duration: 0.3)) {
                 showFloatingBubble = shouldShow
             }
@@ -457,56 +436,22 @@ struct VideoPlayerView: View {
     }
     
     private func shouldShowFloatingBubble() -> Bool {
-        // Debug logging to help diagnose the issue
-        print("🔍 BUBBLE DEBUG:")
-        print("  - totalStitchesInThread: \(totalStitchesInThread ?? 0)")
-        print("  - currentThreadPosition: \(currentThreadPosition ?? 0)")
-        print("  - video.duration: \(video.duration)")
-        print("  - currentPlaybackTime: \(currentPlaybackTime)")
-        print("  - isActive: \(isActive)")
-        
-        // Check if this is a parent video with replies
         guard let totalStitches = totalStitchesInThread, totalStitches > 1 else {
-            print("  ❌ No replies (totalStitches: \(totalStitchesInThread ?? 0))")
             return false
         }
-        
-        // For now, let's be more permissive with the thread position check
-        // Comment out the strict parent check to see if that's the issue
-        // guard let threadPosition = currentThreadPosition, threadPosition == 1 else {
-        //     print("  ❌ Not parent video (position: \(currentThreadPosition ?? 0))")
-        //     return false
-        // }
         
         guard video.duration > 0 else {
-            print("  ❌ Invalid duration")
             return false
         }
         
-        // Show bubble when video reaches 70% completion
         let triggerTime = video.duration * 0.7
         let shouldShow = currentPlaybackTime >= triggerTime
         
-        print("  - triggerTime (70%): \(triggerTime)")
-        print("  - shouldShow: \(shouldShow)")
-        
         return shouldShow
-    }
-    
-    private func getNextStitchTitle() -> String? {
-        guard let threadVideos = threadVideos,
-              currentIndex < threadVideos.count - 1 else { return nil }
-        return threadVideos[currentIndex + 1].title
-    }
-    
-    private func getNextStitchCreator() -> String? {
-        guard let threadVideos = threadVideos,
-              currentIndex < threadVideos.count - 1 else { return nil }
-        return threadVideos[currentIndex + 1].creatorName
     }
 }
 
-// MARK: - Video Player Manager (OPTIMIZED)
+// MARK: - Video Player Manager (OPTIMIZED & FIXED)
 
 @MainActor
 class VideoPlayerManager: ObservableObject {
@@ -522,10 +467,8 @@ class VideoPlayerManager: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var currentVideoURL: String?
     
-    // OPTIMIZATION: Global player count to manage memory
     private static var globalActivePlayerCount = 0
     
-    // Callback to update parent view's playback time
     var onTimeUpdate: ((TimeInterval) -> Void)?
     
     deinit {
@@ -535,49 +478,35 @@ class VideoPlayerManager: ObservableObject {
     }
     
     func setupVideo(url: String, enableHardwareDecoding: Bool = true, enablePreloading: Bool = true) {
-        // Skip if URL hasn't changed
         if url == currentVideoURL && player != nil {
-            print("VIDEO PLAYER OPTIMIZATION: Skipping duplicate setup for \(url)")
+            print("VIDEO PLAYER OPTIMIZATION: Skipping duplicate setup")
             return
         }
         
         cleanup()
         
-        // Check concurrent player limits
         guard Self.globalActivePlayerCount < 10 else {
-            print("🚫 VIDEO PLAYER OPTIMIZATION: Player creation blocked - at limit (\(Self.globalActivePlayerCount)/10)")
+            print("🚫 VIDEO PLAYER OPTIMIZATION: Player creation blocked - at limit")
             return
         }
         
         guard let videoURL = URL(string: url) else {
-            print("VIDEO MANAGER: Invalid URL: \(url)")
+            print("VIDEO MANAGER: Invalid URL")
             return
         }
         
-        print("VIDEO MANAGER: Setting up video: \(url)")
+        print("VIDEO MANAGER: Setting up video")
         currentVideoURL = url
         
-        // Create player item with optimization settings
         let playerItem = AVPlayerItem(url: videoURL)
         
-        // Apply optimization settings
         if !enableHardwareDecoding {
-            // Force software decoding for low memory situations
             playerItem.videoComposition = nil
         }
         
-        // Create player
         player = AVPlayer(playerItem: playerItem)
+        player?.automaticallyWaitsToMinimizeStalling = enablePreloading
         
-        if !enablePreloading {
-            // Disable automatic preloading to save memory/battery
-            player?.automaticallyWaitsToMinimizeStalling = false
-        } else {
-            // Optimize for better playback experience
-            player?.automaticallyWaitsToMinimizeStalling = true
-        }
-        
-        // Increment global count
         Self.globalActivePlayerCount += 1
         print("VIDEO PLAYER OPTIMIZATION: Player created (\(Self.globalActivePlayerCount) active)")
         
@@ -604,9 +533,7 @@ class VideoPlayerManager: ObservableObject {
     private func setupTimeObserver() {
         guard let player = player else { return }
         
-        // Use optimization config for update frequency
-        let maxFPS = 30.0
-        let interval = 1.0 / Double(maxFPS)
+        let interval = 1.0 / 30.0
         
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: interval, preferredTimescale: 600),
@@ -635,8 +562,7 @@ class VideoPlayerManager: ObservableObject {
         
         player.currentItem?.publisher(for: \.duration)
             .map { duration in
-                duration.isValid && !duration.isIndefinite ?
-                    duration.seconds : 0.0
+                duration.isValid && !duration.isIndefinite ? duration.seconds : 0.0
             }
             .assign(to: &$duration)
         
@@ -646,7 +572,6 @@ class VideoPlayerManager: ObservableObject {
     }
     
     private func setupKillObserver() {
-        // Add observer for kill notifications
         killObserver = NotificationCenter.default.addObserver(
             forName: .RealkillAllVideoPlayers,
             object: nil,
@@ -655,35 +580,23 @@ class VideoPlayerManager: ObservableObject {
             guard let self = self else { return }
             self.player?.pause()
             self.isPlaying = false
-            print("🛑 VIDEO PLAYER MANAGER: Killed and paused due to kill notification")
+            print("🛑 VIDEO PLAYER MANAGER: Killed due to notification")
         }
         
-        // Add observers for all UI interactions that should pause videos
         setupUIInteractionObservers()
     }
     
+    // ✅ FIXED: Removed profile notification listeners
     private func setupUIInteractionObservers() {
         let notificationNames = [
-            // Profile and fullscreen presentations
-            "NavigateToProfile",
-            "showingProfileFullscreen",
-            
-            // Recording interfaces
+            // Recording interfaces only
             "PresentRecording",
             "showingStitchRecording",
             "showingReplyRecording",
             
-            // Thread and navigation
+            // Thread and navigation (specific contexts)
             "NavigateToThread",
-            "NavigateToFullscreen",
-            
-            // Profile management
-            "profileManagement",
-            "profileSettings",
-            
-            // Any fullscreen modal
-            "presentFullscreen",
-            "showingFullscreenModal"
+            "NavigateToFullscreen"
         ]
         
         for notificationName in notificationNames {
@@ -695,10 +608,12 @@ class VideoPlayerManager: ObservableObject {
                 guard let self = self else { return }
                 self.player?.pause()
                 self.isPlaying = false
-                print("🛑 VIDEO PLAYER MANAGER: Paused due to UI interaction: \(notificationName)")
+                print("🛑 VIDEO PLAYER MANAGER: Paused due to: \(notificationName)")
             }
             uiInteractionObservers.append(observer)
         }
+        
+        print("✅ VIDEO PLAYER MANAGER: Setup \(notificationNames.count) context-aware observers")
     }
     
     func forcePlay() {
@@ -708,13 +623,13 @@ class VideoPlayerManager: ObservableObject {
         }
         
         if player.timeControlStatus == .playing {
-            print("VIDEO: Already playing - skipping")
+            print("VIDEO: Already playing")
             return
         }
         
         player.play()
         isPlaying = true
-        print("VIDEO: Play executed - Status: \(player.timeControlStatus.rawValue)")
+        print("VIDEO: Force play executed")
     }
     
     func cleanup() {
@@ -728,20 +643,25 @@ class VideoPlayerManager: ObservableObject {
             killObserver = nil
         }
         
+        for observer in uiInteractionObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        uiInteractionObservers.removeAll()
+        
         player?.pause()
         player = nil
         cancellables.removeAll()
         currentVideoURL = nil
         
-        // Update global player count
         if Self.globalActivePlayerCount > 0 {
             Self.globalActivePlayerCount = max(0, Self.globalActivePlayerCount - 1)
-            print("VIDEO PLAYER OPTIMIZATION: Player cleaned up (\(Self.globalActivePlayerCount) remaining)")
+            print("VIDEO PLAYER OPTIMIZATION: Cleaned up (\(Self.globalActivePlayerCount) remaining)")
         }
     }
 }
 
 // MARK: - Video Player UIKit Representable
+
 struct VideoPlayerRepresentable: UIViewRepresentable {
     let player: AVPlayer?
     let gravity: AVLayerVideoGravity
@@ -758,6 +678,7 @@ struct VideoPlayerRepresentable: UIViewRepresentable {
 }
 
 // MARK: - Video Player UI View
+
 class VideoPlayerUIView: UIView {
     private var playerLayer: AVPlayerLayer?
     
@@ -767,24 +688,18 @@ class VideoPlayerUIView: UIView {
     }
     
     func setupPlayer(_ player: AVPlayer?, gravity: AVLayerVideoGravity) {
-        // Remove existing layer
         playerLayer?.removeFromSuperlayer()
         
         guard let player = player else {
-            print("VIDEO UI: No player provided")
             return
         }
         
-        // Create new player layer
         let newPlayerLayer = AVPlayerLayer(player: player)
         newPlayerLayer.videoGravity = gravity
         newPlayerLayer.frame = bounds
         
-        // Add to view
         layer.addSublayer(newPlayerLayer)
         playerLayer = newPlayerLayer
-        
-        print("VIDEO UI: Player layer setup complete")
     }
 }
 
@@ -800,5 +715,7 @@ enum VideoPlayerContext {
     case homeFeed
     case discovery
     case profileGrid
+    case threadView
+    case fullscreen
     case standalone
 }

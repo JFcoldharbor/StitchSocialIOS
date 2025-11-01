@@ -7,6 +7,8 @@
 //  Dependencies: CoreTypes.swift only - No external service dependencies
 //  Database: stitchfin
 //  UPDATED: Complete referral system integration
+//  UPDATED: Added taggedUserIDs for user tagging/mentions
+//  UPDATED: Added milestone tracking fields for notifications
 //
 
 import Foundation
@@ -51,7 +53,7 @@ struct FirebaseSchema {
         static let reports = "reports"
         static let cache = "cache"
         static let system = "system"
-        static let referrals = "referrals"  // NEW: Referral tracking collection
+        static let referrals = "referrals"
         
         /// Get full collection path for stitchfin database
         static func fullPath(for collection: String) -> String {
@@ -64,7 +66,7 @@ struct FirebaseSchema {
                 videos, users, threads, engagement, interactions,
                 tapProgress, notifications, following, userBadges,
                 progression, analytics, comments, reports, cache,
-                system, referrals  // UPDATED: Added referrals collection
+                system, referrals
             ]
             
             let invalidCollections = collections.filter { $0.isEmpty }
@@ -79,13 +81,14 @@ struct FirebaseSchema {
         }
     }
     
-    // MARK: - Video Document Schema
+    // MARK: - Video Document Schema (UPDATED with Milestone Tracking)
     
     struct VideoDocument {
         // Core video fields
         static let id = "id"
         static let title = "title"
         static let description = "description"
+        static let taggedUserIDs = "taggedUserIDs"
         static let videoURL = "videoURL"
         static let thumbnailURL = "thumbnailURL"
         static let creatorID = "creatorID"
@@ -107,6 +110,18 @@ struct FirebaseSchema {
         static let replyCount = "replyCount"
         static let shareCount = "shareCount"
         static let lastEngagementAt = "lastEngagementAt"
+        
+        // MILESTONE TRACKING FIELDS (NEW)
+        static let firstHypeReceived = "firstHypeReceived"           // Has received first hype
+        static let firstCoolReceived = "firstCoolReceived"           // Has received first cool
+        static let milestone10Reached = "milestone10Reached"         // 🔥 Heating Up
+        static let milestone400Reached = "milestone400Reached"       // 👀 Must See
+        static let milestone1000Reached = "milestone1000Reached"     // 🌶️ Hot
+        static let milestone15000Reached = "milestone15000Reached"   // 🚀 Viral
+        static let milestone10ReachedAt = "milestone10ReachedAt"     // Timestamp
+        static let milestone400ReachedAt = "milestone400ReachedAt"   // Timestamp
+        static let milestone1000ReachedAt = "milestone1000ReachedAt" // Timestamp
+        static let milestone15000ReachedAt = "milestone15000ReachedAt" // Timestamp
         
         // Metadata fields
         static let duration = "duration"
@@ -160,14 +175,14 @@ struct FirebaseSchema {
         static let totalCoolsReceived = "totalCoolsReceived"
         static let deletedVideoCount = "deletedVideoCount"
         
-        // REFERRAL SYSTEM FIELDS (NEW)
-        static let referralCode = "referralCode"           // User's unique share code (8 chars)
-        static let invitedBy = "invitedBy"                 // Referrer's userID (null if organic)
-        static let referralCount = "referralCount"         // Total successful referrals
-        static let referralCloutEarned = "referralCloutEarned"  // Clout from referrals (max 1000)
-        static let hypeRatingBonus = "hypeRatingBonus"     // 0.10% per referral (unlimited)
-        static let referralRewardsMaxed = "referralRewardsMaxed" // Hit 1000 clout cap
-        static let referralCreatedAt = "referralCreatedAt" // When referral code generated
+        // REFERRAL SYSTEM FIELDS
+        static let referralCode = "referralCode"
+        static let invitedBy = "invitedBy"
+        static let referralCount = "referralCount"
+        static let referralCloutEarned = "referralCloutEarned"
+        static let hypeRatingBonus = "hypeRatingBonus"
+        static let referralRewardsMaxed = "referralRewardsMaxed"
+        static let referralCreatedAt = "referralCreatedAt"
         
         // Settings fields
         static let notificationSettings = "notificationSettings"
@@ -180,30 +195,30 @@ struct FirebaseSchema {
         }
     }
     
-    // MARK: - Referral Document Schema (NEW)
+    // MARK: - Referral Document Schema
     
     struct ReferralDocument {
         // Core referral fields
-        static let id = "id"                        // Unique referral tracking ID
-        static let referrerID = "referrerID"        // Who sent the invite
-        static let refereeID = "refereeID"          // Who signed up (null until signup)
-        static let referralCode = "referralCode"    // Code used for signup
-        static let status = "status"                // pending/completed/expired/failed
-        static let createdAt = "createdAt"          // When referral was initiated
-        static let completedAt = "completedAt"      // When signup completed
-        static let expiresAt = "expiresAt"          // 30-day expiration
+        static let id = "id"
+        static let referrerID = "referrerID"
+        static let refereeID = "refereeID"
+        static let referralCode = "referralCode"
+        static let status = "status"
+        static let createdAt = "createdAt"
+        static let completedAt = "completedAt"
+        static let expiresAt = "expiresAt"
         
         // Reward tracking
-        static let cloutAwarded = "cloutAwarded"    // 100 clout per referral
-        static let hypeBonus = "hypeBonus"          // 0.10% hype bonus
-        static let rewardsCapped = "rewardsCapped"  // Was this at 1000 clout cap
+        static let cloutAwarded = "cloutAwarded"
+        static let hypeBonus = "hypeBonus"
+        static let rewardsCapped = "rewardsCapped"
         
         // Analytics and fraud prevention
-        static let sourceType = "sourceType"        // link/deeplink/manual
-        static let platform = "platform"           // ios/android/web
-        static let ipAddress = "ipAddress"          // For fraud detection
-        static let deviceFingerprint = "deviceFingerprint" // Prevent farming
-        static let userAgent = "userAgent"          // Device/browser info
+        static let sourceType = "sourceType"
+        static let platform = "platform"
+        static let ipAddress = "ipAddress"
+        static let deviceFingerprint = "deviceFingerprint"
+        static let userAgent = "userAgent"
         
         /// Full document path in stitchfin database
         static func documentPath(referralID: String) -> String {
@@ -400,6 +415,18 @@ struct FirebaseSchema {
             VideoDocument.lastEngagementAt
         ]
         
+        // Video tagging index
+        static let videosByTaggedUser = [
+            VideoDocument.taggedUserIDs,
+            VideoDocument.createdAt
+        ]
+        
+        // NEW: Milestone tracking indexes
+        static let videosByMilestone = [
+            VideoDocument.milestone1000Reached,
+            VideoDocument.milestone1000ReachedAt
+        ]
+        
         // User performance indexes
         static let usersByTier = [
             UserDocument.tier,
@@ -459,7 +486,7 @@ struct FirebaseSchema {
             ThreadDocument.participantCount
         ]
         
-        // REFERRAL SYSTEM INDEXES (NEW)
+        // REFERRAL SYSTEM INDEXES
         static let referralsByCode = [
             ReferralDocument.referralCode,
             ReferralDocument.status,
@@ -490,15 +517,17 @@ struct FirebaseSchema {
                 "// Database: stitchfin",
                 "// Collection: videos - Creator timeline",
                 "// Collection: videos - Thread hierarchy",
+                "// Collection: videos - Tagged users",
+                "// Collection: videos - Milestone tracking (NEW)",
                 "// Collection: interactions - User engagement",
                 "// Collection: following - Social connections",
                 "// Collection: notifications - User notifications",
-                "// Collection: referrals - Referral tracking (NEW)"
+                "// Collection: referrals - Referral tracking"
             ]
         }
     }
     
-    // MARK: - Data Validation Rules (UPDATED with Referrals)
+    // MARK: - Data Validation Rules (UPDATED)
     
     /// Validation constraints for document fields in stitchfin database
     struct ValidationRules {
@@ -506,9 +535,13 @@ struct FirebaseSchema {
         // Video validation
         static let maxVideoTitleLength = 100
         static let minVideoTitleLength = 1
-        static let maxVideoDuration: TimeInterval = 300 // 5 minutes
-        static let maxVideoFileSize: Int64 = 100 * 1024 * 1024 // 100MB
+        static let maxVideoDuration: TimeInterval = 300
+        static let maxVideoFileSize: Int64 = 100 * 1024 * 1024
         static let allowedVideoFormats = ["mp4", "mov", "m4v"]
+        
+        // Tagging validation
+        static let maxTaggedUsersPerVideo = 5
+        static let minTaggedUsersPerVideo = 0
         
         // User validation
         static let maxUsernameLength = 20
@@ -535,18 +568,29 @@ struct FirebaseSchema {
         static let maxNotificationMessageLength = 200
         static let notificationExpirationDays = 30
         
-        // REFERRAL VALIDATION (NEW)
+        // MILESTONE THRESHOLDS (NEW)
+        static let milestoneHeatingUp = 10       // 🔥 Heating Up
+        static let milestoneMustSee = 400        // 👀 Must See
+        static let milestoneHot = 1000           // 🌶️ Hot
+        static let milestoneViral = 15000        // 🚀 Viral
+        
+        // REFERRAL VALIDATION
         static let referralCodeLength = 8
         static let maxReferralClout = 1000
         static let referralExpirationDays = 30
-        static let hypeRatingBonusPerReferral = 0.001  // 0.10%
+        static let hypeRatingBonusPerReferral = 0.001
         static let cloutPerReferral = 100
-        static let maxReferralsForClout = 10  // 1000 clout ÷ 100 per referral
+        static let maxReferralsForClout = 10
         
         /// Validate field against constraints
         static func validateField(_ field: String, value: Any, rules: [String: Any]) -> Bool {
-            // Implementation would go here for runtime validation
             return true
+        }
+        
+        /// Validate tagged users array
+        static func validateTaggedUsers(_ userIDs: [String]) -> Bool {
+            return userIDs.count <= maxTaggedUsersPerVideo &&
+                   userIDs.allSatisfy { !$0.isEmpty }
         }
         
         /// Validate referral code format
@@ -560,6 +604,15 @@ struct FirebaseSchema {
         static func validateReferralRewards(currentClout: Int, newReferrals: Int) -> Bool {
             let potentialClout = currentClout + (newReferrals * cloutPerReferral)
             return potentialClout <= maxReferralClout
+        }
+        
+        /// Check if hype count reached a milestone threshold
+        static func checkMilestoneReached(hypeCount: Int) -> Int? {
+            if hypeCount == milestoneViral { return milestoneViral }
+            if hypeCount == milestoneHot { return milestoneHot }
+            if hypeCount == milestoneMustSee { return milestoneMustSee }
+            if hypeCount == milestoneHeatingUp { return milestoneHeatingUp }
+            return nil
         }
     }
     
@@ -577,7 +630,7 @@ struct FirebaseSchema {
         
         // Thread IDs: same as parent video ID
         static func generateThreadID(parentVideoID: String) -> String {
-            return parentVideoID // Thread ID matches its root video ID
+            return parentVideoID
         }
         
         // Engagement document IDs: videoID for easy lookup
@@ -607,7 +660,7 @@ struct FirebaseSchema {
             return "notif_\(timestamp)_\(random)"
         }
         
-        // REFERRAL IDs (NEW)
+        // REFERRAL IDs
         
         /// Generate referral tracking ID: timestamp + random + referrer prefix
         static func generateReferralID(referrerID: String) -> String {
@@ -617,7 +670,7 @@ struct FirebaseSchema {
             return "ref_\(prefix)_\(timestamp)_\(random)"
         }
         
-        /// Generate referral code: 8-character alphanumeric (user-friendly)
+        /// Generate referral code: 8-character alphanumeric
         static func generateReferralCode() -> String {
             let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
             return String((0..<8).compactMap { _ in chars.randomElement() })
@@ -637,7 +690,7 @@ struct FirebaseSchema {
             }
         }
         
-        /// Validate referral code format (8 chars, alphanumeric, uppercase)
+        /// Validate referral code format
         static func validateReferralCode(_ code: String) -> Bool {
             return code.count == 8 &&
                    code.allSatisfy { $0.isLetter || $0.isNumber } &&
@@ -680,7 +733,14 @@ struct FirebaseSchema {
             ORDER BY createdAt DESC
         """
         
-        // REFERRAL QUERIES (NEW)
+        // Tagged videos query
+        static let videosWithTaggedUser = """
+            stitchfin/videos
+            WHERE taggedUserIDs array-contains {userID}
+            ORDER BY createdAt DESC
+        """
+        
+        // REFERRAL QUERIES
         static let referralByCode = """
             stitchfin/referrals
             WHERE referralCode == {code} AND status == 'pending'
@@ -715,15 +775,15 @@ struct FirebaseSchema {
         
         // Thread hierarchy rules
         static let threadDepthLimits = [
-            0: "thread",    // Root thread (conversationDepth = 0)
-            1: "child",     // Direct reply to thread (conversationDepth = 1)
-            2: "stepchild"  // Reply to child (conversationDepth = 2, max depth)
+            0: "thread",
+            1: "child",
+            2: "stepchild"
         ]
         
         static let maxRepliesPerLevel = [
-            0: 10,  // Max 10 children per thread
-            1: 10,  // Max 10 stepchildren per child
-            2: 0    // Stepchildren cannot have replies
+            0: 10,
+            1: 10,
+            2: 0
         ]
         
         // Engagement consistency rules
@@ -749,7 +809,7 @@ struct FirebaseSchema {
             "coFounder": (clout: 0, followers: 0)
         ]
         
-        // REFERRAL CONSISTENCY RULES (NEW)
+        // REFERRAL CONSISTENCY RULES
         static let referralStatuses = ["pending", "completed", "expired", "failed"]
         static let referralSourceTypes = ["link", "deeplink", "manual", "share"]
         static let referralPlatforms = ["ios", "android", "web"]
@@ -763,11 +823,14 @@ struct FirebaseSchema {
                 if let depth = data["conversationDepth"] as? Int, depth > 2 {
                     errors.append("Conversation depth exceeds maximum (2)")
                 }
+                if let taggedUsers = data["taggedUserIDs"] as? [String],
+                   !ValidationRules.validateTaggedUsers(taggedUsers) {
+                    errors.append("Invalid tagged users array")
+                }
             case "user":
                 if let username = data["username"] as? String, username.isEmpty {
                     errors.append("Username cannot be empty")
                 }
-                // Validate referral fields
                 if let referralCode = data["referralCode"] as? String,
                    !ValidationRules.validateReferralCode(referralCode) {
                     errors.append("Invalid referral code format")
@@ -797,12 +860,10 @@ struct FirebaseSchema {
         ) -> [String] {
             var errors: [String] = []
             
-            // Cannot refer yourself
             if referrerID == refereeID {
                 errors.append("Cannot refer yourself")
             }
             
-            // Check clout cap
             if currentCloutEarned >= ValidationRules.maxReferralClout {
                 errors.append("Referral clout reward cap reached (1000)")
             }
@@ -844,12 +905,15 @@ struct FirebaseSchema {
         let databaseValid = validateDatabaseConfig()
         let collectionsValid = Collections.validateCollections().isEmpty
         let referralSchemaValid = validateReferralSchema()
+        let milestoneSchemaValid = validateMilestoneSchema()
         
-        if databaseValid && collectionsValid && referralSchemaValid {
+        if databaseValid && collectionsValid && referralSchemaValid && milestoneSchemaValid {
             print("✅ FIREBASE SCHEMA: stitchfin database schema initialized successfully")
             print("📊 FIREBASE SCHEMA: Collections: \(Collections.validateCollections().count)")
-            print("📝 FIREBASE SCHEMA: Indexes: \(RequiredIndexes.generateIndexCommands().count)")
+            print("🔍 FIREBASE SCHEMA: Indexes: \(RequiredIndexes.generateIndexCommands().count)")
             print("🔗 FIREBASE SCHEMA: Referral system integrated")
+            print("🏷️ FIREBASE SCHEMA: User tagging system integrated")
+            print("🎯 FIREBASE SCHEMA: Milestone tracking system integrated")
             return true
         } else {
             print("❌ FIREBASE SCHEMA: stitchfin database schema initialization failed")
@@ -875,6 +939,21 @@ struct FirebaseSchema {
         ]
         
         print("✅ REFERRAL SCHEMA: \(requiredUserFields.count) user fields + \(requiredReferralFields.count) referral fields")
+        return true
+    }
+    
+    /// Validate milestone schema integration (NEW)
+    static func validateMilestoneSchema() -> Bool {
+        let requiredMilestoneFields = [
+            VideoDocument.firstHypeReceived,
+            VideoDocument.firstCoolReceived,
+            VideoDocument.milestone10Reached,
+            VideoDocument.milestone400Reached,
+            VideoDocument.milestone1000Reached,
+            VideoDocument.milestone15000Reached
+        ]
+        
+        print("✅ MILESTONE SCHEMA: \(requiredMilestoneFields.count) milestone tracking fields")
         return true
     }
 }

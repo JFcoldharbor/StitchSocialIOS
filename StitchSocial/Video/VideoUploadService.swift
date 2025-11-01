@@ -1,10 +1,10 @@
 //
 //  VideoUploadService.swift
-//  CleanBeta
+//  StitchSocial
 //
 //  Layer 4: Core Services - Video Upload Management
 //  Handles Firebase Storage uploads and metadata persistence
-//  Extracted from ThreadComposer for clean separation of concerns
+//  UPDATED: Added follower notification trigger for new video uploads
 //
 
 import Foundation
@@ -134,11 +134,15 @@ class VideoUploadService: ObservableObject {
     }
     
     /// Creates video document in Firestore using VideoService
+    /// UPDATED: Now triggers follower notifications for new videos and sends mention notifications
     func createVideoDocument(
         uploadResult: VideoUploadResult,
         metadata: VideoUploadMetadata,
         recordingContext: RecordingContext,
-        videoService: VideoService
+        videoService: VideoService,
+        userService: UserService,
+        notificationService: NotificationService,
+        taggedUserIDs: [String] = []
     ) async throws -> CoreVideoMetadata {
         
         await updateProgress(0.95, task: "Creating video document...")
@@ -158,6 +162,29 @@ class VideoUploadService: ObservableObject {
                 fileSize: uploadResult.fileSize
             )
             
+            // 🎬 NEW VIDEO NOTIFICATION: Notify followers for new thread videos
+            // IMPORTANT: Use createdVideo.creatorID (corrected Firebase UID) not metadata.creatorID
+            // Send synchronously to preserve auth context
+            do {
+                let followerIDs = try await userService.getFollowerIDs(userID: createdVideo.creatorID)
+                
+                if !followerIDs.isEmpty {
+                    try await notificationService.sendNewVideoNotification(
+                        creatorID: createdVideo.creatorID,
+                        creatorUsername: metadata.creatorName,
+                        videoID: createdVideo.id,
+                        videoTitle: createdVideo.title,
+                        followerIDs: followerIDs
+                    )
+                    print("✅ UPLOAD SERVICE: Notified \(followerIDs.count) followers of new video")
+                } else {
+                    print("ℹ️ UPLOAD SERVICE: No followers to notify for user \(createdVideo.creatorID)")
+                }
+            } catch {
+                print("⚠️ UPLOAD SERVICE: Failed to send follower notifications - \(error)")
+                // Don't fail upload if notification fails
+            }
+            
         case .stitchToThread(let threadID, _):
             createdVideo = try await videoService.createChildReply(
                 parentID: threadID,
@@ -170,6 +197,26 @@ class VideoUploadService: ObservableObject {
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize
             )
+            
+            // 🎬 STITCH NOTIFICATION: Trigger stitch notification
+            Task {
+                do {
+                    // Get thread details for notification
+                    let threadVideo = try await videoService.getVideo(id: threadID)
+                    let threadUserIDs: [String] = [] // Get from thread if available
+                    
+                    try await notificationService.sendStitchNotification(
+                        videoID: createdVideo.id,
+                        videoTitle: metadata.title,
+                        originalCreatorID: threadVideo.creatorID,
+                        parentCreatorID: nil,
+                        threadUserIDs: threadUserIDs
+                    )
+                    print("✅ UPLOAD SERVICE: Sent stitch notification")
+                } catch {
+                    print("⚠️ UPLOAD SERVICE: Failed to send stitch notification - \(error)")
+                }
+            }
             
         case .replyToVideo(let videoID, _):
             createdVideo = try await videoService.createChildReply(
@@ -184,6 +231,25 @@ class VideoUploadService: ObservableObject {
                 fileSize: uploadResult.fileSize
             )
             
+            // 🎬 STITCH NOTIFICATION: Trigger stitch notification for reply
+            Task {
+                do {
+                    let parentVideo = try await videoService.getVideo(id: videoID)
+                    let threadUserIDs: [String] = [] // Get from thread if available
+                    
+                    try await notificationService.sendStitchNotification(
+                        videoID: createdVideo.id,
+                        videoTitle: metadata.title,
+                        originalCreatorID: parentVideo.creatorID,
+                        parentCreatorID: parentVideo.creatorID,
+                        threadUserIDs: threadUserIDs
+                    )
+                    print("✅ UPLOAD SERVICE: Sent reply notification")
+                } catch {
+                    print("⚠️ UPLOAD SERVICE: Failed to send reply notification - \(error)")
+                }
+            }
+            
         case .continueThread(let threadID, _):
             createdVideo = try await videoService.createChildReply(
                 parentID: threadID,
@@ -196,6 +262,51 @@ class VideoUploadService: ObservableObject {
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize
             )
+            
+            // 🎬 STITCH NOTIFICATION: Trigger stitch notification for thread continuation
+            Task {
+                do {
+                    let threadVideo = try await videoService.getVideo(id: threadID)
+                    let threadUserIDs: [String] = [] // Get from thread if available
+                    
+                    try await notificationService.sendStitchNotification(
+                        videoID: createdVideo.id,
+                        videoTitle: metadata.title,
+                        originalCreatorID: threadVideo.creatorID,
+                        parentCreatorID: nil,
+                        threadUserIDs: threadUserIDs
+                    )
+                    print("✅ UPLOAD SERVICE: Sent thread continuation notification")
+                } catch {
+                    print("⚠️ UPLOAD SERVICE: Failed to send thread notification - \(error)")
+                }
+            }
+        }
+        
+        // 📌 MENTION NOTIFICATIONS: Send to tagged users if any
+        if !taggedUserIDs.isEmpty {
+            try await videoService.updateVideoTags(
+                videoID: createdVideo.id,
+                taggedUserIDs: taggedUserIDs
+            )
+            print("📌 UPLOAD SERVICE: Saved \(taggedUserIDs.count) tagged users to video \(createdVideo.id)")
+            
+            // Send mention notifications
+            for taggedUserID in taggedUserIDs {
+                Task {
+                    do {
+                        try await notificationService.sendMentionNotification(
+                            to: taggedUserID,
+                            videoTitle: metadata.title,
+                            mentionContext: "tagged in video"
+                        )
+                    } catch {
+                        print("⚠️ UPLOAD SERVICE: Failed to send mention notification to \(taggedUserID) - \(error)")
+                        // Don't fail upload if notification fails
+                    }
+                }
+            }
+            print("📬 UPLOAD SERVICE: Sent \(taggedUserIDs.count) mention notifications")
         }
         
         await updateProgress(1.0, task: "Video created successfully!")
@@ -311,25 +422,26 @@ class VideoUploadService: ObservableObject {
     private func generateThumbnail(from videoURL: URL) async throws -> Data {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
+                let asset = AVAsset(url: videoURL)
+                let imageGenerator = AVAssetImageGenerator(asset: asset)
+                imageGenerator.appliesPreferredTrackTransform = true
+                imageGenerator.maximumSize = CGSize(width: 1080, height: 1920)
+                
+                let time = CMTime(seconds: 0.5, preferredTimescale: 600)
+                
                 do {
-                    let asset = AVAsset(url: videoURL)
-                    let imageGenerator = AVAssetImageGenerator(asset: asset)
-                    imageGenerator.appliesPreferredTrackTransform = true
-                    imageGenerator.maximumSize = CGSize(width: 720, height: 1280) // 9:16 aspect ratio
-                    
-                    let time = CMTime(seconds: 1.0, preferredTimescale: 600)
                     let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
+                    let image = UIImage(cgImage: cgImage)
                     
-                    let uiImage = UIImage(cgImage: cgImage)
-                    guard let jpegData = uiImage.jpegData(compressionQuality: 0.8) else {
-                        continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed to generate JPEG data"))
+                    guard let jpegData = image.jpegData(compressionQuality: 0.8) else {
+                        continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed to convert thumbnail to JPEG"))
                         return
                     }
                     
                     continuation.resume(returning: jpegData)
                     
                 } catch {
-                    continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Thumbnail generation failed: \(error.localizedDescription)"))
+                    continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed to generate thumbnail: \(error.localizedDescription)"))
                 }
             }
         }
@@ -338,42 +450,44 @@ class VideoUploadService: ObservableObject {
     /// Extracts technical metadata from video
     private func extractTechnicalMetadata(from videoURL: URL) async throws -> TechnicalMetadata {
         return try await withCheckedThrowingContinuation { continuation in
-            Task {
-                do {
-                    let asset = AVAsset(url: videoURL)
-                    
-                    // Get duration
-                    let duration = try await asset.load(.duration)
-                    let seconds = CMTimeGetSeconds(duration)
-                    
-                    // Get file size
-                    let resourceValues = try videoURL.resourceValues(forKeys: [.fileSizeKey])
-                    let fileSize = Int64(resourceValues.fileSize ?? 0)
-                    
-                    // Get aspect ratio from video track
-                    var aspectRatio: Double = 9.0/16.0 // Default
-                    let videoTracks = try await asset.loadTracks(withMediaType: .video)
-                    if let videoTrack = videoTracks.first {
-                        let naturalSize = try await videoTrack.load(.naturalSize)
-                        let preferredTransform = try await videoTrack.load(.preferredTransform)
-                        let size = naturalSize.applying(preferredTransform)
-                        let width = abs(size.width)
-                        let height = abs(size.height)
-                        if height > 0 {
-                            aspectRatio = Double(width / height)
+            DispatchQueue.global(qos: .userInitiated).async {
+                Task {
+                    do {
+                        let asset = AVAsset(url: videoURL)
+                        
+                        // Get duration
+                        let duration = try await asset.load(.duration)
+                        let seconds = CMTimeGetSeconds(duration)
+                        
+                        // Get file size
+                        let resourceValues = try videoURL.resourceValues(forKeys: [.fileSizeKey])
+                        let fileSize = Int64(resourceValues.fileSize ?? 0)
+                        
+                        // Get aspect ratio from video track
+                        var aspectRatio: Double = 9.0/16.0 // Default
+                        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                        if let videoTrack = videoTracks.first {
+                            let naturalSize = try await videoTrack.load(.naturalSize)
+                            let preferredTransform = try await videoTrack.load(.preferredTransform)
+                            let size = naturalSize.applying(preferredTransform)
+                            let width = abs(size.width)
+                            let height = abs(size.height)
+                            if height > 0 {
+                                aspectRatio = Double(width / height)
+                            }
                         }
+                        
+                        let metadata = TechnicalMetadata(
+                            duration: seconds,
+                            fileSize: fileSize,
+                            aspectRatio: aspectRatio
+                        )
+                        
+                        continuation.resume(returning: metadata)
+                        
+                    } catch {
+                        continuation.resume(throwing: UploadError.metadataExtractionFailed("Failed to extract metadata: \(error.localizedDescription)"))
                     }
-                    
-                    let metadata = TechnicalMetadata(
-                        duration: seconds,
-                        fileSize: fileSize,
-                        aspectRatio: aspectRatio
-                    )
-                    
-                    continuation.resume(returning: metadata)
-                    
-                } catch {
-                    continuation.resume(throwing: UploadError.metadataExtractionFailed("Failed to extract metadata: \(error.localizedDescription)"))
                 }
             }
         }

@@ -1,11 +1,12 @@
 //
 //  CoreVideoMetadata.swift
-//  CleanBeta
+//  StitchSocial
 //
 //  Foundation layer - Depends only on CoreTypes
 //  Single source of truth for all video content - Reddit/Twitch style with full engagement system
 //  Handles Thread/Child/Stepchild logic + Quality scoring + Engagement metrics + Temperature system
 //  UPDATED: Added description field for video content descriptions
+//  UPDATED: Added taggedUserIDs for user tagging/mentions
 //
 
 import Foundation
@@ -17,18 +18,20 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     // MARK: - Core Identity
     let id: String
     let title: String
-    let description: String  // NEW: Video description field
+    let description: String  // Video description field
+    let taggedUserIDs: [String]  // NEW: Array of userIDs tagged in video
     let videoURL: String
     let thumbnailURL: String
     let creatorID: String
     let creatorName: String
     let createdAt: Date
     
-    // MARK: - Default Initializer with Description Default
+    // MARK: - Default Initializer with Description and Tags
     init(
         id: String,
         title: String,
         description: String = "",  // Default empty description for backwards compatibility
+        taggedUserIDs: [String] = [],  // NEW: Default empty array for backwards compatibility
         videoURL: String,
         thumbnailURL: String,
         creatorID: String,
@@ -57,6 +60,7 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         self.id = id
         self.title = title
         self.description = description
+        self.taggedUserIDs = taggedUserIDs
         self.videoURL = videoURL
         self.thumbnailURL = thumbnailURL
         self.creatorID = creatorID
@@ -243,7 +247,7 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     }
 }
 
-// MARK: - Factory Methods (UPDATED: All include description parameter)
+// MARK: - Factory Methods (UPDATED: All include description and taggedUserIDs parameters)
 
 extension CoreVideoMetadata {
     
@@ -252,6 +256,7 @@ extension CoreVideoMetadata {
         id: String = UUID().uuidString,
         title: String,
         description: String = "",
+        taggedUserIDs: [String] = [],  // NEW: Tagged users
         videoURL: String,
         thumbnailURL: String,
         creatorID: String,
@@ -263,6 +268,7 @@ extension CoreVideoMetadata {
             id: id,
             title: title,
             description: description,
+            taggedUserIDs: taggedUserIDs,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -295,6 +301,7 @@ extension CoreVideoMetadata {
         to threadID: String,
         title: String,
         description: String = "",
+        taggedUserIDs: [String] = [],  // NEW: Tagged users
         videoURL: String,
         thumbnailURL: String,
         creatorID: String,
@@ -306,6 +313,7 @@ extension CoreVideoMetadata {
             id: UUID().uuidString,
             title: title,
             description: description,
+            taggedUserIDs: taggedUserIDs,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -339,6 +347,7 @@ extension CoreVideoMetadata {
         threadID: String,
         title: String,
         description: String = "",
+        taggedUserIDs: [String] = [],  // NEW: Tagged users
         videoURL: String,
         thumbnailURL: String,
         creatorID: String,
@@ -350,6 +359,7 @@ extension CoreVideoMetadata {
             id: UUID().uuidString,
             title: title,
             description: description,
+            taggedUserIDs: taggedUserIDs,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -378,7 +388,7 @@ extension CoreVideoMetadata {
     }
 }
 
-// MARK: - Engagement Updates (UPDATED: Include description in copy methods)
+// MARK: - Engagement Updates (UPDATED: Include description and taggedUserIDs in copy methods)
 
 extension CoreVideoMetadata {
     
@@ -408,7 +418,8 @@ extension CoreVideoMetadata {
         return CoreVideoMetadata(
             id: id,
             title: title,
-            description: description, // Include description in copy
+            description: description,
+            taggedUserIDs: taggedUserIDs,  // Preserve tagged users
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -446,7 +457,8 @@ extension CoreVideoMetadata {
         return CoreVideoMetadata(
             id: id,
             title: title,
-            description: description, // Include description in copy
+            description: description,
+            taggedUserIDs: taggedUserIDs,  // Preserve tagged users
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,

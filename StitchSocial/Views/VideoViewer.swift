@@ -1,16 +1,18 @@
 //
-//  WhoViewedSheet.swift
+//  VideoViewer.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Simple "Who Viewed" Analytics Sheet
-//  Dependencies: SwiftUI, VideoService, UserService
-//  Features: Basic viewer list, timestamps, minimal UI
+//  Video Viewer Analytics and Who Viewed Sheet
+//  UPDATED: Merged with viewer tracking improvements - added tier support, better UI
 //
 
+import Foundation
 import SwiftUI
+import FirebaseFirestore
 
-// MARK: - Simple Viewer Data Model
-struct VideoViewer {
+// MARK: - VideoViewer Model (UPDATED with tier)
+struct VideoViewer: Identifiable, Codable {
+    let id = UUID()
     let userID: String
     let username: String
     let displayName: String
@@ -18,48 +20,65 @@ struct VideoViewer {
     let viewedAt: Date
     let watchTime: TimeInterval
     let isVerified: Bool
+    let tier: String  // NEW: User tier for display
+    
+    // Computed property for time ago display
+    var timeAgo: String {
+        let interval = Date().timeIntervalSince(viewedAt)
+        
+        if interval < 60 {
+            return "Just now"
+        } else if interval < 3600 {
+            let minutes = Int(interval / 60)
+            return "\(minutes)m ago"
+        } else if interval < 86400 {
+            let hours = Int(interval / 3600)
+            return "\(hours)h ago"
+        } else if interval < 604800 {
+            let days = Int(interval / 86400)
+            return "\(days)d ago"
+        } else {
+            let weeks = Int(interval / 604800)
+            return "\(weeks)w ago"
+        }
+    }
 }
 
-// MARK: - Who Viewed Sheet
+// MARK: - WhoViewedSheet (UPDATED UI)
 struct WhoViewedSheet: View {
-    
-    // MARK: - Properties
     let videoID: String
-    let videoTitle: String
-    @Environment(\.dismiss) private var dismiss
+    let onDismiss: () -> Void
     
-    // MARK: - Services
     @StateObject private var videoService = VideoService()
-    @StateObject private var userService = UserService()
-    
-    // MARK: - State
     @State private var viewers: [VideoViewer] = []
     @State private var isLoading = true
     @State private var totalViews = 0
     @State private var uniqueViewers = 0
+    @State private var errorMessage: String?
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                // Header Stats
-                statsHeader
+            ZStack {
+                Color.black.ignoresSafeArea()
                 
-                // Viewer List
                 if isLoading {
                     loadingView
+                } else if let error = errorMessage {
+                    errorView(error)
                 } else if viewers.isEmpty {
-                    emptyStateView
+                    emptyView
                 } else {
-                    viewerList
+                    viewersList
                 }
             }
-            .navigationTitle("Who Viewed")
+            .navigationTitle("Viewers")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
-                        dismiss()
+                        onDismiss()
                     }
+                    .foregroundColor(.white)
                 }
             }
         }
@@ -68,80 +87,130 @@ struct WhoViewedSheet: View {
         }
     }
     
-    // MARK: - Stats Header
-    private var statsHeader: some View {
-        VStack(spacing: 12) {
-            // Video Title
-            Text(videoTitle)
-                .font(.headline)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            // View Stats
-            HStack(spacing: 24) {
-                VStack {
-                    Text("\(totalViews)")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("Total Views")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+    // MARK: - Viewers List (IMPROVED UI)
+    
+    private var viewersList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                // Stats header
+                statsHeader
                 
-                VStack {
-                    Text("\(uniqueViewers)")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text("Unique Viewers")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                Divider()
+                    .background(Color.gray.opacity(0.3))
+                
+                // Viewer rows
+                ForEach(viewers) { viewer in
+                    ViewerRow(viewer: viewer)
+                    
+                    if viewer.id != viewers.last?.id {
+                        Divider()
+                            .background(Color.gray.opacity(0.2))
+                            .padding(.leading, 72)
+                    }
                 }
             }
+            .padding(.bottom, 20)
         }
-        .padding()
-        .background(Color(.systemGray6))
     }
     
-    // MARK: - Viewer List
-    private var viewerList: some View {
-        List(viewers, id: \.userID) { viewer in
-            ViewerRow(viewer: viewer)
+    // MARK: - Stats Header
+    
+    private var statsHeader: some View {
+        HStack(spacing: 40) {
+            VStack(spacing: 4) {
+                Text("\(totalViews)")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.white)
+                
+                Text("Total Views")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.gray)
+            }
+            
+            VStack(spacing: 4) {
+                Text("\(uniqueViewers)")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.purple)
+                
+                Text("Unique Viewers")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.gray)
+            }
         }
-        .listStyle(PlainListStyle())
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity)
+        .background(Color.gray.opacity(0.1))
     }
     
-    // MARK: - Loading View
+    // MARK: - Loading State
+    
     private var loadingView: some View {
         VStack(spacing: 16) {
             ProgressView()
+                .tint(.white)
+                .scaleEffect(1.2)
+            
             Text("Loading viewers...")
-                .foregroundColor(.secondary)
+                .font(.subheadline)
+                .foregroundColor(.gray)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     // MARK: - Empty State
-    private var emptyStateView: some View {
+    
+    private var emptyView: some View {
         VStack(spacing: 16) {
             Image(systemName: "eye.slash")
                 .font(.system(size: 48))
-                .foregroundColor(.secondary)
+                .foregroundColor(.gray)
             
             Text("No Views Yet")
                 .font(.headline)
+                .foregroundColor(.white)
             
-            Text("When people view your video, they'll appear here")
+            Text("Be patient! Views will appear here once people watch your video.")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal)
+                .padding(.horizontal, 40)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Error View
+    
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 48))
+                .foregroundColor(.orange)
+            
+            Text("Error Loading Viewers")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            Text(message)
+                .font(.subheadline)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 40)
+            
+            Button("Retry") {
+                Task { await loadViewerData() }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+            .background(Color.purple)
+            .foregroundColor(.white)
+            .cornerRadius(8)
+        }
     }
     
     // MARK: - Load Data
+    
     private func loadViewerData() async {
+        isLoading = true
+        errorMessage = nil
+        
         do {
             // Get video analytics
             let analytics = try await videoService.getVideoAnalytics(videoID: videoID)
@@ -157,23 +226,18 @@ struct WhoViewedSheet: View {
             }
             
         } catch {
-            print("Failed to load viewer data: \(error)")
             await MainActor.run {
+                self.errorMessage = error.localizedDescription
                 self.isLoading = false
             }
         }
     }
 }
 
-// MARK: - Viewer Row
+// MARK: - Viewer Row (UPDATED with tier badge)
+
 struct ViewerRow: View {
     let viewer: VideoViewer
-    
-    private var timeAgoText: String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: viewer.viewedAt, relativeTo: Date())
-    }
     
     private var watchTimeText: String {
         if viewer.watchTime < 60 {
@@ -187,7 +251,7 @@ struct ViewerRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            // Profile Image
+            // Profile image
             AsyncImage(url: URL(string: viewer.profileImageURL ?? "")) { image in
                 image
                     .resizable()
@@ -200,50 +264,72 @@ struct ViewerRow: View {
                             .foregroundColor(.gray)
                     )
             }
-            .frame(width: 40, height: 40)
+            .frame(width: 44, height: 44)
             .clipShape(Circle())
             
-            // User Info
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
+            // User info
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
                     Text(viewer.displayName)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
                     
                     if viewer.isVerified {
                         Image(systemName: "checkmark.seal.fill")
+                            .font(.system(size: 12))
                             .foregroundColor(.blue)
-                            .font(.caption)
+                    }
+                    
+                    // NEW: Tier badge
+                    if viewer.tier != "rookie" {
+                        Text(viewer.tier.uppercased())
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.purple)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                            .background(Color.purple.opacity(0.2))
+                            .cornerRadius(4)
                     }
                 }
                 
                 Text("@\(viewer.username)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 13))
+                    .foregroundColor(.gray)
             }
             
             Spacer()
             
-            // View Info
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(timeAgoText)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+            // View info
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(viewer.timeAgo)
+                    .font(.system(size: 12))
+                    .foregroundColor(.gray)
                 
-                Text(watchTimeText)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 10))
+                        .foregroundColor(.gray.opacity(0.7))
+                    
+                    Text(watchTimeText)
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray.opacity(0.9))
+                }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Color.black)
     }
 }
 
-// MARK: - VideoService Extension
+// MARK: - VideoService Extension (UPDATED to include tier)
+
 extension VideoService {
     
     /// Get list of users who viewed a video
     func getVideoViewers(videoID: String) async throws -> [VideoViewer] {
+        print("📊 VIDEO SERVICE: Fetching viewers for video \(videoID)")
+        
         // Get interactions for this video
         let snapshot = try await db.collection(FirebaseSchema.Collections.interactions)
             .whereField(FirebaseSchema.InteractionDocument.videoID, isEqualTo: videoID)
@@ -252,7 +338,10 @@ extension VideoService {
             .limit(to: 100) // Limit for performance
             .getDocuments()
         
-        var viewers: [VideoViewer] = []
+        print("📊 VIDEO SERVICE: Found \(snapshot.documents.count) view interactions")
+        
+        // Extract unique user IDs and their view data
+        var viewerMap: [String: (date: Date, watchTime: TimeInterval)] = [:]
         
         for doc in snapshot.documents {
             let data = doc.data()
@@ -263,30 +352,53 @@ extension VideoService {
             }
             
             let watchTime = data["watchTime"] as? TimeInterval ?? 0
-            let viewedAt = timestamp.dateValue()
+            let viewDate = timestamp.dateValue()
             
-            // Get user details
-            if let user = try? await UserService().getUser(id: userID) {
-                let viewer = VideoViewer(
-                    userID: userID,
-                    username: user.username,
-                    displayName: user.displayName,
-                    profileImageURL: user.profileImageURL,
-                    viewedAt: viewedAt,
-                    watchTime: watchTime,
-                    isVerified: user.isVerified
-                )
-                viewers.append(viewer)
+            // Keep only the most recent view per user
+            if viewerMap[userID] == nil || viewDate > viewerMap[userID]!.date {
+                viewerMap[userID] = (date: viewDate, watchTime: watchTime)
             }
         }
         
+        print("📊 VIDEO SERVICE: Found \(viewerMap.count) unique viewers")
+        
+        var viewers: [VideoViewer] = []
+        
+        // Fetch user details for each viewer
+        for (userID, viewData) in viewerMap {
+            do {
+                if let user = try await UserService().getUser(id: userID) {
+                    let viewer = VideoViewer(
+                        userID: userID,
+                        username: user.username,
+                        displayName: user.displayName,
+                        profileImageURL: user.profileImageURL,
+                        viewedAt: viewData.date,
+                        watchTime: viewData.watchTime,
+                        isVerified: user.isVerified,
+                        tier: user.tier.rawValue
+                    )
+                    viewers.append(viewer)
+                }
+            } catch {
+                print("⚠️ VIDEO SERVICE: Error fetching user \(userID): \(error)")
+                continue
+            }
+        }
+        
+        // Sort by most recent views
+        viewers.sort { $0.viewedAt > $1.viewedAt }
+        
+        print("✅ VIDEO SERVICE: Returning \(viewers.count) viewers")
         return viewers
     }
 }
 
+// MARK: - Preview
+
 #Preview {
     WhoViewedSheet(
         videoID: "sample_video_id",
-        videoTitle: "My Awesome Video"
+        onDismiss: {}
     )
 }

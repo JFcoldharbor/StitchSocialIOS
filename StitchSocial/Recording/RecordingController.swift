@@ -174,6 +174,7 @@ class RecordingController: ObservableObject {
         
         self.videoCoordinator = VideoCoordinator(
             videoService: videoService,
+            userService: UserService(),
             aiAnalyzer: aiAnalyzer,
             videoProcessor: VideoProcessingService(),
             uploadService: VideoUploadService(),

@@ -317,6 +317,14 @@ struct RecordingView: View {
         // Use controller's method to stop timer (since timer is private)
         controller.stopRecordingTimer()
         
+        // Kill all background activity and videos before exiting
+        BackgroundActivityManager.shared.killAllBackgroundActivity(reason: "Recording exit")
+        
+        // Send additional kill notifications for immediate effect
+        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+        NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
+        NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
+        
         // Do camera cleanup without waiting
         Task { @MainActor in
             await controller.stopCameraSession()
