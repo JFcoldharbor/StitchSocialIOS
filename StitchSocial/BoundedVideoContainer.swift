@@ -6,7 +6,7 @@
 //  Dependencies: AVFoundation, CoreVideoMetadata, ThreadData
 //  Features: Background/foreground handling, memory efficient, loop detection, context-aware kill notifications
 //  Purpose: Lightweight video player for continuous scrolling experiences
-//  FIXED: Profile grid thumbnails immune to kill notifications
+//  FIXED: Deinit crash - proper observer cleanup without retain cycle
 //
 
 import SwiftUI
@@ -21,7 +21,7 @@ struct MyBoundedVideoContainer: UIViewRepresentable {
     let isActive: Bool
     let containerID: String
     let onVideoLoop: (String) -> Void
-    let context: VideoPlayerContext  // ✅ NEW: Context awareness
+    let context: VideoPlayerContext
     
     func makeUIView(context: Context) -> UIView {
         let containerView = UIView()
@@ -58,10 +58,12 @@ class VideoContainerCoordinator: NSObject {
     var currentVideoID: String?
     var isActive: Bool = false
     var notificationObserver: NSObjectProtocol?
-    var killObserver: NSObjectProtocol?  // ✅ NEW: Kill notification observer
+    var killObserver: NSObjectProtocol?
+    var backgroundObserver: NSObjectProtocol?
+    var foregroundObserver: NSObjectProtocol?
     let onVideoLoop: (String) -> Void
     
-    // ✅ NEW: Context awareness
+    // Context awareness
     private let playerContext: VideoPlayerContext
     
     // View tracking properties
@@ -80,7 +82,7 @@ class VideoContainerCoordinator: NSObject {
         print("🎬 BOUNDED VIDEO [\(context.description)]: Initialized")
     }
     
-    // MARK: - ✅ Context-Aware Kill Observer Setup
+    // MARK: - Context-Aware Kill Observer Setup
     
     private func setupKillObserver() {
         // Profile grid thumbnails DON'T respond to kill notifications
@@ -128,27 +130,29 @@ class VideoContainerCoordinator: NSObject {
     // MARK: - Background & Foreground Observers
     
     private func setupBackgroundObservers() {
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(appDidEnterBackground),
-            name: UIApplication.didEnterBackgroundNotification,
-            object: nil
-        )
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.appDidEnterBackground()
+        }
         
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(appWillEnterForeground),
-            name: UIApplication.willEnterForegroundNotification,
-            object: nil
-        )
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.appWillEnterForeground()
+        }
     }
     
-    @objc private func appDidEnterBackground() {
+    private func appDidEnterBackground() {
         player?.pause()
         print("📱 BOUNDED VIDEO [\(playerContext.description)]: Paused (background)")
     }
     
-    @objc private func appWillEnterForeground() {
+    private func appWillEnterForeground() {
         if isActive {
             player?.play()
             print("📱 BOUNDED VIDEO [\(playerContext.description)]: Resumed (foreground)")
@@ -290,22 +294,48 @@ class VideoContainerCoordinator: NSObject {
         currentVideoID = nil
     }
     
+    // MARK: - FIXED DEINIT
+    
     deinit {
-        cleanupCurrentPlayer()
-        resetViewTracking()
+        // Stop view tracking first
+        viewTimer?.invalidate()
+        viewTimer = nil
         
-        // Cleanup kill observer
+        // Clean up player
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        
+        // Remove ALL observers explicitly by reference
+        if let observer = notificationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            notificationObserver = nil
+        }
+        
         if let observer = killObserver {
             NotificationCenter.default.removeObserver(observer)
             killObserver = nil
         }
         
-        NotificationCenter.default.removeObserver(self)
-        print("🗑️ BOUNDED VIDEO [\(playerContext.description)]: Deinitialized")
+        if let observer = backgroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+            backgroundObserver = nil
+        }
+        
+        if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+            foregroundObserver = nil
+        }
+        
+        // Clean up UI
+        playerLayer?.removeFromSuperlayer()
+        player = nil
+        playerLayer = nil
+        
+        print("🗑️ BOUNDED VIDEO [\(playerContext.description)]: Deinitialized safely")
     }
 }
 
-// MARK: - VideoPlayerContext Extension (Add description if not present)
+// MARK: - VideoPlayerContext Extension
 
 extension VideoPlayerContext {
     var description: String {
@@ -313,9 +343,8 @@ extension VideoPlayerContext {
         case .homeFeed: return "Home Feed"
         case .discovery: return "Discovery"
         case .profileGrid: return "Profile Grid"
-        case .threadView: return "Thread View"
-        case .fullscreen: return "Fullscreen"
         case .standalone: return "Standalone"
+        @unknown default: return "Unknown"
         }
     }
 }

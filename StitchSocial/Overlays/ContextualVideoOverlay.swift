@@ -5,10 +5,50 @@
 //  Layer 8: Views - Universal Contextual Video Overlay with Viewer Tracking
 //  Dependencies: EngagementService, UserService, AuthService, FollowManager, VideoService
 //  Features: Static overlay, special user permissions, context-aware profile navigation, viewer tracking
-//  UPDATED: Added eye icon button to view who watched the video
+//  UPDATED: Uses external TaggedUsersRow component, removed embedded implementation
 //
 
 import SwiftUI
+
+// MARK: - Shared Types (Used by extracted components)
+
+/// Cached user data structure (shared across components)
+struct CachedUserData {
+    let displayName: String
+    let profileImageURL: String?
+    let tier: UserTier?
+    let cachedAt: Date
+}
+
+/// Video engagement data model (shared across components)
+struct ContextualVideoEngagement {
+    let videoID: String
+    let creatorID: String
+    var hypeCount: Int
+    var coolCount: Int
+    var shareCount: Int
+    var replyCount: Int
+    var viewCount: Int
+    var lastEngagementAt: Date
+    
+    var totalEngagements: Int {
+        return hypeCount + coolCount
+    }
+    
+    var engagementRatio: Double {
+        let total = totalEngagements
+        return total > 0 ? Double(hypeCount) / Double(total) : 0.5
+    }
+}
+
+/// Contextual button style (shared across components)
+struct ContextualScaleButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
 
 /// Universal overlay that adapts to different viewing contexts with viewer tracking
 struct ContextualVideoOverlay: View {
@@ -21,6 +61,15 @@ struct ContextualVideoOverlay: View {
     let threadVideo: CoreVideoMetadata?
     let isVisible: Bool
     let onAction: ((ContextualOverlayAction) -> Void)?
+    
+    /// Actual reply count from ThreadData - overrides video.replyCount when provided
+    /// Use this when you have access to thread.childVideos.count for accurate count
+    let actualReplyCount: Int?
+    
+    /// Computed reply count - uses actualReplyCount if available, otherwise video.replyCount
+    private var displayReplyCount: Int {
+        actualReplyCount ?? video.replyCount
+    }
     
     // MARK: - State
     
@@ -43,18 +92,11 @@ struct ContextualVideoOverlay: View {
     private static var pendingBatchRequests: Set<String> = []
     private static var batchTimer: Timer?
     
-    private struct CachedUserData {
-        let displayName: String
-        let profileImageURL: String?
-        let tier: UserTier?
-        let cachedAt: Date
-    }
-    
     // MARK: - UI State
     
     @State private var showingProfileFullscreen = false
     @State private var showingThreadView = false
-    @State private var showingViewers = false  // NEW: Viewers sheet
+    @State private var showingViewers = false
     @State private var selectedUserID: String? {
         didSet {
             print("🔍 STATE: selectedUserID changed from \(oldValue ?? "nil") to \(selectedUserID ?? "nil")")
@@ -81,6 +123,7 @@ struct ContextualVideoOverlay: View {
         currentUserID: String?,
         threadVideo: CoreVideoMetadata? = nil,
         isVisible: Bool = true,
+        actualReplyCount: Int? = nil,
         onAction: ((ContextualOverlayAction) -> Void)? = nil
     ) {
         self.video = video
@@ -88,73 +131,93 @@ struct ContextualVideoOverlay: View {
         self.currentUserID = currentUserID
         self.threadVideo = threadVideo
         self.isVisible = isVisible
+        self.actualReplyCount = actualReplyCount
         self.onAction = onAction
     }
     
     // MARK: - Minimal Discovery Overlay
     
     private var minimalDiscoveryOverlay: some View {
-        VStack {
-            // Top: Creator name only
-            HStack {
-                Button {
-                    selectedUserID = video.creatorID
-                    
-                    // Comprehensive video kill - hit all possible notification patterns
-                    NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("DeactivateAllPlayers"), object: nil)
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        showingProfileFullscreen = true
-                        onAction?(.profile(video.creatorID))
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        // Small temperature indicator
-                        Circle()
-                            .fill(temperatureColor)
-                            .frame(width: 4, height: 4)
+        ZStack {
+            // Main content
+            VStack {
+                // Top: Creator name only
+                HStack {
+                    Button {
+                        selectedUserID = video.creatorID
                         
-                        Text(displayCreatorName)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
+                        // Comprehensive video kill
+                        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("DeactivateAllPlayers"), object: nil)
+                        
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            showingProfileFullscreen = true
+                            onAction?(.profile(video.creatorID))
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            // Small temperature indicator
+                            Circle()
+                                .fill(temperatureColor)
+                                .frame(width: 4, height: 4)
+                            
+                            Text(displayCreatorName)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.black.opacity(0.4))
+                        )
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(Color.black.opacity(0.4))
-                    )
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    Spacer()
                 }
-                .buttonStyle(PlainButtonStyle())
+                .padding(.top, 12)
+                .padding(.horizontal, 12)
                 
                 Spacer()
+                
+                // Bottom: Video title only
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if !video.title.isEmpty {
+                            Text(video.title)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.white)
+                                .lineLimit(2)
+                                .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1)
+                        }
+                    }
+                    
+                    Spacer()
+                }
+                .padding(.bottom, 16)
+                .padding(.horizontal, 12)
             }
-            .padding(.top, 12)
-            .padding(.horizontal, 12)
             
-            Spacer()
-            
-            // Bottom: Video title only (no engagement buttons, no metadata)
+            // Right Side - Swipe for replies indicator
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    if !video.title.isEmpty {
-                        Text(video.title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white)
-                            .lineLimit(2)
-                            .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1)
-                    }
-                }
-                
                 Spacer()
+                VStack {
+                    Spacer()
+                    
+                    // Show swipe banner for parent videos with replies
+                    if video.conversationDepth == 0 && displayReplyCount > 0 {
+                        SwipeForRepliesBanner(replyCount: displayReplyCount)
+                    }
+                    
+                    Spacer()
+                }
             }
-            .padding(.bottom, 16)
-            .padding(.horizontal, 12)
+            .padding(.trailing, 12)
         }
     }
     
@@ -162,14 +225,14 @@ struct ContextualVideoOverlay: View {
     
     private func fullContextualOverlay(geometry: GeometryProxy) -> some View {
         ZStack {
-            // Top Section - ALWAYS VISIBLE
+            // Top Section
             VStack {
                 topSection
                 Spacer()
             }
             .opacity(1.0)
             
-            // Bottom Section - ALWAYS VISIBLE (adjusted padding)
+            // Bottom Section
             VStack {
                 Spacer()
                 bottomSection
@@ -177,28 +240,15 @@ struct ContextualVideoOverlay: View {
             }
             .opacity(1.0)
             
-            // Right Side - ALWAYS VISIBLE when content exists
+            // Right Side - Swipe for replies indicator
             HStack {
                 Spacer()
                 VStack {
                     Spacer()
                     
-                    // Right side navigation indicator
-                    if video.conversationDepth <= 1 && video.replyCount > 0 {
-                        Button {
-                            showingThreadView = true
-                            onAction?(.thread(video.threadID ?? video.id))
-                        } label: {
-                            Circle()
-                                .fill(Color.cyan.opacity(0.8))
-                                .frame(width: 30, height: 30)
-                                .overlay(
-                                    Text("\(video.replyCount)")
-                                        .font(.system(size: 12, weight: .bold))
-                                        .foregroundColor(.white)
-                                )
-                        }
-                        .buttonStyle(PlainButtonStyle())
+                    // Show swipe banner for parent videos with replies
+                    if video.conversationDepth == 0 && displayReplyCount > 0 {
+                        SwipeForRepliesBanner(replyCount: displayReplyCount)
                     }
                     
                     Spacer()
@@ -207,7 +257,7 @@ struct ContextualVideoOverlay: View {
             .padding(.trailing, 12)
             .opacity(1.0)
             
-            // Center Effects - ALWAYS VISIBLE when active
+            // Center Effects
             centerEffects
                 .opacity(1.0)
         }
@@ -237,7 +287,8 @@ struct ContextualVideoOverlay: View {
         return context != .discovery
     }
     
-    // MARK: - Special user detection for enhanced permissions
+    // MARK: - Special user detection
+    
     private var currentUserIsSpecial: Bool {
         guard let currentUserID = currentUserID,
               let userEmail = authService.currentUserEmail else { return false }
@@ -253,33 +304,34 @@ struct ContextualVideoOverlay: View {
     
     // MARK: - Cached User Data Management
     
-    /// Get cached user data with automatic batching for missing users
+    /// Get cached user data - returns immediately if cached, triggers load if missing
     private static func getCachedUserData(userID: String) -> CachedUserData? {
-        // Check if we have cached data that's still valid
+        // Check if we have valid cached data
         if let cached = userDataCache[userID],
            let timestamp = cacheTimestamps[userID],
            Date().timeIntervalSince(timestamp) < cacheExpiration {
             return cached
         }
         
-        // Missing or expired - add to pending batch
-        pendingBatchRequests.insert(userID)
-        
-        // If batch is full or timer expired, trigger batch load
-        if pendingBatchRequests.count >= batchSize {
-            scheduleBatchLoad()
-        } else if batchTimer == nil {
-            // Start timer for partial batches
-            batchTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
-                scheduleBatchLoad()
+        // Missing or expired - trigger immediate load in background
+        if !pendingBatchRequests.contains(userID) {
+            pendingBatchRequests.insert(userID)
+            
+            // Trigger immediate load for first request
+            if pendingBatchRequests.count == 1 {
+                Task {
+                    try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second delay
+                    await scheduleBatchLoad()
+                }
             }
         }
         
+        // Return placeholder immediately
         return nil
     }
     
-    /// Schedule batch loading of user data
-    private static func scheduleBatchLoad() {
+    /// Schedule batch loading
+    private static func scheduleBatchLoad() async {
         guard !pendingBatchRequests.isEmpty else { return }
         
         let userIDs = Array(pendingBatchRequests)
@@ -287,32 +339,41 @@ struct ContextualVideoOverlay: View {
         batchTimer?.invalidate()
         batchTimer = nil
         
-        Task {
-            await loadUserDataBatch(userIDs: userIDs)
-        }
+        await loadUserDataBatch(userIDs: userIDs)
     }
     
-    /// Load user data in batch and update cache
+    /// Load user data in batch - OPTIMIZED
     private static func loadUserDataBatch(userIDs: [String]) async {
         let userService = UserService()
         
-        for userID in userIDs {
-            do {
-                if let user = try await userService.getUser(id: userID) {
-                    let cached = CachedUserData(
-                        displayName: user.displayName,
-                        profileImageURL: user.profileImageURL,
-                        tier: user.tier,
-                        cachedAt: Date()
-                    )
-                    
+        // Load all users concurrently
+        await withTaskGroup(of: (String, CachedUserData?)?.self) { group in
+            for userID in userIDs {
+                group.addTask {
+                    do {
+                        if let user = try await userService.getUser(id: userID) {
+                            return (userID, CachedUserData(
+                                displayName: user.displayName,
+                                profileImageURL: user.profileImageURL,
+                                tier: user.tier,
+                                cachedAt: Date()
+                            ))
+                        }
+                    } catch {
+                        print("⚠️ CACHE: Failed to load user \(userID): \(error)")
+                    }
+                    return nil
+                }
+            }
+            
+            // Collect results
+            for await result in group {
+                if let (userID, cached) = result {
                     await MainActor.run {
                         userDataCache[userID] = cached
                         cacheTimestamps[userID] = Date()
                     }
                 }
-            } catch {
-                print("Failed to load user data for \(userID): \(error)")
             }
         }
         
@@ -320,9 +381,10 @@ struct ContextualVideoOverlay: View {
         await MainActor.run {
             NotificationCenter.default.post(name: NSNotification.Name("UserDataCacheUpdated"), object: nil)
         }
+        
+        print("✅ CACHE: Loaded \(userIDs.count) users concurrently")
     }
     
-    /// Clear expired cache entries
     private static func clearExpiredCache() {
         let now = Date()
         for (userID, timestamp) in cacheTimestamps {
@@ -333,24 +395,23 @@ struct ContextualVideoOverlay: View {
         }
     }
     
-    /// Get creator display name with cached lookup
     private var displayCreatorName: String {
         if let cached = Self.getCachedUserData(userID: video.creatorID) {
             return cached.displayName
         }
-        return "Loading..."
+        // Fallback to video metadata while loading
+        return video.creatorName.isEmpty ? "Loading..." : video.creatorName
     }
     
-    /// Get thread creator display name with cached lookup
     private var displayThreadCreatorName: String {
         if let threadVideo = threadVideo,
            let cached = Self.getCachedUserData(userID: threadVideo.creatorID) {
             return cached.displayName
         }
-        return displayCreatorName
+        // Fallback to thread video metadata
+        return threadVideo?.creatorName ?? displayCreatorName
     }
     
-    /// Get creator profile image URL with cached lookup
     private var displayCreatorProfileImageURL: String? {
         if let cached = Self.getCachedUserData(userID: video.creatorID) {
             return cached.profileImageURL
@@ -358,7 +419,6 @@ struct ContextualVideoOverlay: View {
         return nil
     }
     
-    /// Get thread creator profile image URL with cached lookup
     private var displayThreadCreatorProfileImageURL: String? {
         if let threadVideo = threadVideo,
            let cached = Self.getCachedUserData(userID: threadVideo.creatorID) {
@@ -383,14 +443,12 @@ struct ContextualVideoOverlay: View {
         GeometryReader { geometry in
             ZStack {
                 if shouldShowMinimalDisplay {
-                    // MINIMAL DISCOVERY OVERLAY
                     minimalDiscoveryOverlay
                 } else {
-                    // FULL OVERLAY FOR OTHER CONTEXTS
                     fullContextualOverlay(geometry: geometry)
                 }
                 
-                // Floating Icons Overlay - render on top of everything
+                // Floating Icons Overlay
                 ForEach(floatingIconManager.activeIcons, id: \.id) { icon in
                     icon
                 }
@@ -399,26 +457,21 @@ struct ContextualVideoOverlay: View {
         .onAppear {
             setupOverlay()
             setupNotificationObservers()
-            
-            // Clear expired cache periodically
             Self.clearExpiredCache()
         }
         .onDisappear {
             removeNotificationObservers()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("UserDataCacheUpdated"))) { _ in
-            // Force UI refresh when cache updates - trigger state change
             isLoadingUserData.toggle()
             isLoadingUserData.toggle()
         }
         .fullScreenCover(isPresented: $showingProfileFullscreen) {
-            // Use selectedUserID if available, otherwise fallback to video creator
             let userIDToShow = selectedUserID ?? video.creatorID
             
             CreatorProfileView(userID: userIDToShow)
                 .onAppear {
                     print("📱 FULLSCREEN: CreatorProfileView appeared for userID: \(userIDToShow)")
-                    // Comprehensive background activity stopping
                     NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
                     NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
                     NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
@@ -427,9 +480,7 @@ struct ContextualVideoOverlay: View {
                 }
                 .onDisappear {
                     print("📱 FULLSCREEN: CreatorProfileView disappeared")
-                    // Reset state when profile closes
                     selectedUserID = nil
-                    // Resume video activity when profile closes
                     NotificationCenter.default.post(name: NSNotification.Name("FullscreenProfileClosed"), object: nil)
                 }
         }
@@ -453,42 +504,19 @@ struct ContextualVideoOverlay: View {
                 recordingContext: getStitchRecordingContext(),
                 onVideoCreated: { videoMetadata in
                     showingStitchRecording = false
-                    
-                    // Kill videos again after recording completion
                     NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("DeactivateAllPlayers"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("DisableVideoAutoRestart"), object: nil)
-                    
-                    // Refresh engagement data after stitch creation
                     Task { await loadVideoEngagement() }
                 },
                 onCancel: {
                     showingStitchRecording = false
-                    
-                    // Kill videos again after recording cancellation
                     NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("DeactivateAllPlayers"), object: nil)
-                    NotificationCenter.default.post(name: NSNotification.Name("DisableVideoAutoRestart"), object: nil)
                 }
             )
             .onAppear {
-                // Ensure videos stay killed when recording view appears
                 NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
-                NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
-                NotificationCenter.default.post(name: NSNotification.Name("DisableVideoAutoRestart"), object: nil)
             }
             .onDisappear {
-                // Kill videos again when recording view disappears
                 NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
-                NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
-                NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
-                NotificationCenter.default.post(name: NSNotification.Name("DisableVideoAutoRestart"), object: nil)
             }
         }
     }
@@ -497,34 +525,88 @@ struct ContextualVideoOverlay: View {
     
     private var topSection: some View {
         HStack {
-            // Creator Pills
+            // Creator Pills (USING EXTRACTED COMPONENT)
             VStack(alignment: .leading, spacing: 8) {
                 // Video creator pill
-                creatorPill(
+                CreatorPill(
                     creator: video,
                     isThread: false,
                     colors: temperatureColor == .red ?
                         [.red, .orange] : temperatureColor == .blue ?
                         [.blue, .cyan] : temperatureColor == .orange ?
                         [.orange, .yellow] : temperatureColor == .cyan ?
-                        [.cyan, .blue] : [.gray, .white]
+                        [.cyan, .blue] : [.gray, .white],
+                    displayName: displayCreatorName,
+                    profileImageURL: displayCreatorProfileImageURL,
+                    onTap: {
+                        NotificationCenter.default.post(name: NSNotification.Name("DisableVideoAutoRestart"), object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("FullscreenModeActivated"), object: nil)
+                        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("DeactivateAllPlayers"), object: nil)
+                        NotificationCenter.default.post(name: NSNotification.Name("AppDidEnterBackground"), object: nil)
+                        
+                        selectedUserID = video.creatorID
+                        showingProfileFullscreen = true
+                        onAction?(.profile(video.creatorID))
+                    }
                 )
                 
-                // Thread creator pill (only when thread exists)
+                // Thread creator pill
                 if let threadVideo = threadVideo, threadVideo.creatorID != video.creatorID {
-                    creatorPill(
+                    CreatorPill(
                         creator: threadVideo,
                         isThread: true,
-                        colors: [.purple, .pink]
+                        colors: [.purple, .pink],
+                        displayName: displayThreadCreatorName,
+                        profileImageURL: displayThreadCreatorProfileImageURL,
+                        onTap: {
+                            NotificationCenter.default.post(name: NSNotification.Name("DisableVideoAutoRestart"), object: nil)
+                            NotificationCenter.default.post(name: NSNotification.Name("FullscreenModeActivated"), object: nil)
+                            NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                            NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
+                            NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
+                            NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
+                            NotificationCenter.default.post(name: NSNotification.Name("DeactivateAllPlayers"), object: nil)
+                            NotificationCenter.default.post(name: NSNotification.Name("AppDidEnterBackground"), object: nil)
+                            
+                            selectedUserID = threadVideo.creatorID
+                            showingProfileFullscreen = true
+                            onAction?(.profile(threadVideo.creatorID))
+                        }
                     )
                 }
             }
             
             Spacer()
             
-            // Top-right action buttons
-            VStack(spacing: 8) {
-                // Special user actions
+            // Top-right section: Tagged users + action buttons
+            VStack(alignment: .trailing, spacing: 8) {
+                // Tagged Users (USING EXTERNAL COMPONENT)
+                if !video.taggedUserIDs.isEmpty {
+                    TaggedUsersRow(
+                        taggedUserIDs: video.taggedUserIDs,
+                        getCachedUserData: { userID in
+                            Self.getCachedUserData(userID: userID)
+                        },
+                        onUserTap: { userID in
+                            selectedUserID = userID
+                            
+                            NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                            NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
+                            NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
+                            
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                showingProfileFullscreen = true
+                                onAction?(.profile(userID))
+                            }
+                        }
+                    )
+                }
+                
+                // More options button
                 if currentUserIsSpecial || currentUserIsFounder {
                     moreOptionsButton
                 }
@@ -534,148 +616,16 @@ struct ContextualVideoOverlay: View {
         .padding(.horizontal, 12)
     }
     
-    // MARK: - NEW: Viewers Button
-    
-    private var viewersButton: some View {
-        Button {
-            print("👁️ VIEWERS: Button tapped")
-            print("👁️ VIEWERS: showingViewers = \(showingViewers)")
-            print("👁️ VIEWERS: videoID = \(video.id)")
-            showingViewers = true
-            print("👁️ VIEWERS: showingViewers set to true")
-            onAction?(.viewers)
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(Color.black.opacity(0.4))
-                    .frame(width: 36, height: 36)
-                
-                Circle()
-                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    .frame(width: 36, height: 36)
-                
-                // Eye icon with badge
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: "eye.fill")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    // View count badge
-                    if let engagement = videoEngagement, engagement.viewCount > 0 {
-                        Text("\(formatCountCompact(engagement.viewCount))")
-                            .font(.system(size: 7, weight: .bold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 3)
-                            .padding(.vertical, 1)
-                            .background(
-                                Capsule()
-                                    .fill(Color.purple)
-                            )
-                            .offset(x: 8, y: -8)
-                    }
-                }
-            }
-        }
-        .buttonStyle(PlainButtonStyle())
-        .onAppear {
-            print("👁️ VIEWERS BUTTON: Appeared")
-            print("👁️ VIEWERS BUTTON: isUserVideo = \(isUserVideo)")
-            print("👁️ VIEWERS BUTTON: video.creatorID = \(video.creatorID)")
-            print("👁️ VIEWERS BUTTON: currentUserID = \(currentUserID ?? "nil")")
-        }
-    }
-    
-    // MARK: - Creator Pill - Tappable with proper profile navigation
-    
-    private func creatorPill(creator: CoreVideoMetadata, isThread: Bool, colors: [Color]) -> some View {
-        Button {
-            print("🔍 CREATOR PILL: Button tapped for userID: \(creator.creatorID)")
-            
-            // Comprehensive video kill - hit all possible notification patterns
-            NotificationCenter.default.post(name: NSNotification.Name("DisableVideoAutoRestart"), object: nil)
-            NotificationCenter.default.post(name: NSNotification.Name("FullscreenModeActivated"), object: nil)
-            NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
-            NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
-            NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
-            NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
-            NotificationCenter.default.post(name: NSNotification.Name("DeactivateAllPlayers"), object: nil)
-            NotificationCenter.default.post(name: NSNotification.Name("AppDidEnterBackground"), object: nil)
-            print("🛑 CREATOR PILL: Posted comprehensive video kill notifications")
-            
-            // Set selectedUserID and trigger fullscreen
-            selectedUserID = creator.creatorID
-            print("🔍 CREATOR PILL: Set selectedUserID to \(selectedUserID ?? "nil")")
-            
-            // Immediate fullscreen trigger to change app state
-            showingProfileFullscreen = true
-            onAction?(.profile(creator.creatorID))
-        } label: {
-            HStack(spacing: 8) {
-                // Profile Image
-                AsyncImage(url: URL(string: isThread ? displayThreadCreatorProfileImageURL ?? "" : displayCreatorProfileImageURL ?? "")) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Circle()
-                        .fill(Color.gray.opacity(0.3))
-                }
-                .frame(width: isThread ? 28 : 24, height: isThread ? 28 : 24)
-                .clipShape(Circle())
-                .overlay(
-                    Circle()
-                        .stroke(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 2)
-                )
-                
-                // Creator Name and Context
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 4) {
-                        Text(isThread ? displayThreadCreatorName : displayCreatorName)
-                            .font(.system(size: isThread ? 13 : 11, weight: .semibold))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
-                        
-                        if isThread {
-                            Text("thread creator")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(.white.opacity(0.6))
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, isThread ? 12 : 8)
-            .padding(.vertical, isThread ? 8 : 6)
-            .background(
-                RoundedRectangle(cornerRadius: isThread ? 16 : 12)
-                    .fill(Color.black.opacity(0.4))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: isThread ? 16 : 12)
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                    )
-            )
-        }
-        .buttonStyle(ContextualScaleButtonStyle())
-    }
-    
     // MARK: - Follow Button
     
     private var followButton: some View {
-        Button {
-            Task {
-                await handleFollowToggle()
-            }
-        } label: {
-            Image(systemName: "person.fill")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundColor(isFollowing ? .purple : .clear)
-                .frame(width: 24, height: 24)
-                .background(
-                    Circle()
-                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                        .fill(Color.black.opacity(0.3))
-                )
-        }
-        .buttonStyle(ContextualScaleButtonStyle())
+        FollowButton(
+            userID: video.creatorID,
+            isFollowing: isFollowing,
+            onToggle: handleFollowToggle,
+            isHidden: isUserVideo,
+            style: .standard
+        )
     }
     
     private var isFollowing: Bool {
@@ -708,197 +658,7 @@ struct ContextualVideoOverlay: View {
         .buttonStyle(ContextualScaleButtonStyle())
     }
     
-    // MARK: - Metadata Row (UPDATED: Views tappable)
-    
-    private var metadataRow: some View {
-        HStack(spacing: 8) {
-            if let engagement = videoEngagement {
-                // LIVE DATA - Views count (TAPPABLE - opens WhoViewedSheet - CREATOR ONLY)
-                if isUserVideo {
-                    Button {
-                        print("👁️ VIEWS: Tapped views button")
-                        showingViewers = true
-                        onAction?(.viewers)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "eye.fill")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(.white.opacity(0.7))
-                            
-                            Text("\(formatCount(engagement.viewCount)) views")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(.white.opacity(0.9))
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.purple.opacity(0.2))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.purple.opacity(0.4), lineWidth: 1)
-                                )
-                        )
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .onAppear {
-                        print("👁️ VIEWS BUTTON: Appeared (creator-only)")
-                        print("👁️ VIEWS BUTTON: isUserVideo = \(isUserVideo)")
-                    }
-                } else {
-                    // Non-creator view (not tappable)
-                    HStack(spacing: 4) {
-                        Image(systemName: "eye.fill")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.white.opacity(0.7))
-                        
-                        Text("\(formatCount(engagement.viewCount)) views")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                }
-                
-                // Separator
-                Text("•")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
-                
-                // LIVE DATA - Stitch count
-                HStack(spacing: 4) {
-                    Image(systemName: "scissors")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.cyan.opacity(0.7))
-                    
-                    Text("\(formatCount(engagement.replyCount)) stitches")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.cyan.opacity(0.9))
-                }
-                
-                // Separator
-                Text("•")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
-                
-                // LIVE DATA - Total engagement
-                HStack(spacing: 4) {
-                    Image(systemName: "heart.fill")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.red.opacity(0.7))
-                    
-                    Text("\(formatCount(engagement.totalEngagements))")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.red.opacity(0.9))
-                }
-            } else {
-                // Loading state
-                HStack(spacing: 4) {
-                    Image(systemName: "eye.fill")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                    
-                    Text("Loading...")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
-                }
-            }
-        }
-    }
-    
-    // MARK: - NEW: Tagged Users Row
-    
-    private var taggedUsersRow: some View {
-        HStack(spacing: 8) {
-            // "Tagged:" label
-            HStack(spacing: 4) {
-                Image(systemName: "person.2.fill")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.purple.opacity(0.8))
-                
-                Text("Tagged:")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
-            }
-            
-            // Scrollable tagged users
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(video.taggedUserIDs.prefix(5), id: \.self) { userID in
-                        taggedUserAvatar(userID: userID)
-                    }
-                }
-            }
-            
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-    }
-    
-    // MARK: - Tagged User Avatar
-    
-    private func taggedUserAvatar(userID: String) -> some View {
-        Button {
-            // Navigate to tagged user profile
-            selectedUserID = userID
-            
-            // Kill videos
-            NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
-            NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
-            NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                showingProfileFullscreen = true
-                onAction?(.profile(userID))
-            }
-        } label: {
-            HStack(spacing: 4) {
-                // Avatar
-                AsyncImage(url: URL(string: Self.getCachedUserData(userID: userID)?.profileImageURL ?? "")) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Circle()
-                        .fill(Color.gray.opacity(0.3))
-                        .overlay(
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 8))
-                                .foregroundColor(.gray)
-                        )
-                }
-                .frame(width: 20, height: 20)
-                .clipShape(Circle())
-                .overlay(
-                    Circle()
-                        .stroke(Color.purple.opacity(0.6), lineWidth: 1.5)
-                )
-                
-                // Username
-                if let cached = Self.getCachedUserData(userID: userID) {
-                    Text("@\(cached.displayName)")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
-                        .lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.black.opacity(0.4))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color.purple.opacity(0.3), lineWidth: 1)
-                    )
-            )
-        }
-        .buttonStyle(PlainButtonStyle())
-        .onAppear {
-            // Trigger cache load for this user
-            _ = Self.getCachedUserData(userID: userID)
-        }
-    }
-    
-    // MARK: - Bottom Section (CORRECT ORDER: Title, Description, Tagged Users, Metadata, Buttons)
+    // MARK: - Bottom Section
     
     private var bottomSection: some View {
         VStack(spacing: 12) {
@@ -914,7 +674,7 @@ struct ContextualVideoOverlay: View {
             }
             .padding(.horizontal, 12)
             
-            // Row 2: Video description (if available)
+            // Row 2: Video description
             if let description = videoDescription, !description.isEmpty {
                 HStack {
                     Text(description)
@@ -928,25 +688,27 @@ struct ContextualVideoOverlay: View {
                 .padding(.horizontal, 12)
             }
             
-            // Row 2.5: Tagged users (if available)
-            if !video.taggedUserIDs.isEmpty {
-                taggedUsersRow
-            }
-            
-            // Row 3: Metadata and follow button (closer together)
+            // Row 3: Metadata and follow button (USING EXTRACTED COMPONENT)
             HStack(spacing: 12) {
-                metadataRow
+                VideoMetadataRow(
+                    engagement: videoEngagement,
+                    isUserVideo: isUserVideo,
+                    onViewersTap: {
+                        print("👁️ VIEWS: Tapped views button")
+                        showingViewers = true
+                        onAction?(.viewers)
+                    }
+                )
                 followButton
                 Spacer()
             }
             .padding(.horizontal, 12)
             
-            // Row 4: Evenly distributed engagement buttons (aligned baseline)
+            // Row 4: Engagement buttons
             HStack(alignment: .center, spacing: 0) {
                 // Thread Button
                 VStack(spacing: 4) {
                     Button {
-                        // Comprehensive video kill - hit all possible notification patterns
                         NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
@@ -980,7 +742,7 @@ struct ContextualVideoOverlay: View {
                 }
                 .frame(maxWidth: .infinity)
                 
-                // Progressive Cool Button (allow proper display)
+                // Progressive Cool Button
                 VStack(spacing: 4) {
                     ProgressiveCoolButton(
                         videoID: video.id,
@@ -990,11 +752,11 @@ struct ContextualVideoOverlay: View {
                         engagementManager: engagementManager,
                         iconManager: floatingIconManager
                     )
-                    .frame(height: 80) // Allow space for counts above button
+                    .frame(height: 80)
                 }
                 .frame(maxWidth: .infinity)
                 
-                // Progressive Hype Button (allow proper display)
+                // Progressive Hype Button
                 VStack(spacing: 4) {
                     ProgressiveHypeButton(
                         videoID: video.id,
@@ -1004,16 +766,14 @@ struct ContextualVideoOverlay: View {
                         engagementManager: engagementManager,
                         iconManager: floatingIconManager
                     )
-                    .frame(height: 80) // Allow space for counts above button
+                    .frame(height: 80)
                 }
                 .frame(maxWidth: .infinity)
                 
-                // Conditionally add Stitch button only if it exists
+                // Stitch Button
                 if canReply {
-                    // Stitch Button
                     VStack(spacing: 4) {
                         Button {
-                            // Comprehensive video kill - hit all possible notification patterns
                             NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
@@ -1052,17 +812,15 @@ struct ContextualVideoOverlay: View {
         }
     }
     
-    // MARK: - Center Effects (Particle Systems)
+    // MARK: - Center Effects
     
     private var centerEffects: some View {
         ZStack {
-            // Hype particles
             if showingHypeParticles {
                 HypeParticleEffect()
                     .allowsHitTesting(false)
             }
             
-            // Cool particles
             if showingCoolParticles {
                 CoolParticleEffect()
                     .allowsHitTesting(false)
@@ -1073,20 +831,45 @@ struct ContextualVideoOverlay: View {
     // MARK: - Setup and Lifecycle
     
     private func setupOverlay() {
-        // Load video engagement data
+        // EAGER PRELOAD: Load user data immediately when overlay appears
         Task {
+            await preloadUserData()
             await loadVideoEngagement()
-        }
-        
-        // Start cache refresh for user data
-        Self.getCachedUserData(userID: video.creatorID)
-        if let threadVideo = threadVideo {
-            Self.getCachedUserData(userID: threadVideo.creatorID)
         }
     }
     
+    /// Preload user data for video and thread creators
+    private func preloadUserData() async {
+        var userIDsToLoad: [String] = [video.creatorID]
+        
+        // Add thread creator if different
+        if let threadVideo = threadVideo, threadVideo.creatorID != video.creatorID {
+            userIDsToLoad.append(threadVideo.creatorID)
+        }
+        
+        // Add tagged users
+        userIDsToLoad.append(contentsOf: video.taggedUserIDs.prefix(5))
+        
+        // Remove duplicates
+        let uniqueUserIDs = Array(Set(userIDsToLoad))
+        
+        // Check which ones need loading
+        let usersToLoad = uniqueUserIDs.filter { userID in
+            Self.getCachedUserData(userID: userID) == nil
+        }
+        
+        guard !usersToLoad.isEmpty else {
+            print("✅ PRELOAD: All users already cached")
+            return
+        }
+        
+        print("🎬 PRELOAD: Loading \(usersToLoad.count) users eagerly")
+        
+        // Load immediately (don't wait for batch timer)
+        await Self.loadUserDataBatch(userIDs: usersToLoad)
+    }
+    
     private func setupNotificationObservers() {
-        // Listen for engagement updates
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("VideoEngagementUpdated"),
             object: nil,
@@ -1100,7 +883,6 @@ struct ContextualVideoOverlay: View {
             }
         }
         
-        // Listen for real-time engagement changes
         NotificationCenter.default.addObserver(
             forName: NSNotification.Name("EngagementStateChanged"),
             object: nil,
@@ -1112,7 +894,6 @@ struct ContextualVideoOverlay: View {
                let coolCount = notification.userInfo?["coolCount"] as? Int,
                let viewCount = notification.userInfo?["viewCount"] as? Int {
                 
-                // Update local engagement data immediately
                 if var engagement = videoEngagement {
                     engagement.hypeCount = hypeCount
                     engagement.coolCount = coolCount
@@ -1124,12 +905,10 @@ struct ContextualVideoOverlay: View {
             }
         }
         
-        // Listen for view tracking
         Task {
             await trackVideoView()
         }
         
-        // Load follow state
         Task {
             await loadFollowState()
         }
@@ -1144,7 +923,6 @@ struct ContextualVideoOverlay: View {
     
     private func loadVideoEngagement() async {
         do {
-            // Get live engagement data from VideoService
             let videoService = VideoService()
             let freshVideo = try await videoService.getVideo(id: video.id)
             
@@ -1160,7 +938,6 @@ struct ContextualVideoOverlay: View {
                     lastEngagementAt: freshVideo.lastEngagementAt ?? Date()
                 )
                 
-                // Load video description from fresh data
                 videoDescription = freshVideo.description.isEmpty ? nil : freshVideo.description
             }
             
@@ -1168,19 +945,15 @@ struct ContextualVideoOverlay: View {
             
         } catch {
             print("⚠️ CONTEXTUAL OVERLAY: Failed to load engagement data - \(error)")
-            // Don't fall back to static data - let UI show loading state
         }
     }
     
-    /// Track video view after 5 seconds (allows multiple views per user)
     private func trackVideoView() async {
         guard let currentUserID = currentUserID else { return }
         
-        // Wait 5 seconds before recording view
-        try? await Task.sleep(nanoseconds: 5_000_000_000) // 5 seconds
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
         
         do {
-            // FORCE view recording without duplicate check
             try await VideoService().incrementViewCount(
                 videoID: video.id,
                 userID: currentUserID,
@@ -1198,8 +971,16 @@ struct ContextualVideoOverlay: View {
     
     // MARK: - Recording Context Helper
     
+    /// Returns the appropriate recording context based on video depth
+    /// - Depth 0 (thread): Returns .stitchToThread → creates depth 1 child
+    /// - Depth 1 (child): Returns .replyToVideo → creates depth 2 grandchild
     private func getStitchRecordingContext() -> RecordingContext {
-        if let threadID = video.threadID {
+        // FIXED: Check conversationDepth instead of threadID presence
+        // threadID is ALWAYS set (it's the root thread's ID for all videos)
+        // We need to distinguish between replying to a thread vs replying to a child
+        
+        if video.conversationDepth == 0 {
+            // This IS a thread (parent video) - stitch creates a child (depth 1)
             let threadInfo = ThreadInfo(
                 title: video.title,
                 creatorName: video.creatorName,
@@ -1208,42 +989,18 @@ struct ContextualVideoOverlay: View {
                 participantCount: 1,
                 stitchCount: video.replyCount
             )
-            return .stitchToThread(threadID: threadID, threadInfo: threadInfo)
+            print("🎬 STITCH CONTEXT: Stitching to THREAD (depth 0) → will create depth 1 child")
+            return .stitchToThread(threadID: video.id, threadInfo: threadInfo)
         } else {
+            // This is a child/reply (depth 1+) - reply creates a grandchild (depth 2)
             let videoInfo = CameraVideoInfo(
                 title: video.title,
                 creatorName: video.creatorName,
                 creatorID: video.creatorID,
                 thumbnailURL: video.thumbnailURL
             )
+            print("🎬 STITCH CONTEXT: Replying to CHILD (depth \(video.conversationDepth)) → will create depth \(video.conversationDepth + 1)")
             return .replyToVideo(videoID: video.id, videoInfo: videoInfo)
-        }
-    }
-    
-    // MARK: - Utility Functions
-    
-    private func formatCount(_ count: Int) -> String {
-        switch count {
-        case 0..<1000:
-            return "\(count)"
-        case 1000..<1000000:
-            return String(format: "%.1fK", Double(count) / 1000.0).replacingOccurrences(of: ".0", with: "")
-        case 1000000..<1000000000:
-            return String(format: "%.1fM", Double(count) / 1000000.0).replacingOccurrences(of: ".0", with: "")
-        default:
-            return String(format: "%.1fB", Double(count) / 1000000000.0).replacingOccurrences(of: ".0", with: "")
-        }
-    }
-    
-    // NEW: Compact format for badge
-    private func formatCountCompact(_ count: Int) -> String {
-        switch count {
-        case 0..<1000:
-            return "\(count)"
-        case 1000..<10000:
-            return String(format: "%.1fK", Double(count) / 1000.0).replacingOccurrences(of: ".0", with: "")
-        default:
-            return "\(count / 1000)K"
         }
     }
 }
@@ -1272,7 +1029,7 @@ enum ContextualOverlayAction {
     case more
     case profileManagement
     case profileSettings
-    case viewers  // NEW
+    case viewers
 }
 
 enum EngagementType {
@@ -1281,59 +1038,23 @@ enum EngagementType {
     case view
 }
 
-// MARK: - ContextualVideoEngagement Model
-struct ContextualVideoEngagement {
-    let videoID: String
-    let creatorID: String
-    var hypeCount: Int
-    var coolCount: Int
-    var shareCount: Int
-    var replyCount: Int
-    var viewCount: Int
-    var lastEngagementAt: Date
-    
-    /// Total engagement count
-    var totalEngagements: Int {
-        return hypeCount + coolCount
-    }
-    
-    /// Engagement ratio (hype vs total)
-    var engagementRatio: Double {
-        let total = totalEngagements
-        return total > 0 ? Double(hypeCount) / Double(total) : 0.5
-    }
-}
-
-// MARK: - Particle Effects (Placeholder)
+// MARK: - Particle Effects
 struct HypeParticleEffect: View {
     var body: some View {
-        // Placeholder - will be implemented with real particle system
         EmptyView()
     }
 }
 
 struct CoolParticleEffect: View {
     var body: some View {
-        // Placeholder - will be implemented with real particle system
         EmptyView()
-    }
-}
-
-// MARK: - Contextual Button Style
-struct ContextualScaleButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
-            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: configuration.isPressed)
     }
 }
 
 // MARK: - Missing VideoService Extension
 
 extension VideoService {
-    /// ADDED: Missing method needed by ContextualVideoOverlay
     func incrementViewCount(videoID: String, userID: String, watchTime: TimeInterval) async throws {
-        // Record view interaction
         try await recordUserInteraction(
             videoID: videoID,
             userID: userID,
@@ -1341,7 +1062,6 @@ extension VideoService {
             watchTime: watchTime
         )
         
-        // Update video view count
         let video = try await getVideo(id: videoID)
         try await updateVideoEngagement(
             videoID: videoID,

@@ -2,10 +2,10 @@
 //  MainTabContainer.swift
 //  CleanBeta
 //
-//  Layer 8: Views - Main Tab Navigation with Service Injection
+//  Layer 8: Views - Main Tab Navigation with Service Injection + PRELOADING
 //  Dependencies: Layer 4 (Services), Layer 6 (NavigationCoordinator), Layer 1 (Foundation)
 //  Central navigation container with custom dipped tab bar
-//  FIXED: Prevents double upload to profile by handling only UI state
+//  ADDED: Instagram/TikTok-style video preloading on tab switches
 //
 
 import SwiftUI
@@ -18,6 +18,7 @@ struct MainTabContainer: View {
     @StateObject private var authService = AuthService()
     @StateObject private var userService = UserService()
     @StateObject private var videoService = VideoService()
+    @StateObject private var videoPreloadingService = VideoPreloadingService() // ADDED
     @StateObject private var navigationCoordinator = NavigationCoordinator()
     
     // MARK: - Navigation State
@@ -28,6 +29,9 @@ struct MainTabContainer: View {
     // MARK: - Double Upload Prevention
     @State private var isProcessingVideoCreation = false
     
+    // MARK: - Tab Preloading State
+    @State private var hasPreloadedHome = false
+    
     var body: some View {
         ZStack {
             // Background
@@ -36,15 +40,14 @@ struct MainTabContainer: View {
             // Tab Content
             tabContent
             
-            // Custom Dipped Tab Bar - Fixed to extend to screen bottom
+            // Custom Dipped Tab Bar
             VStack {
                 Spacer()
                 
                 CustomDippedTabBar(
                     selectedTab: $selectedTab,
                     onTabSelected: { tab in
-                        selectedTab = tab
-                        navigationCoordinator.selectTab(tab)
+                        handleTabSelection(tab)
                     },
                     onCreateTapped: {
                         showingRecording = true
@@ -56,12 +59,12 @@ struct MainTabContainer: View {
         .environmentObject(authService)
         .environmentObject(userService)
         .environmentObject(videoService)
+        .environmentObject(videoPreloadingService) // ADDED
         .environmentObject(navigationCoordinator)
         .fullScreenCover(isPresented: $showingRecording) {
             RecordingView(
                 recordingContext: RecordingContext.newThread,
                 onVideoCreated: { videoMetadata in
-                    // FIXED: Prevent double processing and only handle UI state
                     guard !isProcessingVideoCreation else {
                         print("MAIN TAB: Video creation already processing, ignoring duplicate call")
                         return
@@ -69,30 +72,24 @@ struct MainTabContainer: View {
                     
                     isProcessingVideoCreation = true
                     
-                    // ONLY handle UI state - VideoCoordinator already updated the profile
                     print("MAIN TAB: Video upload completed - \(videoMetadata.title)")
                     print("MAIN TAB: Profile update handled by VideoCoordinator, not duplicating")
                     
-                    // Close recording interface
                     showingRecording = false
                     
-                    // Optional: Trigger UI refresh to show new video in feeds
-                    // This does NOT update profile counts - just refreshes UI
                     NotificationCenter.default.post(
                         name: .refreshFeeds,
                         object: nil,
                         userInfo: ["newVideoID": videoMetadata.id]
                     )
                     
-                    // Reset processing flag after delay
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                         isProcessingVideoCreation = false
                     }
                 },
                 onCancel: {
-                    // Handle recording cancellation
                     showingRecording = false
-                    isProcessingVideoCreation = false // Reset flag on cancel
+                    isProcessingVideoCreation = false
                 }
             )
         }
@@ -103,8 +100,8 @@ struct MainTabContainer: View {
                     userService: userService,
                     videoService: videoService
                 )
+                .environmentObject(videoPreloadingService) // ADDED
                 .onAppear {
-                    // Load specific user profile
                     NotificationCenter.default.post(
                         name: NSNotification.Name("LoadUserProfile"),
                         object: nil,
@@ -117,7 +114,6 @@ struct MainTabContainer: View {
             }
         }
         .sheet(isPresented: $navigationCoordinator.showingSettingsSheet) {
-            // TODO: Implement SettingsView when available
             Text("Settings Coming Soon")
                 .font(.title)
                 .padding()
@@ -138,32 +134,77 @@ struct MainTabContainer: View {
             navigationCoordinator.setupNotificationObservers()
         }
         .onChange(of: navigationCoordinator.selectedTab) { oldTab, newTab in
-            // Sync navigation coordinator tab changes with local state
             selectedTab = newTab
+        }
+        .onChange(of: selectedTab) { oldTab, newTab in
+            handleTabChange(from: oldTab, to: newTab)
         }
     }
     
-    // MARK: - Tab Content (FIXED)
+    // MARK: - Tab Content
     
     @ViewBuilder
     private var tabContent: some View {
         switch selectedTab {
         case .home:
             HomeFeedView()
+                .environmentObject(videoPreloadingService) // ADDED
             
         case .discovery:
             DiscoveryView()
+                .environmentObject(videoPreloadingService) // ADDED
             
         case .progression:
-            // FIXED: Pass all required services to ProfileView
             ProfileView(
                 authService: authService,
                 userService: userService,
                 videoService: videoService
             )
+            .environmentObject(videoPreloadingService) // ADDED
             
         case .notifications:
             NotificationView()
+        }
+    }
+    
+    // MARK: - INSTAGRAM/TIKTOK PRELOADING PATTERN
+    
+    private func handleTabSelection(_ tab: MainAppTab) {
+        print("🏷️ TAB SWITCH: From \(selectedTab.title) to \(tab.title)")
+        selectedTab = tab
+        navigationCoordinator.selectTab(tab)
+    }
+    
+    private func handleTabChange(from oldTab: MainAppTab, to newTab: MainAppTab) {
+        print("🎬 TAB CHANGED: \(oldTab.title) → \(newTab.title)")
+        
+        // Trigger preload for destination tab BEFORE user arrives
+        switch newTab {
+        case .home:
+            if !hasPreloadedHome {
+                print("🎬 PRELOAD TRIGGER: HomeFeed first load")
+                hasPreloadedHome = true
+                // HomeFeed will preload on its own .onAppear
+            } else {
+                print("🎬 PRELOAD TRIGGER: HomeFeed return - triggering preload")
+                // Post notification to trigger HomeFeed preload
+                NotificationCenter.default.post(
+                    name: .preloadHomeFeed,
+                    object: nil
+                )
+            }
+            
+        case .discovery:
+            print("🎬 PRELOAD TRIGGER: Discovery (handles own preloading)")
+            // Discovery already preloads on appear
+            
+        case .progression:
+            print("🎬 PRELOAD TRIGGER: Profile (handles own preloading)")
+            // Profile uses VideoPreloadingService for grid videos
+            
+        case .notifications:
+            print("🎬 PRELOAD TRIGGER: Notifications (no video preload needed)")
+            break
         }
     }
 }
@@ -172,9 +213,10 @@ struct MainTabContainer: View {
 
 extension Notification.Name {
     static let refreshFeeds = Notification.Name("refreshFeeds")
+    static let preloadHomeFeed = Notification.Name("preloadHomeFeed") // ADDED
 }
 
-// MARK: - Preview (Updated)
+// MARK: - Preview
 
 #Preview {
     MainTabContainer()

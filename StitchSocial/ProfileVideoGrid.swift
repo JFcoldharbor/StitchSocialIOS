@@ -2,17 +2,10 @@
 //  ProfileVideoGrid.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 9/20/25.
-//
-
-
-//
-//  ProfileVideoGrid.swift
-//  StitchSocial
-//
 //  Layer 8: Views - Reusable Profile Video Grid with Thread Navigation
 //  Dependencies: VideoThumbnailView, VideoCoordinator (Layer 6), CoreVideoMetadata
 //  Features: 3-column grid, thread navigation, video deletion, loading states
+//  FIXED: Instant tap response - preload AFTER navigation
 //
 
 import SwiftUI
@@ -93,11 +86,13 @@ struct ProfileVideoGrid: View {
             video: video,
             showEngagementBadge: true
         ) {
-            // Preload adjacent videos before navigation
-            preloadAdjacentVideos(currentIndex: index)
-            
-            // Pass video, index, and full videos array for thread navigation
+            // CRITICAL: Call tap handler IMMEDIATELY - don't block on preloading
             onVideoTap(video, index, videos)
+            
+            // Preload adjacent videos AFTER navigation starts (non-blocking)
+            Task {
+                await preloadAdjacentVideos(currentIndex: index)
+            }
         }
         .contextMenu {
             if isCurrentUserProfile {
@@ -240,31 +235,29 @@ struct ProfileVideoGrid: View {
         }
     }
     
-    /// Preload adjacent videos before navigation
-    private func preloadAdjacentVideos(currentIndex: Int) {
-        Task {
-            var adjacentVideos: [CoreVideoMetadata] = []
-            
-            // Previous video
-            if currentIndex > 0 {
-                adjacentVideos.append(videos[currentIndex - 1])
-            }
-            
-            // Next 2 videos
-            for i in 1...2 {
-                let nextIndex = currentIndex + i
-                if nextIndex < videos.count {
-                    adjacentVideos.append(videos[nextIndex])
-                }
-            }
-            
-            // Preload with normal priority
-            for video in adjacentVideos {
-                await preloadingService.preloadVideo(video, priority: .normal)
-            }
-            
-            print("🎬 GRID PRELOAD: Adjacent preload completed for index \(currentIndex)")
+    /// Preload adjacent videos after navigation (non-blocking)
+    private func preloadAdjacentVideos(currentIndex: Int) async {
+        var adjacentVideos: [CoreVideoMetadata] = []
+        
+        // Previous video
+        if currentIndex > 0 {
+            adjacentVideos.append(videos[currentIndex - 1])
         }
+        
+        // Next 2 videos
+        for i in 1...2 {
+            let nextIndex = currentIndex + i
+            if nextIndex < videos.count {
+                adjacentVideos.append(videos[nextIndex])
+            }
+        }
+        
+        // Preload with normal priority
+        for video in adjacentVideos {
+            await preloadingService.preloadVideo(video, priority: .normal)
+        }
+        
+        print("🎬 GRID PRELOAD: Adjacent preload completed for index \(currentIndex)")
     }
 }
 

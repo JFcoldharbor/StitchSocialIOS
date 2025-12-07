@@ -2,9 +2,10 @@
 //  ProfileView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Optimized Profile Display with Fixed Video Grid and Refresh
-//  Dependencies: ProfileViewModel (Layer 7), VideoThumbnailView, EditProfileView, ProfileVideoGrid
-//  Features: Lightweight thumbnails, profile refresh, proper video playback, thumbnail caching, thread navigation
+//  Layer 8: Views - Optimized Profile Display with Fixed Video Grid and FullscreenVideoView
+//  Dependencies: ProfileViewModel (Layer 7), VideoThumbnailView, EditProfileView, ProfileVideoGrid, FullscreenVideoView
+//  Features: Lightweight thumbnails, profile refresh, proper video playback with vertical navigation
+//  FIXED: Removed .onAppear/.onDisappear modifiers that were breaking fullScreenCover
 //
 
 import SwiftUI
@@ -17,16 +18,15 @@ struct ProfileView: View {
     @StateObject private var viewModel: ProfileViewModel
     private let userService: UserService
     
-    // MARK: - State Variables (Updated for Stitchers)
+    // MARK: - State Variables
     
     @State private var scrollOffset: CGFloat = 0
     @State private var showStickyTabBar = false
-    @State private var showingFollowersList = false // Now shows Stitchers view
+    @State private var showingFollowersList = false
     @State private var showingSettings = false
     @State private var showingEditProfile = false
     @State private var showingVideoPlayer = false
     @State private var selectedVideo: CoreVideoMetadata?
-    @State private var selectedVideoIndex = 0
     
     // MARK: - Video Deletion State
     
@@ -49,180 +49,9 @@ struct ProfileView: View {
             videoService: videoSvc
         ))
     }
-
-// MARK: - Thread Video Navigation View (PROPER PARENT→CHILD STRUCTURE)
-
-struct ThreadVideoNavigationView: View {
-    let thread: ThreadData
-    let initialVideoIndex: Int
-    let onClose: () -> Void
-    let onEngagement: (InteractionType, CoreVideoMetadata) -> Void
-    
-    @State private var currentVideoIndex: Int = 0
-    @State private var dragOffset: CGSize = .zero
-    @State private var isAnimating: Bool = false
-    @State private var isDragging: Bool = false
-    
-    private var totalVideos: Int {
-        return 1 + thread.childVideos.count // parent + children
-    }
-    
-    private var currentVideo: CoreVideoMetadata {
-        if currentVideoIndex == 0 {
-            return thread.parentVideo
-        } else if currentVideoIndex - 1 < thread.childVideos.count {
-            return thread.childVideos[currentVideoIndex - 1]
-        } else {
-            return thread.parentVideo // Fallback
-        }
-    }
-    
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            VideoPlayerView(
-                video: currentVideo,
-                isActive: true,
-                onEngagement: { interactionType in
-                    onEngagement(interactionType, currentVideo)
-                }
-            )
-            .id(currentVideo.id) // Force view refresh when video changes
-            .offset(x: dragOffset.width)
-            .onTapGesture {
-                if !isDragging {
-                    onClose()
-                }
-            }
-            
-            // Thread navigation indicators
-            if totalVideos > 1 {
-                VStack {
-                    HStack {
-                        Spacer()
-                        threadNavigationIndicators
-                    }
-                    .padding(.top, 60)
-                    .padding(.trailing, 20)
-                    
-                    Spacer()
-                }
-            }
-            
-            // Close button
-            VStack {
-                HStack {
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .font(.title2)
-                            .foregroundColor(.white)
-                            .padding(12)
-                            .background(Color.black.opacity(0.5))
-                            .clipShape(Circle())
-                    }
-                    .padding(.top, 60)
-                    .padding(.leading, 20)
-                    
-                    Spacer()
-                }
-                
-                Spacer()
-            }
-        }
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 30)
-                .onChanged { value in
-                    if !isAnimating {
-                        isDragging = true
-                        let horizontalTranslation = value.translation.width
-                        let verticalTranslation = value.translation.height
-                        
-                        // Strong horizontal bias - must be 3x more horizontal than vertical
-                        if abs(horizontalTranslation) > abs(verticalTranslation) * 3 {
-                            dragOffset = CGSize(width: horizontalTranslation * 0.3, height: 0)
-                            print("THREAD NAV: Dragging horizontally: \(horizontalTranslation)")
-                        }
-                    }
-                }
-                .onEnded { value in
-                    print("THREAD NAV: Drag ended with translation: \(value.translation)")
-                    handleSwipeEnd(value: value)
-                }
-        )
-        .onAppear {
-            currentVideoIndex = max(0, min(initialVideoIndex, totalVideos - 1))
-            print("THREAD NAV: Opened thread \(thread.id) with \(totalVideos) videos at index \(currentVideoIndex)")
-            print("THREAD NAV: Parent: \(thread.parentVideo.title)")
-            print("THREAD NAV: Children: \(thread.childVideos.count)")
-            print("THREAD NAV: Current video: \(currentVideo.title)")
-        }
-    }
-    
-    private var threadNavigationIndicators: some View {
-        HStack(spacing: 4) {
-            ForEach(0..<min(totalVideos, 10), id: \.self) { index in
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(index == currentVideoIndex ? Color.white : Color.white.opacity(0.3))
-                    .frame(width: index == 0 ? 12 : 8, height: 6) // Parent is wider
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color.black.opacity(0.5))
-        .cornerRadius(12)
-    }
-    
-    private func handleSwipeEnd(value: DragGesture.Value) {
-        guard !isAnimating else {
-            isDragging = false
-            return
-        }
-        
-        let threshold: CGFloat = 50
-        let translation = value.translation.width
-        let velocity = value.velocity.width
-        
-        print("THREAD NAV: HandleSwipeEnd - translation: \(translation), velocity: \(velocity)")
-        print("THREAD NAV: Current index: \(currentVideoIndex), total videos: \(totalVideos)")
-        
-        isAnimating = true
-        
-        let shouldNavigate = abs(translation) > threshold || abs(velocity) > 800
-        
-        if shouldNavigate {
-            if (translation > 0 || velocity > 800) && currentVideoIndex > 0 {
-                // Swipe right - previous video in thread
-                let newIndex = currentVideoIndex - 1
-                currentVideoIndex = newIndex
-                print("THREAD NAV: Changed to previous video - new index: \(newIndex)")
-                print("THREAD NAV: New video: \(currentVideo.title)")
-            } else if (translation < 0 || velocity < -800) && currentVideoIndex < totalVideos - 1 {
-                // Swipe left - next video in thread
-                let newIndex = currentVideoIndex + 1
-                currentVideoIndex = newIndex
-                print("THREAD NAV: Changed to next video - new index: \(newIndex)")
-                print("THREAD NAV: New video: \(currentVideo.title)")
-            } else {
-                print("THREAD NAV: No navigation - at boundary or insufficient gesture")
-            }
-        } else {
-            print("THREAD NAV: Gesture too small - threshold: \(threshold), translation: \(abs(translation))")
-        }
-        
-        withAnimation(.easeInOut(duration: 0.3)) {
-            dragOffset = .zero
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            isAnimating = false
-            isDragging = false
-        }
-    }
-}
     
     // MARK: - Main Body
-    
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -241,7 +70,6 @@ struct ThreadVideoNavigationView: View {
             await viewModel.loadProfile()
         }
         .onAppear {
-            // Start profile animations when user is loaded
             if let user = viewModel.currentUser {
                 let hypeProgress = CGFloat(viewModel.calculateHypeProgress())
                 viewModel.animationController.startEntranceSequence(hypeProgress: hypeProgress)
@@ -262,7 +90,29 @@ struct ThreadVideoNavigationView: View {
             editProfileSheet
         }
         .fullScreenCover(isPresented: $showingVideoPlayer) {
-            fullScreenVideoPlayer
+            if let video = selectedVideo {
+                FullscreenVideoView(
+                    video: video,
+                    overlayContext: viewModel.isOwnProfile ? .profileOwn : .profileOther,
+                    onDismiss: {
+                        print("📱 PROFILE: Dismissing fullscreen")
+                        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                        showingVideoPlayer = false
+                        selectedVideo = nil
+                    }
+                )
+            } else {
+                Color.red.ignoresSafeArea()
+                    .overlay(
+                        Text("selectedVideo is nil!")
+                            .foregroundColor(.white)
+                            .font(.headline)
+                    )
+            }
+        }
+        .onChange(of: showingVideoPlayer) { oldValue, newValue in
+            print("🔍 DEBUG: showingVideoPlayer changed from \(oldValue) to \(newValue)")
+            print("🔍 DEBUG: selectedVideo = \(selectedVideo?.id ?? "nil")")
         }
         .alert("Delete Video", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -275,9 +125,9 @@ struct ThreadVideoNavigationView: View {
             }
         }
     }
-    
+
     // MARK: - Profile Content
-    
+
     private func profileContent(user: BasicUserInfo) -> some View {
         GeometryReader { geometry in
             ScrollView(.vertical, showsIndicators: false) {
@@ -304,12 +154,10 @@ struct ThreadVideoNavigationView: View {
     
     private func optimizedProfileHeader(user: BasicUserInfo) -> some View {
         VStack(spacing: 20) {
-            // Section 1: Profile Image & Basic Info
             HStack(spacing: 16) {
                 enhancedProfileImage(user: user)
                 
                 VStack(alignment: .leading, spacing: 8) {
-                    // Name and verification
                     HStack(spacing: 8) {
                         Text(user.displayName)
                             .font(.title2)
@@ -319,16 +167,14 @@ struct ThreadVideoNavigationView: View {
                         if user.isVerified {
                             Image(systemName: "checkmark.seal.fill")
                                 .font(.title3)
-                                .foregroundColor(.red) // RED VERIFIED BADGE
+                                .foregroundColor(.red)
                         }
                     }
                     
-                    // Username
                     Text("@\(user.username)")
                         .font(.subheadline)
                         .foregroundColor(.gray)
                     
-                    // Tier badge
                     tierBadge(user: user)
                 }
                 
@@ -336,7 +182,6 @@ struct ThreadVideoNavigationView: View {
             }
             .padding(.horizontal, 20)
             
-            // Section 2: Bio (Full Width)
             if shouldShowBio(user: user) {
                 VStack(alignment: .leading, spacing: 8) {
                     bioSection(user: user)
@@ -345,16 +190,12 @@ struct ThreadVideoNavigationView: View {
                 .padding(.horizontal, 20)
             }
             
-            // Section 3: PROMINENT HYPE METER (Full Width)
             VStack(spacing: 12) {
                 hypeMeterSection(user: user)
             }
             .padding(.horizontal, 20)
             
-            // Section 4: Stats Row
             statsRow(user: user)
-            
-            // Section 5: Action Buttons
             actionButtonsRow(user: user)
         }
         .padding(.vertical, 20)
@@ -364,12 +205,10 @@ struct ThreadVideoNavigationView: View {
     
     private func enhancedProfileImage(user: BasicUserInfo) -> some View {
         ZStack {
-            // Progress ring background
             Circle()
                 .stroke(Color.gray.opacity(0.3), lineWidth: 3)
                 .frame(width: 90, height: 90)
             
-            // Clout progress ring
             Circle()
                 .trim(from: 0, to: viewModel.calculateHypeProgress())
                 .stroke(
@@ -383,7 +222,6 @@ struct ThreadVideoNavigationView: View {
                 .frame(width: 90, height: 90)
                 .rotationEffect(.degrees(-90))
             
-            // Profile image
             AsyncImage(url: URL(string: user.profileImageURL ?? "")) { image in
                 image
                     .resizable()
@@ -444,14 +282,13 @@ struct ThreadVideoNavigationView: View {
         }
     }
     
-    // MARK: - Hype Meter Section (PROMINENT)
+    // MARK: - Hype Meter Section
     
     private func hypeMeterSection(user: BasicUserInfo) -> some View {
         let hypeRating = calculateHypeRating(user: user)
         let progress = CGFloat(hypeRating / 100.0)
         
         return VStack(spacing: 8) {
-            // Title and percentage
             HStack {
                 HStack(spacing: 6) {
                     Image(systemName: "flame.fill")
@@ -470,15 +307,12 @@ struct ThreadVideoNavigationView: View {
                     .foregroundColor(.white)
             }
             
-            // Progress bar with shimmer
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    // Background
                     RoundedRectangle(cornerRadius: 6)
                         .fill(Color.gray.opacity(0.2))
                         .frame(height: 12)
                     
-                    // Progress fill with gradient
                     RoundedRectangle(cornerRadius: 6)
                         .fill(
                             LinearGradient(
@@ -489,7 +323,6 @@ struct ThreadVideoNavigationView: View {
                         )
                         .frame(width: geometry.size.width * progress, height: 12)
                         .overlay(
-                            // Shimmer effect
                             LinearGradient(
                                 colors: [.clear, .white.opacity(0.6), .clear],
                                 startPoint: .leading,
@@ -513,7 +346,6 @@ struct ThreadVideoNavigationView: View {
                 )
         )
         .onAppear {
-            print("🔥 HYPE METER SECTION APPEARED: Rating \(Int(hypeRating))%")
             viewModel.animationController.startEntranceSequence(hypeProgress: progress)
         }
     }
@@ -675,7 +507,7 @@ struct ThreadVideoNavigationView: View {
         .buttonStyle(PlainButtonStyle())
     }
     
-    // MARK: - Video Grid Section (USING NEW ProfileVideoGrid COMPONENT)
+    // MARK: - Video Grid Section
     
     private var videoGridSection: some View {
         ProfileVideoGrid(
@@ -685,7 +517,7 @@ struct ThreadVideoNavigationView: View {
             isLoading: viewModel.isLoadingVideos,
             isCurrentUserProfile: viewModel.isOwnProfile,
             onVideoTap: { video, index, videos in
-                openVideoWithThreadNavigation(video: video, index: index, videos: videos)
+                openVideoInFullscreen(video: video)
             },
             onVideoDelete: { video in
                 Task { await deleteVideo(video) }
@@ -693,59 +525,26 @@ struct ThreadVideoNavigationView: View {
         )
     }
     
-    // MARK: - Thread Navigation Integration (FIXED THREAD STRUCTURE)
+    // MARK: - Video Navigation (FIXED - Simplified + Debug)
     
-    private func openVideoWithThreadNavigation(video: CoreVideoMetadata, index: Int, videos: [CoreVideoMetadata]) {
-        selectedVideo = video
-        selectedVideoIndex = index
-        showingVideoPlayer = true
+    private func openVideoInFullscreen(video: CoreVideoMetadata) {
+        print("📱 PROFILE: Tapped video \(video.id.prefix(8))")
         
-        // Get the specific thread for this video
-        Task {
-            do {
-                // If this video has a threadID, get the full thread
-                if let threadID = video.threadID {
-                    let threadChildren = try await viewModel.loadThreadChildren(threadID: threadID)
-                    let fullThread = ThreadData(
-                        id: threadID,
-                        parentVideo: video,
-                        childVideos: threadChildren
-                    )
-                    await MainActor.run {
-                        currentThread = fullThread
-                        currentVideoInThread = 0 // Start with parent
-                    }
-                } else {
-                    // This video is standalone, create single-video thread
-                    let standaloneThread = ThreadData(
-                        id: video.id,
-                        parentVideo: video,
-                        childVideos: []
-                    )
-                    await MainActor.run {
-                        currentThread = standaloneThread
-                        currentVideoInThread = 0
-                    }
-                }
-            } catch {
-                print("Failed to load thread: \(error)")
-                // Fallback to standalone
-                await MainActor.run {
-                    currentThread = ThreadData(
-                        id: video.id,
-                        parentVideo: video,
-                        childVideos: []
-                    )
-                    currentVideoInThread = 0
-                }
-            }
+        // Kill all players first
+        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+        
+        // Set video IMMEDIATELY
+        selectedVideo = video
+        print("🔍 DEBUG: selectedVideo = \(selectedVideo?.id ?? "nil")")
+        
+        // Present with small delay for cleanup
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            print("🔍 DEBUG: About to set showingVideoPlayer = true")
+            print("🔍 DEBUG: selectedVideo still = \(self.selectedVideo?.id ?? "nil")")
+            self.showingVideoPlayer = true
+            print("🔍 DEBUG: showingVideoPlayer is now \(self.showingVideoPlayer)")
         }
     }
-    
-    // MARK: - Thread Navigation State (CORRECTED)
-    
-    @State private var currentThread: ThreadData?
-    @State private var currentVideoInThread: Int = 0
     
     // MARK: - Video Deletion
     
@@ -755,56 +554,6 @@ struct ThreadVideoNavigationView: View {
             print("Video deleted successfully")
         }
     }
-    
-    // MARK: - Performance Optimization
-    
-    private func preloadAdjacentVideos() {
-        let videos = viewModel.filteredVideos(for: viewModel.selectedTab)
-        let indices = [
-            max(0, selectedVideoIndex - 1),
-            min(videos.count - 1, selectedVideoIndex + 1)
-        ]
-        
-        for index in indices {
-            if index < videos.count {
-                let video = videos[index]
-                // Preload video data
-                Task {
-                    _ = video.videoURL // Access for caching
-                }
-            }
-        }
-    }
-    
-    // MARK: - Full Screen Video Player with Thread Navigation (CORRECTED)
-    
-    private var fullScreenVideoPlayer: some View {
-        Group {
-            if let thread = currentThread {
-                ThreadVideoNavigationView(
-                    thread: thread,
-                    initialVideoIndex: currentVideoInThread,
-                    onClose: {
-                        showingVideoPlayer = false
-                    },
-                    onEngagement: { interactionType, video in
-                        handleGridEngagement(interactionType, video: video)
-                    }
-                )
-            }
-        }
-    }
-    
-    // MARK: - Engagement Handling
-    
-    private func handleGridEngagement(_ interactionType: InteractionType, video: CoreVideoMetadata) {
-        Task {
-            // Handle engagement through viewModel if available
-            print("Handling engagement: \(interactionType) for video: \(video.id)")
-        }
-    }
-    
-    // MARK: - Video Management
     
     private func performVideoDelete() async {
         guard let video = videoToDelete else { return }
@@ -867,12 +616,12 @@ struct ThreadVideoNavigationView: View {
             }
         }
     }
-
+    
     private var settingsSheet: some View {
         SettingsView()
             .environmentObject(viewModel.authService)
     }
-
+    
     private var editProfileSheet: some View {
         Group {
             if let user = viewModel.currentUser {
@@ -926,7 +675,7 @@ struct ThreadVideoNavigationView: View {
         }
         
         if followerCount >= 100 {
-            bioComponents.append("👥 Community leader")
+            bioComponents.append("💥 Community leader")
         }
         
         if user.tier != .rookie {
@@ -1006,8 +755,6 @@ struct ThreadVideoNavigationView: View {
         
         let clampedRating = min(100.0, max(0.0, finalRating))
         
-        print("🔥 HYPE METER: \(user.username) = \(Int(clampedRating))%")
-        
         return clampedRating
     }
     
@@ -1065,7 +812,7 @@ struct ThreadVideoNavigationView: View {
         GeometryReader { geometry in
             Color.clear
                 .preference(key: ScrollOffsetPreferenceKey.self,
-                           value: geometry.frame(in: .named("scroll")).minY)
+                            value: geometry.frame(in: .named("scroll")).minY)
         }
     }
     
@@ -1127,239 +874,177 @@ struct ThreadVideoNavigationView: View {
     }
 }
 
-// MARK: - Supporting Views and Extensions
+// MARK: - Supporting Views
 
-// ProfileStitchersListView - Renamed to avoid conflicts with CreatorProfileView
-struct ProfileStitchersListView: View {
-    let followersList: [BasicUserInfo]
-    let followingList: [BasicUserInfo]
-    let isLoadingFollowers: Bool
-    let isLoadingFollowing: Bool
-    
-    @State private var selectedTab = 0
-    
-    var body: some View {
-        VStack(spacing: 0) {
-            // Tab Bar
-            HStack(spacing: 0) {
-                Button(action: { selectedTab = 0 }) {
-                    VStack(spacing: 8) {
-                        HStack(spacing: 4) {
-                            Text("Followers")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(selectedTab == 0 ? .white : .gray)
+extension ProfileView {
+    struct ProfileStitchersListView: View {
+        let followersList: [BasicUserInfo]
+        let followingList: [BasicUserInfo]
+        let isLoadingFollowers: Bool
+        let isLoadingFollowing: Bool
+        
+        @State private var selectedTab = 0
+        
+        var body: some View {
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    Button(action: { selectedTab = 0 }) {
+                        VStack(spacing: 8) {
+                            HStack(spacing: 4) {
+                                Text("Followers")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(selectedTab == 0 ? .white : .gray)
+                                
+                                Text("(\(followersList.count))")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.gray)
+                            }
                             
-                            Text("(\(followersList.count))")
-                                .font(.system(size: 14))
-                                .foregroundColor(.gray)
+                            Rectangle()
+                                .fill(selectedTab == 0 ? Color.cyan : Color.clear)
+                                .frame(height: 2)
                         }
-                        
-                        Rectangle()
-                            .fill(selectedTab == 0 ? Color.cyan : Color.clear)
-                            .frame(height: 2)
                     }
-                }
-                .frame(maxWidth: .infinity)
-                
-                Button(action: { selectedTab = 1 }) {
-                    VStack(spacing: 8) {
-                        HStack(spacing: 4) {
-                            Text("Following")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(selectedTab == 1 ? .white : .gray)
+                    .frame(maxWidth: .infinity)
+                    
+                    Button(action: { selectedTab = 1 }) {
+                        VStack(spacing: 8) {
+                            HStack(spacing: 4) {
+                                Text("Following")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(selectedTab == 1 ? .white : .gray)
+                                
+                                Text("(\(followingList.count))")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.gray)
+                            }
                             
-                            Text("(\(followingList.count))")
-                                .font(.system(size: 14))
-                                .foregroundColor(.gray)
+                            Rectangle()
+                                .fill(selectedTab == 1 ? Color.cyan : Color.clear)
+                                .frame(height: 2)
                         }
-                        
-                        Rectangle()
-                            .fill(selectedTab == 1 ? Color.cyan : Color.clear)
-                            .frame(height: 2)
                     }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
-            }
-            .background(Color.black)
-            .padding(.top, 10)
-            
-            Divider()
-                .background(Color.gray.opacity(0.3))
-            
-            // Content
-            ZStack {
-                Color.black.ignoresSafeArea()
+                .background(Color.black)
+                .padding(.top, 10)
                 
-                if selectedTab == 0 {
-                    // Followers tab
-                    if isLoadingFollowers {
-                        ProgressView()
-                            .tint(.white)
-                    } else if followersList.isEmpty {
-                        VStack {
-                            Text("No Followers")
-                                .foregroundColor(.white)
+                Divider()
+                    .background(Color.gray.opacity(0.3))
+                
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    
+                    if selectedTab == 0 {
+                        if isLoadingFollowers {
+                            ProgressView()
+                                .tint(.white)
+                        } else if followersList.isEmpty {
+                            VStack {
+                                Text("No Followers")
+                                    .foregroundColor(.white)
+                            }
+                        } else {
+                            ScrollView {
+                                LazyVStack {
+                                    ForEach(followersList, id: \.id) { user in
+                                        ProfileUserRowView(user: user)
+                                    }
+                                }
+                                .padding()
+                            }
                         }
                     } else {
-                        ScrollView {
-                            LazyVStack {
-                                ForEach(followersList, id: \.id) { user in
-                                    ProfileUserRowView(user: user)
-                                }
+                        if isLoadingFollowing {
+                            ProgressView()
+                                .tint(.white)
+                        } else if followingList.isEmpty {
+                            VStack {
+                                Text("Not Following Anyone")
+                                    .foregroundColor(.white)
                             }
-                            .padding()
-                        }
-                    }
-                } else {
-                    // Following tab
-                    if isLoadingFollowing {
-                        ProgressView()
-                            .tint(.white)
-                    } else if followingList.isEmpty {
-                        VStack {
-                            Text("Not Following Anyone")
-                                .foregroundColor(.white)
-                        }
-                    } else {
-                        ScrollView {
-                            LazyVStack {
-                                ForEach(followingList, id: \.id) { user in
-                                    ProfileUserRowView(user: user)
+                        } else {
+                            ScrollView {
+                                LazyVStack {
+                                    ForEach(followingList, id: \.id) { user in
+                                        ProfileUserRowView(user: user)
+                                    }
                                 }
+                                .padding()
                             }
-                            .padding()
                         }
                     }
                 }
             }
         }
     }
-}
-
-// ProfileUserRowView - Individual user row with interaction
-struct ProfileUserRowView: View {
-    let user: BasicUserInfo
-    @State private var showingProfile = false
     
-    var body: some View {
-        HStack {
-            Button(action: { showingProfile = true }) {
-                AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
-                    .frame(width: 50, height: 50)
-                    .clipShape(Circle())
-                    .overlay(
-                        Circle()
-                            .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+    struct ProfileUserRowView: View {
+        let user: BasicUserInfo
+        @State private var showingProfile = false
+        
+        var body: some View {
+            HStack {
+                Button(action: { showingProfile = true }) {
+                    AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
+                        .frame(width: 50, height: 50)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Button(action: { showingProfile = true }) {
+                    VStack(alignment: .leading) {
+                        Text(user.displayName)
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        
+                        Text("@\(user.username)")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Spacer()
+                
+                Button(action: {
+                    // TODO: Implement follow toggle
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "person.plus.fill")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        
+                        Text("Follow")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color.cyan)
                     )
-            }
-            .buttonStyle(PlainButtonStyle())
-            
-            Button(action: { showingProfile = true }) {
-                VStack(alignment: .leading) {
-                    Text(user.displayName)
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
-                    Text("@\(user.username)")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
                 }
             }
-            .buttonStyle(PlainButtonStyle())
-            
-            Spacer()
-            
-            // Follow/Unfollow button (if not current user)
-            Button(action: {
-                // TODO: Implement follow toggle
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: "person.plus.fill")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                    
-                    Text("Follow")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color.cyan)
-                )
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .sheet(isPresented: $showingProfile) {
+                CreatorProfileView(userID: user.id)
+                    .navigationBarHidden(true)
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .sheet(isPresented: $showingProfile) {
-            CreatorProfileView(userID: user.id)
-                .navigationBarHidden(true)
-        }
     }
-}
-
-// Extension to ProfileViewModel for thread navigation
-extension ProfileViewModel {
-    /// Load thread children for navigation
-    func loadThreadChildren(threadID: String) async throws -> [CoreVideoMetadata] {
-        // Create a temporary VideoService instance to access the method
-        let tempVideoService = VideoService()
-        return try await tempVideoService.getThreadChildren(threadID: threadID)
-    }
-}
-
-struct ScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-// MARK: - UserListView (Helper)
-
-struct UserListView: View {
-    let title: String
-    let users: [BasicUserInfo]
-    let isLoading: Bool
     
-    var body: some View {
-        Group {
-            if isLoading {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if users.isEmpty {
-                VStack {
-                    Text("No \(title)")
-                        .foregroundColor(.gray)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(users, id: \.id) { user in
-                    HStack {
-                        AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
-                            .frame(width: 40, height: 40)
-                            .clipShape(Circle())
-                        
-                        VStack(alignment: .leading) {
-                            Text(user.displayName)
-                                .foregroundColor(.white)
-                            Text("@\(user.username)")
-                                .foregroundColor(.gray)
-                                .font(.caption)
-                        }
-                        
-                        Spacer()
-                    }
-                    .listRowBackground(Color.black)
-                }
-                .listStyle(PlainListStyle())
-            }
+    struct ScrollOffsetPreferenceKey: PreferenceKey {
+        static var defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            value = nextValue()
         }
-        .background(Color.black)
     }
 }
-
-// MARK: - EditProfileView is imported from separate file
-// EditProfileView.swift should be a separate file in the project

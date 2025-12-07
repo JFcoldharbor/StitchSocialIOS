@@ -5,7 +5,7 @@
 //  Layer 4: Core Services - Video Engagement & Milestone Management
 //  Dependencies: VideoService (video data), UserService (clout), NotificationService (notifications)
 //  Features: Progressive tapping, first engagement tracking, milestone detection, notification triggering
-//  UPDATED: Every engagement notifies with 30-second cooldown
+//  UPDATED: Added videoID to all notification calls
 //
 
 import Foundation
@@ -318,15 +318,19 @@ class VideoEngagementService: ObservableObject {
             // Send engagement notification (hype or cool)
             do {
                 if engagementType == .hype {
+                    // ✅ FIXED: Added videoID parameter
                     try await notificationService.sendEngagementNotification(
                         to: creatorID,
+                        videoID: videoID,              // ✅ ADDED
                         engagementType: "hype",
                         videoTitle: videoTitle
                     )
                     print("✅ NOTIFICATION: Hype sent to creator \(creatorID)")
                 } else {
+                    // ✅ FIXED: Added videoID parameter
                     try await notificationService.sendEngagementNotification(
                         to: creatorID,
+                        videoID: videoID,              // ✅ ADDED
                         engagementType: "cool",
                         videoTitle: videoTitle
                     )

@@ -474,6 +474,7 @@ class VideoCoordinator: ObservableObject {
             do {
                 try await notificationService.sendMentionNotification(
                     to: taggedUserID,
+                    videoID: videoID,              // ✅ ADD THIS LINE
                     videoTitle: videoTitle,
                     mentionContext: "tagged in video"
                 )

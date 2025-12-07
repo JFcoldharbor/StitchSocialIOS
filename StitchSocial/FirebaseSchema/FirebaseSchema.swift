@@ -158,6 +158,9 @@ struct FirebaseSchema {
         static let updatedAt = "updatedAt"
         static let lastActiveAt = "lastActiveAt"
         
+        // SEARCHABLE TEXT FIELD - lowercase username + displayName for case-insensitive search
+        static let searchableText = "searchableText"
+        
         // Tier and status fields
         static let tier = "tier"
         static let clout = "clout"
@@ -192,6 +195,14 @@ struct FirebaseSchema {
         /// Full document path in stitchfin database
         static func documentPath(userID: String) -> String {
             return Collections.fullPath(for: Collections.users) + "/\(userID)"
+        }
+        
+        /// Generate searchable text from username and displayName
+        /// Format: "username displayname" in lowercase for case-insensitive prefix search
+        static func generateSearchableText(username: String, displayName: String) -> String {
+            let cleanUsername = username.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanDisplayName = displayName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return "\(cleanUsername) \(cleanDisplayName)"
         }
     }
     

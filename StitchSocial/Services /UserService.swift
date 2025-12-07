@@ -5,6 +5,7 @@
 //  Layer 4: Core Services - Complete User Management Service
 //  Dependencies: Firebase Firestore, Firebase Storage, FirebaseSchema, SpecialUserEntry, UserTier
 //  Features: CRUD operations, Profile editing, Following system, Auto-follow support, Clout management
+//  UPDATED: Automatic searchableText generation for case-insensitive user search
 //  FIXED: Proper tier detection from SpecialUserEntry instead of forcing topCreator
 //
 
@@ -61,6 +62,12 @@ class UserService: ObservableObject {
         // Use custom bio if special user
         let initialBio = specialUserEntry?.customBio ?? ""
         
+        // Generate searchableText for efficient case-insensitive search
+        let searchableText = FirebaseSchema.UserDocument.generateSearchableText(
+            username: finalUsername,
+            displayName: finalDisplayName
+        )
+        
         print("USER SERVICE: Creating user with tier \(initialTier.displayName), clout: \(initialClout)")
         
         let userData: [String: Any] = [
@@ -68,6 +75,7 @@ class UserService: ObservableObject {
             FirebaseSchema.UserDocument.email: email,
             FirebaseSchema.UserDocument.username: finalUsername,
             FirebaseSchema.UserDocument.displayName: finalDisplayName,
+            FirebaseSchema.UserDocument.searchableText: searchableText,
             FirebaseSchema.UserDocument.bio: initialBio,
             FirebaseSchema.UserDocument.tier: initialTier.rawValue,
             FirebaseSchema.UserDocument.clout: initialClout,
@@ -142,9 +150,16 @@ class UserService: ObservableObject {
             FirebaseSchema.UserDocument.updatedAt: Timestamp()
         ]
         
+        // Track if we need to update searchableText
+        var needsSearchableTextUpdate = false
+        var newUsername: String? = nil
+        var newDisplayName: String? = nil
+        
         // Add fields that are being updated
         if let displayName = displayName {
             updates[FirebaseSchema.UserDocument.displayName] = displayName
+            newDisplayName = displayName
+            needsSearchableTextUpdate = true
         }
         
         if let bio = bio {
@@ -159,9 +174,26 @@ class UserService: ObservableObject {
             // Username updates require additional validation
             if try await isUsernameAvailable(username, excludingUserID: userID) {
                 updates[FirebaseSchema.UserDocument.username] = username
+                newUsername = username
+                needsSearchableTextUpdate = true
             } else {
                 throw StitchError.validationError("Username '\(username)' is already taken")
             }
+        }
+        
+        // If username or displayName changed, regenerate searchableText
+        if needsSearchableTextUpdate {
+            // Get current user data to fill in missing values
+            let currentUser = try await getUser(id: userID)
+            let finalUsername = newUsername ?? currentUser?.username ?? ""
+            let finalDisplayName = newDisplayName ?? currentUser?.displayName ?? ""
+            
+            let searchableText = FirebaseSchema.UserDocument.generateSearchableText(
+                username: finalUsername,
+                displayName: finalDisplayName
+            )
+            updates[FirebaseSchema.UserDocument.searchableText] = searchableText
+            print("USER SERVICE: Updated searchableText to '\(searchableText)'")
         }
         
         try await db.collection(FirebaseSchema.Collections.users)

@@ -144,73 +144,75 @@ class SearchService: ObservableObject {
             print("🔍 DEBUG: Current user ID: \(currentUserID ?? "nil")")
             
             var allUsers: [BasicUserInfo] = []
+            var existingIDs = Set<String>()
             
-            // Method 1: Search by username prefix
-            print("🔍 DEBUG: === SEARCHING BY USERNAME ===")
-            let usernameQuery = db.collection(FirebaseSchema.Collections.users)
-                .whereField(FirebaseSchema.UserDocument.username, isGreaterThanOrEqualTo: lowercaseQuery)
-                .whereField(FirebaseSchema.UserDocument.username, isLessThan: lowercaseQuery + "\u{f8ff}")
-                .limit(to: limit)
+            // PRIMARY: Search using searchableText field (efficient case-insensitive search)
+            print("🔍 DEBUG: === SEARCHING BY searchableText ===")
+            let searchableQuery = db.collection(FirebaseSchema.Collections.users)
+                .whereField(FirebaseSchema.UserDocument.searchableText, isGreaterThanOrEqualTo: lowercaseQuery)
+                .whereField(FirebaseSchema.UserDocument.searchableText, isLessThan: lowercaseQuery + "\u{f8ff}")
+                .limit(to: limit * 2)
             
-            let usernameSnapshot = try await usernameQuery.getDocuments()
-            print("🔍 DEBUG: Username query returned \(usernameSnapshot.documents.count) documents")
+            let searchableSnapshot = try await searchableQuery.getDocuments()
+            print("🔍 DEBUG: searchableText query returned \(searchableSnapshot.documents.count) documents")
             
-            let usernameUsers = processUserDocuments(usernameSnapshot.documents, currentUserID: currentUserID)
-            allUsers.append(contentsOf: usernameUsers)
-            print("🔍 DEBUG: Added \(usernameUsers.count) users from username search")
+            let searchableUsers = processUserDocuments(searchableSnapshot.documents, currentUserID: currentUserID)
+            for user in searchableUsers {
+                if !existingIDs.contains(user.id) {
+                    allUsers.append(user)
+                    existingIDs.insert(user.id)
+                }
+            }
+            print("🔍 DEBUG: Added \(searchableUsers.count) users from searchableText")
             
-            // Method 2: Search by displayName if we need more results
+            // FALLBACK 1: Search by username prefix (for users without searchableText)
             if allUsers.count < limit {
-                print("🔍 DEBUG: === SEARCHING BY DISPLAY NAME ===")
-                let displayNameQuery = db.collection(FirebaseSchema.Collections.users)
-                    .whereField(FirebaseSchema.UserDocument.displayName, isGreaterThanOrEqualTo: query) // Use original case
-                    .whereField(FirebaseSchema.UserDocument.displayName, isLessThan: query + "\u{f8ff}")
-                    .limit(to: limit - allUsers.count)
+                print("🔍 DEBUG: === FALLBACK: SEARCHING BY USERNAME ===")
+                let usernameQuery = db.collection(FirebaseSchema.Collections.users)
+                    .whereField(FirebaseSchema.UserDocument.username, isGreaterThanOrEqualTo: lowercaseQuery)
+                    .whereField(FirebaseSchema.UserDocument.username, isLessThan: lowercaseQuery + "\u{f8ff}")
+                    .limit(to: limit)
                 
-                let displayNameSnapshot = try await displayNameQuery.getDocuments()
-                print("🔍 DEBUG: DisplayName query returned \(displayNameSnapshot.documents.count) documents")
+                let usernameSnapshot = try await usernameQuery.getDocuments()
+                print("🔍 DEBUG: Username query returned \(usernameSnapshot.documents.count) documents")
                 
-                let displayNameUsers = processUserDocuments(displayNameSnapshot.documents, currentUserID: currentUserID)
-                
-                // Add without duplicates
-                let existingIDs = Set(allUsers.map { $0.id })
-                for user in displayNameUsers {
+                let usernameUsers = processUserDocuments(usernameSnapshot.documents, currentUserID: currentUserID)
+                for user in usernameUsers {
                     if !existingIDs.contains(user.id) {
                         allUsers.append(user)
+                        existingIDs.insert(user.id)
                     }
                 }
-                print("🔍 DEBUG: Added \(displayNameUsers.count) additional users from displayName search")
             }
             
-            // Method 3: If still not enough, get ALL users and filter in memory
-            if allUsers.count < limit && lowercaseQuery.count >= 1 {
-                print("🔍 DEBUG: === FALLBACK: SEARCHING ALL USERS IN MEMORY ===")
+            // FALLBACK 2: In-memory search for comprehensive coverage
+            if allUsers.count < limit {
+                print("🔍 DEBUG: === FALLBACK: IN-MEMORY SEARCH ===")
                 do {
                     let allUsersQuery = db.collection(FirebaseSchema.Collections.users)
-                        .limit(to: 100) // Get first 100 users
+                        .limit(to: 300)
                     
                     let allSnapshot = try await allUsersQuery.getDocuments()
-                    print("🔍 DEBUG: Fallback query returned \(allSnapshot.documents.count) documents")
+                    print("🔍 DEBUG: In-memory search fetched \(allSnapshot.documents.count) documents")
                     
                     let allFoundUsers = processUserDocuments(allSnapshot.documents, currentUserID: currentUserID)
                     
-                    // Filter in memory for contains matches
+                    // Filter for CONTAINS matches
                     let memoryFiltered = allFoundUsers.filter { user in
                         user.username.lowercased().contains(lowercaseQuery) ||
                         user.displayName.lowercased().contains(lowercaseQuery)
                     }
                     
-                    print("🔍 DEBUG: Memory filtered found \(memoryFiltered.count) matching users")
+                    print("🔍 DEBUG: Memory filter found \(memoryFiltered.count) matching users")
                     
-                    // Add without duplicates
-                    let existingIDs = Set(allUsers.map { $0.id })
                     for user in memoryFiltered {
-                        if !existingIDs.contains(user.id) && allUsers.count < limit {
+                        if !existingIDs.contains(user.id) {
                             allUsers.append(user)
+                            existingIDs.insert(user.id)
                         }
                     }
                 } catch {
-                    print("🔍 DEBUG: Fallback search failed: \(error)")
+                    print("🔍 DEBUG: In-memory search failed: \(error)")
                 }
             }
             

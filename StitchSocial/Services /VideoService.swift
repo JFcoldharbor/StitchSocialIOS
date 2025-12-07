@@ -5,7 +5,7 @@
 //  Layer 4: Core Services - Video CRUD and Thread Management
 //  Dependencies: Firebase Firestore, Firebase Storage, FirebaseSchema
 //  Features: Thread hierarchy, video data operations, temperature calculation, user tagging, viewer tracking
-//  CLEANED: Engagement logic moved to VideoEngagementService
+//  FIXED: Auto-fetch username when creatorName is empty
 //
 
 import Foundation
@@ -99,7 +99,7 @@ class VideoService: ObservableObject {
     
     // MARK: - Create Operations
     
-    /// Create new thread (parent video) with Firebase Auth validation
+    /// Create new thread (parent video) with Firebase Auth validation and auto-username fetch
     func createThread(
         title: String,
         description: String = "",
@@ -123,6 +123,24 @@ class VideoService: ObservableObject {
             print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
+        // 🔥 FIX: If creatorName is empty, fetch username from Firestore
+        var finalCreatorName = creatorName
+        if finalCreatorName.isEmpty {
+            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            let userDoc = try await db.collection(FirebaseSchema.Collections.users)
+                .document(validatedCreatorID)
+                .getDocument()
+            
+            if let userData = userDoc.data(),
+               let username = userData[FirebaseSchema.UserDocument.username] as? String {
+                finalCreatorName = username
+                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+            } else {
+                finalCreatorName = "unknown_user"
+                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
+            }
+        }
+        
         let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
         
         let videoData: [String: Any] = [
@@ -132,7 +150,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
             FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,
-            FirebaseSchema.VideoDocument.creatorName: creatorName,
+            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,  // ✅ USE FETCHED VALUE
             FirebaseSchema.VideoDocument.createdAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
             
@@ -173,11 +191,11 @@ class VideoService: ObservableObject {
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("VIDEO SERVICE: Created thread \(videoID) with Firebase UID \(validatedCreatorID)")
+        print("✅ VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
         return video
     }
     
-    /// Create child reply in thread with Firebase Auth validation
+    /// Create child reply in thread with Firebase Auth validation and auto-username fetch
     func createChildReply(
         parentID: String,
         title: String,
@@ -202,6 +220,24 @@ class VideoService: ObservableObject {
             print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
+        // 🔥 FIX: If creatorName is empty, fetch username from Firestore
+        var finalCreatorName = creatorName
+        if finalCreatorName.isEmpty {
+            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            let userDoc = try await db.collection(FirebaseSchema.Collections.users)
+                .document(validatedCreatorID)
+                .getDocument()
+            
+            if let userData = userDoc.data(),
+               let username = userData[FirebaseSchema.UserDocument.username] as? String {
+                finalCreatorName = username
+                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+            } else {
+                finalCreatorName = "unknown_user"
+                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
+            }
+        }
+        
         // Get parent video to determine thread details
         let parentDoc = try await db.collection(FirebaseSchema.Collections.videos).document(parentID).getDocument()
         
@@ -221,7 +257,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
             FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,
-            FirebaseSchema.VideoDocument.creatorName: creatorName,
+            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,  // ✅ USE FETCHED VALUE
             FirebaseSchema.VideoDocument.createdAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
             
@@ -275,7 +311,7 @@ class VideoService: ObservableObject {
         }
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("VIDEO SERVICE: Created reply \(videoID) to \(parentID) with Firebase UID \(validatedCreatorID)")
+        print("✅ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
         return video
     }
     
@@ -842,44 +878,68 @@ class VideoService: ObservableObject {
     }
     
     // MARK: - Private Helper Methods
-    
+
     /// Create CoreVideoMetadata from Firestore data
     internal func createCoreVideoMetadata(from data: [String: Any], id: String) -> CoreVideoMetadata {
         let hypeCount = data[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0
         let coolCount = data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
         let engagementRatio = hypeCount + coolCount > 0 ? Double(hypeCount) / Double(hypeCount + coolCount) : 0.5
         
+        // Break into sub-expressions to help compiler
+        let title = data[FirebaseSchema.VideoDocument.title] as? String ?? ""
+        let description = data[FirebaseSchema.VideoDocument.description] as? String ?? ""
+        let videoURL = data[FirebaseSchema.VideoDocument.videoURL] as? String ?? ""
+        let thumbnailURL = data[FirebaseSchema.VideoDocument.thumbnailURL] as? String ?? ""
+        let creatorID = data[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
+        let creatorName = data[FirebaseSchema.VideoDocument.creatorName] as? String ?? ""
+        let createdAt = (data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
+        let threadID = data[FirebaseSchema.VideoDocument.threadID] as? String ?? id
+        let replyToVideoID = data[FirebaseSchema.VideoDocument.replyToVideoID] as? String
+        let conversationDepth = data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
+        let viewCount = data[FirebaseSchema.VideoDocument.viewCount] as? Int ?? 0
+        let replyCount = data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0
+        let shareCount = data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0
+        let temperature = data[FirebaseSchema.VideoDocument.temperature] as? String ?? "neutral"
+        let qualityScore = data[FirebaseSchema.VideoDocument.qualityScore] as? Int ?? 50
+        let duration = data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0
+        let aspectRatio = data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? 9.0/16.0
+        let fileSize = data[FirebaseSchema.VideoDocument.fileSize] as? Int64 ?? 0
+        let discoverabilityScore = data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double ?? 0.5
+        let isPromoted = data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false
+        let lastEngagementAt = (data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp)?.dateValue()
+        let taggedUserIDs = data[FirebaseSchema.VideoDocument.taggedUserIDs] as? [String] ?? []
+        
         return CoreVideoMetadata(
             id: id,
-            title: data[FirebaseSchema.VideoDocument.title] as? String ?? "",
-            description: data[FirebaseSchema.VideoDocument.description] as? String ?? "",
-            videoURL: data[FirebaseSchema.VideoDocument.videoURL] as? String ?? "",
-            thumbnailURL: data[FirebaseSchema.VideoDocument.thumbnailURL] as? String ?? "",
-            creatorID: data[FirebaseSchema.VideoDocument.creatorID] as? String ?? "",
-            creatorName: data[FirebaseSchema.VideoDocument.creatorName] as? String ?? "",
-            createdAt: (data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue() ?? Date(),
-            threadID: data[FirebaseSchema.VideoDocument.threadID] as? String ?? id,
-            replyToVideoID: data[FirebaseSchema.VideoDocument.replyToVideoID] as? String,
-            conversationDepth: data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0,
-            viewCount: data[FirebaseSchema.VideoDocument.viewCount] as? Int ?? 0,
+            title: title,
+            description: description,
+            taggedUserIDs: taggedUserIDs,  // ← MOVE HERE (after description)
+            videoURL: videoURL,
+            thumbnailURL: thumbnailURL,
+            creatorID: creatorID,
+            creatorName: creatorName,
+            createdAt: createdAt,
+            threadID: threadID,
+            replyToVideoID: replyToVideoID,
+            conversationDepth: conversationDepth,
+            viewCount: viewCount,
             hypeCount: hypeCount,
             coolCount: coolCount,
-            replyCount: data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0,
-            shareCount: data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0,
-            temperature: data[FirebaseSchema.VideoDocument.temperature] as? String ?? "neutral",
-            qualityScore: data[FirebaseSchema.VideoDocument.qualityScore] as? Int ?? 50,
+            replyCount: replyCount,
+            shareCount: shareCount,
+            temperature: temperature,
+            qualityScore: qualityScore,
             engagementRatio: engagementRatio,
             velocityScore: 0.0,
             trendingScore: 0.0,
-            duration: data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0,
-            aspectRatio: data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? 9.0/16.0,
-            fileSize: data[FirebaseSchema.VideoDocument.fileSize] as? Int64 ?? 0,
-            discoverabilityScore: data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double ?? 0.5,
-            isPromoted: data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false,
-            lastEngagementAt: (data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp)?.dateValue()
+            duration: duration,
+            aspectRatio: aspectRatio,
+            fileSize: fileSize,
+            discoverabilityScore: discoverabilityScore,
+            isPromoted: isPromoted,
+            lastEngagementAt: lastEngagementAt
         )
     }
-    
     /// Calculate video temperature
     private func calculateVideoTemperature(
         hypeCount: Int,

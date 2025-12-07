@@ -79,9 +79,17 @@
             </array>
         </dict>
     </dict>
+    <!-- ✅ UPDATED: Added fetch and processing for background tasks -->
     <key>UIBackgroundModes</key>
     <array>
         <string>remote-notification</string>
+        <string>fetch</string>
+        <string>processing</string>
+    </array>
+    <!-- ✅ NEW: Background task scheduler identifiers for re-engagement -->
+    <key>BGTaskSchedulerPermittedIdentifiers</key>
+    <array>
+        <string>com.stitch.reengagement</string>
     </array>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <true/>

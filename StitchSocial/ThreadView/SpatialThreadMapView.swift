@@ -2,10 +2,11 @@
 //  SpatialThreadMapView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Main Orbital Interface Container
+//  Layer 8: Views - Main Orbital Interface Container (FIXED: Touch passthrough)
 //  Dependencies: OrbitalLayoutCalculator (Layer 5), VideoService (Layer 4)
 //  Features: Central thread display, orbital child positioning, page navigation
 //  ARCHITECTURE COMPLIANT: No business logic, uses calculated positions
+//  CRITICAL: Only child orbs and pagination buttons block touches - everything else passes through
 //
 
 import SwiftUI
@@ -19,13 +20,13 @@ struct SpatialThreadMapView: View {
     let children: [CoreVideoMetadata]
     let onChildSelected: ((CoreVideoMetadata) -> Void)?
     let onEngagement: ((CoreVideoMetadata, InteractionType) -> Void)?
+    let onParentTapped: (() -> Void)?
     
     // MARK: - State
     
     @State private var currentPage: Int = 0
     @State private var selectedChildID: String?
     @State private var orbitalPositions: [OrbitalPosition] = []
-    @State private var showingPageNavigation = false
     @State private var animationProgress: Double = 0.0
     
     // MARK: - Computed Properties
@@ -54,25 +55,29 @@ struct SpatialThreadMapView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
-                // Background
-                Color.black
-                    .ignoresSafeArea(.all)
-                
-                // Orbital Interface
-                orbitalInterfaceView(geometry: geometry)
-                
-                // Central Thread
-                centralThreadView(geometry: geometry)
-                
-                // Page Navigation (if needed)
-                if needsPagination {
-                    pageNavigationView
-                }
-                
-                // Thread Info Panel
-                threadInfoPanel
-            }
+            // NO BLOCKING BACKGROUND - Use transparent overlays only
+            Color.clear
+                .overlay(
+                    // Layer 1: Orbital rings (visual only)
+                    orbitalRingsView(geometry: geometry)
+                        .allowsHitTesting(false) // Pass touches through
+                )
+                .overlay(
+                    // Layer 2: Central parent video (TAPPABLE)
+                    centralThreadView(geometry: geometry)
+                )
+                .overlay(
+                    // Layer 3: Child orbs (ONLY interactive elements)
+                    orbitalInterfaceView(geometry: geometry)
+                )
+                .overlay(
+                    // Layer 4: Page navigation (only buttons interactive)
+                    Group {
+                        if needsPagination {
+                            pageNavigationView
+                        }
+                    }
+                )
         }
         .onAppear {
             setupOrbitalInterface()
@@ -85,81 +90,111 @@ struct SpatialThreadMapView: View {
         }
     }
     
-    // MARK: - Orbital Interface View
+    // MARK: - Orbital Interface View (ONLY child orbs are tappable)
     
     private func orbitalInterfaceView(geometry: GeometryProxy) -> some View {
-        ZStack {
-            // Orbit rings (visual guides)
-            orbitalRingsView(geometry: geometry)
-            
-            // Child circles
-            ForEach(orbitalPositions, id: \.childID) { position in
-                OrbitalChildView(
-                    childData: getChildData(for: position.childID),
-                    position: position,
-                    isSelected: selectedChildID == position.childID,
-                    onTap: { childData in
-                        handleChildSelection(childData)
-                    }
-                )
-                .position(position.position)
-                .scaleEffect(animationProgress)
-                .opacity(animationProgress)
-                .animation(
-                    .easeInOut(duration: 0.6)
-                    .delay(Double.random(in: 0...0.3)),
-                    value: animationProgress
-                )
-            }
+        // NO ZStack wrapper - just the child orbs
+        ForEach(orbitalPositions, id: \.childID) { position in
+            OrbitalChildView(
+                childData: getChildData(for: position.childID),
+                position: position,
+                isSelected: selectedChildID == position.childID,
+                onTap: { childData in
+                    handleChildSelection(childData)
+                }
+            )
+            .position(position.position)
+            .scaleEffect(animationProgress)
+            .opacity(animationProgress)
+            .animation(
+                .easeInOut(duration: 0.6)
+                .delay(Double.random(in: 0...0.3)),
+                value: animationProgress
+            )
         }
     }
     
-    // MARK: - Central Thread View
+    // MARK: - Central Thread View (Large tappable parent video card)
     
     private func centralThreadView(geometry: GeometryProxy) -> some View {
         let centerPosition = OrbitalLayoutCalculator.getCenterPosition(containerSize: geometry.size)
         
-        return VStack(spacing: 12) {
-            // Thread thumbnail/preview
-            RoundedRectangle(cornerRadius: 20)
-                .fill(
-                    LinearGradient(
-                        colors: [.purple, .blue],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+        return Button(action: {
+            print("🎬 ORBITAL: Parent video tapped")
+            onParentTapped?()
+        }) {
+            VStack(spacing: 12) {
+                // Large parent video card with actual thumbnail
+                ZStack {
+                    // Thumbnail background
+                    AsyncThumbnailView(
+                        url: parentThread.thumbnailURL,
+                        aspectRatio: 3.0/4.0,
+                        contentMode: .fill
                     )
-                )
-                .frame(width: 120, height: 160)
-                .overlay(
-                    VStack(spacing: 8) {
-                        Image(systemName: "play.circle.fill")
-                            .font(.system(size: 40))
-                            .foregroundColor(.white)
+                    .frame(width: 120, height: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    
+                    // Dark overlay for better text contrast
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.clear, Color.black.opacity(0.7)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 120, height: 160)
+                    
+                    // Play button and info overlay
+                    VStack(spacing: 12) {
+                        Spacer()
                         
-                        Text("THREAD")
-                            .font(.system(size: 12, weight: .bold))
+                        // Play button
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 50))
                             .foregroundColor(.white)
+                            .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 2)
+                        
+                        // Reply count badge
+                        Text("\(children.count) replies")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule()
+                                    .fill(Color.black.opacity(0.5))
+                            )
+                            .padding(.bottom, 8)
                     }
+                    .frame(width: 120, height: 160)
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(Color.white.opacity(0.3), lineWidth: 2)
                 )
-                .shadow(color: .purple.opacity(0.3), radius: 10, x: 0, y: 5)
-            
-            // Thread creator info
-            VStack(spacing: 4) {
-                Text(parentThread.creatorName)
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(.white)
+                .shadow(color: .purple.opacity(0.4), radius: 15, x: 0, y: 8)
                 
-                Text("\(children.count) responses")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.7))
+                // Creator info
+                VStack(spacing: 4) {
+                    Text(parentThread.creatorName)
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.white)
+                    
+                    Text("Original Thread")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.cyan.opacity(0.8))
+                }
             }
         }
+        .buttonStyle(PlainButtonStyle())
         .position(centerPosition)
-        .scaleEffect(1.0 + sin(Date().timeIntervalSince1970) * 0.05) // Subtle breathing animation
-        .animation(.easeInOut(duration: 3).repeatForever(autoreverses: true), value: Date())
+        .scaleEffect(1.0 + sin(Date().timeIntervalSince1970 * 0.5) * 0.03)
+        .animation(.easeInOut(duration: 4).repeatForever(autoreverses: true), value: UUID())
     }
     
-    // MARK: - Orbital Rings View
+    // MARK: - Orbital Rings View (Visual guides only)
     
     private func orbitalRingsView(geometry: GeometryProxy) -> some View {
         let centerPosition = OrbitalLayoutCalculator.getCenterPosition(containerSize: geometry.size)
@@ -185,7 +220,7 @@ struct SpatialThreadMapView: View {
         }
     }
     
-    // MARK: - Page Navigation View
+    // MARK: - Page Navigation View (Buttons only)
     
     private var pageNavigationView: some View {
         VStack {
@@ -211,7 +246,7 @@ struct SpatialThreadMapView: View {
                 }
                 .disabled(currentPage <= 0)
                 
-                // Page indicator
+                // Page indicator (not tappable)
                 Text("\(currentPage + 1) of \(totalPages)")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(.white.opacity(0.8))
@@ -221,6 +256,7 @@ struct SpatialThreadMapView: View {
                         RoundedRectangle(cornerRadius: 20)
                             .fill(Color.purple.opacity(0.3))
                     )
+                    .allowsHitTesting(false) // Not tappable
                 
                 // Next page button
                 Button(action: nextPage) {
@@ -243,51 +279,6 @@ struct SpatialThreadMapView: View {
             }
             .padding(.bottom, 50)
         }
-    }
-    
-    // MARK: - Thread Info Panel
-    
-    private var threadInfoPanel: some View {
-        VStack {
-            HStack {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Thread Map")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    HStack(spacing: 16) {
-                        Text("\(children.count) responses")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.cyan)
-                        
-                        if needsPagination {
-                            Text("Page \(currentPage + 1)/\(totalPages)")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.orange)
-                        }
-                    }
-                }
-                
-                Spacer()
-                
-                // Close button or action buttons
-                Button("Close") {
-                    // Handle close action
-                }
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color.red.opacity(0.3))
-                )
-            }
-            
-            Spacer()
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 60)
     }
     
     // MARK: - Helper Functions
@@ -331,6 +322,8 @@ struct SpatialThreadMapView: View {
         // Haptic feedback
         let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
         impactFeedback.impactOccurred()
+        
+        print("🔵 ORBITAL: Child selected - \(childData.creatorName)")
     }
     
     private func previousPage() {
@@ -346,6 +339,8 @@ struct SpatialThreadMapView: View {
                 animationProgress = 1.0
             }
         }
+        
+        print("◀️ ORBITAL: Previous page - \(currentPage + 1)")
     }
     
     private func nextPage() {
@@ -361,22 +356,31 @@ struct SpatialThreadMapView: View {
                 animationProgress = 1.0
             }
         }
+        
+        print("▶️ ORBITAL: Next page - \(currentPage + 1)")
     }
 }
 
 // MARK: - Preview
 
 #Preview {
-    SpatialThreadMapView(
-        parentThread: CoreVideoMetadata.sampleThread,
-        children: CoreVideoMetadata.sampleChildren,
-        onChildSelected: { child in
-            print("Selected child: \(child.creatorName)")
-        },
-        onEngagement: { video, type in
-            print("Engagement: \(type) on \(video.creatorName)")
-        }
-    )
+    ZStack {
+        Color.black.ignoresSafeArea()
+        
+        SpatialThreadMapView(
+            parentThread: CoreVideoMetadata.sampleThread,
+            children: CoreVideoMetadata.sampleChildren,
+            onChildSelected: { child in
+                print("Selected child: \(child.creatorName)")
+            },
+            onEngagement: { video, type in
+                print("Engagement: \(type) on \(video.creatorName)")
+            },
+            onParentTapped: {
+                print("Parent video tapped!")
+            }
+        )
+    }
 }
 
 // MARK: - Sample Data Extension

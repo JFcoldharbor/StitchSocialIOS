@@ -5,6 +5,7 @@
 //  Layer 4: Core Services - Advanced Video Preloading & AVPlayer Pool Management
 //  Dependencies: AVFoundation, Config
 //  Features: Smooth video swiping, multidirectional navigation, memory management
+//  FIXED: Increased timeout from 15 to 50 attempts for better network reliability
 //
 
 import Foundation
@@ -323,18 +324,26 @@ class VideoPreloadingService: ObservableObject {
     private func monitorPreloadProgress(player: AVPlayer, videoID: String) async {
         guard let playerItem = player.currentItem else { return }
         
-        // Wait for player to be ready - OPTIMIZED
+        // FIXED: Increased timeout from 15 to 50 attempts (1.5s → 5.0s)
         var attempts = 0
-        while playerItem.status != .readyToPlay && attempts < 15 { // Reduced from 30
+        while playerItem.status != .readyToPlay && attempts < 50 {
+            // Check for failure
+            if playerItem.status == .failed {
+                print("❌ PRELOAD: Player failed for \(videoID)")
+                preloadProgress[videoID] = 0.0
+                return
+            }
+            
             try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
             attempts += 1
-            preloadProgress[videoID] = Double(attempts) / 15.0 // Updated denominator
+            preloadProgress[videoID] = Double(attempts) / 50.0
         }
         
         if playerItem.status == .readyToPlay {
             preloadProgress[videoID] = 1.0
+            print("✅ PRELOAD: Ready after \(attempts) attempts (\(String(format: "%.1f", Double(attempts) * 0.1))s)")
         } else {
-            print("❌ PRELOAD: Failed to load \(videoID) after \(attempts) attempts")
+            print("❌ PRELOAD: Timeout after \(attempts) attempts (5.0s)")
             preloadProgress[videoID] = 0.0
         }
     }
@@ -515,8 +524,8 @@ extension VideoPreloadingService {
     /// Test preloading functionality
     func helloWorldTest() {
         print("🎬 PRELOAD SERVICE: Hello World - Ready for smooth multidirectional video swiping!")
-        print("🏊 Pool Size: \(maxPoolSize) players")
-        print("🔍 Preload Distance: \(preloadDistance) videos")
+        print("🎥 Pool Size: \(maxPoolSize) players")
+        print("📍 Preload Distance: \(preloadDistance) videos")
         print("📊 Current Pool: \(playerPool.count) players")
         print("⚡ Concurrent Limit: \(maxConcurrentPreloads) simultaneous preloads")
     }

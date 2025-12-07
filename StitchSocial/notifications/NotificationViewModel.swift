@@ -3,8 +3,7 @@
 //  StitchSocial
 //
 //  Layer 7: ViewModels - Notification Management
-//  FIXED: Retain cycle in startListening closure with [weak self]
-//  FIXED: Line 130 - Removed extraneous notificationID: label
+//  UPDATED: Added senderID and payload to NotificationDisplayData for follow-back and video navigation
 //
 
 import Foundation
@@ -40,7 +39,7 @@ class NotificationViewModel: ObservableObject {
     
     init(notificationService: NotificationService) {
         self.notificationService = notificationService
-        print("📧 NOTIFICATION VM: Initialized with service integration")
+        print("🔧 NOTIFICATION VM: Initialized with service integration")
         
         // Start real-time listener
         startListening()
@@ -84,7 +83,7 @@ class NotificationViewModel: ObservableObject {
             updateFilteredNotifications()
             updateUnreadCount()
             
-            print("📧 NOTIFICATION VM: Loaded \(allNotifications.count) notifications")
+            print("🔧 NOTIFICATION VM: Loaded \(allNotifications.count) notifications")
             
         } catch {
             errorMessage = "Failed to load notifications: \(error.localizedDescription)"
@@ -116,7 +115,7 @@ class NotificationViewModel: ObservableObject {
             
             updateFilteredNotifications()
             
-            print("📧 NOTIFICATION VM: Loaded \(result.notifications.count) more notifications")
+            print("🔧 NOTIFICATION VM: Loaded \(result.notifications.count) more notifications")
             
         } catch {
             print("❌ NOTIFICATION VM: Load more failed - \(error)")
@@ -135,7 +134,6 @@ class NotificationViewModel: ObservableObject {
     
     func markAsRead(_ notificationID: String) async {
         do {
-            // FIXED: Removed notificationID: label
             try await notificationService.markAsRead(notificationID)
             
             // Reload to get updated state from Firestore
@@ -202,20 +200,22 @@ class NotificationViewModel: ObservableObject {
                 title: notification.title,
                 message: notification.message,
                 notificationType: notification.type,
+                senderID: notification.senderID,
                 senderUsername: notification.payload["senderUsername"] ?? "Unknown",
+                payload: notification.payload,
                 isRead: notification.isRead,
                 createdAt: notification.createdAt
             )
         }
         
-        print("📧 NOTIFICATION VM: Filtered to \(filteredNotifications.count) notifications for \(selectedTab.displayName)")
+        print("🔧 NOTIFICATION VM: Filtered to \(filteredNotifications.count) notifications for \(selectedTab.displayName)")
     }
     
     private func updateUnreadCount() {
         unreadCount = allNotifications.filter { !$0.isRead }.count
     }
     
-    // MARK: - Real-time Listener (FIXED)
+    // MARK: - Real-time Listener
     
     private func startListening() {
         guard let userID = currentUserID else {
@@ -223,7 +223,6 @@ class NotificationViewModel: ObservableObject {
             return
         }
         
-        // ✅ FIXED: Added [weak self] to prevent retain cycle
         notificationService.startListening(for: userID) { [weak self] notifications in
             guard let self = self else { return }
             
@@ -238,14 +237,16 @@ class NotificationViewModel: ObservableObject {
     }
 }
 
-// MARK: - Display Data
+// MARK: - Display Data (UPDATED)
 
 struct NotificationDisplayData: Identifiable {
     let id: String
     let title: String
     let message: String
     let notificationType: StitchNotificationType
+    let senderID: String
     let senderUsername: String
+    let payload: [String: String]
     let isRead: Bool
     let createdAt: Date
 }

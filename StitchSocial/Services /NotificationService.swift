@@ -6,8 +6,8 @@
 //  Codebase: stitchnoti
 //  Region: us-central1
 //  Database: stitchfin
-//  FIXED: Use Firebase Callable Functions SDK instead of direct HTTP
-//  UPDATED: Added sendNewVideoNotification for follower notifications
+//  FIXED: Changed StitchError to NSError for compatibility
+//  UPDATED: Added sendStitchNotification method back
 //
 
 import Foundation
@@ -64,7 +64,7 @@ class NotificationService: ObservableObject {
         
         let functionName = "\(functionPrefix)\(name)"
         print("📞 CALLING: \(functionName)")
-        print("🔑 AUTH UID: \(user.uid)")
+        print("🔐 AUTH UID: \(user.uid)")
         
         do {
             // ✅ Use Firebase Callable Functions SDK (handles auth automatically)
@@ -116,116 +116,103 @@ class NotificationService: ObservableObject {
         return tokenData
     }
     
-    // MARK: - First Engagement Notifications
+    // MARK: - Engagement Notifications
     
-    /// Send first hype notification to creator
-    func sendFirstHypeNotification(
-        to creatorID: String,
+    /// Send engagement notification (hype/cool)
+    func sendEngagementNotification(
+        to recipientID: String,
         videoID: String,
-        videoTitle: String,
-        senderUsername: String
+        engagementType: String,
+        videoTitle: String
     ) async throws {
-        print("🔥 FIRST HYPE: Sending to creator \(creatorID)")
+        print("🔥 ENGAGEMENT: Sending \(engagementType) notification")
         
         let data: [String: Any] = [
-            "recipientID": creatorID,
+            "recipientID": recipientID,
             "videoID": videoID,
-            "videoTitle": videoTitle,
-            "senderUsername": senderUsername
+            "engagementType": engagementType,
+            "videoTitle": videoTitle
         ]
         
-        let result = try await callFunction(name: "sendFirstHype", data: data)
+        let result = try await callFunction(name: "sendEngagement", data: data)
         
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ FIRST HYPE: Notification sent")
+            print("✅ ENGAGEMENT: Notification sent")
         }
     }
     
-    /// Send first cool notification to creator
-    func sendFirstCoolNotification(
-        to creatorID: String,
+    // MARK: - Reply & Follow Notifications
+    
+    /// Send reply notification
+    func sendReplyNotification(
+        to recipientID: String,
         videoID: String,
-        videoTitle: String,
-        senderUsername: String
+        videoTitle: String
     ) async throws {
-        print("❄️ FIRST COOL: Sending to creator \(creatorID)")
+        print("💬 REPLY: Sending reply notification")
         
         let data: [String: Any] = [
-            "recipientID": creatorID,
+            "recipientID": recipientID,
             "videoID": videoID,
-            "videoTitle": videoTitle,
-            "senderUsername": senderUsername
+            "videoTitle": videoTitle
         ]
         
-        let result = try await callFunction(name: "sendFirstCool", data: data)
+        let result = try await callFunction(name: "sendReply", data: data)
         
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ FIRST COOL: Notification sent")
+            print("✅ REPLY: Notification sent")
         }
     }
     
-    // MARK: - Milestone Notifications
-    
-    /// Send milestone notification
-    func sendMilestoneNotification(
-        milestone: Int,
-        videoID: String,
-        videoTitle: String,
-        creatorID: String,
-        followerIDs: [String] = [],
-        engagerIDs: [String] = []
-    ) async throws {
-        
-        let milestoneEmoji: String
-        let milestoneName: String
-        
-        switch milestone {
-        case 10:
-            milestoneEmoji = "🔥"
-            milestoneName = "Heating Up"
-        case 400:
-            milestoneEmoji = "👀"
-            milestoneName = "Must See"
-        case 1000:
-            milestoneEmoji = "🌶️"
-            milestoneName = "Hot"
-        case 15000:
-            milestoneEmoji = "🚀"
-            milestoneName = "Viral"
-        default:
-            print("⚠️ MILESTONE: Invalid milestone \(milestone)")
-            return
-        }
-        
-        print("\(milestoneEmoji) MILESTONE: Sending \(milestoneName) notification")
+    /// Send follow notification
+    func sendFollowNotification(to recipientID: String) async throws {
+        print("👤 FOLLOW: Sending follow notification")
         
         let data: [String: Any] = [
-            "milestone": milestone,
-            "milestoneName": milestoneName,
-            "milestoneEmoji": milestoneEmoji,
-            "videoID": videoID,
-            "videoTitle": videoTitle,
-            "creatorID": creatorID,
-            "followerIDs": followerIDs,
-            "engagerIDs": engagerIDs
+            "recipientID": recipientID
         ]
         
-        let result = try await callFunction(name: "sendMilestone", data: data)
+        let result = try await callFunction(name: "sendFollow", data: data)
         
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ MILESTONE: \(milestoneName) notification sent")
+            print("✅ FOLLOW: Notification sent")
+        }
+    }
+    
+    /// Send mention notification
+    func sendMentionNotification(
+        to recipientID: String,
+        videoID: String,
+        videoTitle: String,
+        mentionContext: String = "video"
+    ) async throws {
+        print("📌 MENTION: Sending mention notification")
+        
+        let data: [String: Any] = [
+            "recipientID": recipientID,
+            "videoID": videoID,
+            "videoTitle": videoTitle,
+            "mentionContext": mentionContext
+        ]
+        
+        let result = try await callFunction(name: "sendMention", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            print("✅ MENTION: Notification sent")
         }
     }
     
     // MARK: - Stitch/Reply Notifications
     
-    /// Send stitch/reply notifications with parent/child logic
+    /// Send stitch/reply notification to thread participants
     func sendStitchNotification(
         videoID: String,
         videoTitle: String,
@@ -233,7 +220,11 @@ class NotificationService: ObservableObject {
         parentCreatorID: String?,
         threadUserIDs: [String]
     ) async throws {
-        print("💬 STITCH: Sending reply/stitch notifications")
+        print("🧵 STITCH: Sending stitch notification")
+        print("   • Video: \(videoID)")
+        print("   • Original Creator: \(originalCreatorID)")
+        print("   • Parent Creator: \(parentCreatorID ?? "none")")
+        print("   • Thread Users: \(threadUserIDs.count)")
         
         let data: [String: Any] = [
             "videoID": videoID,
@@ -249,6 +240,43 @@ class NotificationService: ObservableObject {
            let success = resultData["success"] as? Bool,
            success {
             print("✅ STITCH: Notifications sent to \(threadUserIDs.count + 1) users")
+        }
+    }
+    
+    // MARK: - Milestone Notifications
+    
+    /// Send milestone notification to creator, followers, and engagers
+    func sendMilestoneNotification(
+        milestone: Int,
+        videoID: String,
+        videoTitle: String,
+        creatorID: String,
+        followerIDs: [String],
+        engagerIDs: [String]
+    ) async throws {
+        print("🏆 MILESTONE: Sending milestone notification")
+        print("   • Milestone: \(milestone) hypes")
+        print("   • Video: \(videoID)")
+        print("   • Creator: \(creatorID)")
+        print("   • Followers: \(followerIDs.count)")
+        print("   • Engagers: \(engagerIDs.count)")
+        
+        let data: [String: Any] = [
+            "milestone": milestone,
+            "videoID": videoID,
+            "videoTitle": videoTitle,
+            "creatorID": creatorID,
+            "followerIDs": followerIDs,
+            "engagerIDs": engagerIDs
+        ]
+        
+        let result = try await callFunction(name: "sendMilestone", data: data)
+        
+        if let resultData = result as? [String: Any],
+           let success = resultData["success"] as? Bool,
+           success {
+            let totalNotified = followerIDs.count + engagerIDs.count + 1 // +1 for creator
+            print("✅ MILESTONE: Notifications sent to \(totalNotified) users")
         }
     }
     
@@ -281,90 +309,108 @@ class NotificationService: ObservableObject {
         }
     }
     
-    // MARK: - Legacy Notification Sending
+    // MARK: - Re-Engagement Notifications (NEW)
     
-    /// Send engagement notification (hype/cool) - LEGACY
-    func sendEngagementNotification(
-        to recipientID: String,
-        engagementType: String,
-        videoTitle: String
-    ) async throws {
-        print("🔥 ENGAGEMENT: Sending \(engagementType) notification")
+    /// Send re-engagement notification (TikTok/Instagram style)
+    func sendReEngagementNotification(
+        userID: String,
+        notificationType: String,
+        payload: [String: Any]
+    ) async throws -> ReEngagementResult {
+        print("🔄 RE-ENGAGEMENT: Sending \(notificationType) to user \(userID)")
         
         let data: [String: Any] = [
-            "recipientID": recipientID,
-            "engagementType": engagementType,
-            "videoTitle": videoTitle
+            "userId": userID,
+            "notificationType": notificationType,
+            "payload": payload
         ]
         
-        let result = try await callFunction(name: "sendEngagement", data: data)
+        let result = try await callFunction(name: "sendReEngagement", data: data)
         
-        if let resultData = result as? [String: Any],
-           let success = resultData["success"] as? Bool,
-           success {
-            print("✅ ENGAGEMENT: Notification sent")
+        guard let resultData = result as? [String: Any],
+              let success = resultData["success"] as? Bool else {
+            throw NSError(domain: "NotificationService", code: 500, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid re-engagement response"
+            ])
         }
+        
+        if !success {
+            // Check if cooldown
+            if let reason = resultData["reason"] as? String, reason == "cooldown" {
+                let hoursRemaining = resultData["hoursRemaining"] as? String ?? "unknown"
+                print("⏸️ RE-ENGAGEMENT: Cooldown active (\(hoursRemaining)h remaining)")
+                return ReEngagementResult(
+                    success: false,
+                    notificationId: nil,
+                    pushSent: false,
+                    reason: .cooldown,
+                    hoursRemaining: Double(hoursRemaining) ?? 0
+                )
+            }
+            
+            return ReEngagementResult(
+                success: false,
+                notificationId: nil,
+                pushSent: false,
+                reason: .unknown,
+                hoursRemaining: nil
+            )
+        }
+        
+        let notificationId = resultData["notificationId"] as? String
+        let pushSent = resultData["pushSent"] as? Bool ?? false
+        
+        print("✅ RE-ENGAGEMENT: Sent successfully - Push: \(pushSent)")
+        
+        return ReEngagementResult(
+            success: true,
+            notificationId: notificationId,
+            pushSent: pushSent,
+            reason: nil,
+            hoursRemaining: nil
+        )
     }
     
-    /// Send mention notification
-    func sendMentionNotification(
-        to recipientID: String,
-        videoTitle: String,
-        mentionContext: String
-    ) async throws {
-        print("📌 MENTION: Sending mention notification")
-        
-        let data: [String: Any] = [
-            "recipientID": recipientID,
-            "videoTitle": videoTitle,
-            "mentionContext": mentionContext
-        ]
-        
-        let result = try await callFunction(name: "sendMention", data: data)
-        
-        if let resultData = result as? [String: Any],
-           let success = resultData["success"] as? Bool,
-           success {
-            print("✅ MENTION: Notification sent")
-        }
-    }
+    // MARK: - Resend Read Notifications (NEW - TikTok Style)
     
-    /// Send reply notification - LEGACY
-    func sendReplyNotification(
-        to recipientID: String,
-        videoTitle: String
-    ) async throws {
-        print("💬 REPLY: Sending reply notification")
+    /// Resend read notifications as reminders (TikTok/Instagram style)
+    func resendReadNotifications(limit: Int = 5) async throws -> ResendResult {
+        print("🔁 RESEND: Resending up to \(limit) read notifications")
+        
+        guard let userID = Auth.auth().currentUser?.uid else {
+            throw NSError(domain: "NotificationService", code: 401, userInfo: [
+                NSLocalizedDescriptionKey: "No authenticated user"
+            ])
+        }
         
         let data: [String: Any] = [
-            "recipientID": recipientID,
-            "videoTitle": videoTitle
+            "userId": userID,
+            "limit": limit
         ]
         
-        let result = try await callFunction(name: "sendReply", data: data)
+        let result = try await callFunction(name: "resendReadNotifications", data: data)
         
-        if let resultData = result as? [String: Any],
-           let success = resultData["success"] as? Bool,
-           success {
-            print("✅ REPLY: Notification sent")
+        guard let resultData = result as? [String: Any],
+              let success = resultData["success"] as? Bool else {
+            throw NSError(domain: "NotificationService", code: 500, userInfo: [
+                NSLocalizedDescriptionKey: "Invalid resend response"
+            ])
         }
-    }
-    
-    /// Send follow notification
-    func sendFollowNotification(to recipientID: String) async throws {
-        print("👤 FOLLOW: Sending follow notification")
         
-        let data: [String: Any] = [
-            "recipientID": recipientID
-        ]
-        
-        let result = try await callFunction(name: "sendFollow", data: data)
-        
-        if let resultData = result as? [String: Any],
-           let success = resultData["success"] as? Bool,
-           success {
-            print("✅ FOLLOW: Notification sent")
+        if !success {
+            if let reason = resultData["reason"] as? String, reason == "no_token" {
+                print("⚠️ RESEND: No FCM token found")
+                return ResendResult(success: false, resent: 0, reason: .noToken)
+            }
+            
+            return ResendResult(success: false, resent: 0, reason: .unknown)
         }
+        
+        let resent = resultData["resent"] as? Int ?? 0
+        
+        print("✅ RESEND: Successfully resent \(resent) notifications")
+        
+        return ResendResult(success: true, resent: resent, reason: nil)
     }
     
     // MARK: - Load Notifications
@@ -375,7 +421,7 @@ class NotificationService: ObservableObject {
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> NotificationLoadResult {
         
-        print("📧 LOAD: Fetching \(limit) notifications for user \(userID)")
+        print("📨 LOAD: Fetching \(limit) notifications for user \(userID)")
         
         var query = db.collection(notificationsCollection)
             .whereField("recipientID", isEqualTo: userID)
@@ -451,6 +497,39 @@ class NotificationService: ObservableObject {
         print("✅ MARK ALL READ: Updated \(snapshot.documents.count) notifications")
     }
     
+    // MARK: - Clear Notifications
+    
+    /// Clear all notifications for user
+    func clearAllNotifications() async throws -> Int {
+        guard let userID = Auth.auth().currentUser?.uid else {
+            throw NSError(domain: "NotificationService", code: 401, userInfo: [
+                NSLocalizedDescriptionKey: "No authenticated user"
+            ])
+        }
+        
+        print("🗑️ CLEAR ALL: Clearing notifications for user \(userID)")
+        
+        let data: [String: Any] = [
+            "userId": userID
+        ]
+        
+        let result = try await callFunction(name: "clearAllNotifications", data: data)
+        
+        guard let resultData = result as? [String: Any],
+              let success = resultData["success"] as? Bool,
+              success else {
+            throw NSError(domain: "NotificationService", code: 500, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to clear notifications"
+            ])
+        }
+        
+        let deleted = resultData["deleted"] as? Int ?? 0
+        
+        print("✅ CLEAR ALL: Deleted \(deleted) notifications")
+        
+        return deleted
+    }
+    
     // MARK: - Real-time Listener
     
     func startListening(for userID: String, onUpdate: @escaping ([StitchNotification]) -> Void) {
@@ -520,4 +599,30 @@ struct NotificationLoadResult {
     let notifications: [StitchNotification]
     let lastDocument: DocumentSnapshot?
     let hasMore: Bool
+}
+
+struct ReEngagementResult {
+    let success: Bool
+    let notificationId: String?
+    let pushSent: Bool
+    let reason: ReEngagementFailureReason?
+    let hoursRemaining: Double?
+}
+
+enum ReEngagementFailureReason {
+    case cooldown
+    case noActivity
+    case unknown
+}
+
+struct ResendResult {
+    let success: Bool
+    let resent: Int
+    let reason: ResendFailureReason?
+}
+
+enum ResendFailureReason {
+    case noToken
+    case noReadNotifications
+    case unknown
 }

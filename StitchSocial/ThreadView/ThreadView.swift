@@ -2,9 +2,9 @@
 //  ThreadView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Streamlined Spatial Thread Interface
-//  Dependencies: SpatialThreadMapView, CardVideoCarouselView
-//  Features: Thumbnail-only parent, proper video arrays, carousel navigation
+//  Layer 8: Views - Streamlined Spatial Thread Interface with Fullscreen Support
+//  Dependencies: SpatialThreadMapView, CardVideoCarouselView, FullscreenVideoView
+//  Features: Fullscreen parent video, proper video arrays, carousel navigation
 //
 
 import SwiftUI
@@ -27,7 +27,8 @@ struct ThreadView: View {
     
     // MARK: - UI State
     @State private var showingCardCarousel = false
-    @State private var isParentVideoPlaying = false
+    @State private var showingFullscreenVideo = false
+    @State private var fullscreenStartVideo: CoreVideoMetadata?
     
     // MARK: - Environment
     @Environment(\.dismiss) private var dismiss
@@ -53,23 +54,37 @@ struct ThreadView: View {
         }
         .fullScreenCover(isPresented: $showingCardCarousel) {
             if let selectedChild = selectedChild {
-                // ✅ FIXED: Main child first, then stepchildren
+                // Main child first, then stepchildren
                 let carouselVideos = [selectedChild] + stepchildren
                 CardVideoCarouselView(
-                    videos: carouselVideos,        // Main child + all replies
-                    parentVideo: parentThread,     // Thread context
-                    startingIndex: 0               // Start with main child user tapped
+                    videos: carouselVideos,
+                    parentVideo: parentThread,
+                    startingIndex: 0
+                )
+            }
+        }
+        .fullScreenCover(isPresented: $showingFullscreenVideo) {
+            if let video = fullscreenStartVideo {
+                FullscreenVideoView(
+                    video: video,
+                    onDismiss: {
+                        showingFullscreenVideo = false
+                        fullscreenStartVideo = nil
+                    }
                 )
             }
         }
         .onChange(of: showingCardCarousel) { _, isShowing in
             if isShowing {
                 killAllVideoPlayers()
-                isParentVideoPlaying = false
             } else {
-                // Reset carousel state when closed
                 selectedChild = nil
                 stepchildren = []
+            }
+        }
+        .onChange(of: showingFullscreenVideo) { _, isShowing in
+            if isShowing {
+                killAllVideoPlayers()
             }
         }
     }
@@ -78,148 +93,48 @@ struct ThreadView: View {
     
     private func mainInterface(parentThread: CoreVideoMetadata) -> some View {
         ZStack {
-            // Background: Parent Thread Video Card (Thumbnail + Play Button)
-            ThreadVideoCard(
-                video: parentThread,
-                isPlaying: isParentVideoPlaying,
-                onTogglePlay: {
-                    isParentVideoPlaying.toggle()
-                }
-            )
+            // Background color
+            Color.black.ignoresSafeArea()
             
-            // Foreground: Spatial Orbital Interface
+            // Spatial Orbital Interface with central parent video
             SpatialThreadMapView(
                 parentThread: parentThread,
                 children: children,
                 onChildSelected: handleChildTapped,
-                onEngagement: handleEngagement
+                onEngagement: handleEngagement,
+                onParentTapped: {
+                    openParentInFullscreen(parentThread)
+                }
             )
-            .background(Color.clear)
             
-            // Top Navigation Bar
-            navigationBar
-        }
-    }
-    
-    // MARK: - Thread Video Card Component
-    
-    private struct ThreadVideoCard: View {
-        let video: CoreVideoMetadata
-        let isPlaying: Bool
-        let onTogglePlay: () -> Void
-        
-        var body: some View {
-            ZStack {
-                if isPlaying {
-                    // Real video player when playing
-                    VideoPlayerView(
-                        video: video,
-                        isActive: true,
-                        onEngagement: { type in
-                            print("🎬 PARENT VIDEO: Engagement \(type) on \(video.title)")
-                        }
-                    )
-                } else {
-                    // Static thumbnail when paused
-                    videoThumbnail
-                }
-                
-                // Play/pause overlay
-                if !isPlaying {
-                    playButtonOverlay
-                }
-            }
-            .clipped()
-        }
-        
-        private var videoThumbnail: some View {
-            ZStack {
-                // Background gradient as placeholder
-                LinearGradient(
-                    colors: [Color.gray.opacity(0.4), Color.gray.opacity(0.2)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                
-                VStack(spacing: 12) {
-                    Image(systemName: "video.fill")
-                        .font(.system(size: 40))
-                        .foregroundColor(.white.opacity(0.8))
+            // Close Button - Top Layer
+            VStack {
+                HStack {
+                    Button {
+                        print("❌ CLOSE TAPPED")
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(
+                                Circle()
+                                    .fill(Color.black.opacity(0.6))
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    )
+                            )
+                    }
+                    .padding(.top, 60)
+                    .padding(.leading, 20)
                     
-                    Text(video.title)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .padding(.horizontal, 20)
-                    
-                    Text("by \(video.creatorName)")
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-            }
-        }
-        
-        private var playButtonOverlay: some View {
-            Button(action: onTogglePlay) {
-                Image(systemName: "play.circle.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(.white)
-                    .background(
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 80, height: 80)
-                    )
-            }
-            .transition(.scale.combined(with: .opacity))
-        }
-    }
-    
-    // MARK: - Navigation Bar
-    
-    private var navigationBar: some View {
-        VStack {
-            HStack {
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(10)
-                        .background(Color.black.opacity(0.6))
-                        .clipShape(Circle())
+                    Spacer()
                 }
                 
                 Spacer()
-                
-                VStack(spacing: 4) {
-                    Text("Thread")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Text("\(children.count + 1) videos")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
-                }
-                
-                Spacer()
-                
-                Button {
-                    // More options
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(10)
-                        .background(Color.black.opacity(0.6))
-                        .clipShape(Circle())
-                }
             }
-            .padding(.top, 60)
-            .padding(.horizontal, 20)
-            
-            Spacer()
         }
     }
     
@@ -313,19 +228,18 @@ struct ThreadView: View {
         
         // Kill all videos before loading stepchildren
         killAllVideoPlayers()
-        isParentVideoPlaying = false
         
         // Load stepchildren for carousel
         Task {
             do {
-                print("📡 LOADING: Stepchildren for child \(child.id)")
+                print("🔄 LOADING: Stepchildren for child \(child.id)")
                 let loadedStepchildren = try await videoService.getThreadChildren(threadID: child.id)
                 
                 await MainActor.run {
                     stepchildren = loadedStepchildren
                     print("✅ LOADED: \(loadedStepchildren.count) stepchildren")
                     
-                    // ✅ FIXED: Always show carousel (even if no stepchildren)
+                    // Always show carousel (even if no stepchildren)
                     showingCardCarousel = true
                     print("🎬 CAROUSEL: Opening with main child + \(loadedStepchildren.count) replies")
                 }
@@ -334,7 +248,7 @@ struct ThreadView: View {
                     stepchildren = []
                     // Still show carousel with just the main child
                     showingCardCarousel = true
-                    print("❌ ERROR: Failed to load stepchildren, showing main child only")
+                    print("⚠️ ERROR: Failed to load stepchildren, showing main child only")
                 }
             }
         }
@@ -370,6 +284,92 @@ struct ThreadView: View {
         )
         
         print("🛑 VIDEO: Killed all video players")
+    }
+    
+    // MARK: - Fullscreen Video Helpers
+    
+    private func openParentInFullscreen(_ video: CoreVideoMetadata) {
+        killAllVideoPlayers()
+        fullscreenStartVideo = video
+        showingFullscreenVideo = true
+        print("🎬 THREAD: Opening parent video in fullscreen")
+    }
+    
+    private func parentThumbnailView(_ video: CoreVideoMetadata) -> some View {
+        ZStack {
+            // Actual video thumbnail
+            AsyncImage(url: URL(string: video.thumbnailURL)) { phase in
+                switch phase {
+                case .empty:
+                    // Loading state
+                    LinearGradient(
+                        colors: [Color.gray.opacity(0.4), Color.gray.opacity(0.2)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .overlay(
+                        ProgressView()
+                            .tint(.white)
+                    )
+                    
+                case .success(let image):
+                    // Display thumbnail
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                    
+                case .failure:
+                    // Error fallback
+                    LinearGradient(
+                        colors: [Color.gray.opacity(0.4), Color.gray.opacity(0.2)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .overlay(
+                        Image(systemName: "video.fill")
+                            .font(.system(size: 40))
+                            .foregroundColor(.white.opacity(0.6))
+                    )
+                    
+                @unknown default:
+                    EmptyView()
+                }
+            }
+            
+            // Dark overlay gradient for readability
+            LinearGradient(
+                colors: [Color.clear, Color.black.opacity(0.7)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            
+            // Video info overlay
+            VStack {
+                Spacer()
+                
+                VStack(spacing: 8) {
+                    Text(video.title)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .padding(.horizontal, 20)
+                        .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 2)
+                    
+                    Text("by \(video.creatorName)")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
+                        .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 2)
+                }
+                .padding(.bottom, 40)
+            }
+            
+            // Play button overlay
+            Image(systemName: "play.circle.fill")
+                .font(.system(size: 60))
+                .foregroundColor(.white)
+                .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 4)
+        }
     }
 }
 

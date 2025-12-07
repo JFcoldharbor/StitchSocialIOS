@@ -3,7 +3,8 @@
 //  CleanBeta
 //
 //  Created by James Garmon on 7/31/25.
-//  COMPLETE: Firebase + FCM + Push Notifications Integration
+//  COMPLETE: Firebase + FCM + Push Notifications + Re-Engagement Integration
+//  ADDED: Background task scheduling for re-engagement checks
 //
 
 import UIKit
@@ -12,8 +13,13 @@ import FirebaseMessaging
 import FirebaseAuth
 import FirebaseFirestore
 import UserNotifications
+import BackgroundTasks
 
 class AppDelegate: NSObject, UIApplicationDelegate {
+    
+    // MARK: - Background Task Identifiers
+    
+    private let reEngagementTaskID = "com.stitch.reengagement"
     
     // MARK: - Application Lifecycle
     
@@ -25,7 +31,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         if let path = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") {
             print("✅ FIREBASE: GoogleService-Info.plist found at: \(path)")
             
-            // Check if plist can be read
             if let plist = NSDictionary(contentsOfFile: path) {
                 if let projectId = plist["PROJECT_ID"] as? String {
                     print("✅ FIREBASE: Project ID: \(projectId)")
@@ -52,6 +57,33 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         // Setup Firebase Cloud Messaging
         setupFirebaseMessaging()
+        
+        // Setup Background Tasks
+        setupBackgroundTasks()
+        
+        // TEMP: Force backfill to run again (REMOVE AFTER ONE RUN)
+        UserDefaults.standard.removeObject(forKey: "creatorNameBackfillComplete")
+        print("🔄 BACKFILL: Forcing re-run (flag cleared)")
+        
+        // 🔥 ONE-TIME BACKFILL: Fix empty creatorName fields (only runs once)
+        if !UserDefaults.standard.bool(forKey: "creatorNameBackfillComplete") {
+            Task {
+                // Wait for user authentication before running backfill
+                var attempts = 0
+                while Auth.auth().currentUser == nil && attempts < 10 {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000) // Wait 1 second
+                    attempts += 1
+                }
+                
+                if Auth.auth().currentUser != nil {
+                    await backfillEmptyCreatorNames()
+                } else {
+                    print("⚠️ BACKFILL: Skipped - no authenticated user yet (will retry on next launch)")
+                }
+            }
+        } else {
+            print("✅ BACKFILL: Already completed - skipping")
+        }
         
         print("✅ APP DELEGATE: Complete initialization finished")
         
@@ -92,6 +124,81 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             
         } catch {
             print("📱 APP DELEGATE: ❌ Permission request failed: \(error)")
+        }
+    }
+    
+    // MARK: - Background Tasks Setup
+    
+    /// Setup background task handlers
+    private func setupBackgroundTasks() {
+        print("⏰ BACKGROUND TASKS: Setting up handlers...")
+        
+        // Register re-engagement background task
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: reEngagementTaskID,
+            using: nil
+        ) { task in
+            self.handleReEngagementTask(task: task as! BGAppRefreshTask)
+        }
+        
+        print("✅ BACKGROUND TASKS: Registered re-engagement handler")
+    }
+    
+    /// Handle re-engagement background task
+    private func handleReEngagementTask(task: BGAppRefreshTask) {
+        print("🔄 RE-ENGAGEMENT TASK: Starting background check...")
+        
+        // Schedule next task
+        scheduleReEngagementCheck()
+        
+        // Create async task
+        let taskWork = Task {
+            guard let userID = Auth.auth().currentUser?.uid else {
+                print("⚠️ RE-ENGAGEMENT TASK: No authenticated user")
+                task.setTaskCompleted(success: true)
+                return
+            }
+            
+            do {
+                // Create service instances
+                let videoService = VideoService()
+                let userService = UserService()
+                let reEngagementService = ReEngagementService(
+                    videoService: videoService,
+                    userService: userService
+                )
+                
+                // Run check
+                try await reEngagementService.checkReEngagement(userID: userID)
+                
+                print("✅ RE-ENGAGEMENT TASK: Check completed successfully")
+                task.setTaskCompleted(success: true)
+                
+            } catch {
+                print("❌ RE-ENGAGEMENT TASK: Failed - \(error)")
+                task.setTaskCompleted(success: false)
+            }
+        }
+        
+        // Handle task expiration
+        task.expirationHandler = {
+            print("⏰ RE-ENGAGEMENT TASK: Expired")
+            taskWork.cancel()
+        }
+    }
+    
+    /// Schedule next re-engagement check
+    func scheduleReEngagementCheck() {
+        let request = BGAppRefreshTaskRequest(identifier: reEngagementTaskID)
+        
+        // Schedule for 6 hours from now
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 6 * 60 * 60)
+        
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            print("✅ RE-ENGAGEMENT: Next check scheduled for 6 hours")
+        } catch {
+            print("❌ RE-ENGAGEMENT: Failed to schedule - \(error)")
         }
     }
     
@@ -171,16 +278,121 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Clear badge count
         application.applicationIconBadgeNumber = 0
         print("📱 APP DELEGATE: App became active - badge cleared")
+        
+        // Update last active time for re-engagement tracking
+        if let userID = Auth.auth().currentUser?.uid {
+            Task {
+                await updateLastActiveTime(userID: userID)
+            }
+        }
     }
     
     /// Handle app entering background
     func applicationDidEnterBackground(_ application: UIApplication) {
         print("📱 APP DELEGATE: App entered background")
+        
+        // Schedule re-engagement check when entering background
+        scheduleReEngagementCheck()
     }
     
     /// Handle app termination
     func applicationWillTerminate(_ application: UIApplication) {
         print("📱 APP DELEGATE: App will terminate")
+    }
+    
+    // MARK: - Re-Engagement Tracking
+    
+    /// Update user's last active time in Firestore
+    private func updateLastActiveTime(userID: String) async {
+        do {
+            let db = Firestore.firestore(database: Config.Firebase.databaseName)
+            
+            try await db.collection("users").document(userID).updateData([
+                "lastActiveAt": FieldValue.serverTimestamp()
+            ])
+            
+            print("✅ RE-ENGAGEMENT: Updated lastActiveAt for user \(userID)")
+            
+        } catch {
+            print("❌ RE-ENGAGEMENT: Failed to update lastActiveAt - \(error)")
+        }
+    }
+    
+    // MARK: - 🔥 ONE-TIME BACKFILL: Fix Empty Creator Names
+    
+    /// Backfill empty creatorName fields in existing videos
+    private func backfillEmptyCreatorNames() async {
+        let db = Firestore.firestore()
+        
+        print("🔍 BACKFILL: Searching for videos with incorrect creatorName...")
+        
+        do {
+            let snapshot = try await db.collection("videos")
+                .limit(to: 500)
+                .getDocuments()
+            
+            print("📊 BACKFILL: Checking \(snapshot.documents.count) videos...")
+            
+            var fixedCount = 0
+            var failedCount = 0
+            var skippedCount = 0
+            
+            for doc in snapshot.documents {
+                do {
+                    let videoData = doc.data()
+                    guard let creatorID = videoData["creatorID"] as? String else {
+                        print("⚠️ BACKFILL: Skipping \(doc.documentID) - no creatorID")
+                        failedCount += 1
+                        continue
+                    }
+                    
+                    let currentCreatorName = videoData["creatorName"] as? String ?? ""
+                    
+                    let userDoc = try await db.collection("users")
+                        .document(creatorID)
+                        .getDocument()
+                    
+                    guard userDoc.exists,
+                          let userData = userDoc.data(),
+                          let correctUsername = userData["username"] as? String,
+                          !correctUsername.isEmpty else {
+                        print("⚠️ BACKFILL: No username found for user \(creatorID)")
+                        failedCount += 1
+                        continue
+                    }
+                    
+                    let needsUpdate = currentCreatorName.isEmpty ||
+                                     currentCreatorName == "User" ||
+                                     currentCreatorName != correctUsername
+                    
+                    if needsUpdate {
+                        try await doc.reference.updateData(["creatorName": correctUsername])
+                        fixedCount += 1
+                        print("✅ BACKFILL: Fixed \(doc.documentID) → '\(currentCreatorName)' to '@\(correctUsername)'")
+                    } else {
+                        skippedCount += 1
+                    }
+                    
+                } catch {
+                    print("⚠️ BACKFILL: Error processing \(doc.documentID): \(error.localizedDescription)")
+                    failedCount += 1
+                }
+            }
+            
+            print("🎉 BACKFILL COMPLETE!")
+            print("   - Fixed: \(fixedCount) videos")
+            print("   - Skipped (already correct): \(skippedCount) videos")
+            if failedCount > 0 {
+                print("   - Failed: \(failedCount) videos")
+            }
+            
+            if fixedCount > 0 || (fixedCount == 0 && failedCount == 0) {
+                UserDefaults.standard.set(true, forKey: "creatorNameBackfillComplete")
+            }
+            
+        } catch {
+            print("❌ BACKFILL ERROR: \(error.localizedDescription)")
+        }
     }
 }
 
@@ -197,10 +409,10 @@ extension AppDelegate: MessagingDelegate {
         
         print("📱 FCM: Token received: \(token.prefix(20))...")
         
-        // Store FCM token locally and defer Firestore storage until user is authenticated
+        // Store FCM token locally
         UserDefaults.standard.set(token, forKey: "fcm_token")
         
-        // Only attempt to store in Firebase if user is authenticated
+        // Store in Firebase if user authenticated
         if Auth.auth().currentUser != nil {
             Task {
                 await storeFCMToken(token)
@@ -212,7 +424,6 @@ extension AppDelegate: MessagingDelegate {
     
     /// Store FCM token for the current user in Firebase
     private func storeFCMToken(_ token: String) async {
-        // Verify user is still authenticated
         guard let currentUserID = Auth.auth().currentUser?.uid else {
             print("📱 FCM: No authenticated user to store token")
             return
@@ -221,7 +432,7 @@ extension AppDelegate: MessagingDelegate {
         do {
             let db = Firestore.firestore(database: Config.Firebase.databaseName)
             
-            // Store in userTokens collection for NotificationService compatibility
+            // Store in userTokens collection
             try await db.collection("userTokens").document(currentUserID).setData([
                 "fcmToken": token,
                 "updatedAt": FieldValue.serverTimestamp(),
@@ -229,7 +440,7 @@ extension AppDelegate: MessagingDelegate {
                 "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
             ], merge: true)
             
-            // Also store in users collection
+            // Store in users collection
             try await db.collection("users").document(currentUserID).updateData([
                 "fcmToken": token,
                 "fcmTokenUpdatedAt": FieldValue.serverTimestamp(),
@@ -248,7 +459,7 @@ extension AppDelegate: MessagingDelegate {
         }
     }
     
-    /// Store FCM token after user authentication (called from auth flow)
+    /// Store FCM token after user authentication
     func storeFCMTokenForAuthenticatedUser() async {
         if let token = UserDefaults.standard.string(forKey: "fcm_token") {
             await storeFCMToken(token)
@@ -270,13 +481,12 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         
         let userInfo = notification.request.content.userInfo
         
-        // Log notification details
         if let type = userInfo["type"] as? String {
             print("📱 NOTIFICATION: Type: \(type)")
         }
         
         // Show notification even when app is active
-        completionHandler([.alert, .badge, .sound])
+        completionHandler([.banner, .badge, .sound])
     }
     
     /// Handle notification tap
@@ -300,10 +510,9 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         let type = userInfo["type"] as? String ?? "general"
         
         switch type {
-        case "video", "engagement", "hype", "cool":
+        case "video", "engagement", "hype", "cool", "reengagement_stitches", "reengagement_milestone":
             if let videoID = userInfo["videoID"] as? String {
                 print("🎬 NOTIFICATION: Navigate to video \(videoID)")
-                // TODO: Use deep linking to navigate to specific video
                 NotificationCenter.default.post(
                     name: .navigateToVideo,
                     object: nil,
@@ -311,10 +520,9 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
                 )
             }
             
-        case "follow", "user":
+        case "follow", "user", "reengagement_followers":
             if let userID = userInfo["userID"] as? String {
                 print("👤 NOTIFICATION: Navigate to user profile \(userID)")
-                // TODO: Use deep linking to navigate to user profile
                 NotificationCenter.default.post(
                     name: .navigateToProfile,
                     object: nil,
@@ -325,7 +533,6 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         case "thread", "reply":
             if let threadID = userInfo["threadID"] as? String {
                 print("🧵 NOTIFICATION: Navigate to thread \(threadID)")
-                // TODO: Use deep linking to navigate to thread
                 NotificationCenter.default.post(
                     name: .navigateToThread,
                     object: nil,
@@ -333,9 +540,16 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
                 )
             }
             
+        case "reengagement_tier":
+            print("⬆️ NOTIFICATION: Navigate to profile (tier progress)")
+            NotificationCenter.default.post(
+                name: .navigateToProfile,
+                object: nil,
+                userInfo: ["showTierProgress": true]
+            )
+            
         default:
             print("📱 NOTIFICATION: General notification tapped")
-            // Navigate to notifications tab
             NotificationCenter.default.post(
                 name: .navigateToNotifications,
                 object: nil
@@ -378,5 +592,29 @@ extension AppDelegate {
         print("  - Permission status: \(status)")
         print("  - FCM token available: \(token != nil)")
         print("  - Token: \(token?.prefix(20) ?? "None")...")
+    }
+    
+    /// Manually trigger re-engagement check (for testing)
+    func testReEngagementCheck() async {
+        guard let userID = Auth.auth().currentUser?.uid else {
+            print("❌ TEST: No authenticated user")
+            return
+        }
+        
+        print("🧪 TEST: Triggering re-engagement check...")
+        
+        let videoService = VideoService()
+        let userService = UserService()
+        let reEngagementService = ReEngagementService(
+            videoService: videoService,
+            userService: userService
+        )
+        
+        do {
+            try await reEngagementService.checkReEngagement(userID: userID)
+            print("✅ TEST: Re-engagement check completed")
+        } catch {
+            print("❌ TEST: Re-engagement check failed - \(error)")
+        }
     }
 }

@@ -10,6 +10,7 @@
 import Foundation
 import FirebaseStorage
 import FirebaseFirestore
+import FirebaseAuth
 import AVFoundation
 import UIKit
 
@@ -162,13 +163,24 @@ class VideoUploadService: ObservableObject {
                 fileSize: uploadResult.fileSize
             )
             
+            // 🔍 DEBUG: Check auth state
+            print("🔍 DEBUG: Auth.auth().currentUser = \(Auth.auth().currentUser?.uid ?? "NIL")")
+            print("🔍 DEBUG: createdVideo.creatorID = \(createdVideo.creatorID)")
+            
             // 🎬 NEW VIDEO NOTIFICATION: Notify followers for new thread videos
             // IMPORTANT: Use createdVideo.creatorID (corrected Firebase UID) not metadata.creatorID
             // Send synchronously to preserve auth context
             do {
+                print("🔍 DEBUG: Getting followers...")
                 let followerIDs = try await userService.getFollowerIDs(userID: createdVideo.creatorID)
+                print("🔍 DEBUG: Got \(followerIDs.count) followers: \(followerIDs)")
                 
                 if !followerIDs.isEmpty {
+                    print("🔍 DEBUG: About to call sendNewVideoNotification")
+                    print("🔍 DEBUG: creatorID = \(createdVideo.creatorID)")
+                    print("🔍 DEBUG: videoID = \(createdVideo.id)")
+                    print("🔍 DEBUG: followerIDs = \(followerIDs)")
+                    
                     try await notificationService.sendNewVideoNotification(
                         creatorID: createdVideo.creatorID,
                         creatorUsername: metadata.creatorName,
@@ -181,6 +193,7 @@ class VideoUploadService: ObservableObject {
                     print("ℹ️ UPLOAD SERVICE: No followers to notify for user \(createdVideo.creatorID)")
                 }
             } catch {
+                print("❌ ERROR DETAILS: \(error)")
                 print("⚠️ UPLOAD SERVICE: Failed to send follower notifications - \(error)")
                 // Don't fail upload if notification fails
             }
@@ -293,13 +306,19 @@ class VideoUploadService: ObservableObject {
             
             // Send mention notifications
             for taggedUserID in taggedUserIDs {
+                // Don't notify if user tagged themselves
+                guard taggedUserID != metadata.creatorID else { continue }
+                
                 Task {
                     do {
+                        // ✅ FIXED: Using createdVideo.id instead of metadata.id
                         try await notificationService.sendMentionNotification(
                             to: taggedUserID,
+                            videoID: createdVideo.id,        // ✅ CORRECT: Use created video ID
                             videoTitle: metadata.title,
                             mentionContext: "tagged in video"
                         )
+                        print("✅ MENTION: Notification sent to tagged user \(taggedUserID)")
                     } catch {
                         print("⚠️ UPLOAD SERVICE: Failed to send mention notification to \(taggedUserID) - \(error)")
                         // Don't fail upload if notification fails
