@@ -4,6 +4,7 @@
 //
 //  TikTok-style infinite scroll with intelligent content batching
 //  FIXED: Removed engagement from swipe cards - browse only
+//  ADDED: Video preloading for instant fullscreen playback
 //
 
 import SwiftUI
@@ -357,7 +358,11 @@ struct DiscoveryView: View {
     // MARK: - State
     @StateObject private var viewModel = DiscoveryViewModel()
     @EnvironmentObject private var authService: AuthService
-    // ✅ REMOVED: engagementManager - not needed for swipe cards
+    
+    // MARK: - Preloading Service (NEW)
+    private var preloadingService: VideoPreloadingService {
+        VideoPreloadingService.shared
+    }
     
     @State private var selectedCategory: DiscoveryCategory = .all
     @State private var discoveryMode: DiscoveryMode = .swipe
@@ -365,6 +370,9 @@ struct DiscoveryView: View {
     @State private var selectedVideo: CoreVideoMetadata?
     @State private var isFullscreenMode = false
     @State private var showingSearch = false
+    
+    // Track last preloaded index to avoid duplicate preloads
+    @State private var lastPreloadedIndex: Int = -1
     
     var body: some View {
         ZStack {
@@ -421,6 +429,9 @@ struct DiscoveryView: View {
             // Only load if we don't have content already (prevents reloading on tab switch)
             if viewModel.filteredVideos.isEmpty {
                 await viewModel.loadInitialContent()
+                
+                // Preload first video after content loads
+                await preloadVideosAroundIndex(0)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RefreshDiscovery"))) { _ in
@@ -431,6 +442,42 @@ struct DiscoveryView: View {
         .sheet(isPresented: $showingSearch) {
             SearchView()
         }
+    }
+    
+    // MARK: - Video Preloading (NEW)
+    
+    /// Preload videos around the current index for instant fullscreen playback
+    private func preloadVideosAroundIndex(_ index: Int) async {
+        guard !viewModel.filteredVideos.isEmpty else { return }
+        guard index != lastPreloadedIndex else { return } // Avoid duplicate preloads
+        
+        lastPreloadedIndex = index
+        
+        let videos = viewModel.filteredVideos
+        var videosToPreload: [CoreVideoMetadata] = []
+        
+        // Current video (high priority)
+        if index >= 0 && index < videos.count {
+            videosToPreload.append(videos[index])
+        }
+        
+        // Next video
+        if index + 1 < videos.count {
+            videosToPreload.append(videos[index + 1])
+        }
+        
+        // Previous video (in case they swipe back)
+        if index - 1 >= 0 {
+            videosToPreload.append(videos[index - 1])
+        }
+        
+        // Preload with appropriate priorities
+        for (i, video) in videosToPreload.enumerated() {
+            let priority: PreloadPriority = i == 0 ? .high : .normal
+            await preloadingService.preloadVideo(video, priority: priority)
+        }
+        
+        print("🎬 DISCOVERY PRELOAD: Preloaded \(videosToPreload.count) videos around index \(index)")
     }
     
     // MARK: - Header View with Loading Indicators
@@ -498,6 +545,12 @@ struct DiscoveryView: View {
                         selectedCategory = category
                         viewModel.filterBy(category: category)
                         currentSwipeIndex = 0 // Reset to beginning when changing category
+                        lastPreloadedIndex = -1 // Reset preload tracking
+                        
+                        // Preload first video of new category
+                        Task {
+                            await preloadVideosAroundIndex(0)
+                        }
                     } label: {
                         VStack(spacing: 8) {
                             HStack(spacing: 4) {
@@ -522,18 +575,20 @@ struct DiscoveryView: View {
         .padding(.vertical, 12)
     }
     
-    // MARK: - Content View with Progressive Loading
+    // MARK: - Content View with Progressive Loading + Preloading
     
     @ViewBuilder
     private var contentView: some View {
         switch discoveryMode {
         case DiscoveryMode.swipe:
             ZStack(alignment: .top) {
-                // ✅ FIXED: No onEngagement - swipe cards are browse-only
                 DiscoverySwipeCards(
                     videos: viewModel.filteredVideos,
                     currentIndex: $currentSwipeIndex,
                     onVideoTap: { video in
+                        // CRITICAL: Pause all discovery players before entering fullscreen
+                        preloadingService.pauseAllPlayback()
+                        
                         selectedVideo = video
                         withAnimation(.easeInOut(duration: 0.4)) {
                             isFullscreenMode = true
@@ -555,9 +610,22 @@ struct DiscoveryView: View {
                     Task {
                         await viewModel.checkAndLoadMore(currentIndex: newValue)
                     }
+                    
+                    // Preload videos around new position for instant fullscreen
+                    Task {
+                        await preloadVideosAroundIndex(newValue)
+                    }
+                }
+                .onChange(of: isFullscreenMode) { _, isFullscreen in
+                    if !isFullscreen {
+                        // Exiting fullscreen - resume card playback after delay
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            // Card will auto-play on reappear via onAppear
+                        }
+                    }
                 }
                 
-                // ✅ NEW: Swipe Instructions Indicator
+                // Swipe Instructions Indicator
                 swipeInstructionsIndicator
                     .padding(.top, 20)
             }
@@ -566,6 +634,11 @@ struct DiscoveryView: View {
             DiscoveryGridView(
                 videos: viewModel.filteredVideos,
                 onVideoTap: { video in
+                    // For grid, preload before entering fullscreen
+                    Task {
+                        await preloadingService.preloadVideo(video, priority: .high)
+                    }
+                    
                     selectedVideo = video
                     withAnimation(.easeInOut(duration: 0.4)) {
                         isFullscreenMode = true

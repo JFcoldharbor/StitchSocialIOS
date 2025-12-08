@@ -5,6 +5,7 @@
 //  Layer 8: Views - Clean Fullscreen Video Player with Thread Navigation
 //  Dependencies: SwiftUI, AVFoundation, AVKit
 //  Features: Horizontal child navigation, video playback, view tracking
+//  UPDATED: Integrated memory management for crash prevention
 //
 
 import SwiftUI
@@ -42,6 +43,13 @@ struct FullscreenVideoView: View {
     
     // Services
     @StateObject private var videoService = VideoService()
+    
+    // MARK: - Memory Management (NEW)
+    
+    /// Reference to preloading service for memory management
+    private var preloadService: VideoPreloadingService {
+        VideoPreloadingService.shared
+    }
     
     // MARK: - Computed Properties
     
@@ -81,9 +89,17 @@ struct FullscreenVideoView: View {
         .onAppear {
             setupAudioSession()
             loadThreadData()
+            
+            // MEMORY: Mark initial video as protected
+            preloadService.markAsCurrentlyPlaying(video.id)
+            print("🧠 MEMORY: Marked \(video.id.prefix(8)) as currently playing")
         }
         .onDisappear {
             cleanupAudioSession()
+            
+            // MEMORY: Clear protection when leaving fullscreen
+            preloadService.clearCurrentlyPlaying()
+            print("🧠 MEMORY: Cleared currently playing on dismiss")
         }
     }
     
@@ -116,10 +132,10 @@ struct FullscreenVideoView: View {
         .gesture(combinedGesture(geometry: geometry))
     }
     
-    // MARK: - Video Players Layer (FIXED - Simplified)
+    // MARK: - Video Players Layer (FIXED - Proper Identity)
     
     private func videoPlayersLayer(geometry: GeometryProxy) -> some View {
-        ForEach(Array(allVideos.enumerated()), id: \.offset) { index, videoData in
+        ForEach(Array(allVideos.enumerated()), id: \.element.id) { index, videoData in
             let xPosition = geometry.size.width / 2 +
                            CGFloat(index) * geometry.size.width +
                            horizontalOffset +
@@ -129,6 +145,7 @@ struct FullscreenVideoView: View {
                 video: videoData,
                 isActive: index == currentVideoIndex && !isAnimating
             )
+            .id(videoData.id) // Force unique identity per video
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
             .ignoresSafeArea(.all)
@@ -185,7 +202,12 @@ struct FullscreenVideoView: View {
     }
     
     private var closeButton: some View {
-        Button(action: { onDismiss?() }) {
+        Button(action: {
+            // Pause all playback before dismissing
+            preloadService.pauseAllPlayback()
+            print("⏸️ FULLSCREEN: Paused on close button")
+            onDismiss?()
+        }) {
             Image(systemName: "xmark")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundColor(.white)
@@ -209,8 +231,21 @@ struct FullscreenVideoView: View {
     }
     
     private func handleOverlayAction(_ action: ContextualOverlayAction) {
-        // Handle overlay actions
         print("FULLSCREEN: Overlay action - \(action)")
+        
+        // CRITICAL: Pause all playback for any action that leads away from current view
+        // This prevents audio overlap when user starts recording or navigates
+        let actionString = String(describing: action).lowercased()
+        
+        // Actions that require pausing all videos
+        let pauseActions = ["stitch", "reply", "record", "create", "profile", "thread", "navigate", "share"]
+        
+        let shouldPause = pauseActions.contains { actionString.contains($0) }
+        
+        if shouldPause {
+            preloadService.pauseAllPlayback()
+            print("⏸️ FULLSCREEN: Paused all playback for action: \(action)")
+        }
     }
     
     // MARK: - Gesture Handling
@@ -256,6 +291,10 @@ struct FullscreenVideoView: View {
                            velocity.height < -velocityThreshold
         
         if shouldDismiss {
+            // CRITICAL: Pause all playback before dismissing
+            preloadService.pauseAllPlayback()
+            print("⏸️ FULLSCREEN: Paused all playback on dismiss")
+            
             // Animate out and dismiss
             isDismissing = true
             
@@ -308,6 +347,11 @@ struct FullscreenVideoView: View {
         
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         
+        // MEMORY: Update currently playing when navigating within thread
+        let newVideoID = allVideos[index].id
+        preloadService.markAsCurrentlyPlaying(newVideoID)
+        print("🧠 MEMORY: Updated currently playing to \(newVideoID.prefix(8))")
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             isAnimating = false
         }
@@ -345,6 +389,10 @@ struct FullscreenVideoView: View {
                     self.currentThread = threadData
                     self.currentVideoIndex = startingIndex
                     self.isLoadingThread = false
+                    
+                    // MEMORY: Update protection to actual starting video
+                    let startingVideoID = startingIndex < allVideos.count ? allVideos[startingIndex].id : video.id
+                    preloadService.markAsCurrentlyPlaying(startingVideoID)
                 }
                 
                 print("✅ FULLSCREEN: Loaded thread - \(threadData.childVideos.count) replies")
@@ -443,6 +491,13 @@ struct VideoPlayerComponent: View {
     @State private var killObserver: NSObjectProtocol?
     @State private var cancellables = Set<AnyCancellable>()
     
+    // MARK: - Memory Management (NEW)
+    
+    /// Check memory pressure before creating players
+    private var preloadService: VideoPreloadingService {
+        VideoPreloadingService.shared
+    }
+    
     var body: some View {
         GeometryReader { geometry in
             if hasError {
@@ -479,18 +534,57 @@ struct VideoPlayerComponent: View {
             }
         }
         .onDisappear {
-            cleanupPlayer()
+            // Cleanup when view disappears
+            player?.pause()
+            if let observer = killObserver {
+                NotificationCenter.default.removeObserver(observer)
+                killObserver = nil
+            }
+            print("🧹 FULLSCREEN: Cleanup \(video.id.prefix(8))")
         }
         .onChange(of: isActive) { _, newValue in
             if newValue {
-                player?.play()
+                // Became active - play
+                player?.isMuted = false
+                if player?.rate == 0 {
+                    player?.play()
+                }
+                print("▶️ FULLSCREEN ACTIVE: \(video.id.prefix(8))")
             } else {
+                // No longer active - MUST PAUSE to prevent audio overlap
                 player?.pause()
+                print("⏸️ FULLSCREEN INACTIVE: \(video.id.prefix(8))")
             }
         }
     }
     
     private func setupPlayer() {
+        // MEMORY: Try to get player from preload cache first
+        if let cachedPlayer = preloadService.getPlayer(for: video) {
+            self.player = cachedPlayer
+            self.player?.isMuted = false // Unmute (preloaded muted)
+            self.isLoading = false
+            
+            // SEAMLESS: Only start playing if not already playing
+            // This preserves continuity from Discovery cards
+            if isActive && cachedPlayer.rate == 0 {
+                cachedPlayer.play()
+                print("▶️ STARTING PLAY: \(video.id.prefix(8))")
+            } else if cachedPlayer.rate > 0 {
+                print("▶️ CONTINUING PLAY: \(video.id.prefix(8)) (already playing)")
+            }
+            
+            print("🎬 COMPONENT: Using cached player for \(video.id.prefix(8))")
+            return
+        }
+        
+        // MEMORY: Check if we should create new player under pressure
+        if preloadService.memoryPressureLevel >= .critical && !isActive {
+            print("⚠️ COMPONENT: Skipping player creation - memory critical")
+            // Show thumbnail instead - let loading state handle it
+            return
+        }
+        
         guard let videoURL = URL(string: video.videoURL) else {
             hasError = true
             isLoading = false

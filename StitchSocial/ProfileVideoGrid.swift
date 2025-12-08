@@ -5,7 +5,7 @@
 //  Layer 8: Views - Reusable Profile Video Grid with Thread Navigation
 //  Dependencies: VideoThumbnailView, VideoCoordinator (Layer 6), CoreVideoMetadata
 //  Features: 3-column grid, thread navigation, video deletion, loading states
-//  FIXED: Instant tap response - preload AFTER navigation
+//  FIXED: Uses VideoPreloadingService.shared singleton
 //
 
 import SwiftUI
@@ -22,9 +22,12 @@ struct ProfileVideoGrid: View {
     let onVideoDelete: ((CoreVideoMetadata) -> Void)?
     let isCurrentUserProfile: Bool
     
-    // MARK: - Preloading Dependencies
+    // MARK: - Preloading Dependencies (FIXED: Use singleton)
     
-    @StateObject private var preloadingService = VideoPreloadingService()
+    private var preloadingService: VideoPreloadingService {
+        VideoPreloadingService.shared
+    }
+    
     @State private var hasPreloadedInitialVideos = false
     
     // MARK: - State
@@ -47,7 +50,7 @@ struct ProfileVideoGrid: View {
         .onAppear {
             preloadInitialVideos()
         }
-        .onChange(of: selectedTab) { _ in
+        .onChange(of: selectedTab) { _, _ in
             preloadTabVideos()
         }
         .alert("Delete Video", isPresented: $showingDeleteConfirmation) {

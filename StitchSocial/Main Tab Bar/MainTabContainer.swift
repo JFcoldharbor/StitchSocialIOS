@@ -1,11 +1,11 @@
 //
 //  MainTabContainer.swift
-//  CleanBeta
+//  StitchSocial
 //
 //  Layer 8: Views - Main Tab Navigation with Service Injection + PRELOADING
 //  Dependencies: Layer 4 (Services), Layer 6 (NavigationCoordinator), Layer 1 (Foundation)
 //  Central navigation container with custom dipped tab bar
-//  ADDED: Instagram/TikTok-style video preloading on tab switches
+//  FIXED: Uses VideoPreloadingService.shared singleton
 //
 
 import SwiftUI
@@ -18,8 +18,11 @@ struct MainTabContainer: View {
     @StateObject private var authService = AuthService()
     @StateObject private var userService = UserService()
     @StateObject private var videoService = VideoService()
-    @StateObject private var videoPreloadingService = VideoPreloadingService() // ADDED
     @StateObject private var navigationCoordinator = NavigationCoordinator()
+    
+    // MARK: - Preloading Service (FIXED: Use singleton via ObservedObject)
+    
+    @ObservedObject private var videoPreloadingService = VideoPreloadingService.shared
     
     // MARK: - Navigation State
     
@@ -59,7 +62,6 @@ struct MainTabContainer: View {
         .environmentObject(authService)
         .environmentObject(userService)
         .environmentObject(videoService)
-        .environmentObject(videoPreloadingService) // ADDED
         .environmentObject(navigationCoordinator)
         .fullScreenCover(isPresented: $showingRecording) {
             RecordingView(
@@ -100,7 +102,6 @@ struct MainTabContainer: View {
                     userService: userService,
                     videoService: videoService
                 )
-                .environmentObject(videoPreloadingService) // ADDED
                 .onAppear {
                     NotificationCenter.default.post(
                         name: NSNotification.Name("LoadUserProfile"),
@@ -148,11 +149,9 @@ struct MainTabContainer: View {
         switch selectedTab {
         case .home:
             HomeFeedView()
-                .environmentObject(videoPreloadingService) // ADDED
             
         case .discovery:
             DiscoveryView()
-                .environmentObject(videoPreloadingService) // ADDED
             
         case .progression:
             ProfileView(
@@ -160,7 +159,6 @@ struct MainTabContainer: View {
                 userService: userService,
                 videoService: videoService
             )
-            .environmentObject(videoPreloadingService) // ADDED
             
         case .notifications:
             NotificationView()
@@ -213,7 +211,7 @@ struct MainTabContainer: View {
 
 extension Notification.Name {
     static let refreshFeeds = Notification.Name("refreshFeeds")
-    static let preloadHomeFeed = Notification.Name("preloadHomeFeed") // ADDED
+    static let preloadHomeFeed = Notification.Name("preloadHomeFeed")
 }
 
 // MARK: - Preview

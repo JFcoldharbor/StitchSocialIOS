@@ -1,12 +1,14 @@
 //
-//  DiscoverySwipeCards.swift - BACK TO WORKING VERSION
+//  DiscoverySwipeCards.swift - SEAMLESS FULLSCREEN TRANSITION
 //  StitchSocial
 //
-//  Layer 8: Views - Swipe Cards WITHOUT preloading complexity
+//  Layer 8: Views - Swipe Cards with shared player pool
+//  Video continues playing seamlessly between card and fullscreen
 //
 
 import SwiftUI
 import AVFoundation
+import AVKit
 import FirebaseAuth
 
 struct DiscoverySwipeCards: View {
@@ -15,7 +17,6 @@ struct DiscoverySwipeCards: View {
     let videos: [CoreVideoMetadata]
     @Binding var currentIndex: Int
     let onVideoTap: (CoreVideoMetadata) -> Void
-    // Removed: onEngagement - Discovery cards don't need engagement
     let onNavigateToProfile: (String) -> Void
     let onNavigateToThread: (String) -> Void
     
@@ -33,19 +34,30 @@ struct DiscoverySwipeCards: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                ForEach(0..<min(maxCards, videos.count), id: \.self) { index in
-                    if currentIndex + index < videos.count {
-                        cardView(
-                            video: videos[currentIndex + index],
-                            index: index
-                        )
-                    }
+                // Render cards in reverse order so top card is rendered last (on top)
+                ForEach(Array(visibleVideos.enumerated()).reversed(), id: \.element.id) { index, video in
+                    cardView(
+                        video: video,
+                        index: index
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 60)
             .padding(.vertical, 80)
         }
+    }
+    
+    // Computed property for visible videos
+    private var visibleVideos: [CoreVideoMetadata] {
+        var result: [CoreVideoMetadata] = []
+        for i in 0..<maxCards {
+            let videoIndex = currentIndex + i
+            if videoIndex < videos.count {
+                result.append(videos[videoIndex])
+            }
+        }
+        return result
     }
     
     // MARK: - Card View
@@ -63,22 +75,22 @@ struct DiscoverySwipeCards: View {
                 handleVideoLoop(videoID: videoID)
             }
         )
+        .id(video.id) // CRITICAL: Force new view when video changes
         .scaleEffect(scale)
         .offset(x: offset.width, y: offset.height + stackOffset)
         .rotationEffect(.degrees(isTopCard ? dragRotation : 0))
         .opacity(index < 2 ? 1.0 : 0.5)
-        .zIndex(Double(maxCards - index))
+        .zIndex(Double(maxCards - index)) // Ensure correct layering
+        .allowsHitTesting(isTopCard) // Only top card responds to gestures
         .gesture(
             DragGesture()
                 .onChanged { value in
-                    if isTopCard && !isSwipeInProgress {
-                        handleDragChanged(value: value)
-                    }
+                    guard isTopCard && !isSwipeInProgress else { return }
+                    handleDragChanged(value: value)
                 }
                 .onEnded { value in
-                    if isTopCard && !isSwipeInProgress {
-                        handleDragEnded(value: value)
-                    }
+                    guard isTopCard && !isSwipeInProgress else { return }
+                    handleDragEnded(value: value)
                 }
         )
         .onTapGesture {
@@ -88,7 +100,7 @@ struct DiscoverySwipeCards: View {
         }
     }
     
-    // MARK: - Drag Handling - ✅ LEFT/RIGHT NAVIGATION
+    // MARK: - Drag Handling - LEFT/RIGHT NAVIGATION
     
     private func handleDragChanged(value: DragGesture.Value) {
         dragOffset = value.translation
@@ -99,47 +111,41 @@ struct DiscoverySwipeCards: View {
         let translation = value.translation
         let velocity = value.velocity
         
-        // Determine if swipe is primarily horizontal or vertical
         let isHorizontalSwipe = abs(translation.width) > abs(translation.height)
         
         if isHorizontalSwipe {
-            // ✅ HORIZONTAL SWIPE = Navigation (Left/Right)
             if abs(translation.width) > swipeThreshold || abs(velocity.width) > 500 {
                 isSwipeInProgress = true
                 
                 if translation.width > 0 {
-                    // ✅ SWIPE RIGHT = Go to PREVIOUS video
+                    // SWIPE RIGHT = Go to PREVIOUS video
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         dragOffset = CGSize(width: UIScreen.main.bounds.width, height: 0)
                     }
                     
-                    DispatchQueue.main.async {
+                    // FIXED: Delay index change until AFTER animation
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         previousCard()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            isSwipeInProgress = false
-                        }
+                        isSwipeInProgress = false
                     }
                 } else {
-                    // ✅ SWIPE LEFT = Go to NEXT video
+                    // SWIPE LEFT = Go to NEXT video
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                         dragOffset = CGSize(width: -UIScreen.main.bounds.width, height: 0)
                     }
                     
-                    DispatchQueue.main.async {
+                    // FIXED: Delay index change until AFTER animation
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         nextCard()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            isSwipeInProgress = false
-                        }
+                        isSwipeInProgress = false
                     }
                 }
             } else {
-                // Snap back if threshold not met
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                     resetCardPosition()
                 }
             }
         } else {
-            // ✅ VERTICAL SWIPE = Dismiss/Any direction swipe
             let totalTranslation = sqrt(pow(translation.width, 2) + pow(translation.height, 2))
             let totalVelocity = sqrt(pow(velocity.width, 2) + pow(velocity.height, 2))
             
@@ -153,11 +159,10 @@ struct DiscoverySwipeCards: View {
                     )
                 }
                 
-                DispatchQueue.main.async {
+                // FIXED: Delay index change until AFTER animation
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                     nextCard()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        isSwipeInProgress = false
-                    }
+                    isSwipeInProgress = false
                 }
             } else {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
@@ -190,15 +195,14 @@ struct DiscoverySwipeCards: View {
             dragOffset = CGSize(width: 0, height: -1000)
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        // FIXED: Delay index change until AFTER animation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             nextCard()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                isSwipeInProgress = false
-            }
+            isSwipeInProgress = false
         }
     }
     
-    // MARK: - Navigation - ✅ WITH HISTORY
+    // MARK: - Navigation
     
     private func nextCard() {
         if currentIndex + 1 < videos.count {
@@ -209,14 +213,12 @@ struct DiscoverySwipeCards: View {
         
         resetCardPosition()
         
-        // Clear old loop counts
         if currentIndex > 10 {
             let oldVideoID = videos[currentIndex - 10].id
             loopCounts.removeValue(forKey: oldVideoID)
         }
     }
     
-    // ✅ NEW: Go back to previous video
     private func previousCard() {
         if currentIndex > 0 {
             currentIndex -= 1
@@ -234,87 +236,258 @@ struct DiscoverySwipeCards: View {
     }
 }
 
-// MARK: - Discovery Card Component (SIMPLE)
+// MARK: - Discovery Card Component (SIMPLIFIED - VIDEO ONLY)
 
 struct DiscoveryCard: View {
     let video: CoreVideoMetadata
     let shouldAutoPlay: Bool
     let onVideoLoop: (String) -> Void
     
+    // Use shared preloading service
+    private var preloadingService: VideoPreloadingService {
+        VideoPreloadingService.shared
+    }
+    
+    @State private var player: AVPlayer?
+    @State private var isReady = false
     @State private var hasTrackedView = false
+    @State private var loopObserver: NSObjectProtocol?
+    @State private var creatorProfileURL: String? = nil
+    @State private var creatorDisplayName: String? = nil
+    
+    private var displayName: String {
+        if let fetched = creatorDisplayName, !fetched.isEmpty {
+            return fetched
+        }
+        if !video.creatorName.isEmpty {
+            return video.creatorName
+        }
+        return "Creator"
+    }
     
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                if shouldAutoPlay {
-                    VideoPlayerView(
-                        video: video,
-                        isActive: true,
-                        onEngagement: { _ in }
-                    )
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
-                    .id(video.id)
-                    .allowsHitTesting(false)
-                    .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)) { _ in
-                        onVideoLoop(video.id)
-                    }
+                // Background
+                Color.black
+                
+                // Video Player - always try to show if we have a player
+                if let player = player {
+                    VideoPlayer(player: player)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .disabled(true)
                 } else {
-                    AsyncImage(url: URL(string: video.thumbnailURL)) { image in
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                            .clipped()
-                    } placeholder: {
-                        Rectangle()
-                            .fill(Color.gray.opacity(0.3))
-                            .overlay(ProgressView().tint(.white))
-                    }
-                    .allowsHitTesting(false)
+                    // Loading state
+                    ProgressView()
+                        .tint(.white)
+                        .scaleEffect(1.5)
                 }
                 
-                Rectangle()
-                    .fill(Color.clear)
+                // Overlay - only show on top card
+                if shouldAutoPlay {
+                    cardOverlay
+                }
+                
+                // Tap target
+                Color.clear
                     .contentShape(Rectangle())
             }
         }
         .cornerRadius(16)
         .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
         .onAppear {
-            // Track view when card appears (only for top card)
-            if shouldAutoPlay, !hasTrackedView, let userID = Auth.auth().currentUser?.uid {
-                // ✅ VALIDATE: Ensure videoID is not empty before tracking
-                guard !video.id.isEmpty else {
-                    print("❌ VIEW TRACKING: Skipped - empty video ID")
-                    return
+            setupPlayer()
+            if shouldAutoPlay {
+                loadCreatorProfile()
+                trackViewIfNeeded()
+            }
+        }
+        .onDisappear {
+            cleanup()
+        }
+        .onChange(of: shouldAutoPlay) { _, isTop in
+            if isTop {
+                // Became top card - play
+                player?.isMuted = false
+                player?.play()
+                setupLoopObserver()
+                loadCreatorProfile()
+                print("▶️ CARD NOW TOP: \(video.id.prefix(8))")
+            } else {
+                // No longer top - pause
+                player?.pause()
+                removeLoopObserver()
+                print("⏸️ CARD NO LONGER TOP: \(video.id.prefix(8))")
+            }
+        }
+    }
+    
+    // MARK: - Card Overlay
+    
+    private var cardOverlay: some View {
+        VStack {
+            Spacer()
+            
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.8)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 150)
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 10) {
+                    CreatorPill(
+                        creator: video,
+                        isThread: video.isThread,
+                        colors: temperatureColors,
+                        displayName: displayName,
+                        profileImageURL: creatorProfileURL,
+                        onTap: { }
+                    )
+                    
+                    if !video.title.isEmpty {
+                        Text(video.title)
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.9))
+                            .lineLimit(2)
+                    }
+                    
+                    HStack(spacing: 16) {
+                        if video.hypeCount > 0 {
+                            Label("\(video.hypeCount)", systemImage: "flame.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
+                        
+                        if video.viewCount > 0 {
+                            Label("\(video.viewCount)", systemImage: "eye.fill")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        
+                        Label(video.formattedDuration, systemImage: "clock")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
                 }
-                
-                hasTrackedView = true
-                
-                Task {
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 20)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+    
+    // MARK: - Temperature Colors
+    
+    private var temperatureColors: [Color] {
+        switch video.temperature.lowercased() {
+        case "blazing", "fire": return [.red, .orange]
+        case "hot": return [.orange, .yellow]
+        case "warm": return [.yellow, .green]
+        case "cool": return [.cyan, .blue]
+        case "cold", "frozen": return [.blue, .purple]
+        default: return [.gray, .white]
+        }
+    }
+    
+    // MARK: - Player Setup
+    
+    private func setupPlayer() {
+        // Get from pool first
+        if let poolPlayer = preloadingService.getPlayer(for: video) {
+            self.player = poolPlayer
+            
+            if shouldAutoPlay {
+                poolPlayer.isMuted = false
+                if poolPlayer.rate == 0 {
+                    poolPlayer.play()
+                }
+                setupLoopObserver()
+            } else {
+                // Background card - keep paused, show first frame
+                poolPlayer.pause()
+            }
+            
+            isReady = true
+            print("🎬 CARD: Got player for \(video.id.prefix(8)), autoplay: \(shouldAutoPlay)")
+            return
+        }
+        
+        // Preload if not in pool
+        Task {
+            await preloadingService.preloadVideo(video, priority: shouldAutoPlay ? .high : .normal)
+            
+            if let poolPlayer = preloadingService.getPlayer(for: video) {
+                await MainActor.run {
+                    self.player = poolPlayer
                     
-                    let videoService = VideoService()
-                    
-                    // ✅ DOUBLE CHECK: Validate IDs before Firebase call
-                    guard !video.id.isEmpty, !userID.isEmpty else {
-                        print("❌ VIEW TRACKING: Invalid IDs - videoID: '\(video.id)', userID: '\(userID)'")
-                        return
+                    if shouldAutoPlay {
+                        poolPlayer.isMuted = false
+                        poolPlayer.play()
+                        setupLoopObserver()
+                    } else {
+                        poolPlayer.pause()
                     }
                     
-                    do {
-                        try await videoService.trackVideoView(
-                            videoID: video.id,
-                            userID: userID,
-                            watchTime: 5.0
-                        )
-                        print("📊 VIEW TRACKED: \(video.id.prefix(8)) in Discovery")
-                    } catch {
-                        print("❌ VIEW TRACKING ERROR: \(error.localizedDescription)")
-                    }
+                    isReady = true
                 }
             }
+        }
+    }
+    
+    private func cleanup() {
+        player?.pause()
+        removeLoopObserver()
+        print("🧹 CARD CLEANUP: \(video.id.prefix(8))")
+    }
+    
+    private func setupLoopObserver() {
+        guard let item = player?.currentItem else { return }
+        removeLoopObserver()
+        
+        loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            self.player?.seek(to: .zero)
+            self.player?.play()
+            self.onVideoLoop(video.id)
+        }
+    }
+    
+    private func removeLoopObserver() {
+        if let observer = loopObserver {
+            NotificationCenter.default.removeObserver(observer)
+            loopObserver = nil
+        }
+    }
+    
+    private func loadCreatorProfile() {
+        guard !video.creatorID.isEmpty else { return }
+        
+        Task {
+            let userService = UserService()
+            if let profile = try? await userService.getUser(id: video.creatorID) {
+                await MainActor.run {
+                    self.creatorProfileURL = profile.profileImageURL
+                    self.creatorDisplayName = profile.displayName.isEmpty ? profile.username : profile.displayName
+                }
+            }
+        }
+    }
+    
+    private func trackViewIfNeeded() {
+        guard !hasTrackedView, let userID = Auth.auth().currentUser?.uid, !video.id.isEmpty else { return }
+        hasTrackedView = true
+        
+        Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            let videoService = VideoService()
+            try? await videoService.trackVideoView(videoID: video.id, userID: userID, watchTime: 5.0)
+            print("📊 VIEW TRACKED: \(video.id.prefix(8))")
         }
     }
 }

@@ -1,9 +1,9 @@
 //
 //  ContentView.swift
-//  CleanBeta
+//  StitchSocial
 //
 //  Main app entry point with tab navigation and authentication flow
-//  FIXED: Cleaned up duplicate declarations and forced clean auth start
+//  UPDATED: Added memory debug overlay (DEBUG builds only)
 //
 
 import SwiftUI
@@ -27,6 +27,11 @@ struct ContentView: View {
     @State private var homeFeedRefreshTrigger = false
     @State private var showingSuccessMessage = false
     @State private var createdVideoTitle = ""
+    
+    // MARK: - Debug State (NEW)
+    #if DEBUG
+    @State private var showMemoryDebug = false
+    #endif
     
     // MARK: - Body
     
@@ -150,7 +155,7 @@ struct ContentView: View {
                 ProfileView(
                         authService: authService,
                         userService: userService,
-                        videoService: videoService  // Add this parameter
+                        videoService: videoService
                     )
                     .environmentObject(authService)
                 
@@ -169,8 +174,30 @@ struct ContentView: View {
                     handleCreateAction()
                 }
             )
+            
+            // MARK: - Memory Debug Overlay (DEBUG only)
+            #if DEBUG
+            if showMemoryDebug {
+                VStack {
+                    HStack {
+                        Spacer()
+                        MemoryDebugOverlay()
+                            .padding(.trailing, 16)
+                            .padding(.top, 60)
+                    }
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+            }
+            #endif
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        #if DEBUG
+        .onShake {
+            showMemoryDebug.toggle()
+            print("🧠 DEBUG: Memory overlay \(showMemoryDebug ? "shown" : "hidden")")
+        }
+        #endif
     }
     
     // MARK: - Video Creation Callback
@@ -345,6 +372,98 @@ struct ContentView: View {
         initializeApp()
     }
 }
+
+// MARK: - Memory Debug Overlay (NEW)
+
+struct MemoryDebugOverlay: View {
+    @ObservedObject private var preloadService = VideoPreloadingService.shared
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(pressureColor)
+                    .frame(width: 8, height: 8)
+                
+                Text(pressureText)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+            }
+            
+            Text("Pool: \(preloadService.poolStats.totalPlayers)/\(preloadService.getPoolStatus().maxPoolSize)")
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.white.opacity(0.8))
+            
+            if preloadService.isInReducedMode {
+                Text("REDUCED MODE")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundColor(.orange)
+            }
+            
+            if let currentID = preloadService.currentlyPlayingVideoID {
+                Text("▶ \(currentID.prefix(6))...")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.green)
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.7))
+        )
+    }
+    
+    private var pressureColor: Color {
+        switch preloadService.memoryPressureLevel {
+        case .normal: return .green
+        case .elevated: return .yellow
+        case .critical: return .orange
+        case .emergency: return .red
+        }
+    }
+    
+    private var pressureText: String {
+        switch preloadService.memoryPressureLevel {
+        case .normal: return "MEM OK"
+        case .elevated: return "MEM ⚠️"
+        case .critical: return "MEM 🔶"
+        case .emergency: return "MEM 🔴"
+        }
+    }
+}
+
+// MARK: - Shake Gesture (DEBUG only)
+
+#if DEBUG
+extension View {
+    func onShake(perform action: @escaping () -> Void) -> some View {
+        self.modifier(ShakeDetector(action: action))
+    }
+}
+
+struct ShakeDetector: ViewModifier {
+    let action: () -> Void
+    
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
+                action()
+            }
+    }
+}
+
+extension Notification.Name {
+    static let deviceDidShake = Notification.Name("deviceDidShake")
+}
+
+// Add this to your AppDelegate or create a UIWindow subclass
+extension UIWindow {
+    open override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
+        if motion == .motionShake {
+            NotificationCenter.default.post(name: .deviceDidShake, object: nil)
+        }
+    }
+}
+#endif
 
 // MARK: - Preview
 

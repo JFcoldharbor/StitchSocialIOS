@@ -1,3 +1,10 @@
+//
+//  StitchSocialApp.swift
+//  StitchSocial
+//
+//  UPDATED: Added memory management initialization
+//
+
 import SwiftUI
 import FirebaseCore
 import FirebaseAuth
@@ -23,18 +30,25 @@ struct StitchSocialApp: App {
                         .allowsHitTesting(false)
                 )
                 .onAppear {
-                    // REMOVED: setNotificationService - method no longer exists
-                    // REMOVED: startNotificationListener - handled by NotificationViewModel
-                    
-                    // FCM and notification listeners are now automatic:
-                    // - FCMPushManager handles token registration
-                    // - NotificationViewModel handles real-time listener
+                    // Initialize memory management
+                    initializeMemoryManagement()
                     
                     print("📱 APP STARTUP: Services initialized")
                     print("📱 FCM: Automatic via FCMPushManager")
                     print("📱 Notifications: Automatic via NotificationViewModel")
+                    print("🧠 Memory: VideoPreloadingService ready")
                 }
         }
+    }
+    
+    // MARK: - Memory Management Setup (NEW)
+    
+    private func initializeMemoryManagement() {
+        // Pre-warm the preloading service (triggers memory observers)
+        _ = VideoPreloadingService.shared
+        
+        // Log initial state
+        VideoPreloadingService.shared.helloWorldTest()
     }
 }
 
