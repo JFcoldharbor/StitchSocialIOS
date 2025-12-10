@@ -203,16 +203,24 @@ struct ContextualVideoOverlay: View {
                 .padding(.horizontal, 12)
             }
             
-            // Right Side - Swipe for replies indicator
+            // Right Side - Swipe for replies indicator + Share button
             HStack {
                 Spacer()
-                VStack {
+                VStack(spacing: 16) {
                     Spacer()
                     
                     // Show swipe banner for parent videos with replies
                     if video.conversationDepth == 0 && displayReplyCount > 0 {
                         SwipeForRepliesBanner(replyCount: displayReplyCount)
                     }
+                    
+                    // Share button
+                    ShareButton(
+                        video: video,
+                        creatorUsername: displayCreatorName,
+                        threadID: video.threadID ?? video.id,
+                        size: .medium
+                    )
                     
                     Spacer()
                 }
@@ -240,16 +248,24 @@ struct ContextualVideoOverlay: View {
             }
             .opacity(1.0)
             
-            // Right Side - Swipe for replies indicator
+            // Right Side - Swipe for replies indicator + Share button
             HStack {
                 Spacer()
-                VStack {
+                VStack(spacing: 16) {
                     Spacer()
                     
                     // Show swipe banner for parent videos with replies
                     if video.conversationDepth == 0 && displayReplyCount > 0 {
                         SwipeForRepliesBanner(replyCount: displayReplyCount)
                     }
+                    
+                    // Share button
+                    ShareButton(
+                        video: video,
+                        creatorUsername: displayCreatorName,
+                        threadID: video.threadID ?? video.id,
+                        size: .medium
+                    )
                     
                     Spacer()
                 }
@@ -519,6 +535,7 @@ struct ContextualVideoOverlay: View {
                 NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
             }
         }
+        .shareOverlay() // Show loading overlay during video export for sharing
     }
     
     // MARK: - Top Section

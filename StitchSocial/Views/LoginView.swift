@@ -161,26 +161,13 @@ struct LoginView: View {
     // MARK: - Header View
     private var headerView: some View {
         VStack(spacing: 16) {
-            // App logo placeholder (to be replaced with actual logo later)
-            ZStack {
-                // Background circle for logo
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [StitchColors.primary, StitchColors.secondary],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 100, height: 100)
-                
-                // Placeholder icon (will be replaced with actual logo)
-                Image(systemName: "video.fill")
-                    .font(.system(size: 40, weight: .bold))
-                    .foregroundColor(.white)
-            }
-            .scaleEffect(animateWelcome ? 1.0 : 0.8)
-            .animation(.easeInOut(duration: 0.8), value: animateWelcome)
+            // App logo from Assets
+            Image("StitchSocialLogo")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 120, height: 120)
+                .scaleEffect(animateWelcome ? 1.0 : 0.8)
+                .animation(.easeInOut(duration: 0.8), value: animateWelcome)
             
             // App name
             Text("Stitch Social")
@@ -385,9 +372,20 @@ struct LoginView: View {
                 .ignoresSafeArea()
             
             VStack(spacing: 24) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 80))
-                    .foregroundColor(StitchColors.success)
+                // Use real logo with checkmark overlay
+                ZStack {
+                    Image("StitchSocialLogo")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 100, height: 100)
+                    
+                    // Success checkmark badge
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundColor(StitchColors.success)
+                        .background(Circle().fill(Color.black).frame(width: 28, height: 28))
+                        .offset(x: 35, y: 35)
+                }
                 
                 VStack(spacing: 8) {
                     Text("Welcome to Stitch!")

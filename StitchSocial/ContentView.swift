@@ -87,24 +87,13 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
             
             VStack(spacing: 20) {
-                // App logo
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [StitchColors.primary, StitchColors.secondary],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 80, height: 80)
-                    
-                    Image(systemName: "video.fill")
-                        .font(.system(size: 32, weight: .bold))
-                        .foregroundColor(.white)
-                }
+                // App logo from Assets
+                Image("StitchSocialLogo")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 120, height: 120)
                 
-                Text("Stitch")
+                Text("Stitch Social")
                     .font(.system(size: 32, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
                 

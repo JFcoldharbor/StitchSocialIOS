@@ -5,7 +5,7 @@
 //  Layer 8: Views - INSTANT PLAYBACK Home Feed with Thread Navigation
 //  Dependencies: VideoService, UserService, HomeFeedService, EngagementService
 //  Features: Instant video switching, stabilized scrolling, VideoPlayerComponent integration
-//  UPDATED: Offline caching, smoother loading, aggressive preloading
+//  FIXED: Uses VideoPreloadingService.shared singleton
 //
 
 import SwiftUI
@@ -42,16 +42,16 @@ struct HomeFeedView: View {
     @StateObject private var cachingService: CachingService
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
     
+    // MARK: - Feed Cache (Offline Support)
+    
+    private var feedCache: FeedCache {
+        FeedCache.shared
+    }
+    
     // MARK: - Preloading Service (FIXED: Use singleton)
     
     private var videoPreloadingService: VideoPreloadingService {
         VideoPreloadingService.shared
-    }
-    
-    // MARK: - Feed Cache
-    
-    private var feedCache: FeedCache {
-        FeedCache.shared
     }
     
     // MARK: - Home Feed State
@@ -63,8 +63,8 @@ struct HomeFeedView: View {
     @State private var hasLoadedInitialFeed: Bool = false
     @State private var loadingError: String? = nil
     @State private var isReshuffling: Bool = false
-    @State private var isLoadingFresh: Bool = false  // Loading fresh content in background
-    @State private var isOfflineMode: Bool = false   // Using cached content
+    @State private var isOfflineMode: Bool = false
+    @State private var isLoadingFresh: Bool = false
     
     // Video tracking (simplified)
     @State private var videoPlayCounts: [String: Int] = [:]
@@ -85,16 +85,19 @@ struct HomeFeedView: View {
     @State private var isAnimating: Bool = false
     @State private var gestureDebouncer: Timer?
     
-    // MARK: - OPTIMIZED GESTURE PHYSICS
+    // MARK: - OPTIMIZED GESTURE PHYSICS (TIKTOK-STYLE)
     
-    private let gestureMinimumDistance: CGFloat = 30
-    private let swipeThresholdHorizontal: CGFloat = 100
-    private let swipeThresholdVertical: CGFloat = 120
-    private let directionRatio: CGFloat = 2.0
-    private let animationDuration: TimeInterval = 0.2
+    private let gestureMinimumDistance: CGFloat = 15  // Lower = faster detection
+    private let swipeThresholdHorizontal: CGFloat = 60
+    private let swipeThresholdVertical: CGFloat = 80
+    private let directionRatio: CGFloat = 1.5
+    private let animationDuration: TimeInterval = 0.25
     
-    private let dragResistance: CGFloat = 0.8
-    private let maxDragDistance: CGFloat = 60
+    private let dragResistance: CGFloat = 0.6
+    private let maxDragDistance: CGFloat = 80
+    
+    // Swipe state tracking
+    @State private var hasPausedForSwipe: Bool = false
     
     // MARK: - Initialization (FIXED: Removed VideoPreloadingService instantiation)
     
@@ -130,9 +133,6 @@ struct HomeFeedView: View {
                     errorView(error: error)
                 } else if currentFeed.isEmpty && !isShowingPlaceholder {
                     emptyFeedView
-                } else if currentFeed.isEmpty && isShowingPlaceholder {
-                    // Shimmer loading state instead of spinner
-                    shimmerLoadingView
                 } else {
                     stabilizedContainerGrid(geometry: geometry)
                 }
@@ -146,7 +146,7 @@ struct HomeFeedView: View {
                     offlineIndicator
                 }
                 
-                // Background loading indicator
+                // Background refresh indicator
                 if isLoadingFresh && !currentFeed.isEmpty {
                     backgroundLoadingIndicator
                 }
@@ -160,7 +160,7 @@ struct HomeFeedView: View {
             setupAudioSession()
             
             if !hasLoadedInitialFeed {
-                print("🏠 HOMEFEED: Loading initial feed")
+                print("🏠 HOMEFEED: Loading initial feed with cache")
                 loadInstantFeedWithCache()
                 hasLoadedInitialFeed = true
             } else {
@@ -178,7 +178,6 @@ struct HomeFeedView: View {
         }
         .onChange(of: networkMonitor.isConnected) { _, isConnected in
             if isConnected && isOfflineMode {
-                // Came back online - refresh in background
                 print("📶 HOMEFEED: Back online, refreshing...")
                 loadFreshFeedInBackground()
             }
@@ -194,70 +193,21 @@ struct HomeFeedView: View {
         }
     }
     
-    // MARK: - Shimmer Loading View
-    
-    private var shimmerLoadingView: some View {
-        VStack(spacing: 0) {
-            // Fake video card with shimmer
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.gray.opacity(0.2),
-                            Color.gray.opacity(0.4),
-                            Color.gray.opacity(0.2)
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(
-                    VStack {
-                        Spacer()
-                        HStack {
-                            // Fake profile pill
-                            RoundedRectangle(cornerRadius: 20)
-                                .fill(Color.gray.opacity(0.3))
-                                .frame(width: 120, height: 40)
-                            Spacer()
-                        }
-                        .padding()
-                        
-                        // Fake action buttons
-                        HStack {
-                            Spacer()
-                            VStack(spacing: 20) {
-                                ForEach(0..<4) { _ in
-                                    Circle()
-                                        .fill(Color.gray.opacity(0.3))
-                                        .frame(width: 44, height: 44)
-                                }
-                            }
-                        }
-                        .padding()
-                    }
-                )
-        }
-        .ignoresSafeArea()
-    }
-    
     // MARK: - Offline Indicator
     
     private var offlineIndicator: some View {
         VStack {
-            HStack(spacing: 8) {
+            HStack {
                 Image(systemName: "wifi.slash")
-                    .font(.caption)
+                    .font(.system(size: 12))
                 Text("Offline Mode")
-                    .font(.caption)
-                    .fontWeight(.medium)
+                    .font(.caption.bold())
             }
             .foregroundColor(.white)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(Color.orange.opacity(0.9))
-            .cornerRadius(20)
+            .cornerRadius(16)
             .padding(.top, 50)
             
             Spacer()
@@ -271,8 +221,8 @@ struct HomeFeedView: View {
             HStack {
                 Spacer()
                 ProgressView()
-                    .tint(.white)
-                    .scaleEffect(0.8)
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .scaleEffect(0.7)
                     .padding(8)
                     .background(Color.black.opacity(0.5))
                     .cornerRadius(20)
@@ -407,6 +357,13 @@ struct HomeFeedView: View {
         gestureDebouncer?.invalidate()
         guard !isAnimating && !isReshuffling else { return }
         
+        // TIKTOK PATTERN: Pause video IMMEDIATELY when swipe starts
+        if !hasPausedForSwipe {
+            hasPausedForSwipe = true
+            videoPreloadingService.pauseAllPlayback()
+            print("⏸️ SWIPE START: Paused for swipe")
+        }
+        
         let translation = value.translation
         let resistedWidth = min(abs(translation.width), maxDragDistance) * dragResistance * (translation.width < 0 ? -1 : 1)
         let resistedHeight = min(abs(translation.height), maxDragDistance) * dragResistance * (translation.height < 0 ? -1 : 1)
@@ -428,10 +385,11 @@ struct HomeFeedView: View {
         let translation = value.translation
         let velocity = value.velocity
         
-        let velocityBoost = 1.2
+        // Velocity-boosted translation for snappier response
+        let velocityFactor: CGFloat = 0.1
         let adjustedTranslation = CGSize(
-            width: translation.width + (velocity.width * 0.05),
-            height: translation.height + (velocity.height * 0.05)
+            width: translation.width + (velocity.width * velocityFactor),
+            height: translation.height + (velocity.height * velocityFactor)
         )
         
         let isHorizontalSwipe = abs(adjustedTranslation.width) > swipeThresholdHorizontal &&
@@ -439,15 +397,14 @@ struct HomeFeedView: View {
         let isVerticalSwipe = abs(adjustedTranslation.height) > swipeThresholdVertical &&
                              abs(adjustedTranslation.height) > abs(adjustedTranslation.width) * directionRatio
         
-        gestureDebouncer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: false) { _ in
-            processStabilizedGesture(
-                isHorizontal: isHorizontalSwipe,
-                isVertical: isVerticalSwipe,
-                translation: adjustedTranslation,
-                velocity: velocity,
-                geometry: geometry
-            )
-        }
+        // Process immediately - no debouncer for faster response
+        processStabilizedGesture(
+            isHorizontal: isHorizontalSwipe,
+            isVertical: isVerticalSwipe,
+            translation: adjustedTranslation,
+            velocity: velocity,
+            geometry: geometry
+        )
     }
     
     private func processStabilizedGesture(
@@ -464,15 +421,28 @@ struct HomeFeedView: View {
         } else if isVertical {
             handleVerticalSwipe(translation: translation, velocity: velocity, geometry: geometry)
         } else {
+            // No valid swipe - snap back and resume current video
             smoothSnapToCurrentPosition()
+            resumeCurrentVideo()
         }
         
-        withAnimation(.easeOut(duration: 0.15)) {
+        withAnimation(.easeOut(duration: 0.1)) {
             dragOffset = .zero
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + animationDuration) {
             isAnimating = false
+            hasPausedForSwipe = false
+        }
+    }
+    
+    // MARK: - Resume Current Video
+    
+    private func resumeCurrentVideo() {
+        guard let video = getCurrentVideo() else { return }
+        if let player = videoPreloadingService.getPlayer(for: video) {
+            player.play()
+            print("▶️ RESUMED: \(video.id.prefix(8))")
         }
     }
     
@@ -481,11 +451,13 @@ struct HomeFeedView: View {
     private func handleHorizontalSwipe(translation: CGSize, velocity: CGSize, geometry: GeometryProxy) {
         guard let currentThread = getCurrentThread() else {
             smoothSnapToCurrentPosition()
+            resumeCurrentVideo()
             return
         }
         
         guard !currentThread.childVideos.isEmpty else {
             smoothSnapToCurrentPosition()
+            resumeCurrentVideo()
             print("🚫 HORIZONTAL BLOCKED: No children in current thread")
             return
         }
@@ -500,6 +472,7 @@ struct HomeFeedView: View {
                 print("➡️ MOVED TO: Thread \(currentThreadIndex), Child \(nextStitchIndex)")
             } else {
                 smoothSnapToCurrentPosition()
+                resumeCurrentVideo()
                 print("📚 AT END: Cannot go further in thread")
             }
         } else if isSwipeRight {
@@ -509,6 +482,7 @@ struct HomeFeedView: View {
                 print("⬅️ MOVED TO: Thread \(currentThreadIndex), Child \(prevStitchIndex)")
             } else {
                 smoothSnapToCurrentPosition()
+                resumeCurrentVideo()
                 print("🏠 AT PARENT: Cannot go back further in thread")
             }
         }
@@ -526,6 +500,7 @@ struct HomeFeedView: View {
                     loadMoreContentAndContinue()
                 } else {
                     smoothSnapToCurrentPosition()
+                    resumeCurrentVideo()
                 }
             }
         } else if isSwipeDown {
@@ -533,6 +508,7 @@ struct HomeFeedView: View {
                 smoothMoveToThread(currentThreadIndex - 1, geometry: geometry)
             } else {
                 smoothSnapToCurrentPosition()
+                resumeCurrentVideo()
             }
         }
     }
@@ -542,19 +518,26 @@ struct HomeFeedView: View {
         
         guard threadIndex >= 0 && threadIndex < currentFeed.count else {
             smoothSnapToCurrentPosition()
+            resumeCurrentVideo()
             return
         }
         
         currentThreadIndex = threadIndex
         currentStitchIndex = 0
         
-        withAnimation(.spring(response: animationDuration, dampingFraction: 0.95)) {
+        // TIKTOK-STYLE: Snappy spring animation
+        withAnimation(.interpolatingSpring(stiffness: 400, damping: 35)) {
             verticalOffset = -CGFloat(threadIndex) * geometry.size.height
             horizontalOffset = 0
         }
         
         if let newVideo = getCurrentVideo() {
             resetVideoPlayCount(for: newVideo.id)
+        }
+        
+        // Trigger preload for smooth next swipe
+        Task {
+            await preloadCurrentAndNext()
         }
         
         preloadAdjacentThreads()
@@ -577,18 +560,21 @@ struct HomeFeedView: View {
         
         guard let currentThread = getCurrentThread() else {
             smoothSnapToCurrentPosition()
+            resumeCurrentVideo()
             return
         }
         
         let maxStitchIndex = currentThread.childVideos.count
         guard stitchIndex >= 0 && stitchIndex <= maxStitchIndex else {
             smoothSnapToCurrentPosition()
+            resumeCurrentVideo()
             return
         }
         
         currentStitchIndex = stitchIndex
         
-        withAnimation(.spring(response: animationDuration, dampingFraction: 0.95)) {
+        // TIKTOK-STYLE: Snappy spring animation
+        withAnimation(.interpolatingSpring(stiffness: 400, damping: 35)) {
             horizontalOffset = -CGFloat(stitchIndex) * geometry.size.width
         }
         
@@ -694,37 +680,17 @@ struct HomeFeedView: View {
                !homeFeedService.isLoading
     }
     
-    private func loadInstantFeedWithCache() {
+    private func loadInstantFeed() {
         guard let currentUserID = authService.currentUserID else {
             loadingError = "Please sign in to view your feed"
             return
         }
         
-        // STEP 1: Load cached feed IMMEDIATELY for instant display
-        if let cachedFeed = feedCache.loadCachedFeed(), !cachedFeed.isEmpty {
-            print("⚡ HOMEFEED: Displaying cached feed instantly (\(cachedFeed.count) threads)")
-            currentFeed = cachedFeed
-            isShowingPlaceholder = false
-            isOfflineMode = !networkMonitor.isConnected
-            
-            // Start preloading cached videos
-            Task {
-                await preloadCurrentAndNext()
-            }
-            
-            // If online, load fresh content in background
-            if networkMonitor.isConnected {
-                loadFreshFeedInBackground()
-            }
-            return
-        }
-        
-        // STEP 2: No cache - show placeholder and load from network
         isShowingPlaceholder = true
         
         Task {
             do {
-                print("🚀 HOME FEED: Loading fresh feed for user \(currentUserID)")
+                print("🚀 HOME FEED: Loading instant feed for user \(currentUserID)")
                 let threads = try await homeFeedService.loadFeed(userID: currentUserID)
                 
                 await MainActor.run {
@@ -735,24 +701,17 @@ struct HomeFeedView: View {
                     loadingError = nil
                     verticalOffset = 0
                     horizontalOffset = 0
-                    isOfflineMode = false
-                    
-                    // Cache for offline use
-                    feedCache.cacheFeed(threads)
                 }
                 
                 print("✅ HOME FEED: Feed loaded with \(threads.count) threads")
                 
                 // CRITICAL: Preload videos immediately after feed loads
-                print("🎬 HOME FEED: Starting aggressive preload")
-                await preloadAggressively()
+                print("🎬 HOME FEED: Starting preload after feed load")
+                await preloadCurrentAndNext()
                 
             } catch {
                 await MainActor.run {
-                    // If network error and we have no content, show error
-                    if currentFeed.isEmpty {
-                        loadingError = "Failed to load feed: \(error.localizedDescription)"
-                    }
+                    loadingError = "Failed to load feed: \(error.localizedDescription)"
                     isShowingPlaceholder = false
                 }
                 print("❌ HOME FEED: Feed loading failed: \(error)")
@@ -760,51 +719,106 @@ struct HomeFeedView: View {
         }
     }
     
+    // MARK: - Cache-First Loading (INSTANT APP OPEN)
+    
+    private func loadInstantFeedWithCache() {
+        guard let currentUserID = authService.currentUserID else {
+            loadingError = "Please sign in to view your feed"
+            return
+        }
+        
+        // Step 1: Try to show cached feed INSTANTLY
+        if let cachedThreads = feedCache.loadCachedFeed() {
+            currentFeed = cachedThreads
+            isShowingPlaceholder = false
+            isOfflineMode = !networkMonitor.isConnected
+            print("⚡ HOMEFEED: Displaying cached feed instantly (\(cachedThreads.count) threads)")
+            
+            // Preload cached videos
+            Task {
+                await preloadCurrentAndNext()
+            }
+            
+            // Step 2: If online, refresh in background
+            if networkMonitor.isConnected {
+                loadFreshFeedInBackground()
+            }
+        } else {
+            // No cache - load normally
+            isShowingPlaceholder = true
+            
+            Task {
+                do {
+                    print("🚀 HOME FEED: No cache, loading from network")
+                    let threads = try await homeFeedService.loadFeed(userID: currentUserID)
+                    
+                    await MainActor.run {
+                        currentFeed = threads
+                        currentThreadIndex = 0
+                        currentStitchIndex = 0
+                        isShowingPlaceholder = false
+                        loadingError = nil
+                        verticalOffset = 0
+                        horizontalOffset = 0
+                        isOfflineMode = false
+                    }
+                    
+                    // Cache for next time
+                    feedCache.cacheFeed(threads)
+                    print("💾 HOMEFEED: Cached \(threads.count) threads for offline")
+                    
+                    await preloadCurrentAndNext()
+                    
+                } catch {
+                    await MainActor.run {
+                        if currentFeed.isEmpty {
+                            loadingError = "Failed to load feed: \(error.localizedDescription)"
+                        }
+                        isShowingPlaceholder = false
+                    }
+                    print("❌ HOME FEED: Feed loading failed: \(error)")
+                }
+            }
+        }
+    }
+    
     private func loadFreshFeedInBackground() {
         guard let currentUserID = authService.currentUserID else { return }
-        guard !isLoadingFresh else { return } // Prevent duplicate loads
+        guard !isLoadingFresh else { return }
         
         isLoadingFresh = true
         
         Task {
             do {
-                print("🔄 HOMEFEED: Loading fresh content in background...")
-                let threads = try await homeFeedService.loadFeed(userID: currentUserID)
+                print("🔄 HOMEFEED: Background refresh started")
+                let freshThreads = try await homeFeedService.loadFeed(userID: currentUserID)
                 
                 await MainActor.run {
-                    // Merge new content - keep position if possible
-                    let currentVideoID = getCurrentVideo()?.id
-                    
-                    currentFeed = threads
+                    // Preserve position if user hasn't scrolled far
+                    if currentThreadIndex < 3 {
+                        currentFeed = freshThreads
+                        currentThreadIndex = 0
+                        currentStitchIndex = 0
+                        verticalOffset = 0
+                        horizontalOffset = 0
+                    }
                     isOfflineMode = false
                     isLoadingFresh = false
-                    
-                    // Try to restore position
-                    if let videoID = currentVideoID,
-                       let newIndex = threads.firstIndex(where: { $0.parentVideo.id == videoID }) {
-                        currentThreadIndex = newIndex
-                    }
-                    
-                    // Update cache
-                    feedCache.cacheFeed(threads)
-                    print("✅ HOMEFEED: Background refresh complete (\(threads.count) threads)")
                 }
                 
-                // Preload new content
-                await preloadAggressively()
+                // Update cache
+                feedCache.cacheFeed(freshThreads)
+                print("✅ HOMEFEED: Background refresh complete (\(freshThreads.count) threads)")
+                
+                await preloadCurrentAndNext()
                 
             } catch {
                 await MainActor.run {
                     isLoadingFresh = false
                 }
-                print("❌ HOMEFEED: Background refresh failed: \(error)")
+                print("⚠️ HOMEFEED: Background refresh failed: \(error)")
             }
         }
-    }
-    
-    // Keep old function for compatibility
-    private func loadInstantFeed() {
-        loadInstantFeedWithCache()
     }
     
     private func refreshFeed() async {
@@ -820,12 +834,12 @@ struct HomeFeedView: View {
                 verticalOffset = 0
                 horizontalOffset = 0
                 isOfflineMode = false
-                
-                // Update cache
-                feedCache.cacheFeed(refreshedThreads)
             }
             
-            await preloadAggressively()
+            // Cache refreshed feed
+            feedCache.cacheFeed(refreshedThreads)
+            
+            await preloadCurrentAndNext()
             
         } catch {
             await MainActor.run {
@@ -834,65 +848,55 @@ struct HomeFeedView: View {
         }
     }
     
-    // MARK: - Preloading Support (TIKTOK-STYLE AGGRESSIVE)
+    // MARK: - Preloading Support (INSTAGRAM/TIKTOK PATTERN)
     
     private func preloadCurrentAndNext() async {
-        await preloadAggressively()
-    }
-    
-    /// Aggressive preloading - 5+ videos ahead for smooth scrolling
-    private func preloadAggressively() async {
         guard !currentFeed.isEmpty else {
             print("⚠️ PRELOAD: Feed is empty, skipping")
             return
         }
         
-        print("🎬 AGGRESSIVE PRELOAD: Starting - currentThread: \(currentThreadIndex)")
+        print("🎬 PRELOAD: Starting preload - currentThread: \(currentThreadIndex), currentStitch: \(currentStitchIndex)")
         
+        // Get videos to preload
         var videosToPreload: [CoreVideoMetadata] = []
         
-        // Preload MORE videos ahead (TikTok preloads 5-10)
-        let preloadAhead = 5
-        
-        // Current thread - all videos
+        // Current thread
         if currentThreadIndex < currentFeed.count {
             let currentThread = currentFeed[currentThreadIndex]
             videosToPreload.append(currentThread.parentVideo)
-            videosToPreload.append(contentsOf: currentThread.childVideos)
+            videosToPreload.append(contentsOf: currentThread.childVideos.prefix(2))
+            print("🎬 PRELOAD: Added current thread videos: \(videosToPreload.count) total")
         }
         
-        // Next 5 threads - parent videos (most likely to be viewed)
-        for i in 1...preloadAhead {
-            let nextIndex = currentThreadIndex + i
-            if nextIndex < currentFeed.count {
-                videosToPreload.append(currentFeed[nextIndex].parentVideo)
-            }
+        // Next thread
+        if currentThreadIndex + 1 < currentFeed.count {
+            let nextThread = currentFeed[currentThreadIndex + 1]
+            videosToPreload.append(nextThread.parentVideo)
+            print("🎬 PRELOAD: Added next thread parent")
         }
         
-        // Previous thread (for swipe back)
-        if currentThreadIndex > 0 {
-            videosToPreload.append(currentFeed[currentThreadIndex - 1].parentVideo)
+        // Next next thread
+        if currentThreadIndex + 2 < currentFeed.count {
+            let nextNextThread = currentFeed[currentThreadIndex + 2]
+            videosToPreload.append(nextNextThread.parentVideo)
+            print("🎬 PRELOAD: Added next-next thread parent")
         }
         
-        print("🎬 AGGRESSIVE PRELOAD: Queuing \(videosToPreload.count) videos")
+        print("🎬 PRELOAD: Total videos to preload: \(videosToPreload.count)")
         
-        // Preload with priority - current highest, then decreasing
+        // Preload into VideoPreloadingService pool
         for (index, video) in videosToPreload.enumerated() {
-            let priority: PreloadPriority
-            switch index {
-            case 0: priority = .high     // Current video
-            case 1...3: priority = .high // Next few
-            default: priority = .normal  // Rest
-            }
-            
+            let priority: PreloadPriority = index == 0 ? .high : .normal
+            print("🎬 PRELOAD: Preloading video \(index + 1)/\(videosToPreload.count): \(video.id.prefix(8)) (priority: \(priority))")
             await videoPreloadingService.preloadVideo(video, priority: priority)
         }
         
-        print("✅ AGGRESSIVE PRELOAD: Completed \(videosToPreload.count) videos")
+        print("✅ PRELOAD: Completed loading \(videosToPreload.count) videos into player pool")
         
         // Log pool status
         let poolStatus = videoPreloadingService.getPoolStatus()
-        print("📊 POOL: \(poolStatus.totalPlayers)/\(poolStatus.maxPoolSize) (\(Int(poolStatus.utilizationPercentage * 100))%)")
+        print("📊 PRELOAD POOL STATUS: \(poolStatus.totalPlayers)/\(poolStatus.maxPoolSize) players (\(Int(poolStatus.utilizationPercentage * 100))% utilized)")
     }
     
     private func preloadThreadIfNeeded(index: Int) {
