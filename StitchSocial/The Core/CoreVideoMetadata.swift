@@ -55,7 +55,13 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         fileSize: Int64,
         discoverabilityScore: Double,
         isPromoted: Bool,
-        lastEngagementAt: Date?
+        lastEngagementAt: Date?,
+        // Collection support
+        collectionID: String? = nil,
+        segmentNumber: Int? = nil,
+        segmentTitle: String? = nil,
+        isCollectionSegment: Bool = false,
+        replyTimestamp: TimeInterval? = nil
     ) {
         self.id = id
         self.title = title
@@ -85,6 +91,12 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         self.discoverabilityScore = discoverabilityScore
         self.isPromoted = isPromoted
         self.lastEngagementAt = lastEngagementAt
+        // Collection support
+        self.collectionID = collectionID
+        self.segmentNumber = segmentNumber
+        self.segmentTitle = segmentTitle
+        self.isCollectionSegment = isCollectionSegment
+        self.replyTimestamp = replyTimestamp
     }
     
     // MARK: - Thread/Parent-Child-Stepchild Logic
@@ -120,6 +132,81 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     let discoverabilityScore: Double  // How likely to appear in feeds
     let isPromoted: Bool             // Algorithmic boost flag
     let lastEngagementAt: Date?      // Most recent interaction
+    
+    // MARK: - Collection Support
+    var collectionID: String?        // If part of a collection, the collection's ID
+    var segmentNumber: Int?          // Order within collection (1-based)
+    var segmentTitle: String?        // Optional title for this segment
+    var isCollectionSegment: Bool    // True if this video is a collection segment
+    var replyTimestamp: TimeInterval? // Timestamp in parent video this reply references
+    
+    /// Display title for collection segments - uses segmentTitle if available, falls back to "Part N"
+    var segmentDisplayTitle: String {
+        if let title = segmentTitle, !title.isEmpty {
+            return title
+        } else if let num = segmentNumber {
+            return "Part \(num)"
+        } else {
+            return title.isEmpty ? "Untitled" : title
+        }
+    }
+    
+    /// Static factory method to create a collection segment video
+    /// Parameters ordered to match CollectionPlayerViewModel call pattern
+    static func collectionSegment(
+        collectionID: String = "",
+        segmentNumber: Int = 1,
+        segmentTitle: String? = nil,
+        segmentID: String? = nil,
+        videoURL: String = "",
+        thumbnailURL: String = "",
+        duration: TimeInterval = 0,
+        creatorID: String = "",
+        creatorName: String = "",
+        fileSize: Int64 = 0,
+        id: String? = nil,
+        title: String? = nil,
+        createdAt: Date = Date()
+    ) -> CoreVideoMetadata {
+        let finalID = id ?? segmentID ?? UUID().uuidString
+        let finalTitle = title ?? segmentTitle ?? "Part \(segmentNumber)"
+        
+        return CoreVideoMetadata(
+            id: finalID,
+            title: finalTitle,
+            description: "",
+            taggedUserIDs: [],
+            videoURL: videoURL,
+            thumbnailURL: thumbnailURL,
+            creatorID: creatorID,
+            creatorName: creatorName,
+            createdAt: createdAt,
+            threadID: finalID,
+            replyToVideoID: nil,
+            conversationDepth: 0,
+            viewCount: 0,
+            hypeCount: 0,
+            coolCount: 0,
+            replyCount: 0,
+            shareCount: 0,
+            temperature: "neutral",
+            qualityScore: 50,
+            engagementRatio: 0.5,
+            velocityScore: 0.0,
+            trendingScore: 0.0,
+            duration: duration,
+            aspectRatio: 9.0/16.0,
+            fileSize: fileSize,
+            discoverabilityScore: 0.5,
+            isPromoted: false,
+            lastEngagementAt: nil,
+            collectionID: collectionID,
+            segmentNumber: segmentNumber,
+            segmentTitle: segmentTitle ?? finalTitle,
+            isCollectionSegment: true,
+            replyTimestamp: nil
+        )
+    }
     
     // MARK: - Computed Properties
     
@@ -226,13 +313,13 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     /// Temperature emoji representation
     var temperatureEmoji: String {
         switch temperature.lowercased() {
-        case "fire", "blazing": return "🔥"
-        case "hot": return "🌶️"
-        case "warm": return "☀️"
-        case "neutral": return "😐"
-        case "cool": return "❄️"
-        case "cold", "frozen": return "🧊"
-        default: return "📊"
+        case "fire", "blazing": return "ðŸ”¥"
+        case "hot": return "ðŸŒ¶ï¸"
+        case "warm": return "â˜€ï¸"
+        case "neutral": return "ðŸ˜"
+        case "cool": return "â„ï¸"
+        case "cold", "frozen": return "ðŸ§Š"
+        default: return "ðŸ“Š"
         }
     }
     

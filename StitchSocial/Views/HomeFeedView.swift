@@ -1289,7 +1289,7 @@ struct MyVideoPlayerComponent: View {
     
     private func setupKillObserver() {
         killObserver = NotificationCenter.default.addObserver(
-            forName: .RealkillAllVideoPlayers,
+            forName: .killAllVideoPlayers,
             object: nil,
             queue: .main
         ) { _ in
@@ -1335,14 +1335,6 @@ struct MyVideoPlayerComponent: View {
         }
     }
 }
-
-// MARK: - NotificationCenter Extension
-
-extension Notification.Name {
-    static let RealkillAllVideoPlayers = Notification.Name("killAllVideoPlayers")
-    // preloadHomeFeed is declared in MainTabContainer.swift
-}
-
 // MARK: - Preview
 
 struct HomeFeedView_Previews: PreviewProvider {

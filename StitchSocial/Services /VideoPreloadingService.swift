@@ -5,7 +5,7 @@
 //  Layer 4: Core Services - Advanced Video Preloading & AVPlayer Pool Management
 //  Dependencies: AVFoundation, Config
 //  Features: Smooth video swiping, multidirectional navigation, memory management
-//  UPDATED: Added tiered memory management for crash prevention
+//  PHASE 1 FIX: Proper observer cleanup, pool enforcement, failed player removal
 //
 
 import Foundation
@@ -28,7 +28,7 @@ class VideoPreloadingService: ObservableObject {
     private var currentlyPreloading: Set<String> = []
     private var playerObservers: [String: NSObjectProtocol] = [:]
     
-    // MARK: - Memory Management Properties (NEW)
+    // MARK: - Memory Management Properties
     
     /// Track access order for LRU eviction
     private var accessOrder: [String] = []
@@ -64,38 +64,97 @@ class VideoPreloadingService: ObservableObject {
     private var lastWarningTime: Date?
     private var cancellables = Set<AnyCancellable>()
     
+    // MARK: - PHASE 1 FIX: System Observer Storage
+    
+    /// Store system observers for proper cleanup
+    private var systemObservers: [NSObjectProtocol] = []
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+    
     // MARK: - Initialization
     
     private init() {
         setupMemoryObservers()
+        setupKillNotificationObserver()
+    }
+    
+    deinit {
+        // Clean up all observers directly (can't call @MainActor method from deinit)
+        systemObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        systemObservers.removeAll()
+    }
+    
+    // MARK: - PHASE 1 FIX: Kill Notification Observer
+    
+    private func setupKillNotificationObserver() {
+        // Listen for unified kill notification
+        let killObserver = NotificationCenter.default.addObserver(
+            forName: .killAllVideoPlayers,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleKillAllPlayers()
+            }
+        }
+        systemObservers.append(killObserver)
+        
+        // Listen for pause notification
+        let pauseObserver = NotificationCenter.default.addObserver(
+            forName: .pauseAllVideoPlayers,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.pauseAllPlayback()
+            }
+        }
+        systemObservers.append(pauseObserver)
+    }
+    
+    /// Handle kill all players notification
+    private func handleKillAllPlayers() {
+        print("🛑 PRELOAD: Received kill all players notification")
+        pauseAllPlayback()
     }
     
     // MARK: - Memory Observers Setup
     
     private func setupMemoryObservers() {
         // iOS memory warning
-        NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+        let memoryObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
                 self?.handleMemoryWarning()
             }
-            .store(in: &cancellables)
+        }
+        systemObservers.append(memoryObserver)
         
         // App entering background
-        NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+        let backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
                 self?.handleEnterBackground()
             }
-            .store(in: &cancellables)
+        }
+        systemObservers.append(backgroundObserver)
         
         // App entering foreground
-        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+        let foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
                 self?.handleEnterForeground()
             }
-            .store(in: &cancellables)
+        }
+        systemObservers.append(foregroundObserver)
         
         // System memory pressure (more granular than warnings)
         setupMemoryPressureSource()
@@ -106,16 +165,43 @@ class VideoPreloadingService: ObservableObject {
         
         source.setEventHandler { [weak self] in
             Task { @MainActor in
+                guard let self = self else { return }
                 let event = source.data
                 if event.contains(.critical) {
-                    self?.escalatePressure(to: .critical)
+                    self.escalatePressure(to: .critical)
                 } else if event.contains(.warning) {
-                    self?.escalatePressure(to: .elevated)
+                    self.escalatePressure(to: .elevated)
                 }
             }
         }
         
         source.resume()
+        memoryPressureSource = source
+    }
+    
+    // MARK: - PHASE 1 FIX: Cleanup All Observers
+    
+    private func cleanupAllObservers() {
+        // Remove system observers
+        for observer in systemObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        systemObservers.removeAll()
+        
+        // Remove player observers
+        for (_, observer) in playerObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        playerObservers.removeAll()
+        
+        // Cancel memory pressure source
+        memoryPressureSource?.cancel()
+        memoryPressureSource = nil
+        
+        // Cancel combine subscriptions
+        cancellables.removeAll()
+        
+        print("🧹 PRELOAD: Cleaned up all observers")
     }
     
     // MARK: - Core Preloading API
@@ -127,14 +213,14 @@ class VideoPreloadingService: ObservableObject {
         
         // Return existing player if available
         if let existingPlayer = playerPool[video.id] {
-            print("🎬 PRELOAD: Using cached player for \(video.id)")
+            print("🎬 PRELOAD: Using cached player for \(video.id.prefix(8))")
             poolStats.cacheHits += 1
             return existingPlayer
         }
         
         // Don't create new players if in critical memory state
         if memoryPressureLevel >= .critical && currentlyPlayingVideoID != nil {
-            print("⚠️ PRELOAD: Memory critical, not creating new player for \(video.id)")
+            print("⚠️ PRELOAD: Memory critical, not creating new player for \(video.id.prefix(8))")
             return nil
         }
         
@@ -181,29 +267,29 @@ class VideoPreloadingService: ObservableObject {
         await preloadQueuedVideos(videos: videosToPreload, priority: priority)
     }
     
-    /// Preload single video - FIXED IMPLEMENTATION
+    /// Preload single video - PHASE 1 FIX: Enforces pool size BEFORE adding
     func preloadVideo(_ video: CoreVideoMetadata, priority: PreloadPriority = .normal) async {
         guard !currentlyPreloading.contains(video.id),
               playerPool[video.id] == nil else {
-            print("🎬 PRELOAD: Video \(video.id) already preloading/cached")
+            print("🎬 PRELOAD: Video \(video.id.prefix(8)) already preloading/cached")
             return
         }
         
         // Skip non-essential preloads under memory pressure
         if memoryPressureLevel >= .critical && priority != .high {
-            print("⚠️ PRELOAD: Skipping low-priority preload for \(video.id)")
+            print("⚠️ PRELOAD: Skipping low-priority preload for \(video.id.prefix(8))")
             return
         }
         
-        // Check pool capacity (respects reduced size under pressure)
-        if playerPool.count >= currentMaxPoolSize {
+        // PHASE 1 FIX: Enforce pool capacity BEFORE adding new player
+        while playerPool.count >= currentMaxPoolSize {
             print("🎬 PRELOAD: Pool at capacity (\(currentMaxPoolSize)), evicting oldest")
             evictOldestPlayer()
         }
         
         // Check concurrent preload limit
         guard currentlyPreloading.count < maxConcurrentPreloads else {
-            print("🎬 PRELOAD: Concurrent limit reached, queueing \(video.id)")
+            print("🎬 PRELOAD: Concurrent limit reached, queueing \(video.id.prefix(8))")
             if !preloadQueue.contains(video.id) {
                 preloadQueue.append(video.id)
             }
@@ -225,19 +311,19 @@ class VideoPreloadingService: ObservableObject {
         await processNextInQueue()
     }
     
-    // MARK: - Currently Playing Tracking (NEW)
+    // MARK: - Currently Playing Tracking
     
     /// Call when a video starts playing - protects it from memory cleanup
     func markAsCurrentlyPlaying(_ videoID: String) {
         currentlyPlayingVideoID = videoID
         updateAccessOrder(for: videoID)
-        print("🎬 PRELOAD: Marked \(videoID) as currently playing (protected)")
+        print("🎬 PRELOAD: Marked \(videoID.prefix(8)) as currently playing (protected)")
     }
     
     /// Call when playback stops
     func clearCurrentlyPlaying() {
         if let videoID = currentlyPlayingVideoID {
-            print("🎬 PRELOAD: Cleared currently playing: \(videoID)")
+            print("🎬 PRELOAD: Cleared currently playing: \(videoID.prefix(8))")
         }
         currentlyPlayingVideoID = nil
     }
@@ -303,7 +389,7 @@ class VideoPreloadingService: ObservableObject {
         print("🎬 PRELOAD: Vertical setup complete - \(preloadIndices.count) videos in thread")
     }
     
-    // MARK: - Memory Management Actions (NEW)
+    // MARK: - Memory Management Actions
     
     private func handleMemoryWarning() {
         memoryWarningCount += 1
@@ -362,12 +448,14 @@ class VideoPreloadingService: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
             guard let self = self else { return }
             
-            if let lastTime = self.lastWarningTime,
-               Date().timeIntervalSince(lastTime) > 25 {
-                self.memoryPressureLevel = .normal
-                self.memoryWarningCount = 0
-                self.restoreFullPoolSize()
-                print("✅ MEMORY: Pressure returned to normal")
+            Task { @MainActor in
+                if let lastTime = self.lastWarningTime,
+                   Date().timeIntervalSince(lastTime) > 25 {
+                    self.memoryPressureLevel = .normal
+                    self.memoryWarningCount = 0
+                    self.restoreFullPoolSize()
+                    print("✅ MEMORY: Pressure returned to normal")
+                }
             }
         }
     }
@@ -394,11 +482,13 @@ class VideoPreloadingService: ObservableObject {
         
         // Restore pool size after brief delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.restoreFullPoolSize()
+            Task { @MainActor in
+                self?.restoreFullPoolSize()
+            }
         }
     }
     
-    // MARK: - Pool Size Management (NEW)
+    // MARK: - Pool Size Management
     
     /// Reduce pool size to conserve memory
     func reducePoolSize(to size: Int) {
@@ -449,23 +539,22 @@ class VideoPreloadingService: ObservableObject {
     
     // MARK: - Pool Management
     
-    /// Clear specific player from pool
+    /// Clear specific player from pool - PHASE 1 FIX: Ensures observer cleanup
     func clearPlayer(for videoID: String) {
         if let player = playerPool[videoID] {
             player.pause()
             player.replaceCurrentItem(with: nil)
             playerPool.removeValue(forKey: videoID)
             
-            // Remove observer
-            if let observer = playerObservers[videoID] {
+            // PHASE 1 FIX: Always remove observer
+            if let observer = playerObservers.removeValue(forKey: videoID) {
                 NotificationCenter.default.removeObserver(observer)
-                playerObservers.removeValue(forKey: videoID)
             }
             
             preloadProgress.removeValue(forKey: videoID)
             accessOrder.removeAll { $0 == videoID }
             
-            print("🎬 PRELOAD: Cleared player for \(videoID)")
+            print("🎬 PRELOAD: Cleared player for \(videoID.prefix(8))")
         }
         
         updatePoolStats()
@@ -486,7 +575,7 @@ class VideoPreloadingService: ObservableObject {
         print("🎬 PRELOAD: Cleared all players from pool")
     }
     
-    /// Clear preloaded players but keep currently playing (NEW)
+    /// Clear preloaded players but keep currently playing
     func clearPreloadedPlayers() {
         let keepID = currentlyPlayingVideoID
         
@@ -499,7 +588,7 @@ class VideoPreloadingService: ObservableObject {
         print("🧹 PRELOAD: Cleared preloaded players, kept current")
     }
     
-    /// Emergency: Keep only currently playing (NEW)
+    /// Emergency: Keep only currently playing
     func clearAllExceptCurrent() {
         guard let currentID = currentlyPlayingVideoID,
               let currentPlayer = playerPool[currentID] else {
@@ -525,7 +614,7 @@ class VideoPreloadingService: ObservableObject {
         print("🧹 PRELOAD: Emergency cleanup - kept only current player")
     }
     
-    /// Pause all playback (for background) (NEW)
+    /// Pause all playback (for background)
     func pauseAllPlayback() {
         for (_, player) in playerPool {
             player.pause()
@@ -563,10 +652,16 @@ class VideoPreloadingService: ObservableObject {
     
     // MARK: - Private Implementation
     
+    /// PHASE 1 FIX: Creates player AND adds to pool atomically
     private func createPlayer(for video: CoreVideoMetadata) -> AVPlayer? {
         guard let videoURL = URL(string: video.videoURL) else {
-            print("❌ PRELOAD: Invalid URL for \(video.id)")
+            print("❌ PRELOAD: Invalid URL for \(video.id.prefix(8))")
             return nil
+        }
+        
+        // PHASE 1 FIX: Enforce pool size BEFORE creating
+        while playerPool.count >= currentMaxPoolSize {
+            evictOldestPlayer()
         }
         
         let playerItem = AVPlayerItem(url: videoURL)
@@ -583,15 +678,18 @@ class VideoPreloadingService: ObservableObject {
         playerPool[video.id] = player
         updateAccessOrder(for: video.id)
         
-        // Manage pool size
-        managePoolSize()
         updatePoolStats()
         
-        print("🎬 PRELOAD: Created new player for \(video.id)")
+        print("🎬 PRELOAD: Created new player for \(video.id.prefix(8))")
         return player
     }
     
     private func setupPlayerLooping(player: AVPlayer, item: AVPlayerItem, videoID: String) {
+        // PHASE 1 FIX: Remove existing observer first
+        if let existingObserver = playerObservers.removeValue(forKey: videoID) {
+            NotificationCenter.default.removeObserver(existingObserver)
+        }
+        
         let observer = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
@@ -610,7 +708,7 @@ class VideoPreloadingService: ObservableObject {
         for video in videos {
             // Check if we should continue preloading
             guard preloadQueue.contains(video.id) else {
-                print("🎬 PRELOAD: Skipping \(video.id) - removed from queue")
+                print("🎬 PRELOAD: Skipping \(video.id.prefix(8)) - removed from queue")
                 continue
             }
             
@@ -629,9 +727,10 @@ class VideoPreloadingService: ObservableObject {
         }
     }
     
+    /// PHASE 1 FIX: Removes failed players from pool
     private func performVideoPreload(video: CoreVideoMetadata, priority: PreloadPriority) async {
         guard let videoURL = URL(string: video.videoURL) else {
-            print("❌ PRELOAD: Invalid URL for \(video.id)")
+            print("❌ PRELOAD: Invalid URL for \(video.id.prefix(8))")
             return
         }
         
@@ -648,34 +747,50 @@ class VideoPreloadingService: ObservableObject {
         setupPlayerLooping(player: player, item: playerItem, videoID: video.id)
         
         // Monitor preload progress
-        await monitorPreloadProgress(player: player, videoID: video.id)
+        let success = await monitorPreloadProgress(player: player, videoID: video.id)
         
-        // CRITICAL: Seek to zero NOW so player is ready at start position
-        // This prevents delay when player is retrieved from pool
-        await player.seek(to: .zero)
-        
-        // Add to pool when ready
-        playerPool[video.id] = player
-        updateAccessOrder(for: video.id)
-        preloadProgress[video.id] = 1.0
-        
-        // Manage pool size
-        managePoolSize()
-        updatePoolStats()
-        
-        print("🎬 PRELOAD: Completed preload for \(video.id)")
+        // PHASE 1 FIX: Only add to pool if successful
+        if success {
+            // CRITICAL: Seek to zero NOW so player is ready at start position
+            await player.seek(to: .zero)
+            
+            // Enforce pool size before adding
+            while playerPool.count >= currentMaxPoolSize {
+                evictOldestPlayer()
+            }
+            
+            // Add to pool when ready
+            playerPool[video.id] = player
+            updateAccessOrder(for: video.id)
+            preloadProgress[video.id] = 1.0
+            
+            updatePoolStats()
+            
+            print("🎬 PRELOAD: Completed preload for \(video.id.prefix(8))")
+        } else {
+            // PHASE 1 FIX: Clean up failed player
+            player.pause()
+            player.replaceCurrentItem(with: nil)
+            if let observer = playerObservers.removeValue(forKey: video.id) {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            preloadProgress.removeValue(forKey: video.id)
+            
+            print("❌ PRELOAD: Failed to preload \(video.id.prefix(8)), cleaned up")
+        }
     }
     
-    private func monitorPreloadProgress(player: AVPlayer, videoID: String) async {
-        guard let playerItem = player.currentItem else { return }
+    /// PHASE 1 FIX: Returns success/failure status
+    private func monitorPreloadProgress(player: AVPlayer, videoID: String) async -> Bool {
+        guard let playerItem = player.currentItem else { return false }
         
         var attempts = 0
         while playerItem.status != .readyToPlay && attempts < 50 {
             // Check for failure
             if playerItem.status == .failed {
-                print("❌ PRELOAD: Player failed for \(videoID)")
+                print("❌ PRELOAD: Player failed for \(videoID.prefix(8))")
                 preloadProgress[videoID] = 0.0
-                return
+                return false
             }
             
             try? await Task.sleep(nanoseconds: 100_000_000)
@@ -686,9 +801,11 @@ class VideoPreloadingService: ObservableObject {
         if playerItem.status == .readyToPlay {
             preloadProgress[videoID] = 1.0
             print("✅ PRELOAD: Ready after \(attempts) attempts (\(String(format: "%.1f", Double(attempts) * 0.1))s)")
+            return true
         } else {
             print("❌ PRELOAD: Timeout after \(attempts) attempts (5.0s)")
             preloadProgress[videoID] = 0.0
+            return false
         }
     }
     
@@ -705,7 +822,7 @@ class VideoPreloadingService: ObservableObject {
         }
         
         preloadQueue.removeFirst()
-        print("🎬 PRELOAD: Processing next in queue: \(nextVideoID)")
+        print("🎬 PRELOAD: Processing next in queue: \(nextVideoID.prefix(8))")
     }
     
     private func updatePoolStats() {
@@ -881,7 +998,7 @@ struct PreloadingMetrics {
     let preloadSuccessRate: Double
 }
 
-/// Memory status for debugging (NEW)
+/// Memory status for debugging
 struct MemoryStatus {
     let pressureLevel: MemoryPressureLevel
     let poolSize: Int

@@ -573,7 +573,7 @@ class VideoPlayerManager: ObservableObject {
     
     private func setupKillObserver() {
         killObserver = NotificationCenter.default.addObserver(
-            forName: .RealkillAllVideoPlayers,
+            forName: .killAllVideoPlayers,
             object: nil,
             queue: .main
         ) { [weak self] _ in

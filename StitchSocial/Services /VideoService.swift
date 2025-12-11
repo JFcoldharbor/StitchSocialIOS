@@ -120,13 +120,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
-        // 🔥 FIX: If creatorName is empty, fetch username from Firestore
+        // ðŸ”¥ FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -134,10 +134,10 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
@@ -150,7 +150,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
             FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,
-            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,  // ✅ USE FETCHED VALUE
+            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,  // âœ… USE FETCHED VALUE
             FirebaseSchema.VideoDocument.createdAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
             
@@ -191,7 +191,7 @@ class VideoService: ObservableObject {
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("✅ VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
+        print("âœ… VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
         return video
     }
     
@@ -217,13 +217,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
-        // 🔥 FIX: If creatorName is empty, fetch username from Firestore
+        // ðŸ”¥ FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -231,10 +231,10 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
@@ -257,7 +257,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
             FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,
-            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,  // ✅ USE FETCHED VALUE
+            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,  // âœ… USE FETCHED VALUE
             FirebaseSchema.VideoDocument.createdAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
             
@@ -311,7 +311,7 @@ class VideoService: ObservableObject {
         }
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("✅ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
+        print("âœ… VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
         return video
     }
     
@@ -419,17 +419,20 @@ class VideoService: ObservableObject {
         )
     }
     
-    /// Get user videos with pagination
+    /// Get user videos with pagination (EXCLUDES collection segments)
     func getUserVideos(
         userID: String,
         limit: Int = 20,
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> PaginatedResult<CoreVideoMetadata> {
         
+        // Fetch more to account for filtered collection segments
+        let fetchLimit = limit + 10
+        
         var query: Query = db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.creatorID, isEqualTo: userID)
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-            .limit(to: limit)
+            .limit(to: fetchLimit)
         
         if let lastDoc = lastDocument {
             query = query.start(afterDocument: lastDoc)
@@ -437,18 +440,69 @@ class VideoService: ObservableObject {
         
         let snapshot = try await query.getDocuments()
         
+        let allVideos = snapshot.documents.map { document in
+            createCoreVideoMetadata(from: document.data(), id: document.documentID)
+        }
+        
+        // Client-side filter: exclude collection segments
+        let filteredVideos = allVideos.filter { video in
+            // Exclude videos that are collection segments
+            return video.collectionID == nil || video.collectionID?.isEmpty == true
+        }
+        
+        // Take only the requested limit
+        let limitedVideos = Array(filteredVideos.prefix(limit))
+        
+        return PaginatedResult(
+            items: limitedVideos,
+            lastDocument: snapshot.documents.last,
+            hasMore: snapshot.documents.count >= fetchLimit
+        )
+    }
+    
+    // MARK: - Collection Support
+    
+    /// Get all videos belonging to a collection, sorted by segment number
+    func getVideosByCollection(collectionID: String) async throws -> [CoreVideoMetadata] {
+        print("📚 VIDEO SERVICE: Fetching videos for collection \(collectionID)")
+        
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField("collectionID", isEqualTo: collectionID)
+            .order(by: "segmentNumber", descending: false)
+            .getDocuments()
+        
         let videos = snapshot.documents.map { document in
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
-        return PaginatedResult(
-            items: videos,
-            lastDocument: snapshot.documents.last,
-            hasMore: snapshot.documents.count >= limit
-        )
+        print("📚 VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
+        return videos
     }
     
-    /// Get all threads with children for discovery feed
+    /// Get timestamped replies for a video segment (replies that reference specific timestamps)
+    /// - Parameter videoID: The video ID (also accepts segmentID)
+    func getTimestampedReplies(videoID: String? = nil, segmentID: String? = nil) async throws -> [CoreVideoMetadata] {
+        let targetID = videoID ?? segmentID ?? ""
+        guard !targetID.isEmpty else {
+            print("⚠️ VIDEO SERVICE: No videoID or segmentID provided for timestamped replies")
+            return []
+        }
+        
+        // Query for replies to this video that have timestamp markers
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.replyToVideoID, isEqualTo: targetID)
+            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: false)
+            .getDocuments()
+        
+        let replies = snapshot.documents.map { document in
+            createCoreVideoMetadata(from: document.data(), id: document.documentID)
+        }
+        
+        print("📚 VIDEO SERVICE: Loaded \(replies.count) timestamped replies for \(targetID)")
+        return replies
+    }
+    
+    /// Get all threads with children for discovery feed (EXCLUDES collection segments)
     func getAllThreadsWithChildren(
         limit: Int = 50,
         lastDocument: DocumentSnapshot? = nil
@@ -457,10 +511,13 @@ class VideoService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
+        // Fetch more to account for filtered collection segments
+        let fetchLimit = limit + 20
+        
         var query = db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-            .limit(to: limit)
+            .limit(to: fetchLimit)
         
         if let lastDoc = lastDocument {
             query = query.start(afterDocument: lastDoc)
@@ -470,7 +527,12 @@ class VideoService: ObservableObject {
         var threads: [ThreadData] = []
         
         for doc in snapshot.documents {
-            guard let video = try? createCoreVideoMetadata(from: doc.data(), id: doc.documentID) else { continue }
+            let video = createCoreVideoMetadata(from: doc.data(), id: doc.documentID)
+            
+            // Skip collection segments - they should only appear in collection player
+            if let collID = video.collectionID, !collID.isEmpty {
+                continue
+            }
             
             let childVideos = try await getThreadChildren(threadID: video.id)
             
@@ -480,9 +542,14 @@ class VideoService: ObservableObject {
                 childVideos: childVideos
             )
             threads.append(threadData)
+            
+            // Stop once we have enough threads
+            if threads.count >= limit {
+                break
+            }
         }
         
-        let hasMore = snapshot.documents.count >= limit
+        let hasMore = snapshot.documents.count >= fetchLimit
         
         print("VIDEO SERVICE: Discovery feed loaded - \(threads.count) threads")
         return (threads: threads, lastDocument: snapshot.documents.last, hasMore: hasMore)
@@ -570,7 +637,7 @@ class VideoService: ObservableObject {
                 FirebaseSchema.VideoDocument.updatedAt: Timestamp()
             ])
         
-        print("🏷️ VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
+        print("ðŸ·ï¸ VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
     }
     
     /// Record user interaction (views and shares only)
@@ -909,11 +976,18 @@ class VideoService: ObservableObject {
         let lastEngagementAt = (data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp)?.dateValue()
         let taggedUserIDs = data[FirebaseSchema.VideoDocument.taggedUserIDs] as? [String] ?? []
         
+        // Collection fields
+        let collectionID = data["collectionID"] as? String
+        let segmentNumber = data["segmentNumber"] as? Int
+        let segmentTitle = data["segmentTitle"] as? String
+        let isCollectionSegment = data["isCollectionSegment"] as? Bool ?? false
+        let replyTimestamp = data["replyTimestamp"] as? TimeInterval
+        
         return CoreVideoMetadata(
             id: id,
             title: title,
             description: description,
-            taggedUserIDs: taggedUserIDs,  // ← MOVE HERE (after description)
+            taggedUserIDs: taggedUserIDs,  // â† MOVE HERE (after description)
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -937,7 +1011,12 @@ class VideoService: ObservableObject {
             fileSize: fileSize,
             discoverabilityScore: discoverabilityScore,
             isPromoted: isPromoted,
-            lastEngagementAt: lastEngagementAt
+            lastEngagementAt: lastEngagementAt,
+            collectionID: collectionID,
+            segmentNumber: segmentNumber,
+            segmentTitle: segmentTitle,
+            isCollectionSegment: isCollectionSegment,
+            replyTimestamp: replyTimestamp
         )
     }
     /// Calculate video temperature

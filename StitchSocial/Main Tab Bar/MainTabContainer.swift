@@ -5,7 +5,7 @@
 //  Layer 8: Views - Main Tab Navigation with Service Injection + PRELOADING
 //  Dependencies: Layer 4 (Services), Layer 6 (NavigationCoordinator), Layer 1 (Foundation)
 //  Central navigation container with custom dipped tab bar
-//  FIXED: Uses VideoPreloadingService.shared singleton
+//  PHASE 1 FIX: Removed duplicate Notification.Name declarations - now in NotificationNames.swift
 //
 
 import SwiftUI
@@ -79,6 +79,7 @@ struct MainTabContainer: View {
                     
                     showingRecording = false
                     
+                    // PHASE 1 FIX: Use unified notification
                     NotificationCenter.default.post(
                         name: .refreshFeeds,
                         object: nil,
@@ -103,8 +104,9 @@ struct MainTabContainer: View {
                     videoService: videoService
                 )
                 .onAppear {
+                    // PHASE 1 FIX: Use unified notification
                     NotificationCenter.default.post(
-                        name: NSNotification.Name("LoadUserProfile"),
+                        name: .loadUserProfile,
                         object: nil,
                         userInfo: ["userID": userID]
                     )
@@ -185,11 +187,8 @@ struct MainTabContainer: View {
                 // HomeFeed will preload on its own .onAppear
             } else {
                 print("🎬 PRELOAD TRIGGER: HomeFeed return - triggering preload")
-                // Post notification to trigger HomeFeed preload
-                NotificationCenter.default.post(
-                    name: .preloadHomeFeed,
-                    object: nil
-                )
+                // PHASE 1 FIX: Use unified notification
+                NotificationCenter.default.post(name: .preloadHomeFeed, object: nil)
             }
             
         case .discovery:
@@ -207,12 +206,8 @@ struct MainTabContainer: View {
     }
 }
 
-// MARK: - Notification Extensions
-
-extension Notification.Name {
-    static let refreshFeeds = Notification.Name("refreshFeeds")
-    static let preloadHomeFeed = Notification.Name("preloadHomeFeed")
-}
+// MARK: - REMOVED: Notification.Name extension
+// Now in NotificationNames.swift - single source of truth
 
 // MARK: - Preview
 

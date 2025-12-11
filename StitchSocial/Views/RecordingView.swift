@@ -321,7 +321,7 @@ struct RecordingView: View {
         BackgroundActivityManager.shared.killAllBackgroundActivity(reason: "Recording exit")
         
         // Send additional kill notifications for immediate effect
-        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
         NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
         NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
         
@@ -422,7 +422,7 @@ struct RecordingView: View {
     
     private func setupCamera() {
         // FIXED: Use the correct notification name that exists in the project
-        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
         
         // Set up recording audio session
         setupRecordingAudioSession()
@@ -508,11 +508,4 @@ enum VideoSelectionError: LocalizedError {
             return "Unsupported video format"
         }
     }
-}
-
-// MARK: - Notification Extension (FIXED - Provide both names for compatibility)
-
-extension Notification.Name {
-    static let MyRealkillAllVideoPlayers = Notification.Name("killAllVideoPlayers")
-    static let killAllVideoPlayers = Notification.Name("killAllVideoPlayers")  // For ContextualVideoOverlay compatibility
 }

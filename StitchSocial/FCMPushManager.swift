@@ -468,10 +468,3 @@ extension FCMPushManager: UNUserNotificationCenterDelegate {
         print("📱 FCM: Navigation triggered for: \(type)")
     }
 }
-
-// MARK: - Notification Names
-
-extension Notification.Name {
-    static let pushNotificationReceived = Notification.Name("pushNotificationReceived")
-    static let pushNotificationTapped = Notification.Name("pushNotificationTapped")
-}

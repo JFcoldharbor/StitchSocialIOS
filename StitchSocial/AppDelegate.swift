@@ -558,15 +558,6 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
     }
 }
 
-// MARK: - Deep Linking Support
-
-extension Notification.Name {
-    static let navigateToVideo = Notification.Name("navigateToVideo")
-    static let navigateToProfile = Notification.Name("navigateToProfile")
-    static let navigateToThread = Notification.Name("navigateToThread")
-    static let navigateToNotifications = Notification.Name("navigateToNotifications")
-}
-
 // MARK: - Testing & Debug Methods
 
 extension AppDelegate {

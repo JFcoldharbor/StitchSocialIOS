@@ -5,7 +5,7 @@
 //  Layer 8: Views - Optimized Profile Display with Fixed Video Grid and FullscreenVideoView
 //  Dependencies: ProfileViewModel (Layer 7), VideoThumbnailView, EditProfileView, ProfileVideoGrid, FullscreenVideoView
 //  Features: Lightweight thumbnails, profile refresh, proper video playback with vertical navigation
-//  FIXED: Removed .onAppear/.onDisappear modifiers that were breaking fullScreenCover
+//  PHASE 1 FIX: Unified notifications, Task cancellation, observer cleanup
 //
 
 import SwiftUI
@@ -38,6 +38,23 @@ struct ProfileView: View {
     
     @State private var isShowingFullBio = false
     
+    // MARK: - Collections State
+    
+    @State private var userCollections: [VideoCollection] = []
+    @State private var userDrafts: [CollectionDraft] = []
+    @State private var isLoadingCollections = false
+    @State private var showingCollectionComposer = false
+    @State private var showingCollectionPlayer = false
+    @State private var selectedCollection: VideoCollection?
+    @State private var selectedDraft: CollectionDraft?
+    @State private var showingAllCollections = false
+    @State private var collectionError: String?
+    
+    // MARK: - PHASE 1 FIX: Task Management
+    
+    @State private var loadTask: Task<Void, Never>?
+    @State private var collectionsTask: Task<Void, Never>?
+    
     // MARK: - Initialization
     
     init(authService: AuthService, userService: UserService, videoService: VideoService? = nil) {
@@ -68,6 +85,7 @@ struct ProfileView: View {
         }
         .task {
             await viewModel.loadProfile()
+            await loadCollections()
         }
         .onAppear {
             if let user = viewModel.currentUser {
@@ -75,10 +93,20 @@ struct ProfileView: View {
                 viewModel.animationController.startEntranceSequence(hypeProgress: hypeProgress)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RefreshProfile"))) { _ in
-            Task {
+        // PHASE 1 FIX: Use unified notification name
+        .onReceive(NotificationCenter.default.publisher(for: .refreshProfile)) { _ in
+            loadTask?.cancel()
+            loadTask = Task {
                 await viewModel.refreshProfile()
+                await loadCollections()
             }
+        }
+        // PHASE 1 FIX: Cleanup on disappear
+        .onDisappear {
+            loadTask?.cancel()
+            loadTask = nil
+            collectionsTask?.cancel()
+            collectionsTask = nil
         }
         .sheet(isPresented: $showingFollowersList) {
             stitchersSheet
@@ -96,7 +124,8 @@ struct ProfileView: View {
                     overlayContext: viewModel.isOwnProfile ? .profileOwn : .profileOther,
                     onDismiss: {
                         print("📱 PROFILE: Dismissing fullscreen")
-                        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                        // PHASE 1 FIX: Use unified notification
+                        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                         showingVideoPlayer = false
                         selectedVideo = nil
                     }
@@ -108,6 +137,62 @@ struct ProfileView: View {
                             .foregroundColor(.white)
                             .font(.headline)
                     )
+            }
+        }
+        // Collection Composer Sheet
+        .sheet(isPresented: $showingCollectionComposer) {
+            if let user = viewModel.currentUser {
+                NavigationStack {
+                    CollectionComposerSheet(
+                        user: user,
+                        existingDraft: selectedDraft,
+                        onDismiss: {
+                            showingCollectionComposer = false
+                            selectedDraft = nil
+                            collectionsTask?.cancel()
+                            collectionsTask = Task { await loadCollections() }
+                        }
+                    )
+                }
+                .preferredColorScheme(.dark)
+            }
+        }
+        // Collection Player
+        .fullScreenCover(isPresented: $showingCollectionPlayer) {
+            if let collection = selectedCollection, let user = viewModel.currentUser {
+                CollectionPlayerView(
+                    viewModel: CollectionPlayerViewModel(collection: collection, userID: user.id),
+                    coordinator: CollectionCoordinator(userID: user.id, username: user.username),
+                    onDismiss: {
+                        showingCollectionPlayer = false
+                        selectedCollection = nil
+                    }
+                )
+            }
+        }
+        // All Collections Sheet
+        .sheet(isPresented: $showingAllCollections) {
+            if let user = viewModel.currentUser {
+                NavigationStack {
+                    ProfileCollectionsTab(
+                        profileUserID: user.id,
+                        isOwnProfile: viewModel.isOwnProfile,
+                        coordinator: CollectionCoordinator(userID: user.id, username: user.username)
+                    )
+                    .navigationTitle("Collections")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button("Done") {
+                                showingAllCollections = false
+                                collectionsTask?.cancel()
+                                collectionsTask = Task { await loadCollections() }
+                            }
+                            .foregroundColor(.cyan)
+                        }
+                    }
+                }
+                .preferredColorScheme(.dark)
             }
         }
         .onChange(of: showingVideoPlayer) { oldValue, newValue in
@@ -124,6 +209,15 @@ struct ProfileView: View {
                 Text("Are you sure you want to delete '\(video.title)'? This action cannot be undone.")
             }
         }
+        // Collection Error Alert
+        .alert("Collections", isPresented: Binding(
+            get: { collectionError != nil },
+            set: { if !$0 { collectionError = nil } }
+        )) {
+            Button("OK") { collectionError = nil }
+        } message: {
+            Text(collectionError ?? "")
+        }
     }
 
     // MARK: - Profile Content
@@ -133,6 +227,7 @@ struct ProfileView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 0) {
                     optimizedProfileHeader(user: user)
+                    collectionsRow
                     tabBarSection
                     videoGridSection
                 }
@@ -148,6 +243,90 @@ struct ProfileView: View {
                 }
             }
         }
+    }
+    
+    // MARK: - Collections Row
+    
+    @ViewBuilder
+    private var collectionsRow: some View {
+        if let user = viewModel.currentUser {
+            ProfileCollectionsRow(
+                collections: userCollections,
+                drafts: viewModel.isOwnProfile ? userDrafts : [],
+                isOwnProfile: viewModel.isOwnProfile,
+                isEligible: user.tier.isAmbassadorOrHigher,
+                onAddTap: {
+                    if userDrafts.count >= 10 {
+                        collectionError = "You've reached the maximum of 10 drafts. Please delete some drafts first."
+                    } else {
+                        selectedDraft = nil
+                        showingCollectionComposer = true
+                    }
+                },
+                onCollectionTap: { collection in
+                    selectedCollection = collection
+                    showingCollectionPlayer = true
+                },
+                onDraftTap: { draft in
+                    selectedDraft = draft
+                    showingCollectionComposer = true
+                },
+                onDraftDelete: { draft in
+                    deleteDraft(draft)
+                },
+                onSeeAllTap: {
+                    showingAllCollections = true
+                }
+            )
+        }
+    }
+    
+    // MARK: - Draft Deletion
+    
+    private func deleteDraft(_ draft: CollectionDraft) {
+        Task {
+            do {
+                let collectionService = CollectionService()
+                try await collectionService.deleteDraft(draftID: draft.id)
+                
+                // Remove from local array
+                userDrafts.removeAll { $0.id == draft.id }
+                
+                print("🗑️ PROFILE: Deleted draft \(draft.id)")
+            } catch {
+                collectionError = "Failed to delete draft: \(error.localizedDescription)"
+                print("❌ PROFILE: Failed to delete draft: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - Collections Loading
+    
+    private func loadCollections() async {
+        guard let userID = viewModel.currentUser?.id else { return }
+        
+        // PHASE 1 FIX: Check for cancellation
+        guard !Task.isCancelled else { return }
+        
+        isLoadingCollections = true
+        
+        do {
+            let collectionService = CollectionService()
+            userCollections = try await collectionService.getUserCollections(userID: userID)
+            
+            // PHASE 1 FIX: Check for cancellation
+            guard !Task.isCancelled else { return }
+            
+            if viewModel.isOwnProfile {
+                userDrafts = try await collectionService.loadUserDrafts(creatorID: userID)
+            }
+            
+            print("📚 PROFILE: Loaded \(userCollections.count) collections, \(userDrafts.count) drafts")
+        } catch {
+            print("❌ PROFILE: Failed to load collections: \(error)")
+        }
+        
+        isLoadingCollections = false
     }
     
     // MARK: - Optimized Profile Header
@@ -525,20 +704,20 @@ struct ProfileView: View {
         )
     }
     
-    // MARK: - Video Navigation (FIXED - Simplified + Debug)
+    // MARK: - Video Navigation (PHASE 1 FIX: Unified notification)
     
     private func openVideoInFullscreen(video: CoreVideoMetadata) {
         print("📱 PROFILE: Tapped video \(video.id.prefix(8))")
         
-        // Kill all players first
-        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+        // PHASE 1 FIX: Use unified notification
+        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
         
         // Set video IMMEDIATELY
         selectedVideo = video
         print("🔍 DEBUG: selectedVideo = \(selectedVideo?.id ?? "nil")")
         
         // Present with small delay for cleanup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             print("🔍 DEBUG: About to set showingVideoPlayer = true")
             print("🔍 DEBUG: selectedVideo still = \(self.selectedVideo?.id ?? "nil")")
             self.showingVideoPlayer = true
@@ -675,7 +854,7 @@ struct ProfileView: View {
         }
         
         if followerCount >= 100 {
-            bioComponents.append("💥 Community leader")
+            bioComponents.append("👥 Community leader")
         }
         
         if user.tier != .rookie {
@@ -870,6 +1049,95 @@ struct ProfileView: View {
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundColor(.white)
+        }
+    }
+}
+
+// MARK: - Collection Composer Sheet Helper
+
+struct CollectionComposerSheet: View {
+    let user: BasicUserInfo
+    let existingDraft: CollectionDraft?
+    let onDismiss: () -> Void
+    
+    @StateObject private var viewModel: CollectionComposerViewModel
+    @StateObject private var coordinator: CollectionCoordinator
+    @State private var isCreating = false
+    @State private var error: String?
+    
+    init(user: BasicUserInfo, existingDraft: CollectionDraft?, onDismiss: @escaping () -> Void) {
+        self.user = user
+        self.existingDraft = existingDraft
+        self.onDismiss = onDismiss
+        
+        let coord = CollectionCoordinator(userID: user.id, username: user.username)
+        _coordinator = StateObject(wrappedValue: coord)
+        
+        if let draft = existingDraft {
+            _viewModel = StateObject(wrappedValue: CollectionComposerViewModel(draft: draft, username: user.username))
+        } else {
+            _viewModel = StateObject(wrappedValue: CollectionComposerViewModel(userID: user.id, username: user.username))
+        }
+    }
+    
+    var body: some View {
+        Group {
+            if isCreating {
+                VStack(spacing: 16) {
+                    ProgressView()
+                        .tint(.white)
+                    Text("Creating collection...")
+                        .foregroundColor(.gray)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+            } else if let error = error {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.largeTitle)
+                        .foregroundColor(.orange)
+                    Text(error)
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    Button("Dismiss") { onDismiss() }
+                        .foregroundColor(.cyan)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+            } else if viewModel.draftID != nil || existingDraft != nil {
+                CollectionComposerView(
+                    viewModel: viewModel,
+                    coordinator: coordinator,
+                    onDismiss: onDismiss
+                )
+            } else {
+                Color.black
+            }
+        }
+        .task {
+            if existingDraft == nil && viewModel.draftID == nil {
+                isCreating = true
+                await viewModel.createNewDraft()
+                isCreating = false
+                
+                if let err = viewModel.errorMessage {
+                    error = err
+                }
+            }
+        }
+    }
+}
+
+// MARK: - UserTier Extension
+
+extension UserTier {
+    var isAmbassadorOrHigher: Bool {
+        switch self {
+        case .ambassador, .elite, .partner, .legendary, .topCreator, .founder, .coFounder:
+            return true
+        case .rookie, .rising, .veteran, .influencer:
+            return false
         }
     }
 }

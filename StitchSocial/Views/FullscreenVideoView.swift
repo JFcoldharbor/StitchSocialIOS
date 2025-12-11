@@ -5,7 +5,7 @@
 //  Layer 8: Views - Clean Fullscreen Video Player with Thread Navigation
 //  Dependencies: SwiftUI, AVFoundation, AVKit
 //  Features: Horizontal child navigation, video playback, view tracking
-//  UPDATED: Integrated memory management for crash prevention
+//  PHASE 1 FIX: Unified notifications, observer cleanup, proper pool usage
 //
 
 import SwiftUI
@@ -44,7 +44,10 @@ struct FullscreenVideoView: View {
     // Services
     @StateObject private var videoService = VideoService()
     
-    // MARK: - Memory Management (NEW)
+    // MARK: - PHASE 1 FIX: Task Management
+    @State private var loadTask: Task<Void, Never>?
+    
+    // MARK: - Memory Management
     
     /// Reference to preloading service for memory management
     private var preloadService: VideoPreloadingService {
@@ -95,6 +98,10 @@ struct FullscreenVideoView: View {
             print("🧠 MEMORY: Marked \(video.id.prefix(8)) as currently playing")
         }
         .onDisappear {
+            // PHASE 1 FIX: Cancel any pending tasks
+            loadTask?.cancel()
+            loadTask = nil
+            
             cleanupAudioSession()
             
             // MEMORY: Clear protection when leaving fullscreen
@@ -368,13 +375,23 @@ struct FullscreenVideoView: View {
     // MARK: - Thread Data Loading
     
     private func loadThreadData() {
-        Task {
+        // PHASE 1 FIX: Cancel existing task before creating new one
+        loadTask?.cancel()
+        loadTask = Task {
             do {
-                isLoadingThread = true
-                loadError = nil
+                await MainActor.run {
+                    isLoadingThread = true
+                    loadError = nil
+                }
+                
+                // PHASE 1 FIX: Check for cancellation
+                guard !Task.isCancelled else { return }
                 
                 let threadID = video.threadID ?? video.id
                 let threadData = try await videoService.getCompleteThread(threadID: threadID)
+                
+                // PHASE 1 FIX: Check for cancellation again after async work
+                guard !Task.isCancelled else { return }
                 
                 let startingIndex: Int
                 if video.id == threadData.parentVideo.id {
@@ -398,6 +415,9 @@ struct FullscreenVideoView: View {
                 print("✅ FULLSCREEN: Loaded thread - \(threadData.childVideos.count) replies")
                 
             } catch {
+                // PHASE 1 FIX: Only update UI if not cancelled
+                guard !Task.isCancelled else { return }
+                
                 await MainActor.run {
                     self.loadError = error.localizedDescription
                     self.isLoadingThread = false
@@ -477,7 +497,7 @@ struct FullscreenVideoView: View {
     }
 }
 
-// MARK: - Video Player Component
+// MARK: - Video Player Component (PHASE 1 FIX: Observer cleanup, unified notifications)
 
 struct VideoPlayerComponent: View {
     let video: CoreVideoMetadata
@@ -488,10 +508,13 @@ struct VideoPlayerComponent: View {
     @State private var isLoading = true
     @State private var hasError = false
     @State private var hasTrackedView = false
-    @State private var killObserver: NSObjectProtocol?
-    @State private var cancellables = Set<AnyCancellable>()
     
-    // MARK: - Memory Management (NEW)
+    // PHASE 1 FIX: Use NotificationObserverBag for proper cleanup
+    @State private var observerBag = NotificationObserverBag()
+    @State private var loopObserver: NSObjectProtocol?
+    @State private var statusCancellable: AnyCancellable?
+    
+    // MARK: - Memory Management
     
     /// Check memory pressure before creating players
     private var preloadService: VideoPreloadingService {
@@ -514,6 +537,7 @@ struct VideoPlayerComponent: View {
         }
         .onAppear {
             setupPlayer()
+            setupKillObserver()
             
             if isActive, !hasTrackedView, let userID = Auth.auth().currentUser?.uid {
                 hasTrackedView = true
@@ -534,12 +558,8 @@ struct VideoPlayerComponent: View {
             }
         }
         .onDisappear {
-            // Cleanup when view disappears
-            player?.pause()
-            if let observer = killObserver {
-                NotificationCenter.default.removeObserver(observer)
-                killObserver = nil
-            }
+            // PHASE 1 FIX: Proper cleanup
+            cleanupPlayer()
             print("🧹 FULLSCREEN: Cleanup \(video.id.prefix(8))")
         }
         .onChange(of: isActive) { _, newValue in
@@ -574,6 +594,7 @@ struct VideoPlayerComponent: View {
                 print("▶️ CONTINUING PLAY: \(video.id.prefix(8)) (already playing)")
             }
             
+            setupLoopObserver()
             print("🎬 COMPONENT: Using cached player for \(video.id.prefix(8))")
             return
         }
@@ -591,65 +612,104 @@ struct VideoPlayerComponent: View {
             return
         }
         
-        let asset = AVAsset(url: videoURL)
-        playerItem = AVPlayerItem(asset: asset)
-        player = AVPlayer(playerItem: playerItem)
-        
-        setupKillObserver()
-        
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { _ in
-            self.player?.seek(to: .zero)
-            if self.isActive {
-                self.player?.play()
+        // PHASE 1 FIX: Use preload service to create player (adds to pool)
+        Task {
+            await preloadService.preloadVideo(video, priority: .high)
+            
+            await MainActor.run {
+                if let poolPlayer = preloadService.getPlayer(for: video) {
+                    self.player = poolPlayer
+                    self.player?.isMuted = false
+                    self.isLoading = false
+                    
+                    if self.isActive {
+                        poolPlayer.play()
+                    }
+                    
+                    setupLoopObserver()
+                } else {
+                    // Fallback: create player directly if pool failed
+                    let asset = AVAsset(url: videoURL)
+                    playerItem = AVPlayerItem(asset: asset)
+                    player = AVPlayer(playerItem: playerItem)
+                    
+                    setupLoopObserver()
+                    setupStatusObserver()
+                }
             }
         }
+    }
+    
+    // PHASE 1 FIX: Use unified notification name via observer bag
+    private func setupKillObserver() {
+        observerBag.observe(.killAllVideoPlayers) { [self] _ in
+            player?.pause()
+            print("🛑 FULLSCREEN PLAYER: Killed via notification for \(video.id.prefix(8))")
+        }
+    }
+    
+    private func setupLoopObserver() {
+        guard let currentItem = player?.currentItem else { return }
         
-        playerItem?.publisher(for: \.status)
+        // Remove existing loop observer first
+        if let existing = loopObserver {
+            NotificationCenter.default.removeObserver(existing)
+        }
+        
+        loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: currentItem,
+            queue: .main
+        ) { [self] _ in
+            player?.seek(to: .zero)
+            if isActive {
+                player?.play()
+            }
+        }
+    }
+    
+    private func setupStatusObserver() {
+        statusCancellable = playerItem?.publisher(for: \.status)
             .receive(on: DispatchQueue.main)
-            .sink { status in
+            .sink { [self] status in
                 switch status {
                 case .readyToPlay:
-                    self.isLoading = false
-                    if self.isActive {
-                        self.player?.play()
+                    isLoading = false
+                    if isActive {
+                        player?.play()
                     }
                 case .failed:
-                    self.hasError = true
-                    self.isLoading = false
+                    hasError = true
+                    isLoading = false
                 case .unknown:
                     break
                 @unknown default:
                     break
                 }
             }
-            .store(in: &cancellables)
     }
     
-    private func setupKillObserver() {
-        killObserver = NotificationCenter.default.addObserver(
-            forName: .RealkillAllVideoPlayers,
-            object: nil,
-            queue: .main
-        ) { _ in
-            self.player?.pause()
-        }
-    }
-    
+    // PHASE 1 FIX: Comprehensive cleanup
     private func cleanupPlayer() {
         player?.pause()
+        
+        // Clean up observer bag (handles kill notification)
+        observerBag.removeAll()
+        
+        // Clean up loop observer
+        if let observer = loopObserver {
+            NotificationCenter.default.removeObserver(observer)
+            loopObserver = nil
+        }
+        
+        // Clean up status observer
+        statusCancellable?.cancel()
+        statusCancellable = nil
+        
+        // Don't nil the player - it's managed by the pool
+        // Just remove our local reference
         player = nil
         playerItem = nil
-        cancellables.removeAll()
-        
-        if let observer = killObserver {
-            NotificationCenter.default.removeObserver(observer)
-            killObserver = nil
-        }
-        NotificationCenter.default.removeObserver(self)
     }
     
     private var loadingState: some View {

@@ -1,10 +1,11 @@
 //
 //  NavigationCoordinator.swift
-//  CleanBeta
+//  StitchSocial
 //
 //  Layer 6: Coordination - Centralized Navigation Management
 //  Dependencies: Layer 1 Foundation only (UserTier, MainAppTab, StitchColors)
 //  Manages all app navigation flows and deep linking
+//  PHASE 1: Updated notification names to use unified NotificationNames.swift
 //
 
 import SwiftUI
@@ -45,9 +46,9 @@ class NavigationCoordinator: ObservableObject {
             selectedTab = .progression
         }
         
-        // Post notification for ProfileView to load specific user
+        // PHASE 1 FIX: Use unified notification name
         NotificationCenter.default.post(
-            name: NSNotification.Name("LoadUserProfile"),
+            name: .loadUserProfile,
             object: nil,
             userInfo: ["userID": userID]
         )
@@ -62,9 +63,9 @@ class NavigationCoordinator: ObservableObject {
         // Switch to home tab for video content
         selectedTab = .home
         
-        // Post notification for HomeFeedView to scroll to video
+        // PHASE 1 FIX: Use unified notification name
         NotificationCenter.default.post(
-            name: NSNotification.Name("ScrollToVideo"),
+            name: .scrollToVideo,
             object: nil,
             userInfo: [
                 "videoID": videoID,
@@ -81,9 +82,9 @@ class NavigationCoordinator: ObservableObject {
         
         selectedTab = .home
         
-        // Post notification for HomeFeedView to focus on thread
+        // PHASE 1 FIX: Use unified notification name
         NotificationCenter.default.post(
-            name: NSNotification.Name("FocusThread"),
+            name: .focusThread,
             object: nil,
             userInfo: ["threadID": threadID]
         )
@@ -98,8 +99,9 @@ class NavigationCoordinator: ObservableObject {
         selectedTab = .discovery
         
         if let filter = filter {
+            // PHASE 1 FIX: Use unified notification name
             NotificationCenter.default.post(
-                name: NSNotification.Name("SetDiscoveryFilter"),
+                name: .setDiscoveryFilter,
                 object: nil,
                 userInfo: ["filter": filter]
             )
@@ -303,8 +305,9 @@ extension NavigationCoordinator {
     
     /// Handle NotificationCenter navigation events
     func setupNotificationObservers() {
+        // PHASE 1 FIX: Use unified notification names
         NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("NavigateToVideo"),
+            forName: .navigateToVideo,
             object: nil,
             queue: .main
         ) { notification in
@@ -318,7 +321,7 @@ extension NavigationCoordinator {
         }
         
         NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("NavigateToProfile"),
+            forName: .navigateToProfile,
             object: nil,
             queue: .main
         ) { notification in
@@ -331,7 +334,7 @@ extension NavigationCoordinator {
         }
         
         NotificationCenter.default.addObserver(
-            forName: NSNotification.Name("NavigateToThread"),
+            forName: .navigateToThread,
             object: nil,
             queue: .main
         ) { notification in

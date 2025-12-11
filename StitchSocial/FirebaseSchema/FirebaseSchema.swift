@@ -9,6 +9,7 @@
 //  UPDATED: Complete referral system integration
 //  UPDATED: Added taggedUserIDs for user tagging/mentions
 //  UPDATED: Added milestone tracking fields for notifications
+//  UPDATED: Added Collections support fields (collectionID, segmentNumber, segmentTitle, replyTimestamp)
 //
 
 import Foundation
@@ -55,6 +56,11 @@ struct FirebaseSchema {
         static let system = "system"
         static let referrals = "referrals"
         
+        // MARK: - Collections Feature Collections (NEW)
+        static let videoCollections = "videoCollections"
+        static let collectionDrafts = "collectionDrafts"
+        static let collectionProgress = "collectionProgress"
+        
         /// Get full collection path for stitchfin database
         static func fullPath(for collection: String) -> String {
             return "projects/stitchbeta-8bbfe/databases/\(databaseName)/documents/\(collection)"
@@ -66,7 +72,7 @@ struct FirebaseSchema {
                 videos, users, threads, engagement, interactions,
                 tapProgress, notifications, following, userBadges,
                 progression, analytics, comments, reports, cache,
-                system, referrals
+                system, referrals, videoCollections, collectionDrafts, collectionProgress
             ]
             
             let invalidCollections = collections.filter { $0.isEmpty }
@@ -81,7 +87,7 @@ struct FirebaseSchema {
         }
     }
     
-    // MARK: - Video Document Schema (UPDATED with Milestone Tracking)
+    // MARK: - Video Document Schema (UPDATED with Milestone Tracking + Collections Support)
     
     struct VideoDocument {
         // Core video fields
@@ -111,7 +117,7 @@ struct FirebaseSchema {
         static let shareCount = "shareCount"
         static let lastEngagementAt = "lastEngagementAt"
         
-        // MILESTONE TRACKING FIELDS (NEW)
+        // MILESTONE TRACKING FIELDS
         static let firstHypeReceived = "firstHypeReceived"           // Has received first hype
         static let firstCoolReceived = "firstCoolReceived"           // Has received first cool
         static let milestone10Reached = "milestone10Reached"         // 🔥 Heating Up
@@ -137,6 +143,20 @@ struct FirebaseSchema {
         static let isInternalAccount = "isInternalAccount"
         static let isDeleted = "isDeleted"
         static let moderationStatus = "moderationStatus"
+        
+        // MARK: - Collection Support Fields (NEW)
+        
+        /// Collection this video belongs to (nil = standalone video)
+        static let collectionID = "collectionID"
+        
+        /// Segment number within collection (1, 2, 3...)
+        static let segmentNumber = "segmentNumber"
+        
+        /// Segment-specific title (can differ from main title)
+        static let segmentTitle = "segmentTitle"
+        
+        /// For timestamped replies: exact second in parent video this reply references
+        static let replyTimestamp = "replyTimestamp"
         
         /// Full document path in stitchfin database
         static func documentPath(videoID: String) -> String {
@@ -177,6 +197,9 @@ struct FirebaseSchema {
         static let totalHypesReceived = "totalHypesReceived"
         static let totalCoolsReceived = "totalCoolsReceived"
         static let deletedVideoCount = "deletedVideoCount"
+        
+        // Collections count (NEW)
+        static let collectionCount = "collectionCount"
         
         // REFERRAL SYSTEM FIELDS
         static let referralCode = "referralCode"
@@ -404,6 +427,130 @@ struct FirebaseSchema {
         }
     }
     
+    // MARK: - Collection Document Schema (NEW)
+    
+    struct CollectionDocument {
+        // Core collection fields
+        static let id = "id"
+        static let title = "title"
+        static let description = "description"
+        static let creatorID = "creatorID"
+        static let creatorName = "creatorName"
+        static let createdAt = "createdAt"
+        static let updatedAt = "updatedAt"
+        static let publishedAt = "publishedAt"
+        
+        // Segment management
+        static let segmentVideoIDs = "segmentVideoIDs"     // Ordered array of video IDs
+        static let segmentThumbnails = "segmentThumbnails" // Quick access thumbnails
+        static let segmentCount = "segmentCount"
+        static let totalDuration = "totalDuration"
+        
+        // Status and visibility
+        static let status = "status"                       // draft, processing, published, archived, deleted
+        static let visibility = "visibility"               // public, followers, private, unlisted
+        static let thumbnailURL = "thumbnailURL"           // Cover image
+        
+        // Engagement aggregates (sum of all segments)
+        static let totalViews = "totalViews"
+        static let totalHypes = "totalHypes"
+        static let totalCools = "totalCools"
+        static let totalReplies = "totalReplies"
+        static let totalShares = "totalShares"
+        
+        // Discovery
+        static let temperature = "temperature"
+        static let discoverabilityScore = "discoverabilityScore"
+        static let isPromoted = "isPromoted"
+        static let isFeatured = "isFeatured"
+        
+        // Categorization
+        static let tags = "tags"
+        static let category = "category"
+        
+        /// Full document path in stitchfin database
+        static func documentPath(collectionID: String) -> String {
+            return Collections.fullPath(for: Collections.videoCollections) + "/\(collectionID)"
+        }
+    }
+    
+    // MARK: - Collection Draft Document Schema (NEW)
+    
+    struct CollectionDraftDocument {
+        // Core draft fields
+        static let id = "id"
+        static let creatorID = "creatorID"
+        static let createdAt = "createdAt"
+        static let updatedAt = "updatedAt"
+        
+        // Draft content
+        static let title = "title"
+        static let description = "description"
+        
+        // Segments array (each segment is a dictionary)
+        static let segments = "segments"
+        
+        // Segment fields (nested in segments array)
+        struct SegmentFields {
+            static let localVideoPath = "localVideoPath"
+            static let uploadedVideoURL = "uploadedVideoURL"
+            static let thumbnailURL = "thumbnailURL"
+            static let segmentTitle = "segmentTitle"
+            static let duration = "duration"
+            static let uploadStatus = "uploadStatus"       // pending, uploading, uploaded, failed
+            static let uploadProgress = "uploadProgress"   // 0.0 to 1.0
+            static let uploadError = "uploadError"
+            static let fileSize = "fileSize"
+        }
+        
+        // Draft settings
+        static let visibility = "visibility"
+        static let tags = "tags"
+        static let category = "category"
+        static let autoSaveEnabled = "autoSaveEnabled"
+        
+        /// Full document path in stitchfin database
+        static func documentPath(draftID: String) -> String {
+            return Collections.fullPath(for: Collections.collectionDrafts) + "/\(draftID)"
+        }
+    }
+    
+    // MARK: - Collection Progress Document Schema (NEW)
+    
+    struct CollectionProgressDocument {
+        // Identity
+        static let id = "id"                               // Format: {collectionID}_{userID}
+        static let collectionID = "collectionID"
+        static let userID = "userID"
+        
+        // Current position
+        static let currentSegmentIndex = "currentSegmentIndex"     // 0-indexed
+        static let currentSegmentProgress = "currentSegmentProgress" // Seconds into segment
+        
+        // Completion tracking
+        static let completedSegments = "completedSegments" // Array of completed segment indexes
+        static let totalWatchTime = "totalWatchTime"       // Seconds
+        static let percentComplete = "percentComplete"     // 0.0 to 1.0
+        
+        // Timestamps
+        static let lastWatchedAt = "lastWatchedAt"
+        static let startedAt = "startedAt"
+        static let completedAt = "completedAt"             // nil until fully complete
+        
+        // Status
+        static let isCompleted = "isCompleted"
+        
+        /// Full document path in stitchfin database
+        static func documentPath(progressID: String) -> String {
+            return Collections.fullPath(for: Collections.collectionProgress) + "/\(progressID)"
+        }
+        
+        /// Generate progress document ID from collection and user IDs
+        static func generateProgressID(collectionID: String, userID: String) -> String {
+            return "\(collectionID)_\(userID)"
+        }
+    }
+    
     // MARK: - Required Indexes for stitchfin Performance (UPDATED)
     
     struct RequiredIndexes {
@@ -432,10 +579,55 @@ struct FirebaseSchema {
             VideoDocument.createdAt
         ]
         
-        // NEW: Milestone tracking indexes
+        // Milestone tracking indexes
         static let videosByMilestone = [
             VideoDocument.milestone1000Reached,
             VideoDocument.milestone1000ReachedAt
+        ]
+        
+        // MARK: - Collection Indexes (NEW)
+        
+        /// Videos by collection, ordered by segment number
+        static let videosByCollection = [
+            VideoDocument.collectionID,
+            VideoDocument.segmentNumber
+        ]
+        
+        /// Timestamped replies for a video
+        static let timestampedReplies = [
+            VideoDocument.replyToVideoID,
+            VideoDocument.replyTimestamp
+        ]
+        
+        /// Collections by creator
+        static let collectionsByCreator = [
+            CollectionDocument.creatorID,
+            CollectionDocument.createdAt
+        ]
+        
+        /// Published collections for discovery
+        static let publishedCollections = [
+            CollectionDocument.status,
+            CollectionDocument.visibility,
+            CollectionDocument.publishedAt
+        ]
+        
+        /// Collection drafts by user
+        static let draftsByUser = [
+            CollectionDraftDocument.creatorID,
+            CollectionDraftDocument.updatedAt
+        ]
+        
+        /// Watch progress by user
+        static let progressByUser = [
+            CollectionProgressDocument.userID,
+            CollectionProgressDocument.lastWatchedAt
+        ]
+        
+        /// Featured collections
+        static let featuredCollections = [
+            CollectionDocument.isFeatured,
+            CollectionDocument.discoverabilityScore
         ]
         
         // User performance indexes
@@ -529,7 +721,14 @@ struct FirebaseSchema {
                 "// Collection: videos - Creator timeline",
                 "// Collection: videos - Thread hierarchy",
                 "// Collection: videos - Tagged users",
-                "// Collection: videos - Milestone tracking (NEW)",
+                "// Collection: videos - Milestone tracking",
+                "// Collection: videos - Collection segments (NEW)",
+                "// Collection: videos - Timestamped replies (NEW)",
+                "// Collection: videoCollections - By creator (NEW)",
+                "// Collection: videoCollections - Published discovery (NEW)",
+                "// Collection: videoCollections - Featured (NEW)",
+                "// Collection: collectionDrafts - By user (NEW)",
+                "// Collection: collectionProgress - By user (NEW)",
                 "// Collection: interactions - User engagement",
                 "// Collection: following - Social connections",
                 "// Collection: notifications - User notifications",
@@ -579,7 +778,7 @@ struct FirebaseSchema {
         static let maxNotificationMessageLength = 200
         static let notificationExpirationDays = 30
         
-        // MILESTONE THRESHOLDS (NEW)
+        // MILESTONE THRESHOLDS
         static let milestoneHeatingUp = 10       // 🔥 Heating Up
         static let milestoneMustSee = 400        // 👀 Must See
         static let milestoneHot = 1000           // 🌶️ Hot
@@ -592,6 +791,15 @@ struct FirebaseSchema {
         static let hypeRatingBonusPerReferral = 0.001
         static let cloutPerReferral = 100
         static let maxReferralsForClout = 10
+        
+        // MARK: - Collection Validation (NEW)
+        static let maxCollectionTitleLength = 100
+        static let minCollectionTitleLength = 3
+        static let maxCollectionDescriptionLength = 500
+        static let maxSegmentsPerCollection = 20
+        static let minSegmentsPerCollection = 2
+        static let maxSegmentTitleLength = 50
+        static let maxCollectionTags = 10
         
         /// Validate field against constraints
         static func validateField(_ field: String, value: Any, rules: [String: Any]) -> Bool {
@@ -624,6 +832,32 @@ struct FirebaseSchema {
             if hypeCount == milestoneMustSee { return milestoneMustSee }
             if hypeCount == milestoneHeatingUp { return milestoneHeatingUp }
             return nil
+        }
+        
+        /// Validate collection data (NEW)
+        static func validateCollection(title: String, description: String?, segmentCount: Int, tags: [String]?) -> [String] {
+            var errors: [String] = []
+            
+            if title.count < minCollectionTitleLength {
+                errors.append("Collection title must be at least \(minCollectionTitleLength) characters")
+            }
+            if title.count > maxCollectionTitleLength {
+                errors.append("Collection title cannot exceed \(maxCollectionTitleLength) characters")
+            }
+            if let desc = description, desc.count > maxCollectionDescriptionLength {
+                errors.append("Collection description cannot exceed \(maxCollectionDescriptionLength) characters")
+            }
+            if segmentCount < minSegmentsPerCollection {
+                errors.append("Collection must have at least \(minSegmentsPerCollection) segments")
+            }
+            if segmentCount > maxSegmentsPerCollection {
+                errors.append("Collection cannot exceed \(maxSegmentsPerCollection) segments")
+            }
+            if let tags = tags, tags.count > maxCollectionTags {
+                errors.append("Collection cannot have more than \(maxCollectionTags) tags")
+            }
+            
+            return errors
         }
     }
     
@@ -687,6 +921,28 @@ struct FirebaseSchema {
             return String((0..<8).compactMap { _ in chars.randomElement() })
         }
         
+        // MARK: - Collection ID Patterns (NEW)
+        
+        /// Generate collection ID: coll_ + timestamp + random
+        static func generateCollectionID() -> String {
+            let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+            let random = Int.random(in: 1000...9999)
+            return "coll_\(timestamp)_\(random)"
+        }
+        
+        /// Generate draft ID: draft_ + user prefix + timestamp + random
+        static func generateDraftID(creatorID: String) -> String {
+            let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+            let random = Int.random(in: 100...999)
+            let prefix = String(creatorID.prefix(4))
+            return "draft_\(prefix)_\(timestamp)_\(random)"
+        }
+        
+        /// Generate progress ID: collectionID_userID
+        static func generateProgressID(collectionID: String, userID: String) -> String {
+            return "\(collectionID)_\(userID)"
+        }
+        
         /// Validate ID format
         static func validateID(_ id: String, type: String) -> Bool {
             switch type {
@@ -696,6 +952,10 @@ struct FirebaseSchema {
                 return id.hasPrefix("ref_")
             case "notification":
                 return id.hasPrefix("notif_")
+            case "collection":
+                return id.hasPrefix("coll_")
+            case "draft":
+                return id.hasPrefix("draft_")
             default:
                 return !id.isEmpty
             }
@@ -769,6 +1029,57 @@ struct FirebaseSchema {
             WHERE status == 'pending' AND expiresAt < {currentTime}
         """
         
+        // MARK: - Collection Query Patterns (NEW)
+        
+        /// Get all segments for a collection ordered by segment number
+        static let collectionSegments = """
+            stitchfin/videos
+            WHERE collectionID == {collectionID}
+            ORDER BY segmentNumber ASC
+        """
+        
+        /// Get timestamped replies for a segment
+        static let timestampedRepliesForSegment = """
+            stitchfin/videos
+            WHERE replyToVideoID == {segmentVideoID}
+            ORDER BY replyTimestamp ASC
+        """
+        
+        /// Get user's collections
+        static let userCollections = """
+            stitchfin/videoCollections
+            WHERE creatorID == {userID}
+            ORDER BY createdAt DESC
+        """
+        
+        /// Get published public collections for discovery
+        static let publishedCollectionsQuery = """
+            stitchfin/videoCollections
+            WHERE status == 'published' AND visibility == 'public'
+            ORDER BY publishedAt DESC
+        """
+        
+        /// Get user's drafts
+        static let userDrafts = """
+            stitchfin/collectionDrafts
+            WHERE creatorID == {userID}
+            ORDER BY updatedAt DESC
+        """
+        
+        /// Get user's watch progress across collections
+        static let userWatchProgress = """
+            stitchfin/collectionProgress
+            WHERE userID == {userID}
+            ORDER BY lastWatchedAt DESC
+        """
+        
+        /// Get featured collections
+        static let featuredCollectionsQuery = """
+            stitchfin/videoCollections
+            WHERE isFeatured == true AND status == 'published'
+            ORDER BY discoverabilityScore DESC
+        """
+        
         /// Generate Firestore query for stitchfin database
         static func generateQuery(pattern: String, parameters: [String: String]) -> String {
             var query = pattern
@@ -825,6 +1136,11 @@ struct FirebaseSchema {
         static let referralSourceTypes = ["link", "deeplink", "manual", "share"]
         static let referralPlatforms = ["ios", "android", "web"]
         
+        // MARK: - Collection Consistency Rules (NEW)
+        static let collectionStatuses = ["draft", "processing", "published", "archived", "deleted"]
+        static let collectionVisibilities = ["public", "followers", "private", "unlisted"]
+        static let segmentUploadStatuses = ["pending", "uploading", "uploaded", "failed"]
+        
         /// Validate data consistency for stitchfin database
         static func validateConsistency(data: [String: Any], type: String) -> [String] {
             var errors: [String] = []
@@ -855,6 +1171,15 @@ struct FirebaseSchema {
                    !ValidationRules.validateReferralCode(code) {
                     errors.append("Invalid referral code format")
                 }
+            case "collection":
+                if let status = data["status"] as? String,
+                   !collectionStatuses.contains(status) {
+                    errors.append("Invalid collection status: \(status)")
+                }
+                if let visibility = data["visibility"] as? String,
+                   !collectionVisibilities.contains(visibility) {
+                    errors.append("Invalid collection visibility: \(visibility)")
+                }
             default:
                 break
             }
@@ -877,6 +1202,34 @@ struct FirebaseSchema {
             
             if currentCloutEarned >= ValidationRules.maxReferralClout {
                 errors.append("Referral clout reward cap reached (1000)")
+            }
+            
+            return errors
+        }
+        
+        /// Validate collection business rules (NEW)
+        static func validateCollectionBusinessRules(
+            creatorID: String,
+            segmentCount: Int,
+            status: String,
+            visibility: String
+        ) -> [String] {
+            var errors: [String] = []
+            
+            if creatorID.isEmpty {
+                errors.append("Collection must have a creator")
+            }
+            
+            if segmentCount < ValidationRules.minSegmentsPerCollection && status == "published" {
+                errors.append("Published collection must have at least \(ValidationRules.minSegmentsPerCollection) segments")
+            }
+            
+            if !collectionStatuses.contains(status) {
+                errors.append("Invalid collection status: \(status)")
+            }
+            
+            if !collectionVisibilities.contains(visibility) {
+                errors.append("Invalid collection visibility: \(visibility)")
             }
             
             return errors
@@ -909,22 +1262,24 @@ struct FirebaseSchema {
     
     // MARK: - Database Initialization (UPDATED)
     
-    /// Initialize stitchfin database schema with referral system
+    /// Initialize stitchfin database schema with referral system and collections
     static func initializeSchema() -> Bool {
-        print("🔧 FIREBASE SCHEMA: Initializing stitchfin database schema with referral system...")
+        print("🔧 FIREBASE SCHEMA: Initializing stitchfin database schema with referral system and collections...")
         
         let databaseValid = validateDatabaseConfig()
         let collectionsValid = Collections.validateCollections().isEmpty
         let referralSchemaValid = validateReferralSchema()
         let milestoneSchemaValid = validateMilestoneSchema()
+        let collectionsSchemaValid = validateCollectionsSchema()
         
-        if databaseValid && collectionsValid && referralSchemaValid && milestoneSchemaValid {
+        if databaseValid && collectionsValid && referralSchemaValid && milestoneSchemaValid && collectionsSchemaValid {
             print("✅ FIREBASE SCHEMA: stitchfin database schema initialized successfully")
             print("📊 FIREBASE SCHEMA: Collections: \(Collections.validateCollections().count)")
             print("🔍 FIREBASE SCHEMA: Indexes: \(RequiredIndexes.generateIndexCommands().count)")
             print("🔗 FIREBASE SCHEMA: Referral system integrated")
             print("🏷️ FIREBASE SCHEMA: User tagging system integrated")
             print("🎯 FIREBASE SCHEMA: Milestone tracking system integrated")
+            print("📚 FIREBASE SCHEMA: Collections feature integrated")
             return true
         } else {
             print("❌ FIREBASE SCHEMA: stitchfin database schema initialization failed")
@@ -953,7 +1308,7 @@ struct FirebaseSchema {
         return true
     }
     
-    /// Validate milestone schema integration (NEW)
+    /// Validate milestone schema integration
     static func validateMilestoneSchema() -> Bool {
         let requiredMilestoneFields = [
             VideoDocument.firstHypeReceived,
@@ -965,6 +1320,41 @@ struct FirebaseSchema {
         ]
         
         print("✅ MILESTONE SCHEMA: \(requiredMilestoneFields.count) milestone tracking fields")
+        return true
+    }
+    
+    /// Validate collections schema integration (NEW)
+    static func validateCollectionsSchema() -> Bool {
+        let requiredVideoFields = [
+            VideoDocument.collectionID,
+            VideoDocument.segmentNumber,
+            VideoDocument.segmentTitle,
+            VideoDocument.replyTimestamp
+        ]
+        
+        let requiredCollectionFields = [
+            CollectionDocument.id,
+            CollectionDocument.title,
+            CollectionDocument.creatorID,
+            CollectionDocument.segmentVideoIDs,
+            CollectionDocument.status,
+            CollectionDocument.visibility
+        ]
+        
+        let requiredDraftFields = [
+            CollectionDraftDocument.id,
+            CollectionDraftDocument.creatorID,
+            CollectionDraftDocument.segments
+        ]
+        
+        let requiredProgressFields = [
+            CollectionProgressDocument.id,
+            CollectionProgressDocument.collectionID,
+            CollectionProgressDocument.userID,
+            CollectionProgressDocument.currentSegmentIndex
+        ]
+        
+        print("✅ COLLECTIONS SCHEMA: \(requiredVideoFields.count) video fields + \(requiredCollectionFields.count) collection fields + \(requiredDraftFields.count) draft fields + \(requiredProgressFields.count) progress fields")
         return true
     }
 }

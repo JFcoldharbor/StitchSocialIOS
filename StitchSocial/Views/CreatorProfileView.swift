@@ -4,8 +4,8 @@
 //
 //  Layer 8: Views - External User Profile Display (View-Only)
 //  Dependencies: UserService, FollowManager, VideoService (Layer 4-7)
-//  Features: Follow/unfollow, share, report, IDENTICAL layout to ProfileView
-//  VISUAL PARITY: Hype meter, badges, verification, same layout as ProfileView
+//  Features: Follow/unfollow, share, report, Collections Row, IDENTICAL layout to ProfileView
+//  UPDATED: Added horizontal Collections row, fixed video grid aspect ratio
 //
 
 import SwiftUI
@@ -52,6 +52,14 @@ struct CreatorProfileView: View {
     @State private var showingFollowersList = false
     @State private var isShowingFullBio = false
     
+    // MARK: - Collections State (NEW)
+    
+    @State private var userCollections: [VideoCollection] = []
+    @State private var isLoadingCollections = false
+    @State private var showingCollectionPlayer = false
+    @State private var selectedCollection: VideoCollection?
+    @State private var showingAllCollections = false
+    
     // MARK: - Animation State (Matching ProfileView)
     
     @State private var shimmerOffset: CGFloat = 0
@@ -60,6 +68,14 @@ struct CreatorProfileView: View {
     // MARK: - Dismiss
     
     @Environment(\.dismiss) private var dismiss
+    
+    // MARK: - Computed Properties
+    
+    /// Check if user is eligible for collections (Ambassador+ tier)
+    private var isCollectionsEligible: Bool {
+        guard let user = user else { return false }
+        return user.tier.isAmbassadorOrHigher
+    }
     
     // MARK: - Body
     
@@ -96,6 +112,10 @@ struct CreatorProfileView: View {
         .sheet(isPresented: $showingFollowersList) {
             followersListSheet
         }
+        // All Collections Sheet (NEW)
+        .sheet(isPresented: $showingAllCollections) {
+            allCollectionsSheet
+        }
         .fullScreenCover(isPresented: $showingVideoPlayer) {
             if let selectedVideo = selectedVideo {
                 FullscreenVideoView(
@@ -105,6 +125,10 @@ struct CreatorProfileView: View {
                     }
                 )
             }
+        }
+        // Collection Player Full Screen (NEW)
+        .fullScreenCover(isPresented: $showingCollectionPlayer) {
+            collectionPlayerSheet
         }
     }
     
@@ -150,6 +174,10 @@ struct CreatorProfileView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 0) {
                     optimizedProfileHeader(user: user)
+                    
+                    // Collections Row (NEW) - between header and tabs
+                    collectionsRow
+                    
                     tabBarSection
                     videoGridSection
                 }
@@ -164,6 +192,72 @@ struct CreatorProfileView: View {
                     stickyTabBar
                 }
             }
+        }
+    }
+    
+    // MARK: - Collections Row (NEW)
+    
+    @ViewBuilder
+    private var collectionsRow: some View {
+        if let user = user {
+            ProfileCollectionsRow(
+                collections: userCollections,
+                drafts: [],  // Never show drafts on other profiles
+                isOwnProfile: false,
+                isEligible: isCollectionsEligible,
+                onAddTap: { },  // No add on other profiles
+                onCollectionTap: { collection in
+                    selectedCollection = collection
+                    showingCollectionPlayer = true
+                },
+                onDraftTap: { _ in },  // No drafts on other profiles
+                onSeeAllTap: {
+                    showingAllCollections = true
+                }
+            )
+        }
+    }
+    
+    // MARK: - Collection Sheets (NEW)
+    
+    @ViewBuilder
+    private var collectionPlayerSheet: some View {
+        if let collection = selectedCollection, let currentUserID = Auth.auth().currentUser?.uid {
+            let coordinator = CollectionCoordinator(userID: currentUserID, username: "")
+            let playerVM = CollectionPlayerViewModel(collection: collection, userID: currentUserID)
+            
+            CollectionPlayerView(
+                viewModel: playerVM,
+                coordinator: coordinator,
+                onDismiss: {
+                    showingCollectionPlayer = false
+                    selectedCollection = nil
+                }
+            )
+        }
+    }
+    
+    @ViewBuilder
+    private var allCollectionsSheet: some View {
+        if let user = user, let currentUserID = Auth.auth().currentUser?.uid {
+            NavigationStack {
+                ProfileCollectionsTab(
+                    profileUserID: user.id,
+                    isOwnProfile: false,
+                    coordinator: CollectionCoordinator(userID: currentUserID, username: "")
+                )
+                .navigationTitle("\(user.displayName)'s Collections")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Done") {
+                            showingAllCollections = false
+                        }
+                        .foregroundColor(.cyan)
+                    }
+                }
+            }
+            .preferredColorScheme(.dark)
         }
     }
     
@@ -252,179 +346,177 @@ struct CreatorProfileView: View {
             // Section 4: Stats Row
             statsRow(user: user)
             
-            // Section 5: Action Buttons
+            // Section 5: Action Buttons (Follow, Subscribe)
             actionButtonsRow(user: user)
         }
         .padding(.vertical, 20)
     }
     
-    // MARK: - Enhanced Profile Image (IDENTICAL to ProfileView)
+    // MARK: - Enhanced Profile Image
     
     private func enhancedProfileImage(user: BasicUserInfo) -> some View {
         ZStack {
-            // Main profile image with tier-colored border
-            AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
-                .frame(width: 80, height: 80)
-                .clipShape(Circle())
-                .overlay(
-                    Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: tierColors(for: user.tier),
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 3
-                        )
+            // Outer ring (background)
+            Circle()
+                .stroke(Color.gray.opacity(0.3), lineWidth: 3)
+                .frame(width: 90, height: 90)
+            
+            // Hype progress ring
+            Circle()
+                .trim(from: 0, to: calculateHypeLevel(user: user) / 100)
+                .stroke(
+                    LinearGradient(
+                        colors: tierColors(for: user.tier),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
                 )
+                .frame(width: 90, height: 90)
+                .rotationEffect(.degrees(-90))
+            
+            // Profile image
+            AsyncImage(url: URL(string: user.profileImageURL ?? "")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Circle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        Image(systemName: "person.fill")
+                            .font(.title2)
+                            .foregroundColor(.gray)
+                    )
+            }
+            .frame(width: 80, height: 80)
+            .clipShape(Circle())
         }
     }
     
-    // MARK: - Tier Badge (IDENTICAL to ProfileView)
+    // MARK: - Tier Badge
     
     private func tierBadge(user: BasicUserInfo) -> some View {
         HStack(spacing: 6) {
             Image(systemName: tierIcon(for: user.tier))
                 .font(.caption)
-                .foregroundColor(tierColors(for: user.tier)[0])
+                .foregroundColor(tierColors(for: user.tier).first ?? .white)
             
-            Text(user.tier.rawValue.capitalized)
+            Text(user.tier.displayName)
                 .font(.caption)
                 .fontWeight(.semibold)
-                .foregroundColor(tierColors(for: user.tier)[0])
+                .foregroundColor(.white)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(tierColors(for: user.tier)[0].opacity(0.15))
+            LinearGradient(
+                colors: tierColors(for: user.tier),
+                startPoint: .leading,
+                endPoint: .trailing
+            ).opacity(0.3)
         )
+        .background(Color.black.opacity(0.5))
+        .cornerRadius(10)
     }
     
-    // MARK: - Bio Section (IDENTICAL to ProfileView)
+    // MARK: - Bio Section
     
     private func shouldShowBio(user: BasicUserInfo) -> Bool {
-        return !getBioText(user: user).isEmpty
+        let bio = getBioText(user: user)
+        return !bio.isEmpty
     }
     
     private func bioSection(user: BasicUserInfo) -> some View {
-        let bioText = getBioText(user: user)
-        let shouldTruncate = bioText.count > 100
+        let bio = getBioText(user: user)
         
-        return VStack(alignment: .leading, spacing: 8) {
-            if shouldTruncate && !isShowingFullBio {
-                Text(String(bioText.prefix(100)) + "...")
-                    .font(.subheadline)
-                    .foregroundColor(.white)
-                    .lineLimit(3)
-                
-                Button("Show more") {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        isShowingFullBio = true
-                    }
-                }
-                .font(.caption)
-                .foregroundColor(.cyan)
-            } else {
-                Text(bioText)
-                    .font(.subheadline)
-                    .foregroundColor(.white)
-                
-                if shouldTruncate && isShowingFullBio {
-                    Button("Show less") {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            isShowingFullBio = false
+        return Group {
+            if !bio.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(bio)
+                        .font(.body)
+                        .foregroundColor(.white)
+                        .lineLimit(isShowingFullBio ? nil : 2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    
+                    if bio.count > 80 {
+                        Button(action: {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                isShowingFullBio.toggle()
+                            }
+                        }) {
+                            Text(isShowingFullBio ? "Show less" : "Show more")
+                                .font(.caption)
+                                .foregroundColor(.cyan)
                         }
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .font(.caption)
-                    .foregroundColor(.cyan)
                 }
             }
         }
     }
     
-    // MARK: - Hype Meter Section (IDENTICAL to ProfileView)
+    // MARK: - Hype Meter Section
     
     private func hypeMeterSection(user: BasicUserInfo) -> some View {
-        VStack(spacing: 12) {
-            // Hype meter header
+        let hypeRating = calculateHypeLevel(user: user)
+        let progress = hypeRating / 100.0
+        
+        return VStack(spacing: 8) {
             HStack {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Image(systemName: "flame.fill")
-                        .font(.subheadline)
                         .foregroundColor(.orange)
+                        .font(.system(size: 14, weight: .medium))
                     
-                    Text("Hype Meter")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
+                    Text("Hype Rating")
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(.white)
                 }
                 
                 Spacer()
                 
-                Text("\(Int(calculateHypeLevel(user: user)))%")
-                    .font(.subheadline)
-                    .fontWeight(.bold)
-                    .foregroundColor(.orange)
+                Text("\(Int(hypeRating))%")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(.white)
             }
             
-            // Animated hype meter bar
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    // Background
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.gray.opacity(0.3))
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.gray.opacity(0.2))
                         .frame(height: 12)
                     
-                    // Animated fill with shimmer effect
-                    RoundedRectangle(cornerRadius: 8)
+                    RoundedRectangle(cornerRadius: 6)
                         .fill(
                             LinearGradient(
-                                colors: [.orange, .red, .orange],
+                                colors: [.green, .yellow, .orange, .red, .purple],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
                         )
-                        .frame(
-                            width: geometry.size.width * (hypeProgress / 100.0),
-                            height: 12
-                        )
-                        .overlay(
-                            // Shimmer effect
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [.clear, .white.opacity(0.3), .clear],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .offset(x: shimmerOffset)
-                                .clipped()
-                        )
-                        .animation(.easeInOut(duration: 1.0), value: hypeProgress)
+                        .frame(width: geometry.size.width * progress, height: 12)
                 }
             }
             .frame(height: 12)
-            .onAppear {
-                // Animate hype meter on appear
-                withAnimation(.easeInOut(duration: 1.5)) {
-                    hypeProgress = calculateHypeLevel(user: user)
-                }
-                
-                // Start shimmer animation
-                withAnimation(.linear(duration: 2.0).repeatForever(autoreverses: false)) {
-                    shimmerOffset = 200
-                }
-            }
         }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                )
+        )
     }
     
     // MARK: - Stats Row
     
     private func statsRow(user: BasicUserInfo) -> some View {
-        HStack(spacing: 40) {
-            CreatorStatView(title: "Threads", count: userVideos.count)
+        HStack(spacing: 30) {
+            CreatorStatView(title: "Videos", count: userVideos.count)
             
             Button(action: {
                 Task {
@@ -433,7 +525,7 @@ struct CreatorProfileView: View {
                 }
                 showingFollowersList = true
             }) {
-                CreatorStatView(title: "Stitchers", count: followersList.count + followingList.count)
+                CreatorStatView(title: "Stitchers", count: followersList.count)
             }
             .buttonStyle(PlainButtonStyle())
             
@@ -446,7 +538,7 @@ struct CreatorProfileView: View {
     
     private func actionButtonsRow(user: BasicUserInfo) -> some View {
         HStack(spacing: 12) {
-            // Follow/Following button
+            // Follow button
             Button(action: {
                 Task {
                     await followManager.toggleFollow(for: user.id)
@@ -509,7 +601,7 @@ struct CreatorProfileView: View {
             HStack(spacing: 0) {
                 CreatorTabButton(
                     title: "Threads",
-                    count: userVideos.count,
+                    count: userVideos.filter { $0.conversationDepth == 0 }.count,
                     isSelected: selectedTab == 0
                 ) {
                     selectedTab = 0
@@ -517,7 +609,7 @@ struct CreatorProfileView: View {
                 
                 CreatorTabButton(
                     title: "Stitches",
-                    count: getThreadCount(),
+                    count: userVideos.filter { $0.conversationDepth > 0 }.count,
                     isSelected: selectedTab == 1
                 ) {
                     selectedTab = 1
@@ -538,7 +630,7 @@ struct CreatorProfileView: View {
             HStack(spacing: 0) {
                 CreatorTabButton(
                     title: "Threads",
-                    count: userVideos.count,
+                    count: userVideos.filter { $0.conversationDepth == 0 }.count,
                     isSelected: selectedTab == 0
                 ) {
                     selectedTab = 0
@@ -546,7 +638,7 @@ struct CreatorProfileView: View {
                 
                 CreatorTabButton(
                     title: "Stitches",
-                    count: getThreadCount(),
+                    count: userVideos.filter { $0.conversationDepth > 0 }.count,
                     isSelected: selectedTab == 1
                 ) {
                     selectedTab = 1
@@ -560,21 +652,25 @@ struct CreatorProfileView: View {
         .background(Color.black)
     }
     
-    // MARK: - Video Grid Section
+    // MARK: - Video Grid Section (FIXED ASPECT RATIO)
     
     private var videoGridSection: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 3), spacing: 1) {
             ForEach(Array(filteredVideos().enumerated()), id: \.element.id) { index, video in
-                VideoThumbnailView(
-                    video: video,
-                    showEngagementBadge: true
-                ) {
-                    selectedVideo = video
-                    selectedVideoIndex = index
-                    showingVideoPlayer = true
+                // Fixed aspect ratio container
+                GeometryReader { geo in
+                    VideoThumbnailView(
+                        video: video,
+                        showEngagementBadge: true
+                    ) {
+                        selectedVideo = video
+                        selectedVideoIndex = index
+                        showingVideoPlayer = true
+                    }
+                    .frame(width: geo.size.width, height: geo.size.width * (16.0/9.0))
+                    .clipped()
                 }
-                .aspectRatio(9/16, contentMode: .fill)
-                .clipped()
+                .aspectRatio(9.0/16.0, contentMode: .fit)
             }
         }
         .padding(.top, 20)
@@ -623,6 +719,9 @@ struct CreatorProfileView: View {
                 await loadFollowers()
                 await loadFollowing()
                 
+                // Load collections (NEW)
+                await loadCollections()
+                
             } else {
                 await MainActor.run {
                     self.errorMessage = "User not found"
@@ -636,6 +735,20 @@ struct CreatorProfileView: View {
                 self.isLoading = false
             }
         }
+    }
+    
+    private func loadCollections() async {
+        isLoadingCollections = true
+        
+        do {
+            let collectionService = CollectionService()
+            userCollections = try await collectionService.getUserCollections(userID: userID)
+            print("📚 CREATOR PROFILE: Loaded \(userCollections.count) collections for \(userID)")
+        } catch {
+            print("❌ CREATOR PROFILE: Failed to load collections: \(error)")
+        }
+        
+        isLoadingCollections = false
     }
     
     private func loadFollowers() async {
@@ -695,7 +808,7 @@ struct CreatorProfileView: View {
     // MARK: - Helper Functions
     
     private func getBioText(user: BasicUserInfo) -> String {
-        return user.bio ?? "Welcome to my profile! Check out my latest videos and join the conversation."
+        return user.bio ?? ""
     }
     
     private func tierBaseRating(for tier: UserTier) -> Double {
@@ -715,16 +828,16 @@ struct CreatorProfileView: View {
     
     private func filteredVideos() -> [CoreVideoMetadata] {
         if selectedTab == 0 {
-            // All threads
-            return userVideos
+            // Threads (top-level videos)
+            return userVideos.filter { $0.conversationDepth == 0 }
         } else {
-            // Thread starter videos only (now called "Stitches")
-            return userVideos.filter { $0.replyToVideoID == nil }
+            // Stitches (replies)
+            return userVideos.filter { $0.conversationDepth > 0 }
         }
     }
     
     private func getThreadCount() -> Int {
-        return userVideos.filter { $0.replyToVideoID == nil }.count
+        return userVideos.filter { $0.conversationDepth == 0 }.count
     }
     
     private func handleScrollChange(_ offset: CGFloat) {

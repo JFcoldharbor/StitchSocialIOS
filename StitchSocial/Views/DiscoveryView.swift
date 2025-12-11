@@ -3,8 +3,7 @@
 //  StitchSocial
 //
 //  TikTok-style infinite scroll with intelligent content batching
-//  FIXED: Removed engagement from swipe cards - browse only
-//  ADDED: Video preloading for instant fullscreen playback
+//  PHASE 1 FIX: Unified notifications, Task cancellation, observer cleanup
 //
 
 import SwiftUI
@@ -180,7 +179,7 @@ class DiscoveryViewModel: ObservableObject {
         defer { loadingState.isLoadingMore = false }
         
         do {
-            print("🔥 DISCOVERY: Loading more content (batch \(loadingState.loadingBatch + 1))")
+            print("📥 DISCOVERY: Loading more content (batch \(loadingState.loadingBatch + 1))")
             
             // Load extra to ensure mix
             let fetchLimit = subsequentBatchSize * 3 // Get 60 videos
@@ -359,7 +358,7 @@ struct DiscoveryView: View {
     @StateObject private var viewModel = DiscoveryViewModel()
     @EnvironmentObject private var authService: AuthService
     
-    // MARK: - Preloading Service (NEW)
+    // MARK: - Preloading Service
     private var preloadingService: VideoPreloadingService {
         VideoPreloadingService.shared
     }
@@ -373,6 +372,11 @@ struct DiscoveryView: View {
     
     // Track last preloaded index to avoid duplicate preloads
     @State private var lastPreloadedIndex: Int = -1
+    
+    // MARK: - PHASE 1 FIX: Task Management
+    @State private var preloadTask: Task<Void, Never>?
+    @State private var loadMoreTask: Task<Void, Never>?
+    @State private var initialLoadTask: Task<Void, Never>?
     
     var body: some View {
         ZStack {
@@ -434,20 +438,37 @@ struct DiscoveryView: View {
                 await preloadVideosAroundIndex(0)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RefreshDiscovery"))) { _ in
-            Task {
+        // PHASE 1 FIX: Use unified notification name
+        .onReceive(NotificationCenter.default.publisher(for: .refreshDiscovery)) { _ in
+            initialLoadTask?.cancel()
+            initialLoadTask = Task {
                 await viewModel.loadInitialContent()
             }
+        }
+        // PHASE 1 FIX: Cleanup on disappear
+        .onDisappear {
+            preloadTask?.cancel()
+            preloadTask = nil
+            loadMoreTask?.cancel()
+            loadMoreTask = nil
+            initialLoadTask?.cancel()
+            initialLoadTask = nil
         }
         .sheet(isPresented: $showingSearch) {
             SearchView()
         }
     }
     
-    // MARK: - Video Preloading (NEW)
+    // MARK: - Video Preloading (PHASE 1 FIX: Task cancellation)
     
     /// Preload videos around the current index for instant fullscreen playback
     private func preloadVideosAroundIndex(_ index: Int) async {
+        // PHASE 1 FIX: Check for task cancellation
+        guard !Task.isCancelled else {
+            print("⚠️ DISCOVERY PRELOAD: Task cancelled, skipping")
+            return
+        }
+        
         guard !viewModel.filteredVideos.isEmpty else { return }
         guard index != lastPreloadedIndex else { return } // Avoid duplicate preloads
         
@@ -473,6 +494,12 @@ struct DiscoveryView: View {
         
         // Preload with appropriate priorities
         for (i, video) in videosToPreload.enumerated() {
+            // PHASE 1 FIX: Check for cancellation in loop
+            guard !Task.isCancelled else {
+                print("⚠️ DISCOVERY PRELOAD: Task cancelled during loop")
+                return
+            }
+            
             let priority: PreloadPriority = i == 0 ? .high : .normal
             await preloadingService.preloadVideo(video, priority: priority)
         }
@@ -547,8 +574,9 @@ struct DiscoveryView: View {
                         currentSwipeIndex = 0 // Reset to beginning when changing category
                         lastPreloadedIndex = -1 // Reset preload tracking
                         
-                        // Preload first video of new category
-                        Task {
+                        // PHASE 1 FIX: Cancel existing task before creating new one
+                        preloadTask?.cancel()
+                        preloadTask = Task {
                             await preloadVideosAroundIndex(0)
                         }
                     } label: {
@@ -575,7 +603,7 @@ struct DiscoveryView: View {
         .padding(.vertical, 12)
     }
     
-    // MARK: - Content View with Progressive Loading + Preloading
+    // MARK: - Content View with Progressive Loading + Preloading (PHASE 1 FIX)
     
     @ViewBuilder
     private var contentView: some View {
@@ -586,8 +614,8 @@ struct DiscoveryView: View {
                     videos: viewModel.filteredVideos,
                     currentIndex: $currentSwipeIndex,
                     onVideoTap: { video in
-                        // CRITICAL: Pause all discovery players before entering fullscreen
-                        preloadingService.pauseAllPlayback()
+                        // PHASE 1 FIX: Use unified method to kill players
+                        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                         
                         selectedVideo = video
                         withAnimation(.easeInOut(duration: 0.4)) {
@@ -603,16 +631,20 @@ struct DiscoveryView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.clear)
+                // PHASE 1 FIX: Task cancellation in onChange
                 .onChange(of: currentSwipeIndex) { oldValue, newValue in
                     print("🎯 DISCOVERY: Swipe \(oldValue) → \(newValue)")
                     
-                    // Trigger progressive loading when user gets close to end
-                    Task {
+                    // PHASE 1 FIX: Cancel existing tasks before creating new ones
+                    loadMoreTask?.cancel()
+                    loadMoreTask = Task {
+                        guard !Task.isCancelled else { return }
                         await viewModel.checkAndLoadMore(currentIndex: newValue)
                     }
                     
-                    // Preload videos around new position for instant fullscreen
-                    Task {
+                    preloadTask?.cancel()
+                    preloadTask = Task {
+                        guard !Task.isCancelled else { return }
                         await preloadVideosAroundIndex(newValue)
                     }
                 }
@@ -634,8 +666,11 @@ struct DiscoveryView: View {
             DiscoveryGridView(
                 videos: viewModel.filteredVideos,
                 onVideoTap: { video in
-                    // For grid, preload before entering fullscreen
-                    Task {
+                    // PHASE 1 FIX: Kill players and preload before entering fullscreen
+                    NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
+                    
+                    preloadTask?.cancel()
+                    preloadTask = Task {
                         await preloadingService.preloadVideo(video, priority: .high)
                     }
                     
@@ -645,12 +680,14 @@ struct DiscoveryView: View {
                     }
                 },
                 onLoadMore: {
-                    Task {
+                    loadMoreTask?.cancel()
+                    loadMoreTask = Task {
                         await viewModel.checkAndLoadMore(currentIndex: viewModel.filteredVideos.count - 5)
                     }
                 },
                 onRefresh: {
-                    Task {
+                    initialLoadTask?.cancel()
+                    initialLoadTask = Task {
                         await viewModel.refreshContent()
                     }
                 },
@@ -659,7 +696,7 @@ struct DiscoveryView: View {
         }
     }
     
-    // MARK: - ✅ NEW: Swipe Instructions Indicator
+    // MARK: - ✅ Swipe Instructions Indicator
     
     private var swipeInstructionsIndicator: some View {
         HStack(spacing: 20) {
@@ -752,7 +789,8 @@ struct DiscoveryView: View {
                 .padding(.horizontal, 40)
             
             Button("Try Again") {
-                Task {
+                initialLoadTask?.cancel()
+                initialLoadTask = Task {
                     await viewModel.loadInitialContent()
                 }
             }

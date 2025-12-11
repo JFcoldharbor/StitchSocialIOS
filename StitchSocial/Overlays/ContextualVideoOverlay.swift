@@ -147,7 +147,7 @@ struct ContextualVideoOverlay: View {
                         selectedUserID = video.creatorID
                         
                         // Comprehensive video kill
-                        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
@@ -488,7 +488,7 @@ struct ContextualVideoOverlay: View {
             CreatorProfileView(userID: userIDToShow)
                 .onAppear {
                     print("📱 FULLSCREEN: CreatorProfileView appeared for userID: \(userIDToShow)")
-                    NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                    NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                     NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
                     NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
                     NotificationCenter.default.post(name: NSNotification.Name("DeactivateAllPlayers"), object: nil)
@@ -520,19 +520,19 @@ struct ContextualVideoOverlay: View {
                 recordingContext: getStitchRecordingContext(),
                 onVideoCreated: { videoMetadata in
                     showingStitchRecording = false
-                    NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                    NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                     Task { await loadVideoEngagement() }
                 },
                 onCancel: {
                     showingStitchRecording = false
-                    NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                    NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                 }
             )
             .onAppear {
-                NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
             }
             .onDisappear {
-                NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
             }
         }
         .shareOverlay() // Show loading overlay during video export for sharing
@@ -558,7 +558,7 @@ struct ContextualVideoOverlay: View {
                     onTap: {
                         NotificationCenter.default.post(name: NSNotification.Name("DisableVideoAutoRestart"), object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("FullscreenModeActivated"), object: nil)
-                        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
@@ -582,7 +582,7 @@ struct ContextualVideoOverlay: View {
                         onTap: {
                             NotificationCenter.default.post(name: NSNotification.Name("DisableVideoAutoRestart"), object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("FullscreenModeActivated"), object: nil)
-                            NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                            NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
@@ -611,7 +611,7 @@ struct ContextualVideoOverlay: View {
                         onUserTap: { userID in
                             selectedUserID = userID
                             
-                            NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                            NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
                             
@@ -726,7 +726,7 @@ struct ContextualVideoOverlay: View {
                 // Thread Button
                 VStack(spacing: 4) {
                     Button {
-                        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
                         NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
@@ -791,7 +791,7 @@ struct ContextualVideoOverlay: View {
                 if canReply {
                     VStack(spacing: 4) {
                         Button {
-                            NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                            NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
                             NotificationCenter.default.post(name: NSNotification.Name("StopAllBackgroundActivity"), object: nil)
