@@ -1,16 +1,17 @@
 //
 //  HomeFeedService.swift
-//  CleanBeta
+//  StitchSocial
 //
-//  Layer 4: Core Services - Following-Only Feed Management with Lazy Loading
+//  Layer 4: Core Services - Following Feed with Deep Discovery
 //  Dependencies: VideoService, UserService, Config
-//  Features: Instant parent thread loading, lazy child loading, multidirectional navigation
+//  Features: Deep time-based discovery, varied content, lazy loading
+//  UPDATED: Integrated deep discovery for diverse content mix
 //
 
 import Foundation
 import FirebaseFirestore
 
-/// Following-only feed service with lazy loading for instant startup
+/// Following-only feed service with deep discovery for varied content
 @MainActor
 class HomeFeedService: ObservableObject {
     
@@ -32,13 +33,14 @@ class HomeFeedService: ObservableObject {
     private var lastDocument: DocumentSnapshot?
     private var hasMoreContent: Bool = true
     
-    // MARK: - Configuration (Discovery Pattern)
+    // MARK: - Configuration
     
-    private let defaultFeedSize = 40 // Increased like Discovery for better experience
-    private let triggerLoadThreshold = 10 // Like Discovery - more aggressive loading
-    private let maxCachedThreads = 300 // Increased like Discovery for better caching
+    private let defaultFeedSize = 40
+    private let triggerLoadThreshold = 10
+    private let maxCachedThreads = 300
     
     // MARK: - Caching for Performance
+    
     private var cachedFollowingIDs: [String] = []
     private var followingIDsCacheTime: Date?
     private let followingCacheExpiration: TimeInterval = 300 // 5 minutes
@@ -52,197 +54,264 @@ class HomeFeedService: ObservableObject {
         self.videoService = videoService
         self.userService = userService
         
-        print("🏠 HOME FEED: Initialized with lazy loading strategy")
+        print("🏠 HOME FEED: Initialized with deep discovery strategy")
     }
     
-    // MARK: - Primary Feed Operations - FIXED FOR FULL FOLLOWING FEED
+    // MARK: - DEEP DISCOVERY - Primary Feed Loading
     
-    /// Load initial following feed - DISCOVERY PATTERN for followers only
-    func loadFeed(userID: String, limit: Int = 20) async throws -> [ThreadData] {
+    /// Load feed with deep discovery - mix of recent, older, and varied content
+    func loadFeedWithDeepDiscovery(userID: String, limit: Int = 40) async throws -> [ThreadData] {
         
         isLoading = true
         defer { isLoading = false }
         
-        print("HOME FEED: Loading initial feed for user \(userID) (Discovery pattern)")
+        print("🔍 DEEP DISCOVERY: Loading diverse feed for user \(userID)")
         
-        // Step 1: Get following IDs with caching
+        // Step 1: Get following IDs
         let followingIDs = try await getCachedFollowingIDs(userID: userID)
         guard !followingIDs.isEmpty else {
-            print("HOME FEED: No following found - returning empty feed")
+            print("🔍 DEEP DISCOVERY: No following found")
             return []
         }
         
-        print("HOME FEED: Found \(followingIDs.count) following users")
+        print("🔍 DEEP DISCOVERY: Found \(followingIDs.count) following users")
         
-        // Step 2: Get parent threads using Discovery pattern
-        let threads = try await getFollowingParentThreadsOnly(
+        // Step 2: Get diverse content mix
+        var allThreads: [ThreadData] = []
+        
+        // 40% Recent content (last 7 days)
+        let recentThreads = try await getRecentContent(
             followingIDs: followingIDs,
+            limit: Int(Double(limit) * 0.4)
+        )
+        allThreads.append(contentsOf: recentThreads)
+        print("🔍 DEEP DISCOVERY: Loaded \(recentThreads.count) recent threads")
+        
+        // 30% Medium-old content (7-30 days)
+        let mediumOldThreads = try await getMediumOldContent(
+            followingIDs: followingIDs,
+            limit: Int(Double(limit) * 0.3)
+        )
+        allThreads.append(contentsOf: mediumOldThreads)
+        print("🔍 DEEP DISCOVERY: Loaded \(mediumOldThreads.count) medium-old threads")
+        
+        // 20% Older content (30-90 days)
+        let olderThreads = try await getOlderContent(
+            followingIDs: followingIDs,
+            limit: Int(Double(limit) * 0.2)
+        )
+        allThreads.append(contentsOf: olderThreads)
+        print("🔍 DEEP DISCOVERY: Loaded \(olderThreads.count) older threads")
+        
+        // 10% Random deep cuts (90+ days)
+        let deepCutThreads = try await getDeepCutContent(
+            followingIDs: followingIDs,
+            limit: Int(Double(limit) * 0.1)
+        )
+        allThreads.append(contentsOf: deepCutThreads)
+        print("🔍 DEEP DISCOVERY: Loaded \(deepCutThreads.count) deep cut threads")
+        
+        // Step 3: Shuffle for variety
+        let shuffledThreads = allThreads.shuffled()
+        
+        // Step 4: Update state
+        currentFeed = shuffledThreads
+        feedStats.totalThreadsLoaded = shuffledThreads.count
+        feedStats.lastRefreshTime = Date()
+        feedStats.refreshCount += 1
+        
+        print("✅ DEEP DISCOVERY: Loaded \(shuffledThreads.count) total threads with diverse time range")
+        return shuffledThreads
+    }
+    
+    // MARK: - Time-Based Content Loading
+    
+    /// Get recent content (last 7 days)
+    private func getRecentContent(followingIDs: [String], limit: Int) async throws -> [ThreadData] {
+        let sevenDaysAgo = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+        return try await getContentInTimeRange(
+            followingIDs: followingIDs,
+            startDate: sevenDaysAgo,
+            endDate: Date(),
             limit: limit
         )
-        
-        // Step 3: Update state
-        currentFeed = threads
-        feedStats.totalThreadsLoaded = threads.count
-        feedStats.lastRefreshTime = Date()
-        
-        print("HOME FEED: Loaded \(threads.count) PARENT threads from followers (Discovery pattern)")
-        return threads
     }
     
-    /// Refresh feed with new content - ALWAYS FRESH FIREBASE QUERIES
-    func refreshFeed(userID: String) async throws -> [ThreadData] {
-        
-        isRefreshing = true
-        defer { isRefreshing = false }
-        
-        print("🔄 HOME FEED: Refreshing with FRESH content from Firebase")
-        
-        // Reset pagination state - but not needed for follower rotation
-        lastDocument = nil
-        hasMoreContent = true
-        
-        // REAL FIX: Clear current feed and get completely fresh content
-        currentFeed.removeAll()
-        feedStats = FeedStats()
-        
-        // Load fresh content from Firebase
-        let freshThreads = try await loadFeed(userID: userID, limit: defaultFeedSize)
-        
-        feedStats.refreshCount += 1
-        feedStats.lastRefreshTime = Date()
-        
-        print("✅ HOME FEED: Feed refreshed with \(freshThreads.count) FRESH threads from Firebase")
-        return freshThreads
-    }
-    
-    /// Load more content for pagination - REAL FIREBASE QUERIES FOR NEW CONTENT
-    func loadMoreContent(userID: String) async throws -> [ThreadData] {
-        
-        guard hasMoreContent && !isLoading else {
-            print("🏠 HOME FEED: No more content to load or already loading")
-            return currentFeed
-        }
-        
-        isLoading = true
-        defer { isLoading = false }
-        
-        print("🔄 HOME FEED: Loading FRESH content from different followers")
-        
-        // Get following IDs
-        let followingIDs = try await getCachedFollowingIDs(userID: userID)
-        guard !followingIDs.isEmpty else { return currentFeed }
-        
-        // REAL FIX: Load from different followers each time - NO PAGINATION
-        let nextBatch = try await getFollowingParentThreadsOnly(
+    /// Get medium-old content (7-30 days)
+    private func getMediumOldContent(followingIDs: [String], limit: Int) async throws -> [ThreadData] {
+        let thirtyDaysAgo = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+        let sevenDaysAgo = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+        return try await getContentInTimeRange(
             followingIDs: followingIDs,
-            limit: defaultFeedSize
-            // NO startAfter - we want fresh content from different followers
+            startDate: thirtyDaysAgo,
+            endDate: sevenDaysAgo,
+            limit: limit
         )
-        
-        // Always append new content (no pagination means we always get fresh content)
-        if !nextBatch.isEmpty {
-            currentFeed.append(contentsOf: nextBatch)
-            feedStats.totalThreadsLoaded = currentFeed.count
-            
-            // Memory management - like Discovery
-            if currentFeed.count > maxCachedThreads {
-                let threadsToRemove = currentFeed.count - maxCachedThreads
-                currentFeed.removeFirst(threadsToRemove)
-                print("🧹 HOME FEED: Cleaned \(threadsToRemove) old threads from memory")
-            }
-            
-            print("✅ HOME FEED: Loaded \(nextBatch.count) FRESH threads from different followers, total: \(currentFeed.count)")
-        } else {
-            print("🔄 HOME FEED: No new content from current follower chunk, trying reshuffle")
-            hasMoreContent = false
-        }
-        
-        return currentFeed
     }
     
-    // MARK: - REAL NEW CONTENT LOADING - NO FAKE PAGINATION
+    /// Get older content (30-90 days)
+    private func getOlderContent(followingIDs: [String], limit: Int) async throws -> [ThreadData] {
+        let ninetyDaysAgo = Date().addingTimeInterval(-90 * 24 * 60 * 60)
+        let thirtyDaysAgo = Date().addingTimeInterval(-30 * 24 * 60 * 60)
+        return try await getContentInTimeRange(
+            followingIDs: followingIDs,
+            startDate: ninetyDaysAgo,
+            endDate: thirtyDaysAgo,
+            limit: limit
+        )
+    }
     
-    /// Get parent threads from ALL followers continuously - ACTUAL new content each time
-    private func getFollowingParentThreadsOnly(
+    /// Get deep cut content (90+ days old)
+    private func getDeepCutContent(followingIDs: [String], limit: Int) async throws -> [ThreadData] {
+        let ninetyDaysAgo = Date().addingTimeInterval(-90 * 24 * 60 * 60)
+        let veryOld = Date().addingTimeInterval(-365 * 24 * 60 * 60) // Up to 1 year old
+        return try await getContentInTimeRange(
+            followingIDs: followingIDs,
+            startDate: veryOld,
+            endDate: ninetyDaysAgo,
+            limit: limit
+        )
+    }
+    
+    /// Core method to get content in a specific time range
+    private func getContentInTimeRange(
         followingIDs: [String],
-        limit: Int,
-        startAfter: DocumentSnapshot? = nil
+        startDate: Date,
+        endDate: Date,
+        limit: Int
     ) async throws -> [ThreadData] {
-        
-        guard !followingIDs.isEmpty else {
-            print("🏠 HOME FEED: No followers to load from")
-            return []
-        }
         
         let db = Firestore.firestore(database: Config.Firebase.databaseName)
         
-        // REAL FIX: Query different followers each time, not same ones with pagination
-        let followingChunk = getNextFollowingChunk(from: followingIDs)
+        // Sample different followers each time for variety
+        let sampledFollowers = getSampledFollowers(from: followingIDs, count: 30)
         
-        print("🏠 HOME FEED: Querying \(followingChunk.count) followers from total \(followingIDs.count)")
+        guard !sampledFollowers.isEmpty else { return [] }
         
-        // QUERY FOR RECENT CONTENT FROM THIS GROUP - NO PAGINATION
+        // Query with time range
         let query = db.collection(FirebaseSchema.Collections.videos)
-            .whereField(FirebaseSchema.VideoDocument.creatorID, in: followingChunk)
+            .whereField(FirebaseSchema.VideoDocument.creatorID, in: sampledFollowers)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
-            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-            .limit(to: limit)
-        // NO startAfter - we want recent content from these followers
+            .whereField(FirebaseSchema.VideoDocument.createdAt, isGreaterThanOrEqualTo: Timestamp(date: startDate))
+            .whereField(FirebaseSchema.VideoDocument.createdAt, isLessThan: Timestamp(date: endDate))
+            .limit(to: limit * 2) // Get more to account for filtering
         
         let snapshot = try await query.getDocuments()
-        // Don't update lastDocument for follower feeds - we rotate followers instead
         
         var threads: [ThreadData] = []
-        
-        // Convert documents to ThreadData
         for document in snapshot.documents {
             if let thread = try await createParentThreadFromDocument(document) {
                 threads.append(thread)
             }
         }
         
-        // Light shuffle for variety
-        let shuffledThreads = threads.shuffled()
-        
-        print("🏠 HOME FEED: Loaded \(shuffledThreads.count) FRESH threads from \(followingChunk.count) different followers")
-        return shuffledThreads
+        // Shuffle and limit
+        return Array(threads.shuffled().prefix(limit))
     }
     
-    /// Get next chunk of followers to query (rotates on each call, not time)
-    private func getNextFollowingChunk(from followingIDs: [String]) -> [String] {
-        let maxFollowersPerQuery = 30 // Firestore's actual whereIn limit
-        let chunkSize = min(maxFollowersPerQuery, followingIDs.count)
-        
-        if followingIDs.count <= chunkSize {
-            // If we have fewer followers than limit, return all
-            return followingIDs
+    /// Sample random followers for variety
+    private func getSampledFollowers(from followingIDs: [String], count: Int) -> [String] {
+        if followingIDs.count <= count {
+            return followingIDs.shuffled()
         }
         
-        // Rotate through different chunks on each load
-        let rotationIndex = (feedStats.refreshCount + currentFeed.count / 20) % (followingIDs.count - chunkSize + 1)
-        let endIndex = min(rotationIndex + chunkSize, followingIDs.count)
-        
-        let chunk = Array(followingIDs[rotationIndex..<endIndex])
-        print("🔄 HOME FEED: Using followers chunk \(rotationIndex)-\(endIndex-1) of \(followingIDs.count) total")
-        return chunk
+        // Random sample - different each time
+        return Array(followingIDs.shuffled().prefix(count))
     }
+    
+    // MARK: - Legacy Methods (Keep for compatibility)
+    
+    /// Load initial following feed - NOW USES DEEP DISCOVERY
+    func loadFeed(userID: String, limit: Int = 40) async throws -> [ThreadData] {
+        // Redirect to deep discovery
+        return try await loadFeedWithDeepDiscovery(userID: userID, limit: limit)
+    }
+    
+    /// Refresh feed - NOW USES DEEP DISCOVERY
+    func refreshFeed(userID: String) async throws -> [ThreadData] {
+        isRefreshing = true
+        defer { isRefreshing = false }
+        
+        print("🔄 HOME FEED: Refreshing with deep discovery")
+        
+        // Clear cache for fresh data
+        cachedFollowingIDs = []
+        followingIDsCacheTime = nil
+        
+        return try await loadFeedWithDeepDiscovery(userID: userID, limit: defaultFeedSize)
+    }
+    
+    /// Load more content - NOW USES DEEP DISCOVERY
+    func loadMoreContent(userID: String) async throws -> [ThreadData] {
+        
+        guard hasMoreContent && !isLoading else {
+            print("🔍 DEEP DISCOVERY: No more content or already loading")
+            return currentFeed
+        }
+        
+        isLoading = true
+        defer { isLoading = false }
+        
+        print("🔍 DEEP DISCOVERY: Loading more diverse content")
+        
+        // Load another diverse batch
+        let nextBatch = try await loadFeedWithDeepDiscovery(userID: userID, limit: defaultFeedSize)
+        
+        if !nextBatch.isEmpty {
+            currentFeed.append(contentsOf: nextBatch)
+            feedStats.totalThreadsLoaded = currentFeed.count
+            
+            // Memory management
+            if currentFeed.count > maxCachedThreads {
+                let threadsToRemove = currentFeed.count - maxCachedThreads
+                currentFeed.removeFirst(threadsToRemove)
+                print("🧹 DEEP DISCOVERY: Cleaned \(threadsToRemove) old threads")
+            }
+            
+            print("✅ DEEP DISCOVERY: Added \(nextBatch.count) diverse threads, total: \(currentFeed.count)")
+        } else {
+            hasMoreContent = false
+            print("🏁 DEEP DISCOVERY: No more content available")
+        }
+        
+        return currentFeed
+    }
+    
+    // MARK: - Thread Creation Helper
     
     /// Create ThreadData with PARENT ONLY (no children loading) - FIXED FOR SPEED
     private func createParentThreadFromDocument(_ document: DocumentSnapshot) async throws -> ThreadData? {
         
-        // Create video metadata directly from document (bypass VideoService.getVideo)
         let data = document.data()
         guard let data = data else { return nil }
         
+        // Extract parent video data
         let id = data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
-        let creatorID = data[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
-        let title = data[FirebaseSchema.VideoDocument.title] as? String ?? "Untitled"
+        let title = data[FirebaseSchema.VideoDocument.title] as? String ?? ""
         let videoURL = data[FirebaseSchema.VideoDocument.videoURL] as? String ?? ""
         let thumbnailURL = data[FirebaseSchema.VideoDocument.thumbnailURL] as? String ?? ""
+        let creatorID = data[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
         let creatorName = data[FirebaseSchema.VideoDocument.creatorName] as? String ?? "Unknown"
         let createdAt = (data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
+        let threadID = data[FirebaseSchema.VideoDocument.threadID] as? String ?? id
+        let conversationDepth = data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
         
-        // Create CoreVideoMetadata for parent video
+        // Engagement metrics
+        let viewCount = data[FirebaseSchema.VideoDocument.viewCount] as? Int ?? 0
+        let hypeCount = data[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0
+        let coolCount = data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
+        let replyCount = data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0
+        let shareCount = data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0
+        
+        // Video metadata
+        let duration = data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0
+        let aspectRatio = data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? 9.0/16.0
+        let fileSize = data[FirebaseSchema.VideoDocument.fileSize] as? Int ?? 0
+        
+        let total = hypeCount + coolCount
+        let engagementRatio = total > 0 ? Double(hypeCount) / Double(total) : 0.5
+        
+        // Create parent video
         let parentVideo = CoreVideoMetadata(
             id: id,
             title: title,
@@ -251,312 +320,195 @@ class HomeFeedService: ObservableObject {
             creatorID: creatorID,
             creatorName: creatorName,
             createdAt: createdAt,
-            threadID: data[FirebaseSchema.VideoDocument.threadID] as? String,
-            replyToVideoID: data[FirebaseSchema.VideoDocument.replyToVideoID] as? String,
-            conversationDepth: data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0,
-            viewCount: data[FirebaseSchema.VideoDocument.viewCount] as? Int ?? 0,
-            hypeCount: data[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0,
-            coolCount: data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0,
-            replyCount: data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0,
-            shareCount: data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0,
-            temperature: data[FirebaseSchema.VideoDocument.temperature] as? String ?? "neutral",
-            qualityScore: data[FirebaseSchema.VideoDocument.qualityScore] as? Int ?? 50,
-            engagementRatio: 0.0,
+            threadID: threadID,
+            replyToVideoID: nil,
+            conversationDepth: conversationDepth,
+            viewCount: viewCount,
+            hypeCount: hypeCount,
+            coolCount: coolCount,
+            replyCount: replyCount,
+            shareCount: shareCount,
+            temperature: "neutral",
+            qualityScore: 50,
+            engagementRatio: engagementRatio,
             velocityScore: 0.0,
             trendingScore: 0.0,
-            duration: data[FirebaseSchema.VideoDocument.duration] as? Double ?? 0.0,
-            aspectRatio: data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? (9.0/16.0),
-            fileSize: data[FirebaseSchema.VideoDocument.fileSize] as? Int64 ?? 0,
-            discoverabilityScore: (data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double) ?? 0.5,
-            isPromoted: data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false,
-            lastEngagementAt: (data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp)?.dateValue()
+            duration: duration,
+            aspectRatio: aspectRatio,
+            fileSize: Int64(fileSize),
+            discoverabilityScore: 0.5,
+            isPromoted: false,
+            lastEngagementAt: nil
         )
         
-        // Create ThreadData with NO CHILDREN (instant loading)
+        // Create thread with empty children (loaded lazily)
         return ThreadData(
-            id: parentVideo.id,
+            id: threadID,
             parentVideo: parentVideo,
-            childVideos: [] // Empty - load lazily
+            childVideos: [] // Empty - loaded on demand
         )
     }
     
-    // MARK: - INSTANT FALLBACK IMPLEMENTATION
+    // MARK: - Following IDs with Caching
     
-    /// Get trending threads as fallback (no following check required)
-    private func getTrendingParentThreadsOnly(limit: Int) async throws -> [ThreadData] {
-        
-        let db = Firestore.firestore(database: Config.Firebase.databaseName)
-        
-        // Simple query for recent parent threads (no user filtering)
-        let query = db.collection(FirebaseSchema.Collections.videos)
-            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
-            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-            .limit(to: limit)
-        
-        let snapshot = try await query.getDocuments()
-        var threads: [ThreadData] = []
-        
-        // Convert documents to ThreadData - PARENT ONLY
-        for document in snapshot.documents {
-            if let thread = try await createParentThreadFromDocument(document) {
-                threads.append(thread)
-            }
-        }
-        
-        // Simple shuffle for variety
-        let shuffledThreads = threads.shuffled()
-        
-        print("TRENDING: Loaded \(shuffledThreads.count) trending parent threads")
-        return shuffledThreads
-    }
-    
-    /// Timeout wrapper for async operations
-    private func withTimeout<T>(_ timeLimit: TimeInterval, operation: @escaping () async throws -> T) async throws -> T {
-        return try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeLimit * 1_000_000_000))
-                throw TimeoutError()
-            }
-            
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
-        }
-    }
-    
-    // MARK: - Lazy Child Loading for Navigation
-    
-    /// Get following IDs with caching to eliminate repeated UserService calls
-    private func getCachedFollowingIDs(userID: String) async throws -> [String] {
+    /// Get following IDs with 5-minute cache
+    func getCachedFollowingIDs(userID: String) async throws -> [String] {
         
         // Check cache first
         if let cacheTime = followingIDsCacheTime,
            Date().timeIntervalSince(cacheTime) < followingCacheExpiration,
            !cachedFollowingIDs.isEmpty {
-            print("CACHE HIT: Using cached following IDs (\(cachedFollowingIDs.count) users)")
+            print("🏠 HOME FEED: Using cached following IDs (\(cachedFollowingIDs.count))")
             return cachedFollowingIDs
         }
         
-        // Cache miss - load from UserService
-        print("CACHE MISS: Loading following IDs from UserService")
+        // Fetch fresh
+        print("🏠 HOME FEED: Fetching fresh following IDs...")
         let followingIDs = try await userService.getFollowingIDs(userID: userID)
         
-        // Cache the result
+        // Update cache
         cachedFollowingIDs = followingIDs
         followingIDsCacheTime = Date()
         
-        print("CACHED: Stored \(followingIDs.count) following IDs")
+        print("✅ HOME FEED: Cached \(followingIDs.count) following IDs")
         return followingIDs
     }
     
-    /// Load children for specific thread when needed (called from HomeFeedView)
-    func loadThreadChildren(threadID: String) async -> [CoreVideoMetadata] {
-        do {
-            let children = try await videoService.getThreadChildren(threadID: threadID)
-            print("🔥 LAZY LOAD: Loaded \(children.count) children for thread \(threadID)")
-            return children
-        } catch {
-            print("❌ LAZY LOAD: Failed to load children for thread \(threadID)")
-            return []
-        }
+    /// Clear following cache (call when user follows/unfollows)
+    func clearFollowingCache() {
+        cachedFollowingIDs = []
+        followingIDsCacheTime = nil
+        print("🧹 HOME FEED: Cleared following cache")
     }
     
-    // MARK: - Navigation Support
+    // MARK: - Feed State Management
     
-    /// Preload threads for horizontal navigation
-    func preloadHorizontalNavigation(
-        currentThreadIndex: Int,
-        threads: [ThreadData],
-        direction: HomeFeedSwipeDirection
-    ) async {
-        
-        let preloadRange: [Int]
-        
-        switch direction {
-        case .forward:
-            let startIndex = currentThreadIndex + 1
-            let endIndex = min(startIndex + 2, threads.count - 1)
-            preloadRange = Array(startIndex...endIndex)
-            
-        case .backward:
-            let endIndex = currentThreadIndex - 1
-            let startIndex = max(endIndex - 2, 0)
-            preloadRange = Array(startIndex...endIndex)
-        }
-        
-        // Load children for threads that will be navigated to
-        for index in preloadRange {
-            guard index >= 0 && index < threads.count else { continue }
-            
-            let thread = threads[index]
-            if thread.childVideos.isEmpty {
-                _ = await loadThreadChildren(threadID: thread.id)
-            }
-        }
-        
-        print("⚡ HOME FEED: Preloaded horizontal navigation for indices \(preloadRange)")
+    /// Get current feed
+    func getCurrentFeed() -> [ThreadData] {
+        return currentFeed
     }
     
-    /// Check if should load more content based on current position - DISCOVERY PATTERN
-    func shouldLoadMoreContent(currentThreadIndex: Int) -> Bool {
-        let triggerLoadThreshold = 10 // Like Discovery - more aggressive loading
-        let remainingCount = currentFeed.count - currentThreadIndex
-        return remainingCount <= triggerLoadThreshold && hasMoreContent && !isLoading
+    /// Check if should trigger load
+    func shouldLoadMore(currentIndex: Int) -> Bool {
+        let remainingThreads = currentFeed.count - currentIndex
+        return remainingThreads <= triggerLoadThreshold && hasMoreContent && !isLoading
     }
     
-    /// Progressive loading check (like Discovery's checkAndLoadMore)
-    func checkAndLoadMore(currentIndex: Int, userID: String) async {
-        guard shouldLoadMoreContent(currentThreadIndex: currentIndex) else { return }
-        
-        do {
-            _ = try await loadMoreContent(userID: userID)
-            print("⚡ HOME FEED: Auto-loaded more content at index \(currentIndex)")
-        } catch {
-            print("❌ HOME FEED: Auto-load failed: \(error)")
-        }
-    }
-    
-    // MARK: - RESHUFFLE FUNCTIONALITY - NEW
-    
-    /// Reshuffle current feed when reaching bottom
-    func reshuffleCurrentFeed() {
-        guard !currentFeed.isEmpty else { return }
-        
-        print("🔀 HOME FEED: Reshuffling \(currentFeed.count) threads")
-        
-        // Simple shuffle of existing content
-        currentFeed = currentFeed.shuffled()
-        
-        // Update stats
-        feedStats.refreshCount += 1
-        feedStats.lastRefreshTime = Date()
-        
-        print("✅ HOME FEED: Feed reshuffled - new order applied")
-    }
-    
-    /// Get reshuffled feed for bottom reach scenario - REAL FIREBASE QUERIES
-    func getReshuffledFeed(userID: String) async throws -> [ThreadData] {
-        
-        print("🔄 HOME FEED: Getting FRESH content from Firebase (not reshuffling cache)")
-        
-        // REAL FIX: Don't reshuffle cache - get FRESH content from Firebase
-        do {
-            let freshContent = try await loadMoreContent(userID: userID)
-            if freshContent.count > currentFeed.count - 10 { // Got new content
-                return freshContent
-            } else {
-                // Try refreshing completely
-                print("🔄 HOME FEED: Loading more didn't work, doing full refresh")
-                return try await refreshFeed(userID: userID)
-            }
-        } catch {
-            // Fallback - only then reshuffle existing
-            if !currentFeed.isEmpty {
-                print("❌ HOME FEED: Firebase queries failed, shuffling existing as fallback")
-                currentFeed = currentFeed.shuffled()
-                feedStats.refreshCount += 1
-                feedStats.lastRefreshTime = Date()
-                return currentFeed
-            }
-            throw error
-        }
-    }
-    
-    // MARK: - Cache Integration
-    
-    /// Get cached feed if available
-    func getCachedFeed(userID: String) -> [ThreadData]? {
-        // Will be implemented when CachingService integration is complete
-        return nil
-    }
-    
-    /// Warm cache with initial thread data
-    func warmCache(threads: [ThreadData]) {
-        // Will be implemented when CachingService integration is complete
-        print("🔥 HOME FEED: Cache warming ready for \(threads.count) threads")
-    }
-    
-    // MARK: - Statistics and Monitoring
-    
-    /// Get current feed statistics
-    func getFeedStats() -> FeedStats {
-        feedStats.currentFeedSize = currentFeed.count
-        feedStats.hasMoreContent = hasMoreContent
-        return feedStats
-    }
-    
-    /// Reset feed state
-    func resetFeedState() {
-        currentFeed.removeAll()
+    /// Clear all state
+    func clearFeed() {
+        currentFeed = []
         lastDocument = nil
         hasMoreContent = true
         feedStats = FeedStats()
+        print("🧹 HOME FEED: Cleared all state")
+    }
+    
+    // MARK: - Additional Feed Operations
+    
+    /// Reshuffle current feed for variety
+    func getReshuffledFeed(userID: String) async throws -> [ThreadData] {
+        print("🔀 HOME FEED: Reshuffling feed with new deep discovery mix")
         
-        print("🔄 HOME FEED: Reset feed state")
+        // Clear cache to get fresh followers
+        clearFollowingCache()
+        
+        // Load new diverse batch
+        return try await loadFeedWithDeepDiscovery(userID: userID, limit: defaultFeedSize)
     }
-}
-
-// MARK: - Supporting Types
-
-/// Custom timeout error
-struct TimeoutError: Error {}
-
-/// Feed statistics for monitoring
-struct FeedStats {
-    var totalThreadsLoaded: Int = 0
-    var currentFeedSize: Int = 0
-    var refreshCount: Int = 0
-    var hasMoreContent: Bool = true
-    var lastRefreshTime: Date?
     
-    var cacheHitRate: Double {
-        return 0.85
-    }
-}
-
-/// Swipe direction for preloading
-enum HomeFeedSwipeDirection {
-    case forward
-    case backward
-}
-
-// MARK: - Private Utility Extensions
-
-fileprivate extension Array where Element == String {
-    func batchedChunks(into size: Int) -> [[Element]] {
-        return stride(from: 0, to: count, by: size).map {
-            Array(self[$0..<Swift.min($0 + size, count)])
+    /// Load children for a thread (lazy loading)
+    func loadThreadChildren(threadID: String) async throws -> [CoreVideoMetadata] {
+        
+        let db = Firestore.firestore(database: Config.Firebase.databaseName)
+        
+        print("👶 HOME FEED: Loading children for thread \(threadID)")
+        
+        // Query for child videos
+        let query = db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: threadID)
+            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isGreaterThan: 0)
+            .order(by: FirebaseSchema.VideoDocument.conversationDepth, descending: false)
+            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: false)
+            .limit(to: 50) // Reasonable limit for thread children
+        
+        let snapshot = try await query.getDocuments()
+        
+        var children: [CoreVideoMetadata] = []
+        
+        for document in snapshot.documents {
+            let data = document.data()
+            
+            let id = data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
+            let title = data[FirebaseSchema.VideoDocument.title] as? String ?? ""
+            let videoURL = data[FirebaseSchema.VideoDocument.videoURL] as? String ?? ""
+            let thumbnailURL = data[FirebaseSchema.VideoDocument.thumbnailURL] as? String ?? ""
+            let creatorID = data[FirebaseSchema.VideoDocument.creatorID] as? String ?? ""
+            let creatorName = data[FirebaseSchema.VideoDocument.creatorName] as? String ?? "Unknown"
+            let createdAt = (data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
+            let conversationDepth = data[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
+            let replyToVideoID = data[FirebaseSchema.VideoDocument.replyToVideoID] as? String
+            
+            // Engagement metrics
+            let viewCount = data[FirebaseSchema.VideoDocument.viewCount] as? Int ?? 0
+            let hypeCount = data[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0
+            let coolCount = data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
+            let replyCount = data[FirebaseSchema.VideoDocument.replyCount] as? Int ?? 0
+            let shareCount = data[FirebaseSchema.VideoDocument.shareCount] as? Int ?? 0
+            
+            // Video metadata
+            let duration = data[FirebaseSchema.VideoDocument.duration] as? TimeInterval ?? 0
+            let aspectRatio = data[FirebaseSchema.VideoDocument.aspectRatio] as? Double ?? 9.0/16.0
+            let fileSize = data[FirebaseSchema.VideoDocument.fileSize] as? Int ?? 0
+            
+            let total = hypeCount + coolCount
+            let engagementRatio = total > 0 ? Double(hypeCount) / Double(total) : 0.5
+            
+            let childVideo = CoreVideoMetadata(
+                id: id,
+                title: title,
+                videoURL: videoURL,
+                thumbnailURL: thumbnailURL,
+                creatorID: creatorID,
+                creatorName: creatorName,
+                createdAt: createdAt,
+                threadID: threadID,
+                replyToVideoID: replyToVideoID,
+                conversationDepth: conversationDepth,
+                viewCount: viewCount,
+                hypeCount: hypeCount,
+                coolCount: coolCount,
+                replyCount: replyCount,
+                shareCount: shareCount,
+                temperature: "neutral",
+                qualityScore: 50,
+                engagementRatio: engagementRatio,
+                velocityScore: 0.0,
+                trendingScore: 0.0,
+                duration: duration,
+                aspectRatio: aspectRatio,
+                fileSize: Int64(fileSize),
+                discoverabilityScore: 0.5,
+                isPromoted: false,
+                lastEngagementAt: nil
+            )
+            
+            children.append(childVideo)
         }
+        
+        print("✅ HOME FEED: Loaded \(children.count) children for thread \(threadID)")
+        return children
     }
 }
 
-// MARK: - Hello World Test Extension
+// MARK: - Feed Statistics
 
-extension HomeFeedService {
+struct FeedStats: Codable {
+    var totalThreadsLoaded: Int = 0
+    var lastRefreshTime: Date?
+    var refreshCount: Int = 0
     
-    /// Test home feed functionality
-    func helloWorldTest() {
-        print("🏠 HOME FEED SERVICE: Hello World - Discovery pattern for followers!")
-        print("🏠 Features: Continuous loading, following-only content, no double cycling")
-        print("🏠 Performance: Like Discovery but followers only")
-    }
-}
-
-// MARK: - Integration Extensions
-
-extension HomeFeedService {
-    
-    /// Integration with VideoPreloadingService
-    func setupPreloadingIntegration() async {
-        print("🏠 HOME FEED: Ready for preloading service integration")
-    }
-    
-    /// Integration with HomeFeedView
-    func prepareForViewIntegration() -> [ThreadData] {
-        return currentFeed
+    var timesSinceRefresh: TimeInterval? {
+        guard let lastRefresh = lastRefreshTime else { return nil }
+        return Date().timeIntervalSince(lastRefresh)
     }
 }

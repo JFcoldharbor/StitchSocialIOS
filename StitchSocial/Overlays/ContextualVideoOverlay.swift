@@ -5,7 +5,8 @@
 //  Layer 8: Views - Universal Contextual Video Overlay with Viewer Tracking
 //  Dependencies: EngagementService, UserService, AuthService, FollowManager, VideoService
 //  Features: Static overlay, special user permissions, context-aware profile navigation, viewer tracking
-//  UPDATED: Uses external TaggedUsersRow component, removed embedded implementation
+//  UPDATED: Added self-stitching support - creators can now continue their own threads
+//           Context-aware: profileOwn, homeFeed, thread, fullscreen allow self-stitch
 //
 
 import SwiftUI
@@ -75,7 +76,7 @@ struct ContextualVideoOverlay: View {
     
     @StateObject private var userService = UserService()
     @StateObject private var authService = AuthService()
-    @StateObject private var followManager = FollowManager()
+    @ObservedObject var followManager = FollowManager.shared
     @StateObject private var engagementManager = EngagementManager(
         videoService: VideoService(),
         userService: UserService()
@@ -289,8 +290,59 @@ struct ContextualVideoOverlay: View {
         video.creatorID == currentUserID
     }
     
+    // MARK: - Reply Permission Logic (Self-stitching support)
+    
     private var canReply: Bool {
-        video.conversationDepth <= 1 && !isUserVideo
+        // Depth limit: can only reply to depth 0 or 1 (creates max depth 2)
+        guard video.conversationDepth <= 1 else {
+            print("🚫 STITCH: Blocked - depth \(video.conversationDepth) > 1")
+            return false
+        }
+        
+        // Allow self-replies in appropriate contexts
+        if isUserVideo {
+            let allowed = allowsSelfReply
+            print("🎬 STITCH: Own video - context: \(context), allowsSelfReply: \(allowed)")
+            return allowed
+        }
+        
+        // Always allow replies to others' videos (within depth limit)
+        return true
+    }
+    
+    /// Determines if self-stitching is allowed based on viewing context
+    private var allowsSelfReply: Bool {
+        switch context {
+        case .profileOwn:
+            return true   // Creator can continue threads from their profile
+        case .homeFeed:
+            return true   // Creator can add to their own content in feed
+        case .thread:
+            return true   // Creator can participate in their own threads
+        case .fullscreen:
+            return true   // Allow in fullscreen view
+        case .discovery:
+            return false  // Less relevant in discovery
+        case .profileOther:
+            return false  // Won't see own videos here anyway
+        }
+    }
+    
+    // MARK: - Stitch Button Properties (Dynamic based on self-stitch)
+    
+    /// Icon for stitch button (different for self-stitch)
+    private var stitchButtonIcon: String {
+        isUserVideo ? "plus.circle" : "scissors"
+    }
+    
+    /// Label for stitch button
+    private var stitchButtonLabel: String {
+        isUserVideo ? "Continue" : "Stitch"
+    }
+    
+    /// Ring color for stitch button
+    private var stitchButtonRingColor: Color {
+        isUserVideo ? .green : .purple
     }
     
     // MARK: - Context-Aware Display Logic
@@ -787,7 +839,7 @@ struct ContextualVideoOverlay: View {
                 }
                 .frame(maxWidth: .infinity)
                 
-                // Stitch Button
+                // Stitch Button (with self-stitch support)
                 if canReply {
                     VStack(spacing: 4) {
                         Button {
@@ -808,17 +860,17 @@ struct ContextualVideoOverlay: View {
                                     .frame(width: 42, height: 42)
                                 
                                 Circle()
-                                    .stroke(Color.purple.opacity(0.4), lineWidth: 1.2)
+                                    .stroke(stitchButtonRingColor.opacity(0.4), lineWidth: 1.2)
                                     .frame(width: 42, height: 42)
                                 
-                                Image(systemName: "scissors")
+                                Image(systemName: stitchButtonIcon)
                                     .font(.system(size: 18, weight: .bold))
                                     .foregroundColor(.white)
                             }
                         }
                         .buttonStyle(ContextualScaleButtonStyle())
                         
-                        Text("Stitch")
+                        Text(stitchButtonLabel)
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(.white.opacity(0.8))
                     }

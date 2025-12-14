@@ -4,7 +4,8 @@
 //
 //  Layer 5: Business Logic - Pure Engagement Calculation Functions
 //  Dependencies: EngagementConfig, EngagementTypes (Layer 1-2) ONLY
-//  Features: Progressive tapping logic, milestone detection, cost calculations
+//  Features: Progressive tapping logic, milestone detection, NEW hybrid clout calculations
+//  UPDATED: Decoupled visual hypes from clout, tier-based caps, diminishing returns, anti-spam
 //
 
 import Foundation
@@ -61,6 +62,51 @@ struct EngagementCalculator {
         return current >= required
     }
     
+    // MARK: - NEW: Hybrid Clout Calculation System
+    
+    /// Calculate clout award for completed engagement (NEW SYSTEM)
+    static func calculateCloutReward(
+        giverTier: UserTier,
+        tapNumber: Int,
+        isFirstEngagement: Bool,
+        currentCloutFromThisUser: Int
+    ) -> Int {
+        return EngagementConfig.calculateClout(
+            tier: giverTier,
+            tapNumber: tapNumber,
+            isFirstEngagement: isFirstEngagement,
+            currentCloutFromUser: currentCloutFromThisUser
+        )
+    }
+    
+    /// Calculate visual hype increment (decoupled from clout)
+    static func calculateVisualHypeIncrement(giverTier: UserTier) -> Int {
+        return EngagementConfig.getVisualHypeMultiplier(for: giverTier)
+    }
+    
+    /// Check if user can give more clout to this video
+    static func canGiveMoreClout(
+        giverTier: UserTier,
+        currentCloutFromThisUser: Int
+    ) -> Bool {
+        let maxAllowed = EngagementConfig.getMaxCloutPerUserPerVideo(for: giverTier)
+        return currentCloutFromThisUser < maxAllowed
+    }
+    
+    /// Check if video can receive more clout
+    static func canReceiveMoreClout(currentTotalClout: Int) -> Bool {
+        return currentTotalClout < EngagementConfig.maxTotalCloutPerVideo
+    }
+    
+    /// Calculate remaining clout allowance for user on this video
+    static func calculateRemainingCloutAllowance(
+        giverTier: UserTier,
+        currentCloutFromThisUser: Int
+    ) -> Int {
+        let maxAllowed = EngagementConfig.getMaxCloutPerUserPerVideo(for: giverTier)
+        return max(0, maxAllowed - currentCloutFromThisUser)
+    }
+    
     // MARK: - Hype Rating Calculations
     
     /// Calculate hype rating cost for specific user tier
@@ -78,161 +124,78 @@ struct EngagementCalculator {
         return max(0.0, currentRating - cost)
     }
     
-    // MARK: - Clout Reward Calculations
-    
-    /// Calculate clout reward for specific user tier
-    static func calculateCloutReward(giverTier: UserTier) -> Int {
-        return EngagementConfig.getCloutReward(for: giverTier)
-    }
-    
-    /// Calculate regular clout based on 5-hype threshold
-    static func calculateRegularClout(userTier: UserTier, currentHypeCount: Int) -> Int {
-        // Award clout every 5 hypes
-        if currentHypeCount % EngagementConfig.regularCloutThreshold == 0 {
-            return calculateCloutReward(giverTier: userTier)
-        }
-        return 0
-    }
+    // MARK: - Cool Engagement Calculations
     
     /// Calculate clout penalty for cool engagements
     static func calculateCoolPenalty() -> Int {
         return EngagementConfig.coolCloutPenalty
     }
     
-    /// Calculate total clout for multiple engagements
-    static func calculateTotalClout(engagementCount: Int, giverTier: UserTier) -> Int {
-        let rewardPerEngagement = calculateCloutReward(giverTier: giverTier)
-        return engagementCount * rewardPerEngagement
-    }
+    // MARK: - Complete Engagement Result Calculation
     
-    // MARK: - State Update Calculations
-    
-    /// Calculate complete engagement state update
-    static func calculateStateUpdate(
-        currentState: VideoEngagementState,
-        isHypeEngagement: Bool,
-        additionalTaps: Int = 1
-    ) -> (newState: VideoEngagementState, isComplete: Bool, progress: Double, milestone: TapMilestone?) {
-        
-        var newState = currentState
-        var isComplete = false
-        var progress = 0.0
-        var milestone: TapMilestone? = nil
-        
-        if isHypeEngagement {
-            // Update hype taps
-            newState.hypeCurrentTaps += additionalTaps
-            
-            // Calculate progress
-            progress = calculateTapProgress(
-                current: newState.hypeCurrentTaps,
-                required: newState.hypeRequiredTaps
-            )
-            
-            // Check completion
-            if isTappingComplete(current: newState.hypeCurrentTaps, required: newState.hypeRequiredTaps) {
-                isComplete = true
-                newState.completeHypeEngagement()
-                milestone = .complete
-            } else {
-                milestone = detectMilestone(progress: progress)
-            }
-            
-        } else {
-            // Update cool taps
-            newState.coolCurrentTaps += additionalTaps
-            
-            // Calculate progress
-            progress = calculateTapProgress(
-                current: newState.coolCurrentTaps,
-                required: newState.coolRequiredTaps
-            )
-            
-            // Check completion
-            if isTappingComplete(current: newState.coolCurrentTaps, required: newState.coolRequiredTaps) {
-                isComplete = true
-                newState.completeCoolEngagement()
-                milestone = .complete
-            } else {
-                milestone = detectMilestone(progress: progress)
-            }
-        }
-        
-        return (newState, isComplete, progress, milestone)
-    }
-    
-    /// Calculate complete engagement result
+    /// Calculate complete engagement result (INSTANT ENGAGEMENTS)
     static func calculateEngagementResult(
         currentVideoHypeCount: Int,
         currentVideoCoolCount: Int,
         userTier: UserTier,
         isHypeEngagement: Bool,
-        isComplete: Bool,
-        isFounderFirstTap: Bool = false
+        tapNumber: Int,
+        isFirstEngagement: Bool,
+        currentCloutFromThisUser: Int
     ) -> EngagementResult {
         
-        if isComplete {
-            // Successful engagement
-            let cloutAwarded: Int
-            let visualHypeIncrement: Int
-            let visualCoolIncrement: Int
-            let animationType: EngagementAnimationType
-            let message: String
+        // All engagements complete instantly
+        let visualHypeIncrement: Int
+        let visualCoolIncrement: Int
+        let cloutAwarded: Int
+        let animationType: EngagementAnimationType
+        let message: String
+        
+        if isHypeEngagement {
+            // Calculate visual hype increment (tier-based, every tap)
+            visualHypeIncrement = calculateVisualHypeIncrement(giverTier: userTier)
+            visualCoolIncrement = 0
             
-            if isHypeEngagement {
-                if isFounderFirstTap {
-                    // Founder first tap: 20 hypes + 200 clout
-                    cloutAwarded = EngagementConfig.founderFirstTapCloutBonus
-                    visualHypeIncrement = EngagementConfig.founderFirstTapMultiplier
-                    visualCoolIncrement = 0
-                    animationType = .founderExplosion
-                    message = "Founder boost: +20 hypes!"
-                } else {
-                    // Regular hype
-                    cloutAwarded = calculateCloutReward(giverTier: userTier)
-                    visualHypeIncrement = 1
-                    visualCoolIncrement = 0
-                    animationType = .standardHype
-                    message = "Hype added!"
-                }
+            // Calculate clout with new system (decoupled from visual hypes)
+            cloutAwarded = calculateCloutReward(
+                giverTier: userTier,
+                tapNumber: tapNumber,
+                isFirstEngagement: isFirstEngagement,
+                currentCloutFromThisUser: currentCloutFromThisUser
+            )
+            
+            // Determine animation type
+            if isFirstEngagement && EngagementConfig.hasFirstTapBonus(tier: userTier) {
+                animationType = .founderExplosion  // Premium tier first tap
+                message = "Premium boost: +\(visualHypeIncrement) hypes!"
             } else {
-                // Cool engagement
-                cloutAwarded = calculateCoolPenalty()
-                visualHypeIncrement = 0
-                visualCoolIncrement = 1
-                animationType = .standardCool
-                message = "Cool added"
+                animationType = .standardHype
+                message = "Hype added!"
             }
             
-            let newHypeCount = currentVideoHypeCount + visualHypeIncrement
-            let newCoolCount = currentVideoCoolCount + visualCoolIncrement
-            
-            return EngagementResult(
-                success: true,
-                cloutAwarded: cloutAwarded,
-                newHypeCount: newHypeCount,
-                newCoolCount: newCoolCount,
-                isFounderFirstTap: isFounderFirstTap,
-                visualHypeIncrement: visualHypeIncrement,
-                visualCoolIncrement: visualCoolIncrement,
-                animationType: animationType,
-                message: message
-            )
-            
         } else {
-            // Still in progress
-            return EngagementResult(
-                success: false,
-                cloutAwarded: 0,
-                newHypeCount: currentVideoHypeCount,
-                newCoolCount: currentVideoCoolCount,
-                isFounderFirstTap: false,
-                visualHypeIncrement: 0,
-                visualCoolIncrement: 0,
-                animationType: .tapProgress,
-                message: "Keep tapping..."
-            )
+            // Cool engagement
+            visualHypeIncrement = 0
+            visualCoolIncrement = 1
+            cloutAwarded = calculateCoolPenalty()
+            animationType = .standardCool
+            message = "Cool added"
         }
+        
+        let newHypeCount = currentVideoHypeCount + visualHypeIncrement
+        let newCoolCount = currentVideoCoolCount + visualCoolIncrement
+        
+        return EngagementResult(
+            success: true,
+            cloutAwarded: cloutAwarded,
+            newHypeCount: newHypeCount,
+            newCoolCount: newCoolCount,
+            isFounderFirstTap: isFirstEngagement && userTier == .founder,
+            visualHypeIncrement: visualHypeIncrement,
+            visualCoolIncrement: visualCoolIncrement,
+            animationType: animationType,
+            message: message
+        )
     }
     
     // MARK: - Engagement Type Logic
@@ -289,5 +252,79 @@ struct EngagementCalculator {
         }
         
         return (true, nil)
+    }
+    
+    /// Validate clout award against caps
+    static func validateCloutAward(
+        giverTier: UserTier,
+        currentCloutFromUser: Int,
+        proposedClout: Int,
+        currentVideoTotalClout: Int
+    ) -> (isValid: Bool, adjustedClout: Int, reason: String?) {
+        
+        // Check per-user-per-video cap
+        let maxPerUser = EngagementConfig.getMaxCloutPerUserPerVideo(for: giverTier)
+        if currentCloutFromUser >= maxPerUser {
+            return (false, 0, "User has reached max clout for this video (\(maxPerUser))")
+        }
+        
+        // Check if proposed clout would exceed user cap
+        let remainingUserAllowance = maxPerUser - currentCloutFromUser
+        var adjustedClout = min(proposedClout, remainingUserAllowance)
+        
+        // Check per-video total cap
+        let maxPerVideo = EngagementConfig.maxTotalCloutPerVideo
+        if currentVideoTotalClout >= maxPerVideo {
+            return (false, 0, "Video has reached max total clout (\(maxPerVideo))")
+        }
+        
+        // Check if proposed clout would exceed video cap
+        let remainingVideoAllowance = maxPerVideo - currentVideoTotalClout
+        adjustedClout = min(adjustedClout, remainingVideoAllowance)
+        
+        if adjustedClout < proposedClout {
+            return (true, adjustedClout, "Clout adjusted to fit within caps")
+        }
+        
+        return (true, adjustedClout, nil)
+    }
+}
+
+// MARK: - Testing & Validation
+
+extension EngagementCalculator {
+    
+    /// Test new hybrid clout system with examples
+    static func testHybridCloutSystem() -> String {
+        var report = "🧪 TESTING HYBRID CLOUT SYSTEM\n\n"
+        
+        // Test Founder
+        report += "📊 FOUNDER TEST (20 hypes/tap, 50 base clout)\n"
+        for tap in 1...15 {
+            let clout = calculateCloutReward(
+                giverTier: .founder,
+                tapNumber: tap,
+                isFirstEngagement: tap == 1,
+                currentCloutFromThisUser: (tap - 1) * 50
+            )
+            let visual = calculateVisualHypeIncrement(giverTier: .founder)
+            report += "Tap \(tap): +\(visual) hypes, \(clout) clout\n"
+        }
+        
+        report += "\n📊 INFLUENCER TEST (1 hype/tap, 5 base clout)\n"
+        for tap in 1...10 {
+            let clout = calculateCloutReward(
+                giverTier: .influencer,
+                tapNumber: tap,
+                isFirstEngagement: tap == 1,
+                currentCloutFromThisUser: (tap - 1) * 5
+            )
+            let visual = calculateVisualHypeIncrement(giverTier: .influencer)
+            report += "Tap \(tap): +\(visual) hypes, \(clout) clout\n"
+        }
+        
+        report += "\n✅ Hybrid Clout System Tests Complete!\n"
+        
+        return report
     }
 }

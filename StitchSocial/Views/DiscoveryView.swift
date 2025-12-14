@@ -1,17 +1,222 @@
 //
-//  DiscoveryView with Progressive Loading
+//  DiscoveryView.swift (UPDATED)
 //  StitchSocial
 //
-//  TikTok-style infinite scroll with intelligent content batching
-//  PHASE 1 FIX: Unified notifications, Task cancellation, observer cleanup
+//  Enhanced with deep time-based randomization
+//  Shows varied content from all time periods, not just newest
 //
 
 import SwiftUI
 import Foundation
 import FirebaseAuth
-import FirebaseFirestore
 
-// MARK: - Discovery Mode & Category (ORIGINAL)
+// MARK: - Discovery ViewModel with Deep Randomization
+
+@MainActor
+class DiscoveryViewModel: ObservableObject {
+    // Published properties
+    @Published var videos: [CoreVideoMetadata] = []
+    @Published var filteredVideos: [CoreVideoMetadata] = []
+    @Published var isLoading = false
+    @Published var currentCategory: DiscoveryCategory = .all
+    @Published var errorMessage: String?
+    
+    // Services
+    private let discoveryService = DiscoveryService()
+    
+    // MARK: - Load Initial Content with Deep Randomization
+    
+    func loadInitialContent() async {
+        guard !isLoading else { return }
+        
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            print("🔍 DISCOVERY: Loading deep randomized content")
+            
+            // Use deep randomized discovery
+            let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 40)
+            let loadedVideos = threads.map { $0.parentVideo }
+            
+            await MainActor.run {
+                // Filter out videos with empty IDs
+                let validVideos = loadedVideos.filter { !$0.id.isEmpty }
+                
+                if validVideos.count < loadedVideos.count {
+                    print("⚠️ DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
+                }
+                
+                videos = validVideos
+                applyFilterAndShuffle()
+                errorMessage = nil
+                
+                print("✅ DISCOVERY: Loaded \(filteredVideos.count) randomized videos")
+            }
+        } catch {
+            await MainActor.run {
+                errorMessage = "Failed to load discovery content"
+                print("❌ DISCOVERY: Load failed: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - Load More with Deep Randomization
+    
+    func loadMoreContent() async {
+        guard !isLoading else { return }
+        
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            print("📥 DISCOVERY: Loading more randomized content")
+            
+            // Load another deep randomized batch
+            let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 20)
+            let newVideos = threads.map { $0.parentVideo }
+            
+            await MainActor.run {
+                // Filter out videos with empty IDs
+                let validVideos = newVideos.filter { !$0.id.isEmpty }
+                
+                // Add to existing videos
+                videos.append(contentsOf: validVideos)
+                applyFilterAndShuffle()
+                
+                print("✅ DISCOVERY: Added \(validVideos.count) more videos, total: \(filteredVideos.count)")
+            }
+        } catch {
+            print("❌ DISCOVERY: Failed to load more: \(error)")
+        }
+    }
+    
+    // MARK: - Refresh Content
+    
+    func refreshContent() async {
+        videos = []
+        await loadInitialContent()
+    }
+    
+    // MARK: - Randomize Content
+    
+    func randomizeContent() {
+        // Ultra-shuffle existing videos
+        videos = videos.shuffled()
+        applyFilterAndShuffle()
+        
+        print("🎲 DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
+    }
+    
+    // MARK: - Category Filtering
+    
+    func filterBy(category: DiscoveryCategory) async {
+        currentCategory = category
+        
+        isLoading = true
+        defer { isLoading = false }
+        
+        do {
+            let threads: [ThreadData]
+            
+            switch category {
+            case .all:
+                // Deep randomized discovery
+                threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 40)
+                
+            case .trending:
+                // Trending content (last 7 days, high engagement)
+                threads = try await discoveryService.getTrendingDiscovery(limit: 40)
+                
+            case .recent:
+                // Only very recent (last 24 hours)
+                threads = try await discoveryService.getRecentDiscovery(limit: 40)
+                
+            case .popular:
+                // All-time popular content
+                threads = try await discoveryService.getPopularDiscovery(limit: 40)
+                
+            case .following:
+                // TODO: Implement following filter
+                threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 40)
+            }
+            
+            let loadedVideos = threads.map { $0.parentVideo }
+            
+            await MainActor.run {
+                // Filter out videos with empty IDs
+                let validVideos = loadedVideos.filter { !$0.id.isEmpty }
+                videos = validVideos
+                applyFilterAndShuffle()
+                
+                print("📊 DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
+            }
+            
+        } catch {
+            await MainActor.run {
+                errorMessage = "Failed to load \(category.displayName) content"
+                print("❌ DISCOVERY: Category load failed: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - Filtering and Shuffling
+    
+    private func applyFilterAndShuffle() {
+        filteredVideos = diversifyShuffle(videos: videos)
+    }
+    
+    /// Shuffle with maximum creator variety
+    private func diversifyShuffle(videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
+        guard videos.count > 1 else { return videos }
+        
+        // Group by creator
+        var creatorBuckets: [String: [CoreVideoMetadata]] = [:]
+        for video in videos {
+            creatorBuckets[video.creatorID, default: []].append(video)
+        }
+        
+        // Shuffle each creator's videos
+        var shuffledBuckets = creatorBuckets.mapValues { $0.shuffled() }
+        
+        // Interleave to maximize variety
+        var result: [CoreVideoMetadata] = []
+        var recentCreators: [String] = []
+        let maxRecentTracking = 5
+        
+        while !shuffledBuckets.isEmpty {
+            let availableCreators = shuffledBuckets.keys.filter { !recentCreators.contains($0) }
+            
+            let chosenCreatorID: String
+            if !availableCreators.isEmpty {
+                chosenCreatorID = availableCreators.randomElement()!
+            } else {
+                chosenCreatorID = shuffledBuckets.keys.randomElement()!
+                recentCreators.removeAll()
+            }
+            
+            if var creatorVideos = shuffledBuckets[chosenCreatorID], !creatorVideos.isEmpty {
+                let video = creatorVideos.removeFirst()
+                result.append(video)
+                
+                recentCreators.append(chosenCreatorID)
+                if recentCreators.count > maxRecentTracking {
+                    recentCreators.removeFirst()
+                }
+                
+                if creatorVideos.isEmpty {
+                    shuffledBuckets.removeValue(forKey: chosenCreatorID)
+                } else {
+                    shuffledBuckets[chosenCreatorID] = creatorVideos
+                }
+            }
+        }
+        
+        return result
+    }
+}
+
+// MARK: - Discovery Mode & Category
 
 enum DiscoveryMode: String, CaseIterable {
     case swipe = "swipe"
@@ -60,308 +265,12 @@ enum DiscoveryCategory: String, CaseIterable {
     }
 }
 
-// MARK: - Progressive Loading State
-
-struct LoadingState {
-    var isInitialLoading = false
-    var isLoadingMore = false
-    var hasMoreContent = true
-    var loadingBatch = 0
-    var totalLoaded = 0
-    var lastLoadTime = Date()
-}
-
-// MARK: - Discovery ViewModel with Progressive Loading
-
-@MainActor
-class DiscoveryViewModel: ObservableObject {
-    // Published properties
-    @Published var videos: [CoreVideoMetadata] = []
-    @Published var filteredVideos: [CoreVideoMetadata] = []
-    @Published var loadingState = LoadingState()
-    @Published var currentCategory: DiscoveryCategory = .all
-    @Published var errorMessage: String?
-    
-    // Progressive loading configuration
-    let initialBatchSize = 40       // Increased from 20 to 40 for better grid experience
-    let subsequentBatchSize = 20    // Increased from 10 to 20 for smoother loading
-    private let triggerLoadThreshold = 10  // Load more when 10 videos remaining (more aggressive)
-    private let maxCachedVideos = 300     // Increased cache for much better grid experience
-    
-    // Services and state
-    private let videoService = VideoService()
-    private var allAvailableVideos: [CoreVideoMetadata] = []
-    private var lastDocument: DocumentSnapshot?
-    
-    // MARK: - Initial Loading - ✅ MIXED RECENT + OLD CONTENT
-    
-    func loadInitialContent() async {
-        guard !loadingState.isInitialLoading else { return }
-        
-        loadingState.isInitialLoading = true
-        defer { loadingState.isInitialLoading = false }
-        
-        do {
-            print("🎯 DISCOVERY: Loading mixed content (recent 24hrs + random old)")
-            
-            // Load MORE videos than needed to ensure variety
-            let fetchLimit = initialBatchSize * 3 // Get 120 videos
-            let result = try await videoService.getDiscoveryParentThreadsOnly(limit: fetchLimit)
-            let loadedVideos = result.threads.map { $0.parentVideo }
-            
-            await MainActor.run {
-                // ✅ SPLIT: 30% recent (last 24hrs), 70% random older
-                let now = Date()
-                let twentyFourHoursAgo = now.addingTimeInterval(-24 * 60 * 60)
-                
-                // ✅ CRITICAL: Filter out videos with empty IDs before processing
-                let validVideos = loadedVideos.filter { !$0.id.isEmpty }
-                
-                if validVideos.count < loadedVideos.count {
-                    print("⚠️ DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
-                }
-                
-                // Separate recent vs old
-                let recentVideos = validVideos.filter { $0.createdAt >= twentyFourHoursAgo }
-                let olderVideos = validVideos.filter { $0.createdAt < twentyFourHoursAgo }
-                
-                print("📊 DISCOVERY: Found \(recentVideos.count) recent, \(olderVideos.count) older")
-                
-                // Calculate mix ratios
-                let recentCount = min(Int(Double(initialBatchSize) * 0.3), recentVideos.count)
-                let olderCount = initialBatchSize - recentCount
-                
-                // Take samples and shuffle
-                let selectedRecent = Array(recentVideos.shuffled().prefix(recentCount))
-                let selectedOlder = Array(olderVideos.shuffled().prefix(olderCount))
-                
-                // Combine and shuffle again for maximum randomness
-                allAvailableVideos = (selectedRecent + selectedOlder).shuffled()
-                
-                lastDocument = result.lastDocument
-                loadingState.hasMoreContent = result.hasMore
-                loadingState.totalLoaded = allAvailableVideos.count
-                loadingState.loadingBatch = 1
-                
-                // Apply category filter and shuffle
-                applyFilterAndShuffle()
-                
-                errorMessage = nil
-                print("✅ DISCOVERY: Loaded \(filteredVideos.count) videos (recent + resurfaced old)")
-            }
-        } catch {
-            await MainActor.run {
-                errorMessage = "Failed to load discovery content"
-                print("❌ DISCOVERY: Initial load failed: \(error)")
-            }
-        }
-    }
-    
-    // MARK: - Progressive Loading
-    
-    func checkAndLoadMore(currentIndex: Int) async {
-        // Check if we need to load more content
-        let remainingCount = filteredVideos.count - currentIndex
-        
-        guard remainingCount <= triggerLoadThreshold,
-              !loadingState.isLoadingMore,
-              loadingState.hasMoreContent else {
-            return
-        }
-        
-        await loadMoreContent()
-    }
-    
-    private func loadMoreContent() async {
-        guard !loadingState.isLoadingMore else { return }
-        
-        loadingState.isLoadingMore = true
-        defer { loadingState.isLoadingMore = false }
-        
-        do {
-            print("📥 DISCOVERY: Loading more content (batch \(loadingState.loadingBatch + 1))")
-            
-            // Load extra to ensure mix
-            let fetchLimit = subsequentBatchSize * 3 // Get 60 videos
-            let result = try await videoService.getDiscoveryParentThreadsOnly(
-                limit: fetchLimit,
-                lastDocument: lastDocument
-            )
-            let newVideos = result.threads.map { $0.parentVideo }
-            
-            await MainActor.run {
-                // ✅ SAME LOGIC: 30% recent, 70% old
-                let now = Date()
-                let twentyFourHoursAgo = now.addingTimeInterval(-24 * 60 * 60)
-                
-                // ✅ CRITICAL: Filter out videos with empty IDs
-                let validVideos = newVideos.filter { !$0.id.isEmpty }
-                
-                if validVideos.count < newVideos.count {
-                    print("⚠️ DISCOVERY: Filtered out \(newVideos.count - validVideos.count) videos with empty IDs")
-                }
-                
-                let recentVideos = validVideos.filter { $0.createdAt >= twentyFourHoursAgo }
-                let olderVideos = validVideos.filter { $0.createdAt < twentyFourHoursAgo }
-                
-                let recentCount = min(Int(Double(subsequentBatchSize) * 0.3), recentVideos.count)
-                let olderCount = subsequentBatchSize - recentCount
-                
-                let selectedRecent = Array(recentVideos.shuffled().prefix(recentCount))
-                let selectedOlder = Array(olderVideos.shuffled().prefix(olderCount))
-                
-                let shuffledNew = (selectedRecent + selectedOlder).shuffled()
-                allAvailableVideos.append(contentsOf: shuffledNew)
-                
-                lastDocument = result.lastDocument
-                loadingState.hasMoreContent = result.hasMore
-                loadingState.totalLoaded += shuffledNew.count
-                loadingState.loadingBatch += 1
-                loadingState.lastLoadTime = Date()
-                
-                // Apply filter and add to feed
-                let newFilteredVideos = applyCurrentFilter(to: shuffledNew)
-                let diversifiedNew = diversifyShuffle(videos: newFilteredVideos)
-                filteredVideos.append(contentsOf: diversifiedNew)
-                
-                manageMemory()
-                
-                print("✅ DISCOVERY: Loaded \(shuffledNew.count) more videos (recent + old)")
-            }
-        } catch {
-            print("❌ DISCOVERY: Failed to load more content: \(error)")
-        }
-    }
-    
-    // MARK: - Refresh Content
-    
-    func refreshContent() async {
-        // Reset state
-        allAvailableVideos = []
-        lastDocument = nil
-        loadingState = LoadingState()
-        
-        // Load fresh content
-        await loadInitialContent()
-    }
-    
-    // MARK: - Randomize Content
-    
-    func randomizeContent() {
-        // Shuffle all available videos
-        allAvailableVideos = allAvailableVideos.shuffled()
-        
-        // Re-apply current filter with shuffle
-        applyFilterAndShuffle()
-        
-        print("🎲 DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
-    }
-    
-    private func manageMemory() {
-        if filteredVideos.count > maxCachedVideos {
-            let videosToRemove = filteredVideos.count - maxCachedVideos
-            filteredVideos.removeFirst(videosToRemove)
-            print("🧹 DISCOVERY: Removed \(videosToRemove) old videos for memory management")
-        }
-    }
-    
-    // MARK: - Filtering and Shuffling
-    
-    func filterBy(category: DiscoveryCategory) {
-        currentCategory = category
-        applyFilterAndShuffle()
-    }
-    
-    private func applyFilterAndShuffle() {
-        let filtered = applyCurrentFilter(to: allAvailableVideos)
-        filteredVideos = diversifyShuffle(videos: filtered)
-        print("🔄 DISCOVERY: Applied \(currentCategory.displayName) filter - \(filteredVideos.count) videos")
-    }
-    
-    private func applyCurrentFilter(to videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
-        switch currentCategory {
-        case .all:
-            return videos
-        case .trending:
-            return videos.filter { $0.temperature == "hot" || $0.temperature == "blazing" }
-        case .recent:
-            return videos.sorted { $0.createdAt > $1.createdAt }
-        case .popular:
-            return videos.sorted { $0.hypeCount > $1.hypeCount }
-        case .following:
-            return videos // TODO: Filter by followed users
-        }
-    }
-    
-    // MARK: - MAXIMUM RANDOMIZATION - True Discovery
-    
-    private func diversifyShuffle(videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
-        guard videos.count > 1 else { return videos }
-        
-        // Group by creator
-        var creatorBuckets: [String: [CoreVideoMetadata]] = [:]
-        for video in videos {
-            creatorBuckets[video.creatorID, default: []].append(video)
-        }
-        
-        // Shuffle each creator's videos
-        var shuffledBuckets = creatorBuckets.mapValues { $0.shuffled() }
-        
-        // Build result with MAXIMUM variety
-        var result: [CoreVideoMetadata] = []
-        var recentCreators: [String] = [] // Track last 5 creators
-        let maxRecentTracking = 5
-        
-        while !shuffledBuckets.isEmpty {
-            // Find creators NOT in recent list
-            let availableCreators = shuffledBuckets.keys.filter { !recentCreators.contains($0) }
-            
-            let chosenCreatorID: String
-            if !availableCreators.isEmpty {
-                // Pick random from available creators
-                chosenCreatorID = availableCreators.randomElement()!
-            } else {
-                // All creators used recently - pick random from any
-                chosenCreatorID = shuffledBuckets.keys.randomElement()!
-                recentCreators.removeAll() // Reset tracking
-            }
-            
-            // Take one video from chosen creator
-            if var creatorVideos = shuffledBuckets[chosenCreatorID], !creatorVideos.isEmpty {
-                let video = creatorVideos.removeFirst()
-                result.append(video)
-                
-                // Update recent creators tracking
-                recentCreators.append(chosenCreatorID)
-                if recentCreators.count > maxRecentTracking {
-                    recentCreators.removeFirst()
-                }
-                
-                // Update or remove bucket
-                if creatorVideos.isEmpty {
-                    shuffledBuckets.removeValue(forKey: chosenCreatorID)
-                } else {
-                    shuffledBuckets[chosenCreatorID] = creatorVideos
-                }
-            }
-        }
-        
-        print("🎲 DISCOVERY: Ultra-randomized \(result.count) videos with max variety")
-        return result
-    }
-}
-
-// MARK: - Enhanced DiscoveryView with Progressive Loading
+// MARK: - Enhanced DiscoveryView
 
 struct DiscoveryView: View {
     // MARK: - State
     @StateObject private var viewModel = DiscoveryViewModel()
     @EnvironmentObject private var authService: AuthService
-    
-    // MARK: - Preloading Service
-    private var preloadingService: VideoPreloadingService {
-        VideoPreloadingService.shared
-    }
     
     @State private var selectedCategory: DiscoveryCategory = .all
     @State private var discoveryMode: DiscoveryMode = .swipe
@@ -369,14 +278,6 @@ struct DiscoveryView: View {
     @State private var selectedVideo: CoreVideoMetadata?
     @State private var isFullscreenMode = false
     @State private var showingSearch = false
-    
-    // Track last preloaded index to avoid duplicate preloads
-    @State private var lastPreloadedIndex: Int = -1
-    
-    // MARK: - PHASE 1 FIX: Task Management
-    @State private var preloadTask: Task<Void, Never>?
-    @State private var loadMoreTask: Task<Void, Never>?
-    @State private var initialLoadTask: Task<Void, Never>?
     
     var body: some View {
         ZStack {
@@ -397,15 +298,15 @@ struct DiscoveryView: View {
                     .ignoresSafeArea()
                     
                     VStack(spacing: 0) {
-                        // Header with Loading Indicator
+                        // Header
                         headerView
                         
                         // Category Selector
                         categorySelector
                         
                         // Content
-                        if viewModel.loadingState.isInitialLoading {
-                            initialLoadingView
+                        if viewModel.isLoading && viewModel.videos.isEmpty {
+                            loadingView
                         } else if let errorMessage = viewModel.errorMessage {
                             errorView(errorMessage)
                         } else {
@@ -414,7 +315,7 @@ struct DiscoveryView: View {
                     }
                 }
             } else {
-                // Fullscreen Mode (engagement enabled here)
+                // Fullscreen Mode
                 if let video = selectedVideo {
                     FullscreenVideoView(video: video) {
                         withAnimation(.easeInOut(duration: 0.4)) {
@@ -430,84 +331,16 @@ struct DiscoveryView: View {
         .navigationBarHidden(isFullscreenMode)
         .statusBarHidden(isFullscreenMode)
         .task {
-            // Only load if we don't have content already (prevents reloading on tab switch)
             if viewModel.filteredVideos.isEmpty {
                 await viewModel.loadInitialContent()
-                
-                // Preload first video after content loads
-                await preloadVideosAroundIndex(0)
             }
-        }
-        // PHASE 1 FIX: Use unified notification name
-        .onReceive(NotificationCenter.default.publisher(for: .refreshDiscovery)) { _ in
-            initialLoadTask?.cancel()
-            initialLoadTask = Task {
-                await viewModel.loadInitialContent()
-            }
-        }
-        // PHASE 1 FIX: Cleanup on disappear
-        .onDisappear {
-            preloadTask?.cancel()
-            preloadTask = nil
-            loadMoreTask?.cancel()
-            loadMoreTask = nil
-            initialLoadTask?.cancel()
-            initialLoadTask = nil
         }
         .sheet(isPresented: $showingSearch) {
             SearchView()
         }
     }
     
-    // MARK: - Video Preloading (PHASE 1 FIX: Task cancellation)
-    
-    /// Preload videos around the current index for instant fullscreen playback
-    private func preloadVideosAroundIndex(_ index: Int) async {
-        // PHASE 1 FIX: Check for task cancellation
-        guard !Task.isCancelled else {
-            print("⚠️ DISCOVERY PRELOAD: Task cancelled, skipping")
-            return
-        }
-        
-        guard !viewModel.filteredVideos.isEmpty else { return }
-        guard index != lastPreloadedIndex else { return } // Avoid duplicate preloads
-        
-        lastPreloadedIndex = index
-        
-        let videos = viewModel.filteredVideos
-        var videosToPreload: [CoreVideoMetadata] = []
-        
-        // Current video (high priority)
-        if index >= 0 && index < videos.count {
-            videosToPreload.append(videos[index])
-        }
-        
-        // Next video
-        if index + 1 < videos.count {
-            videosToPreload.append(videos[index + 1])
-        }
-        
-        // Previous video (in case they swipe back)
-        if index - 1 >= 0 {
-            videosToPreload.append(videos[index - 1])
-        }
-        
-        // Preload with appropriate priorities
-        for (i, video) in videosToPreload.enumerated() {
-            // PHASE 1 FIX: Check for cancellation in loop
-            guard !Task.isCancelled else {
-                print("⚠️ DISCOVERY PRELOAD: Task cancelled during loop")
-                return
-            }
-            
-            let priority: PreloadPriority = i == 0 ? .high : .normal
-            await preloadingService.preloadVideo(video, priority: priority)
-        }
-        
-        print("🎬 DISCOVERY PRELOAD: Preloaded \(videosToPreload.count) videos around index \(index)")
-    }
-    
-    // MARK: - Header View with Loading Indicators
+    // MARK: - Header View
     
     private var headerView: some View {
         HStack {
@@ -522,7 +355,7 @@ struct DiscoveryView: View {
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.6))
                     
-                    if viewModel.loadingState.isLoadingMore {
+                    if viewModel.isLoading {
                         HStack(spacing: 4) {
                             ProgressView()
                                 .scaleEffect(0.7)
@@ -538,15 +371,24 @@ struct DiscoveryView: View {
             Spacer()
             
             HStack(spacing: 16) {
+                // Randomize button
+                Button {
+                    viewModel.randomizeContent()
+                } label: {
+                    Image(systemName: "shuffle")
+                        .font(.title2)
+                        .foregroundColor(.cyan)
+                }
+                
                 // Mode Toggle
                 Button {
                     withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                        discoveryMode = discoveryMode == DiscoveryMode.grid ? DiscoveryMode.swipe : DiscoveryMode.grid
+                        discoveryMode = discoveryMode == .grid ? .swipe : .grid
                     }
                 } label: {
                     Image(systemName: discoveryMode.icon)
                         .font(.title2)
-                        .foregroundColor(discoveryMode == DiscoveryMode.swipe ? .cyan : .white.opacity(0.7))
+                        .foregroundColor(discoveryMode == .swipe ? .cyan : .white.opacity(0.7))
                 }
                 
                 Button {
@@ -570,15 +412,10 @@ struct DiscoveryView: View {
                 ForEach(DiscoveryCategory.allCases, id: \.self) { category in
                     Button {
                         selectedCategory = category
-                        viewModel.filterBy(category: category)
-                        currentSwipeIndex = 0 // Reset to beginning when changing category
-                        lastPreloadedIndex = -1 // Reset preload tracking
-                        
-                        // PHASE 1 FIX: Cancel existing task before creating new one
-                        preloadTask?.cancel()
-                        preloadTask = Task {
-                            await preloadVideosAroundIndex(0)
+                        Task {
+                            await viewModel.filterBy(category: category)
                         }
+                        currentSwipeIndex = 0
                     } label: {
                         VStack(spacing: 8) {
                             HStack(spacing: 4) {
@@ -603,104 +440,68 @@ struct DiscoveryView: View {
         .padding(.vertical, 12)
     }
     
-    // MARK: - Content View with Progressive Loading + Preloading (PHASE 1 FIX)
+    // MARK: - Content View
     
     @ViewBuilder
     private var contentView: some View {
         switch discoveryMode {
-        case DiscoveryMode.swipe:
+        case .swipe:
             ZStack(alignment: .top) {
                 DiscoverySwipeCards(
                     videos: viewModel.filteredVideos,
                     currentIndex: $currentSwipeIndex,
                     onVideoTap: { video in
-                        // PHASE 1 FIX: Use unified method to kill players
-                        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
-                        
                         selectedVideo = video
                         withAnimation(.easeInOut(duration: 0.4)) {
                             isFullscreenMode = true
                         }
                     },
-                    onNavigateToProfile: { userID in
-                        // Handle profile navigation
-                    },
-                    onNavigateToThread: { threadID in
-                        // Handle thread navigation
-                    }
+                    onNavigateToProfile: { _ in },
+                    onNavigateToThread: { _ in }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.clear)
-                // PHASE 1 FIX: Task cancellation in onChange
-                .onChange(of: currentSwipeIndex) { oldValue, newValue in
-                    print("🎯 DISCOVERY: Swipe \(oldValue) → \(newValue)")
-                    
-                    // PHASE 1 FIX: Cancel existing tasks before creating new ones
-                    loadMoreTask?.cancel()
-                    loadMoreTask = Task {
-                        guard !Task.isCancelled else { return }
-                        await viewModel.checkAndLoadMore(currentIndex: newValue)
-                    }
-                    
-                    preloadTask?.cancel()
-                    preloadTask = Task {
-                        guard !Task.isCancelled else { return }
-                        await preloadVideosAroundIndex(newValue)
-                    }
-                }
-                .onChange(of: isFullscreenMode) { _, isFullscreen in
-                    if !isFullscreen {
-                        // Exiting fullscreen - resume card playback after delay
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            // Card will auto-play on reappear via onAppear
+                .onChange(of: currentSwipeIndex) { _, newValue in
+                    // Load more when getting close to end
+                    if newValue >= viewModel.filteredVideos.count - 10 {
+                        Task {
+                            await viewModel.loadMoreContent()
                         }
                     }
                 }
                 
-                // Swipe Instructions Indicator
+                // Swipe Instructions
                 swipeInstructionsIndicator
                     .padding(.top, 20)
             }
             
-        case DiscoveryMode.grid:
+        case .grid:
             DiscoveryGridView(
                 videos: viewModel.filteredVideos,
                 onVideoTap: { video in
-                    // PHASE 1 FIX: Kill players and preload before entering fullscreen
-                    NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
-                    
-                    preloadTask?.cancel()
-                    preloadTask = Task {
-                        await preloadingService.preloadVideo(video, priority: .high)
-                    }
-                    
                     selectedVideo = video
                     withAnimation(.easeInOut(duration: 0.4)) {
                         isFullscreenMode = true
                     }
                 },
                 onLoadMore: {
-                    loadMoreTask?.cancel()
-                    loadMoreTask = Task {
-                        await viewModel.checkAndLoadMore(currentIndex: viewModel.filteredVideos.count - 5)
+                    Task {
+                        await viewModel.loadMoreContent()
                     }
                 },
                 onRefresh: {
-                    initialLoadTask?.cancel()
-                    initialLoadTask = Task {
+                    Task {
                         await viewModel.refreshContent()
                     }
                 },
-                isLoadingMore: viewModel.loadingState.isLoadingMore
+                isLoadingMore: viewModel.isLoading
             )
         }
     }
     
-    // MARK: - ✅ Swipe Instructions Indicator
+    // MARK: - Swipe Instructions
     
     private var swipeInstructionsIndicator: some View {
         HStack(spacing: 20) {
-            // Left swipe instruction
             HStack(spacing: 6) {
                 Image(systemName: "arrow.left")
                     .font(.system(size: 14, weight: .semibold))
@@ -713,7 +514,6 @@ struct DiscoveryView: View {
                 .frame(height: 16)
                 .background(Color.white.opacity(0.3))
             
-            // Right swipe instruction
             HStack(spacing: 6) {
                 Image(systemName: "arrow.right")
                     .font(.system(size: 14, weight: .semibold))
@@ -726,7 +526,6 @@ struct DiscoveryView: View {
                 .frame(height: 16)
                 .background(Color.white.opacity(0.3))
             
-            // Tap instruction
             HStack(spacing: 6) {
                 Image(systemName: "hand.tap.fill")
                     .font(.system(size: 14, weight: .semibold))
@@ -748,9 +547,9 @@ struct DiscoveryView: View {
         .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
     }
     
-    // MARK: - Loading Views
+    // MARK: - Loading View
     
-    private var initialLoadingView: some View {
+    private var loadingView: some View {
         VStack(spacing: 20) {
             ProgressView()
                 .scaleEffect(1.5)
@@ -759,14 +558,12 @@ struct DiscoveryView: View {
             Text("Discovering amazing content...")
                 .font(.headline)
                 .foregroundColor(.white.opacity(0.8))
-                .multilineTextAlignment(.center)
             
-            Text("Loading first \(viewModel.initialBatchSize) videos")
+            Text("Finding videos from all time periods")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.6))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.clear)
     }
     
     // MARK: - Error View
@@ -789,8 +586,7 @@ struct DiscoveryView: View {
                 .padding(.horizontal, 40)
             
             Button("Try Again") {
-                initialLoadTask?.cancel()
-                initialLoadTask = Task {
+                Task {
                     await viewModel.loadInitialContent()
                 }
             }
@@ -802,7 +598,6 @@ struct DiscoveryView: View {
             .fontWeight(.semibold)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.clear)
     }
 }
 

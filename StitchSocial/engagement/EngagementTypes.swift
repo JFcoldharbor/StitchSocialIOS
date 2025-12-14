@@ -2,9 +2,10 @@
 //  EngagementTypes.swift
 //  StitchSocial
 //
-//  Layer 2: Protocols - Core Engagement Data Structures WITH FIXED TAP PROGRESSION
+//  Layer 2: Protocols - Core Engagement Data Structures
 //  Dependencies: Foundation, EngagementConfig (Layer 1) ONLY
-//  Features: All engagement types defined ONCE - no duplicates, FIXED TAP COUNTING
+//  Features: All engagement types defined, user-specific clout tracking for caps
+//  UPDATED: Added clout tracking per user for anti-spam system
 //
 
 import Foundation
@@ -26,24 +27,26 @@ struct EngagementResult {
 
 /// Animation types for different engagement results
 enum EngagementAnimationType: String, CaseIterable, Codable {
-    case founderExplosion   // First founder tap = massive hype explosion
+    case founderExplosion   // First tap for premium tiers (Ambassador → Founder)
     case standardHype       // Normal hype animation
     case standardCool       // Normal cool animation
     case tapProgress        // Progressive tap feedback
     case tapMilestone       // Milestone reached
     case trollWarning       // Warning animation for potential trolling
     case tierMilestone      // Special tier-based effects
+    case cloutCapReached    // User hit their clout cap for this video
     case none
     
     var displayName: String {
         switch self {
-        case .founderExplosion: return "Founder Boost!"
+        case .founderExplosion: return "Premium Boost!"
         case .standardHype: return "Hype!"
         case .standardCool: return "Cool"
         case .tapProgress: return "Tapping..."
         case .tapMilestone: return "Milestone!"
         case .trollWarning: return "Warning"
         case .tierMilestone: return "Tier Up!"
+        case .cloutCapReached: return "Cap Reached"
         case .none: return ""
         }
     }
@@ -95,21 +98,21 @@ enum TapMilestone: String, CaseIterable, Codable {
     }
 }
 
-// MARK: - VIDEO ENGAGEMENT STATE WITH FIXED TAP PROGRESSION
+// MARK: - VIDEO ENGAGEMENT STATE WITH USER-SPECIFIC CLOUT TRACKING
 
-/// Per-video per-user engagement state - SINGLE DEFINITION WITH WORKING TAP LOGIC
+/// Per-video per-user engagement state - INSTANT ENGAGEMENTS
 struct VideoEngagementState: Codable {
     let videoID: String
     let userID: String
     var totalEngagements: Int           // Combined hype + cool
     var hypeEngagements: Int            // Hype only count
     var coolEngagements: Int            // Cool only count
-    var hypeCurrentTaps: Int            // Current tap progress for hype
-    var hypeRequiredTaps: Int           // Required taps for next hype
-    var coolCurrentTaps: Int            // Current tap progress for cool
-    var coolRequiredTaps: Int           // Required taps for next cool
     var lastEngagementAt: Date
     var createdAt: Date
+    
+    // Clout tracking for anti-spam
+    var totalCloutGiven: Int = 0
+    var engagementHistory: [EngagementRecord] = []
     
     init(videoID: String, userID: String, createdAt: Date = Date()) {
         self.videoID = videoID
@@ -117,92 +120,57 @@ struct VideoEngagementState: Codable {
         self.totalEngagements = 0
         self.hypeEngagements = 0
         self.coolEngagements = 0
-        self.hypeCurrentTaps = 0
-        self.hypeRequiredTaps = 1
-        self.coolCurrentTaps = 0
-        self.coolRequiredTaps = 1
         self.lastEngagementAt = Date()
         self.createdAt = createdAt
     }
     
-    // MARK: - FIXED TAP METHODS
+    // MARK: - INSTANT ENGAGEMENT METHODS
     
-    /// Add tap for hype - returns true if complete - FIXED VERSION
-    mutating func addHypeTap() -> Bool {
-        hypeCurrentTaps += 1
-        lastEngagementAt = Date()
-        
-        let isComplete = hypeCurrentTaps >= hypeRequiredTaps
-        return isComplete
-    }
-    
-    /// Add tap for cool - returns true if complete - FIXED VERSION
-    mutating func addCoolTap() -> Bool {
-        coolCurrentTaps += 1
-        lastEngagementAt = Date()
-        
-        let isComplete = coolCurrentTaps >= coolRequiredTaps
-        return isComplete
-    }
-    
-    /// Complete hype engagement and reset for next - FIXED VERSION
-    mutating func completeHypeEngagement() {
+    /// Add hype engagement (instant)
+    mutating func addHypeEngagement() {
         totalEngagements += 1
         hypeEngagements += 1
-        hypeCurrentTaps = 0  // Reset current taps
-        
-        // Calculate next requirement using proper formula
-        let nextEngagementNumber = hypeEngagements + 1
-        hypeRequiredTaps = calculateProgressiveTaps(engagementNumber: nextEngagementNumber)
-        
         lastEngagementAt = Date()
     }
     
-    /// Complete cool engagement and reset for next - FIXED VERSION
-    mutating func completeCoolEngagement() {
+    /// Add cool engagement (instant)
+    mutating func addCoolEngagement() {
         totalEngagements += 1
         coolEngagements += 1
-        coolCurrentTaps = 0  // Reset current taps
-        
-        // Calculate next requirement using proper formula
-        let nextEngagementNumber = coolEngagements + 1
-        coolRequiredTaps = calculateProgressiveTaps(engagementNumber: nextEngagementNumber)
-        
         lastEngagementAt = Date()
+    }
+    
+    /// Record clout awarded for an engagement
+    mutating func recordCloutAwarded(_ clout: Int, isHype: Bool) {
+        totalCloutGiven += clout
+        
+        let record = EngagementRecord(
+            timestamp: Date(),
+            type: isHype ? .hype : .cool,
+            cloutAwarded: clout,
+            tapNumber: isHype ? hypeEngagements : coolEngagements
+        )
+        
+        engagementHistory.append(record)
     }
     
     // MARK: - Computed Properties
     
-    /// Current hype tap progress (0.0 to 1.0)
-    var hypeProgress: Double {
-        guard hypeRequiredTaps > 0 else { return 0.0 }
-        return min(1.0, Double(hypeCurrentTaps) / Double(hypeRequiredTaps))
+    /// Check if user has hit their clout cap for this video
+    func hasHitCloutCap(for tier: UserTier) -> Bool {
+        let maxAllowed = EngagementConfig.getMaxCloutPerUserPerVideo(for: tier)
+        return totalCloutGiven >= maxAllowed
     }
     
-    /// Current cool tap progress (0.0 to 1.0)
-    var coolProgress: Double {
-        guard coolRequiredTaps > 0 else { return 0.0 }
-        return min(1.0, Double(coolCurrentTaps) / Double(coolRequiredTaps))
+    /// Get remaining clout allowance for this user on this video
+    func getRemainingCloutAllowance(for tier: UserTier) -> Int {
+        let maxAllowed = EngagementConfig.getMaxCloutPerUserPerVideo(for: tier)
+        return max(0, maxAllowed - totalCloutGiven)
     }
     
-    /// Remaining taps needed for hype completion
-    var hypeRemainingTaps: Int {
-        return max(0, hypeRequiredTaps - hypeCurrentTaps)
-    }
-    
-    /// Remaining taps needed for cool completion
-    var coolRemainingTaps: Int {
-        return max(0, coolRequiredTaps - coolCurrentTaps)
-    }
-    
-    /// Check if next hype engagement will be instant (first 4)
-    var isNextHypeInstant: Bool {
-        return hypeEngagements < 4 // EngagementConfig.instantEngagementThreshold
-    }
-    
-    /// Check if next cool engagement will be instant (first 4)
-    var isNextCoolInstant: Bool {
-        return coolEngagements < 4 // EngagementConfig.instantEngagementThreshold
+    /// Check if user has hit engagement cap
+    func hasHitEngagementCap() -> Bool {
+        return totalEngagements >= EngagementConfig.maxEngagementsPerUserPerVideo
     }
     
     /// Time since last engagement
@@ -214,24 +182,22 @@ struct VideoEngagementState: Codable {
     var isExpired: Bool {
         return timeSinceLastEngagement > 86400 // 24 hours
     }
-    
-    // MARK: - PROGRESSIVE TAP CALCULATION (Temporary - matches EngagementCalculator)
-    
-    /// Calculate progressive taps needed for specific engagement number
-    private func calculateProgressiveTaps(engagementNumber: Int) -> Int {
-        // Engagements 1-4 are instant (1 tap)
-        if engagementNumber <= 4 {
-            return 1
-        }
-        
-        // Progressive tapping starts at 5th engagement
-        // 5th = 2 taps, 6th = 4 taps, 7th = 8 taps, 8th = 16 taps, etc.
-        let progressiveIndex = engagementNumber - 5
-        let requirement = 2 * Int(pow(2.0, Double(progressiveIndex)))
-        
-        // Cap at maximum to prevent infinite progression
-        return min(requirement, 256) // Max 256 taps
-    }
+}
+
+// MARK: - NEW: Engagement Record
+
+/// Individual engagement record for tracking
+struct EngagementRecord: Codable {
+    let timestamp: Date
+    let type: EngagementInteractionType
+    let cloutAwarded: Int
+    let tapNumber: Int
+}
+
+/// Type of engagement interaction
+enum EngagementInteractionType: String, Codable {
+    case hype
+    case cool
 }
 
 // MARK: - HELPER STRUCTURES
@@ -244,7 +210,7 @@ struct HypeRatingState: Codable {
     
     init(percent: Double = 25.0) {
         self.percent = percent
-        self.points = (percent / 100.0) * 15000.0 // EngagementConfig.maxHypeRatingPoints
+        self.points = (percent / 100.0) * 15000.0
         self.lastUpdate = Date()
     }
 }
@@ -256,16 +222,61 @@ struct EngagementInteraction: Codable {
     let userID: String
     let type: String // "hype" or "cool"
     let cloutAwarded: Int
+    let visualHypesAdded: Int  // NEW: Track visual hypes separately
     let hypeRatingCost: Double
     let createdAt: Date
     
-    init(videoID: String, userID: String, type: String, cloutAwarded: Int, hypeRatingCost: Double) {
+    init(
+        videoID: String,
+        userID: String,
+        type: String,
+        cloutAwarded: Int,
+        visualHypesAdded: Int,
+        hypeRatingCost: Double
+    ) {
         self.id = "\(videoID)_\(userID)_\(type)_\(Int(Date().timeIntervalSince1970))"
         self.videoID = videoID
         self.userID = userID
         self.type = type
         self.cloutAwarded = cloutAwarded
+        self.visualHypesAdded = visualHypesAdded
         self.hypeRatingCost = hypeRatingCost
         self.createdAt = Date()
+    }
+}
+
+// MARK: - Clout Cap Status
+
+/// Status of clout caps for UI display
+struct CloutCapStatus {
+    let userCloutGiven: Int
+    let userCloutCap: Int
+    let videoTotalClout: Int
+    let videoCloutCap: Int
+    
+    var userPercentage: Double {
+        guard userCloutCap > 0 else { return 0.0 }
+        return Double(userCloutGiven) / Double(userCloutCap)
+    }
+    
+    var videoPercentage: Double {
+        guard videoCloutCap > 0 else { return 0.0 }
+        return Double(videoTotalClout) / Double(videoCloutCap)
+    }
+    
+    var userIsNearCap: Bool {
+        return userPercentage >= 0.8
+    }
+    
+    var videoIsNearCap: Bool {
+        return videoPercentage >= 0.8
+    }
+    
+    var userHitCap: Bool {
+        return userCloutGiven >= userCloutCap
+    }
+    
+    var videoHitCap: Bool {
+        return videoTotalClout >= videoCloutCap
     }
 }

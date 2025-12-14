@@ -5,6 +5,7 @@
 //  Layer 8: Views - Ultra-Responsive Gesture Handler
 //  Dependencies: SwiftUI
 //  Features: <50ms response, prediction, butter-smooth animations
+//  PHASE 3: Improved debouncing, cleaner state management, better conflict resolution
 //
 
 import SwiftUI
@@ -51,14 +52,18 @@ struct GestureConfig {
     let enableVisualFeedback: Bool
     let enablePrediction: Bool
     let sensitivity: Double
-    let responseMultiplier: Double // New: amplifies small movements
+    let responseMultiplier: Double
+    
+    // PHASE 3: Debouncing configuration
+    let debounceInterval: TimeInterval
+    let maxGesturesPerSecond: Int
     
     static let ultraResponsive = GestureConfig(
-        minimumDistance: 3,         // Detect immediately
-        directionThreshold: 8,      // Lock direction instantly
-        activationThreshold: 25,    // Minimal movement for feedback
-        commitThreshold: 45,        // Lower commit threshold
-        velocityThreshold: 250,     // Lower velocity threshold
+        minimumDistance: 3,
+        directionThreshold: 8,
+        activationThreshold: 25,
+        commitThreshold: 45,
+        velocityThreshold: 250,
         buttonProtectionZones: [
             CGRect(x: 0.8, y: 0.2, width: 0.2, height: 0.6) // Right side protection
         ],
@@ -66,8 +71,10 @@ struct GestureConfig {
         enableHaptics: true,
         enableVisualFeedback: true,
         enablePrediction: true,
-        sensitivity: 2.2,           // Higher sensitivity
-        responseMultiplier: 1.6     // Amplify small movements
+        sensitivity: 2.2,
+        responseMultiplier: 1.6,
+        debounceInterval: 0.15,  // PHASE 3: 150ms between gestures
+        maxGesturesPerSecond: 5  // PHASE 3: Max 5 swipes/second
     )
     
     static let butterSmooth = ultraResponsive
@@ -85,7 +92,9 @@ struct GestureConfig {
         enableVisualFeedback: true,
         enablePrediction: true,
         sensitivity: 1.8,
-        responseMultiplier: 1.4
+        responseMultiplier: 1.4,
+        debounceInterval: 0.15,
+        maxGesturesPerSecond: 5
     )
 }
 
@@ -96,6 +105,7 @@ struct MultidirectionalSwipeGesture {
     let onSwipe: (GestureResult) -> Void
     let onFeedback: ((VisualFeedback) -> Void)?
     
+    // MARK: - State Management (PHASE 3: Simplified)
     @State private var currentDirection: GestureDirection = .none
     @State private var dragOffset: CGSize = .zero
     @State private var isGestureActive = false
@@ -103,7 +113,12 @@ struct MultidirectionalSwipeGesture {
     @State private var gestureStartTime: CFAbsoluteTime = 0
     @State private var velocityHistory: [CGVector] = []
     @State private var lastTranslation: CGSize = .zero
-    @State private var frameCount: Int = 0
+    
+    // PHASE 3: Debouncing state
+    @State private var lastGestureTime: CFAbsoluteTime = 0
+    @State private var gestureCount: Int = 0
+    @State private var gestureWindowStart: CFAbsoluteTime = 0
+    @State private var isDebouncing = false
     
     init(
         config: GestureConfig = .ultraResponsive,
@@ -116,7 +131,7 @@ struct MultidirectionalSwipeGesture {
     }
 }
 
-// MARK: - Ultra-Smooth Gesture Implementation
+// MARK: - Gesture Implementation
 
 extension MultidirectionalSwipeGesture {
     
@@ -130,23 +145,25 @@ extension MultidirectionalSwipeGesture {
             }
     }
     
+    // MARK: - Drag Changed Handler
+    
     private func handleDragChanged(value: DragGesture.Value, geometry: GeometryProxy) {
+        // PHASE 3: Skip if debouncing
+        guard !isDebouncing else { return }
+        
         // Performance: Skip if in protected zone
         if isInProtectedZone(startLocation: value.startLocation, geometry: geometry) {
             return
         }
         
-        // Track gesture start time for velocity calculations
+        // Track gesture start time
         if gestureStartTime == 0 {
             gestureStartTime = CFAbsoluteTimeGetCurrent()
-            frameCount = 0
         }
-        
-        frameCount += 1
         
         let translation = value.translation
         
-        // Apply sensitivity and response multiplier for ultra-responsiveness
+        // Apply sensitivity and response multiplier
         let amplifiedTranslation = CGSize(
             width: translation.width * config.sensitivity * config.responseMultiplier,
             height: translation.height * config.sensitivity * config.responseMultiplier
@@ -158,10 +175,10 @@ extension MultidirectionalSwipeGesture {
         let velocity = calculateVelocity(
             current: translation,
             previous: lastTranslation,
-            timeDelta: 1.0/60.0 // Assume 60fps
+            timeDelta: 1.0/60.0
         )
         
-        // Update velocity history for smoothing
+        // Update velocity history (keep last 5 samples)
         updateVelocityHistory(velocity)
         
         // Ultra-fast direction detection
@@ -169,40 +186,25 @@ extension MultidirectionalSwipeGesture {
             detectDirectionFast(translation: amplifiedTranslation, velocity: velocity)
         }
         
-        // Instant activation detection
+        // Activation detection
         let wasActive = isGestureActive
         isGestureActive = shouldActivateGesture(translation: amplifiedTranslation, velocity: velocity)
         
-        // Immediate haptic feedback
+        // Immediate haptic feedback (only once per gesture)
         if config.enableHaptics && isGestureActive && !wasActive && !hasProvidedHaptic {
             lightHaptic()
             hasProvidedHaptic = true
         }
         
-        // Real-time visual feedback with prediction
+        // Real-time visual feedback
         if config.enableVisualFeedback {
-            let progress = calculateProgress(translation: amplifiedTranslation, velocity: velocity)
-            let shouldCommit = shouldCommitGesture(translation: amplifiedTranslation, velocity: velocity)
-            let predictedDirection = config.enablePrediction ? predictSwipeDirection(
-                translation: amplifiedTranslation,
-                velocity: velocity
-            ) : nil
-            
-            let feedback = VisualFeedback(
-                dragOffset: dragOffset,
-                progress: progress,
-                direction: currentDirection,
-                isActive: isGestureActive,
-                shouldCommit: shouldCommit,
-                velocity: velocity,
-                predictedDirection: predictedDirection
-            )
-            
-            onFeedback?(feedback)
+            provideFeedback(translation: amplifiedTranslation, velocity: velocity)
         }
         
         lastTranslation = translation
     }
+    
+    // MARK: - Drag Ended Handler (PHASE 3: Improved debouncing)
     
     private func handleDragEnded(value: DragGesture.Value, geometry: GeometryProxy) {
         defer {
@@ -210,6 +212,19 @@ extension MultidirectionalSwipeGesture {
             withAnimation(.interactiveSpring(response: 0.25, dampingFraction: 0.9)) {
                 resetGestureState()
             }
+        }
+        
+        // PHASE 3: Check debounce before processing
+        let currentTime = CFAbsoluteTimeGetCurrent()
+        if currentTime - lastGestureTime < config.debounceInterval {
+            print("⏸️ GESTURE: Debounced - too fast")
+            return
+        }
+        
+        // PHASE 3: Rate limiting - check gestures per second
+        if !checkRateLimit(currentTime: currentTime) {
+            print("⏸️ GESTURE: Rate limited - too many gestures")
+            return
         }
         
         // Skip if in protected zone
@@ -224,73 +239,114 @@ extension MultidirectionalSwipeGesture {
             height: translation.height * config.sensitivity * config.responseMultiplier
         )
         
-        // Determine swipe result with velocity consideration
+        // Determine swipe result
         let result = determineSwipeResult(translation: amplifiedTranslation, velocity: velocity)
         
-        // Log performance metrics
-        let gestureTime = CFAbsoluteTimeGetCurrent() - gestureStartTime
-        let avgFrameTime = gestureTime / Double(frameCount)
-        
         if result != .none {
+            // PHASE 3: Update debounce tracking
+            lastGestureTime = currentTime
+            isDebouncing = true
+            
             // Success haptic
             if config.enableHaptics {
                 successHaptic()
             }
             
-            print("⚡ ULTRA GESTURE: \(result.description) - \(String(format: "%.1f", gestureTime * 1000))ms, \(String(format: "%.1f", avgFrameTime * 1000))ms/frame")
+            // Trigger callback
             onSwipe(result)
+            
+            // PHASE 3: Clear debounce after interval
+            DispatchQueue.main.asyncAfter(deadline: .now() + config.debounceInterval) {
+                isDebouncing = false
+            }
+            
+            print("✅ GESTURE: \(result.description)")
         } else {
-            // Cancelled haptic
+            // Cancelled - soft haptic
             if config.enableHaptics && isGestureActive {
                 cancelHaptic()
             }
         }
     }
     
-    // MARK: - Ultra-Fast Direction Detection
+    // MARK: - PHASE 3: Rate Limiting
+    
+    private func checkRateLimit(currentTime: CFAbsoluteTime) -> Bool {
+        // Reset window if more than 1 second has passed
+        if currentTime - gestureWindowStart > 1.0 {
+            gestureWindowStart = currentTime
+            gestureCount = 0
+        }
+        
+        // Increment counter
+        gestureCount += 1
+        
+        // Check if exceeded limit
+        if gestureCount > config.maxGesturesPerSecond {
+            return false
+        }
+        
+        return true
+    }
+    
+    // MARK: - Feedback Provider (PHASE 3: Cleaned up)
+    
+    private func provideFeedback(translation: CGSize, velocity: CGVector) {
+        let progress = calculateProgress(translation: translation, velocity: velocity)
+        let shouldCommit = shouldCommitGesture(translation: translation, velocity: velocity)
+        let predictedDirection = config.enablePrediction ? predictSwipeDirection(
+            translation: translation,
+            velocity: velocity
+        ) : nil
+        
+        let feedback = VisualFeedback(
+            dragOffset: dragOffset,
+            progress: progress,
+            direction: currentDirection,
+            isActive: isGestureActive,
+            shouldCommit: shouldCommit,
+            velocity: velocity,
+            predictedDirection: predictedDirection
+        )
+        
+        onFeedback?(feedback)
+    }
+    
+    // MARK: - Direction Detection (PHASE 3: Optimized)
     
     private func detectDirectionFast(translation: CGSize, velocity: CGVector) {
-        let horizontalMovement = abs(translation.width)
-        let verticalMovement = abs(translation.height)
-        let horizontalVelocity = abs(velocity.dx)
-        let verticalVelocity = abs(velocity.dy)
+        let absX = abs(translation.width)
+        let absY = abs(translation.height)
         
-        // Use both movement and velocity for instant detection
-        let horizontalScore = horizontalMovement + (horizontalVelocity * 0.1)
-        let verticalScore = verticalMovement + (verticalVelocity * 0.1)
+        // Wait for minimum threshold
+        guard max(absX, absY) > config.directionThreshold else { return }
         
-        if verticalScore > config.directionThreshold && verticalScore > horizontalScore * 0.6 {
-            currentDirection = .vertical
-        } else if horizontalScore > config.directionThreshold && horizontalScore > verticalScore * 0.6 {
+        // Strong horizontal bias detection
+        if absX > absY * 1.3 {
             currentDirection = .horizontal
+            print("🔒 GESTURE: Locked horizontal")
+        }
+        // Strong vertical bias detection
+        else if absY > absX * 1.3 {
+            currentDirection = .vertical
+            print("🔒 GESTURE: Locked vertical")
+        }
+        // Use velocity as tiebreaker
+        else {
+            let absVx = abs(velocity.dx)
+            let absVy = abs(velocity.dy)
+            
+            if absVx > absVy {
+                currentDirection = .horizontal
+                print("🔒 GESTURE: Locked horizontal (velocity)")
+            } else {
+                currentDirection = .vertical
+                print("🔒 GESTURE: Locked vertical (velocity)")
+            }
         }
     }
     
-    // MARK: - Velocity Calculations
-    
-    private func calculateVelocity(current: CGSize, previous: CGSize, timeDelta: TimeInterval) -> CGVector {
-        let dx = (current.width - previous.width) / timeDelta
-        let dy = (current.height - previous.height) / timeDelta
-        return CGVector(dx: dx, dy: dy)
-    }
-    
-    private func updateVelocityHistory(_ velocity: CGVector) {
-        velocityHistory.append(velocity)
-        if velocityHistory.count > 5 { // Keep last 5 frames for smoothing
-            velocityHistory.removeFirst()
-        }
-    }
-    
-    private func getSmoothedVelocity() -> CGVector {
-        guard !velocityHistory.isEmpty else { return CGVector.zero }
-        
-        let avgDx = velocityHistory.map { $0.dx }.reduce(0, +) / Double(velocityHistory.count)
-        let avgDy = velocityHistory.map { $0.dy }.reduce(0, +) / Double(velocityHistory.count)
-        
-        return CGVector(dx: avgDx, dy: avgDy)
-    }
-    
-    // MARK: - Enhanced Gesture Logic
+    // MARK: - Activation & Commit Logic
     
     private func shouldActivateGesture(translation: CGSize, velocity: CGVector) -> Bool {
         let distance = sqrt(pow(translation.width, 2) + pow(translation.height, 2))
@@ -306,73 +362,79 @@ extension MultidirectionalSwipeGesture {
         return distance > config.commitThreshold || speed > config.velocityThreshold
     }
     
-    private func calculateProgress(translation: CGSize, velocity: CGVector) -> Double {
-        let distance = sqrt(pow(translation.width, 2) + pow(translation.height, 2))
-        let speed = sqrt(pow(velocity.dx, 2) + pow(velocity.dy, 2))
-        
-        // Combine distance and velocity for responsive progress
-        let distanceProgress = min(1.0, distance / (config.commitThreshold * 1.2))
-        let velocityProgress = min(1.0, speed / (config.velocityThreshold * 2.0))
-        
-        return max(distanceProgress, velocityProgress * 0.7)
-    }
-    
-    // MARK: - Gesture Prediction
-    
-    private func predictSwipeDirection(translation: CGSize, velocity: CGVector) -> GestureResult? {
-        let horizontalDistance = abs(translation.width)
-        let verticalDistance = abs(translation.height)
-        let horizontalVelocity = abs(velocity.dx)
-        let verticalVelocity = abs(velocity.dy)
-        
-        // Predict based on current trajectory
-        let horizontalScore = horizontalDistance + (horizontalVelocity * 0.05)
-        let verticalScore = verticalDistance + (verticalVelocity * 0.05)
-        
-        if horizontalScore > verticalScore && horizontalScore > config.activationThreshold * 0.5 {
-            return translation.width < 0 ? .horizontalLeft : .horizontalRight
-        } else if verticalScore > config.activationThreshold * 0.5 {
-            return translation.height < 0 ? .verticalUp : .verticalDown
-        }
-        
-        return nil
-    }
+    // MARK: - Swipe Result Determination (PHASE 3: Clearer logic)
     
     private func determineSwipeResult(translation: CGSize, velocity: CGVector) -> GestureResult {
-        let horizontalDistance = abs(translation.width)
-        let verticalDistance = abs(translation.height)
-        let horizontalVelocity = abs(velocity.dx)
-        let verticalVelocity = abs(velocity.dy)
+        // Must be activated first
+        guard isGestureActive else { return .none }
         
-        // Lower thresholds for ultra-responsiveness
-        let meetsDistanceThreshold = horizontalDistance > config.commitThreshold || verticalDistance > config.commitThreshold
-        let meetsVelocityThreshold = horizontalVelocity > config.velocityThreshold || verticalVelocity > config.velocityThreshold
-        
-        guard meetsDistanceThreshold || meetsVelocityThreshold else {
+        // Must meet commit criteria
+        guard shouldCommitGesture(translation: translation, velocity: velocity) else {
             return .none
         }
         
-        // Use locked direction for consistent behavior
-        if config.enableDirectionLocking && currentDirection != .none {
-            switch currentDirection {
-            case .vertical:
-                return translation.height < 0 ? .verticalUp : .verticalDown
-            case .horizontal:
-                return translation.width < 0 ? .horizontalLeft : .horizontalRight
-            case .none:
-                break
-            }
+        // Determine direction based on locked direction
+        switch currentDirection {
+        case .horizontal:
+            return translation.width > 0 ? .horizontalRight : .horizontalLeft
+            
+        case .vertical:
+            return translation.height > 0 ? .verticalDown : .verticalUp
+            
+        case .none:
+            return .none
         }
+    }
+    
+    // MARK: - Progress Calculation
+    
+    private func calculateProgress(translation: CGSize, velocity: CGVector) -> Double {
+        let distance = sqrt(pow(translation.width, 2) + pow(translation.height, 2))
+        let progress = min(1.0, distance / (config.commitThreshold * 1.5))
+        return max(0.0, progress)
+    }
+    
+    // MARK: - Prediction (PHASE 3: Simplified)
+    
+    private func predictSwipeDirection(translation: CGSize, velocity: CGVector) -> GestureResult? {
+        let speed = sqrt(pow(velocity.dx, 2) + pow(velocity.dy, 2))
         
-        // Fallback: determine by movement + velocity
-        let horizontalScore = horizontalDistance + (horizontalVelocity * 0.1)
-        let verticalScore = verticalDistance + (verticalVelocity * 0.1)
+        // Only predict if moving fast
+        guard speed > config.velocityThreshold * 0.7 else { return nil }
         
-        if verticalScore > horizontalScore {
-            return translation.height < 0 ? .verticalUp : .verticalDown
+        // Predict based on velocity direction
+        if abs(velocity.dx) > abs(velocity.dy) {
+            return velocity.dx > 0 ? .horizontalRight : .horizontalLeft
         } else {
-            return translation.width < 0 ? .horizontalLeft : .horizontalRight
+            return velocity.dy > 0 ? .verticalDown : .verticalUp
         }
+    }
+    
+    // MARK: - Velocity Calculations
+    
+    private func calculateVelocity(current: CGSize, previous: CGSize, timeDelta: TimeInterval) -> CGVector {
+        let dx = (current.width - previous.width) / timeDelta
+        let dy = (current.height - previous.height) / timeDelta
+        return CGVector(dx: dx, dy: dy)
+    }
+    
+    private func updateVelocityHistory(_ velocity: CGVector) {
+        velocityHistory.append(velocity)
+        
+        // Keep only last 5 samples for smoothing
+        if velocityHistory.count > 5 {
+            velocityHistory.removeFirst()
+        }
+    }
+    
+    private func getSmoothedVelocity() -> CGVector {
+        guard !velocityHistory.isEmpty else { return .zero }
+        
+        // Average last few samples
+        let avgDx = velocityHistory.map(\.dx).reduce(0, +) / Double(velocityHistory.count)
+        let avgDy = velocityHistory.map(\.dy).reduce(0, +) / Double(velocityHistory.count)
+        
+        return CGVector(dx: avgDx, dy: avgDy)
     }
     
     // MARK: - Helper Functions
@@ -396,7 +458,7 @@ extension MultidirectionalSwipeGesture {
         gestureStartTime = 0
         velocityHistory.removeAll()
         lastTranslation = .zero
-        frameCount = 0
+        // Note: Don't reset debounce tracking here
     }
     
     // MARK: - Haptic Feedback

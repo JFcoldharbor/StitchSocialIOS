@@ -4,7 +4,7 @@
 //
 //  Created by James Garmon on 7/31/25.
 //  COMPLETE: Firebase + FCM + Push Notifications + Re-Engagement Integration
-//  ADDED: Background task scheduling for re-engagement checks
+//  UPDATED: Added Performance Monitoring and Realtime Database
 //
 
 import UIKit
@@ -12,6 +12,8 @@ import FirebaseCore
 import FirebaseMessaging
 import FirebaseAuth
 import FirebaseFirestore
+import FirebasePerformance  // NEW
+import FirebaseDatabase     // NEW
 import UserNotifications
 import BackgroundTasks
 
@@ -45,8 +47,8 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("📋 FIREBASE: Download from Firebase Console and add to Xcode project")
         }
         
-        // Configure Firebase
-        FirebaseApp.configure()
+        // Configure Firebase with new centralized config
+        FirebaseConfig.shared.configure()
         
         // Verify Firebase is configured
         if let app = FirebaseApp.app() {
@@ -148,6 +150,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     private func handleReEngagementTask(task: BGAppRefreshTask) {
         print("🔄 RE-ENGAGEMENT TASK: Starting background check...")
         
+        // Track performance of background task
+        let trace = PerformanceMonitoringService.shared.startTrace(
+            name: "re_engagement_background",
+            attributes: ["task_type": "background_refresh"]
+        )
+        
         // Schedule next task
         scheduleReEngagementCheck()
         
@@ -155,6 +163,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         let taskWork = Task {
             guard let userID = Auth.auth().currentUser?.uid else {
                 print("⚠️ RE-ENGAGEMENT TASK: No authenticated user")
+                PerformanceMonitoringService.shared.stopTrace(name: "re_engagement_background")
                 task.setTaskCompleted(success: true)
                 return
             }
@@ -172,10 +181,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 try await reEngagementService.checkReEngagement(userID: userID)
                 
                 print("✅ RE-ENGAGEMENT TASK: Check completed successfully")
+                PerformanceMonitoringService.shared.stopTrace(name: "re_engagement_background")
                 task.setTaskCompleted(success: true)
                 
             } catch {
                 print("❌ RE-ENGAGEMENT TASK: Failed - \(error)")
+                PerformanceMonitoringService.shared.stopTrace(name: "re_engagement_background")
                 task.setTaskCompleted(success: false)
             }
         }
@@ -183,6 +194,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Handle task expiration
         task.expirationHandler = {
             print("⏰ RE-ENGAGEMENT TASK: Expired")
+            PerformanceMonitoringService.shared.stopTrace(name: "re_engagement_background")
             taskWork.cancel()
         }
     }
@@ -199,6 +211,26 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             print("✅ RE-ENGAGEMENT: Next check scheduled for 6 hours")
         } catch {
             print("❌ RE-ENGAGEMENT: Failed to schedule - \(error)")
+        }
+    }
+    
+    // MARK: - Application Lifecycle Events (NEW for Presence)
+    
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        print("🟢 APP: Became active")
+        
+        // Start user presence tracking
+        if Config.Features.enableUserPresence {
+            RealtimeDataService.shared.startPresenceTracking()
+        }
+    }
+    
+    func applicationWillResignActive(_ application: UIApplication) {
+        print("🟡 APP: Will resign active")
+        
+        // Stop user presence tracking
+        if Config.Features.enableUserPresence {
+            RealtimeDataService.shared.stopPresenceTracking()
         }
     }
     
@@ -224,167 +256,74 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         print("📱 APP DELEGATE: ❌ Failed to register for remote notifications: \(error)")
     }
     
-    // MARK: - Background Notification Handling
+    // MARK: - Creator Name Backfill
     
-    /// Handle remote notification received (background/terminated app)
-    func application(
-        _ application: UIApplication,
-        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
-        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
-    ) {
-        print("📱 APP DELEGATE: 📨 Remote notification received in background")
+    /// Backfill empty creatorName fields in videos
+    private func backfillEmptyCreatorNames() async {
+        print("🔄 BACKFILL: Starting creator name backfill...")
         
-        // Process notification data
-        handleBackgroundNotification(userInfo: userInfo)
+        let startTime = Date()
         
-        completionHandler(.newData)
-    }
-    
-    /// Handle background notification processing
-    private func handleBackgroundNotification(userInfo: [AnyHashable: Any]) {
-        let type = userInfo["type"] as? String ?? "general"
-        let videoID = userInfo["videoID"] as? String
-        let userID = userInfo["userID"] as? String
-        
-        print("📱 APP DELEGATE: 📨 Processing notification - Type: \(type)")
-        
-        // Process notification based on type
-        if let videoID = videoID {
-            print("📱 APP DELEGATE: Video notification for: \(videoID)")
-            // TODO: Pre-load video data for faster navigation
-        }
-        if let userID = userID {
-            print("📱 APP DELEGATE: User notification for: \(userID)")
-            // TODO: Pre-load user profile data
-        }
-        
-        // Update badge count or trigger local updates
-        updateAppBadge(from: userInfo)
-    }
-    
-    /// Update app badge count from notification
-    private func updateAppBadge(from userInfo: [AnyHashable: Any]) {
-        if let badgeCount = userInfo["badge"] as? Int {
-            DispatchQueue.main.async {
-                UIApplication.shared.applicationIconBadgeNumber = badgeCount
-            }
-        }
-    }
-    
-    // MARK: - App Lifecycle
-    
-    /// Handle app becoming active
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        // Clear badge count
-        application.applicationIconBadgeNumber = 0
-        print("📱 APP DELEGATE: App became active - badge cleared")
-        
-        // Update last active time for re-engagement tracking
-        if let userID = Auth.auth().currentUser?.uid {
-            Task {
-                await updateLastActiveTime(userID: userID)
-            }
-        }
-    }
-    
-    /// Handle app entering background
-    func applicationDidEnterBackground(_ application: UIApplication) {
-        print("📱 APP DELEGATE: App entered background")
-        
-        // Schedule re-engagement check when entering background
-        scheduleReEngagementCheck()
-    }
-    
-    /// Handle app termination
-    func applicationWillTerminate(_ application: UIApplication) {
-        print("📱 APP DELEGATE: App will terminate")
-    }
-    
-    // MARK: - Re-Engagement Tracking
-    
-    /// Update user's last active time in Firestore
-    private func updateLastActiveTime(userID: String) async {
         do {
             let db = Firestore.firestore(database: Config.Firebase.databaseName)
             
-            try await db.collection("users").document(userID).updateData([
-                "lastActiveAt": FieldValue.serverTimestamp()
-            ])
-            
-            print("✅ RE-ENGAGEMENT: Updated lastActiveAt for user \(userID)")
-            
-        } catch {
-            print("❌ RE-ENGAGEMENT: Failed to update lastActiveAt - \(error)")
-        }
-    }
-    
-    // MARK: - 🔥 ONE-TIME BACKFILL: Fix Empty Creator Names
-    
-    /// Backfill empty creatorName fields in existing videos
-    private func backfillEmptyCreatorNames() async {
-        let db = Firestore.firestore()
-        
-        print("🔍 BACKFILL: Searching for videos with incorrect creatorName...")
-        
-        do {
+            // Get all videos with empty or missing creatorName
             let snapshot = try await db.collection("videos")
-                .limit(to: 500)
+                .whereField("creatorName", isEqualTo: "")
                 .getDocuments()
-            
-            print("📊 BACKFILL: Checking \(snapshot.documents.count) videos...")
             
             var fixedCount = 0
             var failedCount = 0
-            var skippedCount = 0
             
-            for doc in snapshot.documents {
+            print("🔄 BACKFILL: Found \(snapshot.documents.count) videos with empty creatorName")
+            
+            // Process each video
+            for document in snapshot.documents {
+                let data = document.data()
+                guard let creatorID = data["creatorId"] as? String else {
+                    print("⚠️ BACKFILL: Video \(document.documentID) has no creatorId")
+                    failedCount += 1
+                    continue
+                }
+                
                 do {
-                    let videoData = doc.data()
-                    guard let creatorID = videoData["creatorID"] as? String else {
-                        print("⚠️ BACKFILL: Skipping \(doc.documentID) - no creatorID")
-                        failedCount += 1
-                        continue
-                    }
+                    // Fetch creator profile
+                    let userDoc = try await db.collection("users").document(creatorID).getDocument()
                     
-                    let currentCreatorName = videoData["creatorName"] as? String ?? ""
-                    
-                    let userDoc = try await db.collection("users")
-                        .document(creatorID)
-                        .getDocument()
-                    
-                    guard userDoc.exists,
-                          let userData = userDoc.data(),
-                          let correctUsername = userData["username"] as? String,
-                          !correctUsername.isEmpty else {
-                        print("⚠️ BACKFILL: No username found for user \(creatorID)")
-                        failedCount += 1
-                        continue
-                    }
-                    
-                    let needsUpdate = currentCreatorName.isEmpty ||
-                                     currentCreatorName == "User" ||
-                                     currentCreatorName != correctUsername
-                    
-                    if needsUpdate {
-                        try await doc.reference.updateData(["creatorName": correctUsername])
+                    if let userData = userDoc.data(),
+                       let displayName = userData["displayName"] as? String {
+                        
+                        // Update video with creator name
+                        try await db.collection("videos").document(document.documentID).updateData([
+                            "creatorName": displayName,
+                            "backfilledAt": FieldValue.serverTimestamp()
+                        ])
+                        
                         fixedCount += 1
-                        print("✅ BACKFILL: Fixed \(doc.documentID) → '\(currentCreatorName)' to '@\(correctUsername)'")
+                        print("✅ BACKFILL: Fixed video \(document.documentID) -> \(displayName)")
                     } else {
-                        skippedCount += 1
+                        print("⚠️ BACKFILL: Creator \(creatorID) has no displayName")
+                        failedCount += 1
                     }
                     
                 } catch {
-                    print("⚠️ BACKFILL: Error processing \(doc.documentID): \(error.localizedDescription)")
+                    print("❌ BACKFILL: Failed to process video \(document.documentID): \(error)")
                     failedCount += 1
                 }
             }
             
-            print("🎉 BACKFILL COMPLETE!")
-            print("   - Fixed: \(fixedCount) videos")
-            print("   - Skipped (already correct): \(skippedCount) videos")
-            if failedCount > 0 {
-                print("   - Failed: \(failedCount) videos")
-            }
+            let duration = Date().timeIntervalSince(startTime)
+            
+            print("🎉 BACKFILL COMPLETE:")
+            print("   ✅ Fixed: \(fixedCount)")
+            print("   ❌ Failed: \(failedCount)")
+            print("   ⏱️ Duration: \(String(format: "%.2f", duration))s")
+            
+            // Track performance
+            PerformanceMonitoringService.shared.trackMemoryOperation(
+                operation: "creator_name_backfill",
+                memoryUsed: Int64(fixedCount * 1024) // Rough estimate
+            )
             
             if fixedCount > 0 || (fixedCount == 0 && failedCount == 0) {
                 UserDefaults.standard.set(true, forKey: "creatorNameBackfillComplete")

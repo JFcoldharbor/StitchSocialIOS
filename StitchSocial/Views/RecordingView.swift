@@ -9,11 +9,32 @@ import SwiftUI
 import AVFoundation
 import PhotosUI
 
+// MARK: - Navigation Destination
+
+enum RecordingNavigationDestination: Hashable {
+    case threadComposer(VideoEditState)
+    
+    static func == (lhs: RecordingNavigationDestination, rhs: RecordingNavigationDestination) -> Bool {
+        switch (lhs, rhs) {
+        case (.threadComposer(let lhsState), .threadComposer(let rhsState)):
+            return lhsState.draftID == rhsState.draftID
+        }
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        switch self {
+        case .threadComposer(let state):
+            hasher.combine(state.draftID)
+        }
+    }
+}
+
 struct RecordingView: View {
     @StateObject private var controller: RecordingController
     @StateObject private var permissionsManager = CameraPermissionsManager()
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isProcessingSelectedVideo = false
+    @State private var navigationPath: [RecordingNavigationDestination] = []
     
     let onVideoCreated: (CoreVideoMetadata) -> Void
     let onCancel: () -> Void
@@ -29,29 +50,49 @@ struct RecordingView: View {
     }
     
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            switch controller.currentPhase {
-            case .ready, .recording, .stopping:
-                cameraInterface
+        NavigationStack(path: $navigationPath) {
+            ZStack {
+                Color.black.ignoresSafeArea()
                 
-            case .aiProcessing:
-                processingInterface
-                
-            case .complete:
-                if let videoURL = controller.recordedVideoURL {
+                switch controller.currentPhase {
+                case .ready, .recording, .stopping:
+                    cameraInterface
+                    
+                case .aiProcessing:
+                    processingInterface
+                    
+                case .complete:
+                    if let videoURL = controller.recordedVideoURL {
+                        // NEW FLOW: Go to review screen first
+                        VideoReviewView(
+                            initialState: VideoEditState(
+                                videoURL: videoURL,
+                                videoDuration: 60.0, // Placeholder, will be loaded in review
+                                videoSize: CGSize(width: 1080, height: 1920)
+                            ),
+                            onContinueToThread: { editState in
+                                // After review, navigate to ThreadComposer
+                                navigationPath.append(.threadComposer(editState))
+                            },
+                            onCancel: onCancel
+                        )
+                    }
+                    
+                case .error(let message):
+                    errorInterface(message)
+                }
+            }
+            .navigationDestination(for: RecordingNavigationDestination.self) { destination in
+                switch destination {
+                case .threadComposer(let editState):
                     ThreadComposer(
-                        recordedVideoURL: videoURL,
+                        recordedVideoURL: editState.finalVideoURL,
                         recordingContext: controller.recordingContext,
                         aiResult: controller.aiAnalysisResult,
                         onVideoCreated: onVideoCreated,
                         onCancel: onCancel
                     )
                 }
-                
-            case .error(let message):
-                errorInterface(message)
             }
         }
         .navigationBarHidden(true)
@@ -460,6 +501,8 @@ struct RecordingView: View {
             print("Failed to restore playback audio session: \(error)")
         }
     }
+    
+    // MARK: - Review Flow Helpers
 }
 
 // MARK: - Simple Camera Preview Component

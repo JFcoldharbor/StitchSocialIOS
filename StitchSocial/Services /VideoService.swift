@@ -740,10 +740,7 @@ class VideoService: ObservableObject {
             "totalEngagements": state.totalEngagements,
             "hypeEngagements": state.hypeEngagements,
             "coolEngagements": state.coolEngagements,
-            "hypeCurrentTaps": state.hypeCurrentTaps,
-            "hypeRequiredTaps": state.hypeRequiredTaps,
-            "coolCurrentTaps": state.coolCurrentTaps,
-            "coolRequiredTaps": state.coolRequiredTaps,
+            "totalCloutGiven": state.totalCloutGiven,
             "lastEngagementAt": Timestamp(date: state.lastEngagementAt)
         ]
         
@@ -763,13 +760,12 @@ class VideoService: ObservableObject {
               let totalEngagements = data["totalEngagements"] as? Int,
               let hypeEngagements = data["hypeEngagements"] as? Int,
               let coolEngagements = data["coolEngagements"] as? Int,
-              let hypeCurrentTaps = data["hypeCurrentTaps"] as? Int,
-              let hypeRequiredTaps = data["hypeRequiredTaps"] as? Int,
-              let coolCurrentTaps = data["coolCurrentTaps"] as? Int,
-              let coolRequiredTaps = data["coolRequiredTaps"] as? Int,
               let lastEngagementTimestamp = data["lastEngagementAt"] as? Timestamp else {
             return nil
         }
+        
+        // Get optional fields
+        let totalCloutGiven = data["totalCloutGiven"] as? Int ?? 0
         
         var state = VideoEngagementState(
             videoID: videoID,
@@ -780,10 +776,7 @@ class VideoService: ObservableObject {
         state.totalEngagements = totalEngagements
         state.hypeEngagements = hypeEngagements
         state.coolEngagements = coolEngagements
-        state.hypeCurrentTaps = hypeCurrentTaps
-        state.hypeRequiredTaps = hypeRequiredTaps
-        state.coolCurrentTaps = coolCurrentTaps
-        state.coolRequiredTaps = coolRequiredTaps
+        state.totalCloutGiven = totalCloutGiven
         state.lastEngagementAt = lastEngagementTimestamp.dateValue()
         
         return state

@@ -2,7 +2,7 @@
 //  StitchSocialApp.swift
 //  StitchSocial
 //
-//  UPDATED: Added memory management initialization
+//  UPDATED: Added Realtime Database presence tracking (optional)
 //
 
 import SwiftUI
@@ -37,11 +37,16 @@ struct StitchSocialApp: App {
                     print("📱 FCM: Automatic via FCMPushManager")
                     print("📱 Notifications: Automatic via NotificationViewModel")
                     print("🧠 Memory: VideoPreloadingService ready")
+                    
+                    // Print config status if debug mode
+                    if Config.Features.enableDebugLogging {
+                        Config.printConfigurationStatus()
+                    }
                 }
         }
     }
     
-    // MARK: - Memory Management Setup (NEW)
+    // MARK: - Memory Management Setup
     
     private func initializeMemoryManagement() {
         // Pre-warm the preloading service (triggers memory observers)

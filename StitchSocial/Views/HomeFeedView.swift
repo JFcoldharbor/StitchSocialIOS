@@ -40,6 +40,7 @@ struct HomeFeedView: View {
     @StateObject private var authService: AuthService
     @StateObject private var homeFeedService: HomeFeedService
     @StateObject private var cachingService: CachingService
+    @StateObject private var suggestionService: SuggestionService
     @ObservedObject private var networkMonitor = NetworkMonitor.shared
     
     // MARK: - Feed Cache (Offline Support)
@@ -76,6 +77,13 @@ struct HomeFeedView: View {
     @State private var shouldShowPeopleFinderPrompt: Bool = false
     @State private var peopleFinderTriggerCount: Int = 0
     
+    // MARK: - Suggested Users State
+    
+    @State private var showingSuggestionCard: Bool = false
+    @State private var currentSuggestions: [BasicUserInfo] = []
+    @State private var lastSuggestionCheck: Date?
+    @State private var suggestionCheckCount: Int = 0
+    
     // MARK: - Viewport State
     
     @State private var containerSize: CGSize = .zero
@@ -99,6 +107,11 @@ struct HomeFeedView: View {
     // Swipe state tracking
     @State private var hasPausedForSwipe: Bool = false
     
+    // MARK: - Task Management (PHASE 2)
+    @State private var preloadTask: Task<Void, Never>?
+    @State private var loadMoreTask: Task<Void, Never>?
+    @State private var refreshTask: Task<Void, Never>?
+    
     // MARK: - Initialization (FIXED: Removed VideoPreloadingService instantiation)
     
     init(
@@ -114,12 +127,19 @@ struct HomeFeedView: View {
             videoService: videoSvc,
             userService: userSvc
         )
+        let searchService = SearchService()
+        let suggestionService = SuggestionService(
+            searchService: searchService,
+            followManager: FollowManager.shared,
+            userService: userSvc
+        )
         
         self._videoService = StateObject(wrappedValue: videoSvc)
         self._userService = StateObject(wrappedValue: userSvc)
         self._authService = StateObject(wrappedValue: authSvc)
         self._homeFeedService = StateObject(wrappedValue: homeFeedService)
         self._cachingService = StateObject(wrappedValue: cachingService)
+        self._suggestionService = StateObject(wrappedValue: suggestionService)
     }
     
     // MARK: - Main Body
@@ -165,14 +185,18 @@ struct HomeFeedView: View {
                 hasLoadedInitialFeed = true
             } else {
                 print("🏠 HOMEFEED: Returning to feed, triggering preload")
-                Task {
+                // PHASE 2: Cancel existing and create new
+                preloadTask?.cancel()
+                preloadTask = Task {
                     await preloadCurrentAndNext()
                 }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .preloadHomeFeed)) { _ in
             print("🎬 HOMEFEED: Received preload notification from tab switch")
-            Task {
+            // PHASE 2: Cancel existing and create new
+            preloadTask?.cancel()
+            preloadTask = Task {
                 await preloadCurrentAndNext()
             }
         }
@@ -185,10 +209,37 @@ struct HomeFeedView: View {
         .killBackgroundOnAppear(.stitches)
         .onDisappear {
             print("🏠 HOMEFEED: View disappeared")
+            // PHASE 2: Cancel all pending tasks
+            preloadTask?.cancel()
+            loadMoreTask?.cancel()
+            refreshTask?.cancel()
+            preloadTask = nil
+            loadMoreTask = nil
+            refreshTask = nil
         }
         .refreshable {
-            Task {
+            // PHASE 2: Cancel existing and create new
+            refreshTask?.cancel()
+            refreshTask = Task {
                 await refreshFeed()
+            }
+        }
+        .sheet(isPresented: $showingSuggestionCard) {
+            if !currentSuggestions.isEmpty {
+                SuggestedUsersCard(
+                    suggestions: currentSuggestions,
+                    onDismiss: {
+                        showingSuggestionCard = false
+                    },
+                    onRefresh: {
+                        await refreshSuggestions()
+                    },
+                    onNavigateToProfile: { userID in
+                        showingSuggestionCard = false
+                        // Navigate to profile via your navigation system
+                        // navigationCoordinator.navigateToProfile(userID: userID)
+                    }
+                )
             }
         }
     }
@@ -553,6 +604,11 @@ struct HomeFeedView: View {
         peopleFinderTriggerCount += 1
         
         print("🎬 MOVED TO THREAD: \(threadIndex)")
+        
+        // CRITICAL: Fire-and-forget suggestion check - NEVER blocks UI
+        Task.detached(priority: .background) {
+            await self.checkAndShowSuggestions()
+        }
     }
     
     private func smoothMoveToStitch(_ stitchIndex: Int, geometry: GeometryProxyProtocol) {
@@ -690,8 +746,12 @@ struct HomeFeedView: View {
         
         Task {
             do {
-                print("🚀 HOME FEED: Loading instant feed for user \(currentUserID)")
-                let threads = try await homeFeedService.loadFeed(userID: currentUserID)
+                print("🚀 HOME FEED: Loading with DEEP DISCOVERY for user \(currentUserID)")
+                // Use deep discovery for diverse, time-varied content
+                let threads = try await homeFeedService.loadFeedWithDeepDiscovery(
+                    userID: currentUserID,
+                    limit: 40
+                )
                 
                 await MainActor.run {
                     currentFeed = threads
@@ -703,7 +763,7 @@ struct HomeFeedView: View {
                     horizontalOffset = 0
                 }
                 
-                print("✅ HOME FEED: Feed loaded with \(threads.count) threads")
+                print("✅ HOME FEED: Deep discovery loaded \(threads.count) diverse threads")
                 
                 // CRITICAL: Preload videos immediately after feed loads
                 print("🎬 HOME FEED: Starting preload after feed load")
@@ -749,8 +809,11 @@ struct HomeFeedView: View {
             
             Task {
                 do {
-                    print("🚀 HOME FEED: No cache, loading from network")
-                    let threads = try await homeFeedService.loadFeed(userID: currentUserID)
+                    print("🚀 HOME FEED: No cache, loading with DEEP DISCOVERY")
+                    let threads = try await homeFeedService.loadFeedWithDeepDiscovery(
+                        userID: currentUserID,
+                        limit: 40
+                    )
                     
                     await MainActor.run {
                         currentFeed = threads
@@ -765,7 +828,7 @@ struct HomeFeedView: View {
                     
                     // Cache for next time
                     feedCache.cacheFeed(threads)
-                    print("💾 HOMEFEED: Cached \(threads.count) threads for offline")
+                    print("💾 HOMEFEED: Cached \(threads.count) diverse threads for offline")
                     
                     await preloadCurrentAndNext()
                     
@@ -790,8 +853,11 @@ struct HomeFeedView: View {
         
         Task {
             do {
-                print("🔄 HOMEFEED: Background refresh started")
-                let freshThreads = try await homeFeedService.loadFeed(userID: currentUserID)
+                print("🔄 HOMEFEED: Background refresh with DEEP DISCOVERY")
+                let freshThreads = try await homeFeedService.loadFeedWithDeepDiscovery(
+                    userID: currentUserID,
+                    limit: 40
+                )
                 
                 await MainActor.run {
                     // Preserve position if user hasn't scrolled far
@@ -825,7 +891,11 @@ struct HomeFeedView: View {
         guard let currentUserID = authService.currentUserID else { return }
         
         do {
-            let refreshedThreads = try await homeFeedService.refreshFeed(userID: currentUserID)
+            print("🔄 REFRESH: Using deep discovery")
+            let refreshedThreads = try await homeFeedService.loadFeedWithDeepDiscovery(
+                userID: currentUserID,
+                limit: 40
+            )
             
             await MainActor.run {
                 currentFeed = refreshedThreads
@@ -851,6 +921,12 @@ struct HomeFeedView: View {
     // MARK: - Preloading Support (INSTAGRAM/TIKTOK PATTERN)
     
     private func preloadCurrentAndNext() async {
+        // PHASE 2: Check for cancellation
+        guard !Task.isCancelled else {
+            print("⏹️ PRELOAD: Task cancelled, skipping")
+            return
+        }
+        
         guard !currentFeed.isEmpty else {
             print("⚠️ PRELOAD: Feed is empty, skipping")
             return
@@ -887,6 +963,11 @@ struct HomeFeedView: View {
         
         // Preload into VideoPreloadingService pool
         for (index, video) in videosToPreload.enumerated() {
+            // PHASE 2: Check for cancellation during loop
+            guard !Task.isCancelled else {
+                print("⏹️ PRELOAD: Cancelled during loop at index \(index)")
+                return
+            }
             let priority: PreloadPriority = index == 0 ? .high : .normal
             print("🎬 PRELOAD: Preloading video \(index + 1)/\(videosToPreload.count): \(video.id.prefix(8)) (priority: \(priority))")
             await videoPreloadingService.preloadVideo(video, priority: priority)
@@ -1010,22 +1091,64 @@ struct HomeFeedView: View {
     }
     
     private var emptyFeedView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "video.slash")
-                .font(.system(size: 60))
-                .foregroundColor(.gray)
+        ZStack {
+            Color.black.ignoresSafeArea()
             
-            Text("No videos to show")
-                .font(.title2)
-                .fontWeight(.semibold)
-            
-            Text("Follow some creators or check back later for new content")
-                .font(.body)
-                .foregroundColor(.gray)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
+            VStack(spacing: 30) {
+                // Empty state icon
+                ZStack {
+                    Circle()
+                        .fill(Color.purple.opacity(0.1))
+                        .frame(width: 150, height: 150)
+                        .blur(radius: 20)
+                    
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 70))
+                        .foregroundColor(.purple.opacity(0.5))
+                }
+                
+                VStack(spacing: 12) {
+                    Text("No Videos Yet")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundColor(.white)
+                    
+                    Text("Follow creators to see their content")
+                        .font(.system(size: 16))
+                        .foregroundColor(.gray)
+                        .multilineTextAlignment(.center)
+                }
+                
+                // Discover Creators button
+                Button(action: {
+                    Task {
+                        await loadInitialSuggestions()
+                        if !currentSuggestions.isEmpty {
+                            showingSuggestionCard = true
+                        }
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 16))
+                        Text("Discover Creators")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 14)
+                    .background(
+                        LinearGradient(
+                            colors: [.purple, .pink],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .cornerRadius(14)
+                    .shadow(color: .purple.opacity(0.3), radius: 10, x: 0, y: 5)
+                }
+            }
+            .padding(.horizontal, 40)
         }
-        .padding()
     }
     
     // MARK: - People Finder (Stub)
@@ -1041,6 +1164,72 @@ struct HomeFeedView: View {
         peopleFinderTriggerCount += 1
         if peopleFinderTriggerCount % 20 == 0 {
             checkPeopleFinderEligibility()
+        }
+    }
+    
+    // MARK: - Suggested Users Functions
+    
+    /// Check and show suggestion card if appropriate (NON-BLOCKING)
+    private func checkAndShowSuggestions() async {
+        guard let userID = Auth.auth().currentUser?.uid else { return }
+        
+        // Fast early returns
+        if let lastCheck = lastSuggestionCheck,
+           Date().timeIntervalSince(lastCheck) < 60 {
+            return
+        }
+        
+        // Quick check without blocking
+        let shouldShow = await suggestionService.shouldShowSuggestionCard(
+            userID: userID,
+            currentVideoIndex: currentThreadIndex
+        )
+        
+        guard shouldShow else { return }
+        
+        // CRITICAL: Don't block on loading suggestions
+        Task(priority: .background) {
+            do {
+                // Get fresh suggestions in background
+                let suggestions = try await suggestionService.getSuggestions(limit: 10)
+                
+                guard !suggestions.isEmpty else { return }
+                
+                await MainActor.run {
+                    currentSuggestions = suggestions
+                    lastSuggestionCheck = Date()
+                    suggestionCheckCount += 1
+                    showingSuggestionCard = true
+                    
+                    print("💡 HOMEFEED: Showing suggestion card with \(suggestions.count) suggestions")
+                }
+            } catch {
+                print("❌ HOMEFEED: Failed to get suggestions: \(error)")
+            }
+        }
+    }
+    
+    /// Refresh suggestions manually
+    private func refreshSuggestions() async {
+        guard let userID = Auth.auth().currentUser?.uid else { return }
+        
+        do {
+            currentSuggestions = try await suggestionService.refreshSuggestions(limit: 10)
+            print("💡 HOMEFEED: Refreshed \(currentSuggestions.count) suggestions")
+        } catch {
+            print("❌ HOMEFEED: Failed to refresh suggestions: \(error)")
+        }
+    }
+    
+    /// Load initial suggestions for empty feed
+    private func loadInitialSuggestions() async {
+        guard let userID = Auth.auth().currentUser?.uid else { return }
+        
+        do {
+            currentSuggestions = try await suggestionService.getSuggestions(limit: 10)
+            print("💡 HOMEFEED: Loaded \(currentSuggestions.count) initial suggestions")
+        } catch {
+            print("❌ HOMEFEED: Failed to load initial suggestions: \(error)")
         }
     }
     
@@ -1289,7 +1478,7 @@ struct MyVideoPlayerComponent: View {
     
     private func setupKillObserver() {
         killObserver = NotificationCenter.default.addObserver(
-            forName: .killAllVideoPlayers,
+            forName: .RealkillAllVideoPlayers,
             object: nil,
             queue: .main
         ) { _ in
@@ -1335,6 +1524,14 @@ struct MyVideoPlayerComponent: View {
         }
     }
 }
+
+// MARK: - NotificationCenter Extension
+
+extension Notification.Name {
+    static let RealkillAllVideoPlayers = Notification.Name("killAllVideoPlayers")
+    // preloadHomeFeed is declared in MainTabContainer.swift
+}
+
 // MARK: - Preview
 
 struct HomeFeedView_Previews: PreviewProvider {

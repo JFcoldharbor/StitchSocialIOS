@@ -20,7 +20,7 @@ struct CreatorProfileView: View {
     
     // MARK: - Dependencies
     
-    @StateObject private var followManager = FollowManager()
+    @ObservedObject var followManager = FollowManager.shared
     private let userService = UserService()
     private let videoService = VideoService()
     
@@ -37,8 +37,15 @@ struct CreatorProfileView: View {
     
     // MARK: - Video Player State
     
-    @State private var showingVideoPlayer = false
-    @State private var selectedVideo: CoreVideoMetadata?
+    /// Wrapper for video presentation to work with item-based fullScreenCover
+    struct VideoPresentation: Identifiable {
+        let id: String
+        let video: CoreVideoMetadata
+        let index: Int
+        let context: OverlayContext
+    }
+    
+    @State private var videoPresentation: VideoPresentation?
     @State private var selectedVideoIndex = 0
     @State private var isLoadingVideos = false
     
@@ -70,6 +77,17 @@ struct CreatorProfileView: View {
     @Environment(\.dismiss) private var dismiss
     
     // MARK: - Computed Properties
+    
+    /// Check if this is the current user's own profile
+    private var isOwnProfile: Bool {
+        guard let currentUserID = Auth.auth().currentUser?.uid else { return false }
+        return userID == currentUserID
+    }
+    
+    /// Determines the overlay context based on profile ownership
+    private var videoOverlayContext: OverlayContext {
+        isOwnProfile ? .profileOwn : .profileOther
+    }
     
     /// Check if user is eligible for collections (Ambassador+ tier)
     private var isCollectionsEligible: Bool {
@@ -116,15 +134,15 @@ struct CreatorProfileView: View {
         .sheet(isPresented: $showingAllCollections) {
             allCollectionsSheet
         }
-        .fullScreenCover(isPresented: $showingVideoPlayer) {
-            if let selectedVideo = selectedVideo {
-                FullscreenVideoView(
-                    video: selectedVideo,
-                    onDismiss: {
-                        showingVideoPlayer = false
-                    }
-                )
-            }
+        // FIXED: Use item-based fullScreenCover to avoid race condition
+        .fullScreenCover(item: $videoPresentation) { presentation in
+            FullscreenVideoView(
+                video: presentation.video,
+                overlayContext: presentation.context,
+                onDismiss: {
+                    videoPresentation = nil
+                }
+            )
         }
         // Collection Player Full Screen (NEW)
         .fullScreenCover(isPresented: $showingCollectionPlayer) {
@@ -202,15 +220,15 @@ struct CreatorProfileView: View {
         if let user = user {
             ProfileCollectionsRow(
                 collections: userCollections,
-                drafts: [],  // Never show drafts on other profiles
-                isOwnProfile: false,
+                drafts: [],  // Drafts only shown on own profile through ProfileView
+                isOwnProfile: isOwnProfile,
                 isEligible: isCollectionsEligible,
-                onAddTap: { },  // No add on other profiles
+                onAddTap: { },  // Add handled through ProfileView
                 onCollectionTap: { collection in
                     selectedCollection = collection
                     showingCollectionPlayer = true
                 },
-                onDraftTap: { _ in },  // No drafts on other profiles
+                onDraftTap: { _ in },  // Drafts handled through ProfileView
                 onSeeAllTap: {
                     showingAllCollections = true
                 }
@@ -243,10 +261,10 @@ struct CreatorProfileView: View {
             NavigationStack {
                 ProfileCollectionsTab(
                     profileUserID: user.id,
-                    isOwnProfile: false,
+                    isOwnProfile: isOwnProfile,
                     coordinator: CollectionCoordinator(userID: currentUserID, username: "")
                 )
-                .navigationTitle("\(user.displayName)'s Collections")
+                .navigationTitle(isOwnProfile ? "My Collections" : "\(user.displayName)'s Collections")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .navigationBarLeading) {
@@ -663,9 +681,12 @@ struct CreatorProfileView: View {
                         video: video,
                         showEngagementBadge: true
                     ) {
-                        selectedVideo = video
-                        selectedVideoIndex = index
-                        showingVideoPlayer = true
+                        videoPresentation = VideoPresentation(
+                            id: video.id,
+                            video: video,
+                            index: index,
+                            context: videoOverlayContext
+                        )
                     }
                     .frame(width: geo.size.width, height: geo.size.width * (16.0/9.0))
                     .clipped()
@@ -743,9 +764,9 @@ struct CreatorProfileView: View {
         do {
             let collectionService = CollectionService()
             userCollections = try await collectionService.getUserCollections(userID: userID)
-            print("📚 CREATOR PROFILE: Loaded \(userCollections.count) collections for \(userID)")
+            print("ðŸ“š CREATOR PROFILE: Loaded \(userCollections.count) collections for \(userID)")
         } catch {
-            print("❌ CREATOR PROFILE: Failed to load collections: \(error)")
+            print("âŒ CREATOR PROFILE: Failed to load collections: \(error)")
         }
         
         isLoadingCollections = false
@@ -1165,7 +1186,7 @@ struct CreatorTabButton: View {
 
 struct CreatorUserRowView: View {
     let user: BasicUserInfo
-    @StateObject private var followManager = FollowManager()
+    @ObservedObject var followManager = FollowManager.shared
     @State private var showingProfile = false
     @Environment(\.dismiss) private var dismiss
     

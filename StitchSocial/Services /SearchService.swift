@@ -34,7 +34,7 @@ class SearchService: ObservableObject {
     
     // MARK: - Core Search Methods - SUPER SIMPLE
     
-    /// Search users - if query is empty, show all users for browsing + DEBUG + FIXED LIMIT
+    /// Search users - if query is empty, show suggested users
     func searchUsers(query: String, limit: Int = 50) async throws -> [BasicUserInfo] {
         
         print("🔍 DEBUG: ===== SearchUsers Called =====")
@@ -51,15 +51,163 @@ class SearchService: ObservableObject {
         print("🔍 DEBUG: Trimmed query: '\(trimmedQuery)'")
         print("🔍 DEBUG: Query is empty: \(trimmedQuery.isEmpty)")
         
-        // FIXED: If empty query, show all users with proper limit
+        // NEW: If empty query, show personalized suggestions
         if trimmedQuery.isEmpty {
-            print("🔍 DEBUG: Taking getAllUsers path with limit: \(limit)")
-            return try await getAllUsers(limit: limit)
+            print("🔍 DEBUG: Taking getSuggestedUsers path with limit: \(limit)")
+            return try await getSuggestedUsers(limit: limit)
         }
         
         // FIXED: If has query, do comprehensive search with proper limit
         print("🔍 DEBUG: Taking searchUsersByText path with limit: \(limit)")
         return try await searchUsersByText(query: trimmedQuery, limit: limit)
+    }
+    
+    /// Get personalized user suggestions based on follows and activity
+    func getSuggestedUsers(limit: Int = 50) async throws -> [BasicUserInfo] {
+        print("💡 SUGGESTIONS: Generating personalized user suggestions")
+        
+        guard let currentUserID = auth.currentUser?.uid else {
+            // Not logged in, show popular users
+            return try await getAllUsers(limit: limit)
+        }
+        
+        var suggestions: [BasicUserInfo] = []
+        var seenIDs = Set<String>()
+        seenIDs.insert(currentUserID) // Don't suggest self
+        
+        // 1. Get users you follow to exclude and find their follows
+        let following = try await getFollowingIDs(userID: currentUserID)
+        seenIDs.formUnion(following)
+        
+        // 2. Get "People You May Know" - people followed by people you follow
+        let mutualFollows = try await getMutualFollowSuggestions(
+            currentUserID: currentUserID,
+            following: following,
+            excludeIDs: seenIDs,
+            limit: limit / 2
+        )
+        
+        for user in mutualFollows {
+            if !seenIDs.contains(user.id) {
+                suggestions.append(user)
+                seenIDs.insert(user.id)
+            }
+        }
+        
+        print("💡 SUGGESTIONS: Added \(mutualFollows.count) mutual follow suggestions")
+        
+        // 3. Fill remaining with trending/active users
+        if suggestions.count < limit {
+            let remaining = limit - suggestions.count
+            let trending = try await getTrendingUsers(
+                excludeIDs: seenIDs,
+                limit: remaining
+            )
+            
+            for user in trending {
+                if !seenIDs.contains(user.id) {
+                    suggestions.append(user)
+                    seenIDs.insert(user.id)
+                }
+            }
+            
+            print("💡 SUGGESTIONS: Added \(trending.count) trending users")
+        }
+        
+        print("✅ SUGGESTIONS: Returning \(suggestions.count) personalized suggestions")
+        return suggestions
+    }
+    
+    /// Get user IDs that the current user follows
+    private func getFollowingIDs(userID: String) async throws -> Set<String> {
+        let snapshot = try await db.collection("follows")
+            .whereField("followerID", isEqualTo: userID)
+            .getDocuments()
+        
+        let ids = Set(snapshot.documents.map { $0.data()["followingID"] as? String ?? "" }.filter { !$0.isEmpty })
+        print("👥 FOLLOWS: User follows \(ids.count) people")
+        return ids
+    }
+    
+    /// Get "People You May Know" based on mutual follows
+    private func getMutualFollowSuggestions(
+        currentUserID: String,
+        following: Set<String>,
+        excludeIDs: Set<String>,
+        limit: Int
+    ) async throws -> [BasicUserInfo] {
+        
+        var candidateScores: [String: Int] = [:] // userID -> score (number of mutual connections)
+        
+        // For each person you follow, get who they follow
+        let sampleFollowing = Array(following.prefix(10)) // Sample to avoid too many queries
+        
+        for followedUserID in sampleFollowing {
+            let theirFollows = try? await db.collection("follows")
+                .whereField("followerID", isEqualTo: followedUserID)
+                .limit(to: 50)
+                .getDocuments()
+            
+            guard let theirFollows = theirFollows else { continue }
+            
+            for doc in theirFollows.documents {
+                let suggestedID = doc.data()["followingID"] as? String ?? ""
+                
+                // Skip if already following or excluded
+                guard !suggestedID.isEmpty,
+                      !excludeIDs.contains(suggestedID) else { continue }
+                
+                // Increment score for each mutual connection
+                candidateScores[suggestedID, default: 0] += 1
+            }
+        }
+        
+        // Sort by score (most mutual connections first)
+        let topCandidates = candidateScores.sorted { $0.value > $1.value }
+            .prefix(limit)
+            .map { $0.key }
+        
+        print("🤝 MUTUAL: Found \(topCandidates.count) mutual follow candidates")
+        
+        // Fetch user details
+        return try await fetchUsersByIDs(Array(topCandidates))
+    }
+    
+    /// Get trending/active users based on recent activity
+    private func getTrendingUsers(excludeIDs: Set<String>, limit: Int) async throws -> [BasicUserInfo] {
+        // Get users sorted by clout (engagement) who aren't excluded
+        let query = db.collection(FirebaseSchema.Collections.users)
+            .order(by: FirebaseSchema.UserDocument.clout, descending: true)
+            .limit(to: limit * 3) // Fetch extra to account for filtering
+        
+        let snapshot = try await query.getDocuments()
+        let users = processUserDocuments(snapshot.documents, currentUserID: nil)
+        
+        let filtered = users.filter { !excludeIDs.contains($0.id) }
+        return Array(filtered.prefix(limit))
+    }
+    
+    /// Fetch multiple users by IDs
+    private func fetchUsersByIDs(_ userIDs: [String]) async throws -> [BasicUserInfo] {
+        guard !userIDs.isEmpty else { return [] }
+        
+        // Firestore 'in' queries limited to 10 items - batch manually
+        var allUsers: [BasicUserInfo] = []
+        
+        let batchSize = 10
+        for i in stride(from: 0, to: userIDs.count, by: batchSize) {
+            let endIndex = min(i + batchSize, userIDs.count)
+            let batch = Array(userIDs[i..<endIndex])
+            
+            let query = db.collection(FirebaseSchema.Collections.users)
+                .whereField(FieldPath.documentID(), in: batch)
+            
+            let snapshot = try await query.getDocuments()
+            let users = processUserDocuments(snapshot.documents, currentUserID: nil)
+            allUsers.append(contentsOf: users)
+        }
+        
+        return allUsers
     }
     
     /// Get all users for browsing - SIMPLE QUERY, NO INDEXES + DEBUG
@@ -190,7 +338,7 @@ class SearchService: ObservableObject {
                 print("🔍 DEBUG: === FALLBACK: IN-MEMORY SEARCH ===")
                 do {
                     let allUsersQuery = db.collection(FirebaseSchema.Collections.users)
-                        .limit(to: 300)
+                        .limit(to: 1000)  // INCREASED: from 300 to 1000 for better coverage
                     
                     let allSnapshot = try await allUsersQuery.getDocuments()
                     print("🔍 DEBUG: In-memory search fetched \(allSnapshot.documents.count) documents")

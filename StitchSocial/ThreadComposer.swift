@@ -87,6 +87,23 @@ struct ThreadComposer: View {
                 composerInterface
             }
         }
+        .navigationBarBackButtonHidden(false)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(recordingContext.contextDisplayTitle)
+                    .font(.headline)
+                    .foregroundColor(.white)
+            }
+            
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    onCancel()
+                }
+                .foregroundColor(.white)
+            }
+        }
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(Color.black.opacity(0.9), for: .navigationBar)
         .onAppear {
             setupSharedVideoPlayer()
             performInitialAIAnalysis()
@@ -117,9 +134,6 @@ struct ThreadComposer: View {
     
     private var composerInterface: some View {
         VStack(spacing: 0) {
-            // Header
-            header
-            
             // Video Preview - SMALLER SIZE
             videoPreview
                 .frame(height: 200)
@@ -141,34 +155,6 @@ struct ThreadComposer: View {
             // Post Button
             postButton
         }
-    }
-    
-    // MARK: - Header
-    
-    private var header: some View {
-        HStack {
-            Button("Cancel") {
-                onCancel()
-            }
-            .foregroundColor(.white)
-            
-            Spacer()
-            
-            Text(recordingContext.contextDisplayTitle)
-                .font(.headline)
-                .foregroundColor(.white)
-            
-            Spacer()
-            
-            // Hidden placeholder for symmetry
-            Button("Cancel") {
-                onCancel()
-            }
-            .foregroundColor(.white)
-            .opacity(0)
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
     }
     
     // MARK: - Video Preview (Simple inline player for composer)
@@ -484,9 +470,14 @@ struct ThreadComposer: View {
         
         sharedPlayer = player
         
-        // Start playing immediately
-        player.play()
-        isPlaying = true
+        // DON'T start playing if AI analysis is running
+        if !isAnalyzing {
+            player.play()
+            isPlaying = true
+        } else {
+            isPlaying = false
+            print("🎬 SETUP: Player ready but paused - waiting for AI analysis")
+        }
         
         // Setup looping with proper notification handling
         NotificationCenter.default.addObserver(
@@ -532,7 +523,7 @@ struct ThreadComposer: View {
             }
             .store(in: &cancellables)
         
-        print("🎬 SETUP: Player ready and should start playing")
+        print("🎬 SETUP: Player ready")
     }
     
     private func togglePlayback() {

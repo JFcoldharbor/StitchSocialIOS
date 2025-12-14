@@ -6,6 +6,8 @@
 //  Dependencies: None - Pure configuration data
 //  Features: Environment detection, API keys, Firebase settings, feature flags
 //
+//  UPDATED: Added Firebase Performance and Realtime Database configuration
+//
 
 import Foundation
 
@@ -102,6 +104,64 @@ struct Config {
         /// FCM Server Key for push notifications
         static let fcmServerKey = "BIrbeI7xJ8M-BR4BRR8nVK4cgeHQ5kg7BZScN7H9OPOuPpoZCyZIT_Nxf7j5qB6fvJEKil2oXKS4ViQQ-G-ClXc"
         
+        // MARK: - Performance Monitoring Configuration
+        
+        /// Enable performance monitoring data collection
+        static let performanceMonitoringEnabled: Bool = {
+            switch Environment.current {
+            case .development: return Features.enableAdvancedMetrics
+            case .staging: return true
+            case .production: return true
+            }
+        }()
+        
+        /// Trace sampling rate (0.0 to 1.0)
+        /// 1.0 = trace all requests, 0.1 = trace 10% of requests
+        static let traceSamplingRate: Double = {
+            switch Environment.current {
+            case .development: return 1.0  // Trace everything in dev
+            case .staging: return 0.5      // 50% in staging
+            case .production: return 0.1   // 10% in production to reduce cost
+            }
+        }()
+        
+        // MARK: - Realtime Database Configuration
+        
+        /// Realtime Database URL (auto-configured from GoogleService-Info.plist)
+        static let realtimeDatabaseURL: String? = {
+            Bundle.main.object(forInfoDictionaryKey: "DATABASE_URL") as? String
+        }()
+        
+        /// Enable Realtime Database offline persistence
+        static let realtimeDatabasePersistenceEnabled = true
+        
+        /// Realtime Database cache size in bytes (100MB)
+        static let realtimeDatabaseCacheSize: UInt = 100 * 1024 * 1024
+        
+        /// Realtime Database features to enable
+        struct RealtimeFeatures {
+            /// Enable live viewer counts on videos
+            static let liveViewerCounts = true
+            
+            /// Enable user presence tracking
+            static let userPresence = true
+            
+            /// Enable live comments/chat
+            static let liveComments = true
+            
+            /// Enable typing indicators
+            static let typingIndicators = true
+            
+            /// Enable live reactions (hype, likes, etc)
+            static let liveReactions = true
+            
+            /// Enable trending score tracking
+            static let trendingScores = true
+            
+            /// Enable leaderboard
+            static let leaderboard = true
+        }
+        
         /// Firebase configuration validation
         static func validateConfiguration() -> Bool {
             guard !databaseName.isEmpty else {
@@ -116,6 +176,15 @@ struct Config {
             
             print("✅ CONFIG: Firebase database configured - \(databaseName)")
             print("✅ CONFIG: FCM server key configured - \(fcmServerKey.prefix(20))...")
+            
+            if performanceMonitoringEnabled {
+                print("✅ CONFIG: Performance Monitoring enabled (sample rate: \(traceSamplingRate))")
+            }
+            
+            if let rtdbURL = realtimeDatabaseURL {
+                print("✅ CONFIG: Realtime Database configured - \(rtdbURL)")
+            }
+            
             return true
         }
     }
@@ -202,6 +271,27 @@ struct Config {
         static let enableAdvancedMetrics: Bool = {
             Environment.current == .development
         }()
+        
+        // MARK: - New: Performance & Realtime Features
+        
+        /// Enable Firebase Performance Monitoring
+        static let enablePerformanceMonitoring: Bool = {
+            Firebase.performanceMonitoringEnabled
+        }()
+        
+        /// Enable Realtime Database features
+        static let enableRealtimeDatabase: Bool = {
+            Firebase.realtimeDatabaseURL != nil
+        }()
+        
+        /// Enable specific realtime features
+        static let enableLiveViewerCounts = Firebase.RealtimeFeatures.liveViewerCounts
+        static let enableUserPresence = Firebase.RealtimeFeatures.userPresence
+        static let enableLiveComments = Firebase.RealtimeFeatures.liveComments
+        static let enableTypingIndicators = Firebase.RealtimeFeatures.typingIndicators
+        static let enableLiveReactions = Firebase.RealtimeFeatures.liveReactions
+        static let enableTrendingScores = Firebase.RealtimeFeatures.trendingScores
+        static let enableLeaderboard = Firebase.RealtimeFeatures.leaderboard
     }
     
     // MARK: - Network Configuration
@@ -284,6 +374,11 @@ struct Config {
             issues.append("Bundle ID is missing")
         }
         
+        // Check Realtime Database configuration
+        if Features.enableRealtimeDatabase && Firebase.realtimeDatabaseURL == nil {
+            issues.append("Realtime Database URL is missing in GoogleService-Info.plist")
+        }
+        
         // Environment-specific checks
         switch Environment.current {
         case .production:
@@ -320,8 +415,20 @@ struct Config {
         print("   Firebase DB: \(Firebase.databaseName)")
         print("   FCM Key: \(Firebase.fcmServerKey.isEmpty ? "❌ Missing" : "✅ Configured")")
         print("   Push Notifications: \(Features.enablePushNotifications ? "✅ Enabled" : "❌ Disabled")")
+        print("   Performance Monitoring: \(Features.enablePerformanceMonitoring ? "✅ Enabled" : "❌ Disabled")")
+        print("   Realtime Database: \(Features.enableRealtimeDatabase ? "✅ Enabled" : "❌ Disabled")")
         print("   Bundle ID: \(App.bundleID)")
         print("   Debug Logging: \(Features.enableDebugLogging ? "✅" : "❌")")
+        
+        if Features.enableRealtimeDatabase {
+            print("   Realtime Features:")
+            print("      - Viewer Counts: \(Features.enableLiveViewerCounts ? "✅" : "❌")")
+            print("      - User Presence: \(Features.enableUserPresence ? "✅" : "❌")")
+            print("      - Live Comments: \(Features.enableLiveComments ? "✅" : "❌")")
+            print("      - Live Reactions: \(Features.enableLiveReactions ? "✅" : "❌")")
+            print("      - Trending: \(Features.enableTrendingScores ? "✅" : "❌")")
+            print("      - Leaderboard: \(Features.enableLeaderboard ? "✅" : "❌")")
+        }
         
         if !validation.isValid {
             print("   ⚠️ Issues Found:")

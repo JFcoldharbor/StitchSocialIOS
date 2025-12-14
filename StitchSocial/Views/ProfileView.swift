@@ -5,7 +5,8 @@
 //  Layer 8: Views - Optimized Profile Display with Fixed Video Grid and FullscreenVideoView
 //  Dependencies: ProfileViewModel (Layer 7), VideoThumbnailView, EditProfileView, ProfileVideoGrid, FullscreenVideoView
 //  Features: Lightweight thumbnails, profile refresh, proper video playback with vertical navigation
-//  PHASE 1 FIX: Unified notifications, Task cancellation, observer cleanup
+//  FIXED: Removed .onAppear/.onDisappear modifiers that were breaking fullScreenCover
+//  UPDATED: Added Collections Row between header and tabs
 //
 
 import SwiftUI
@@ -25,8 +26,21 @@ struct ProfileView: View {
     @State private var showingFollowersList = false
     @State private var showingSettings = false
     @State private var showingEditProfile = false
-    @State private var showingVideoPlayer = false
-    @State private var selectedVideo: CoreVideoMetadata?
+    
+    // MARK: - Video Player State
+    
+    /// Wrapper for video presentation to work with item-based fullScreenCover
+    struct VideoPresentation: Identifiable, Equatable {
+        let id: String
+        let video: CoreVideoMetadata
+        let context: OverlayContext
+        
+        static func == (lhs: VideoPresentation, rhs: VideoPresentation) -> Bool {
+            lhs.id == rhs.id
+        }
+    }
+    
+    @State private var videoPresentation: VideoPresentation?
     
     // MARK: - Video Deletion State
     
@@ -49,11 +63,6 @@ struct ProfileView: View {
     @State private var selectedDraft: CollectionDraft?
     @State private var showingAllCollections = false
     @State private var collectionError: String?
-    
-    // MARK: - PHASE 1 FIX: Task Management
-    
-    @State private var loadTask: Task<Void, Never>?
-    @State private var collectionsTask: Task<Void, Never>?
     
     // MARK: - Initialization
     
@@ -93,20 +102,11 @@ struct ProfileView: View {
                 viewModel.animationController.startEntranceSequence(hypeProgress: hypeProgress)
             }
         }
-        // PHASE 1 FIX: Use unified notification name
-        .onReceive(NotificationCenter.default.publisher(for: .refreshProfile)) { _ in
-            loadTask?.cancel()
-            loadTask = Task {
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("RefreshProfile"))) { _ in
+            Task {
                 await viewModel.refreshProfile()
                 await loadCollections()
             }
-        }
-        // PHASE 1 FIX: Cleanup on disappear
-        .onDisappear {
-            loadTask?.cancel()
-            loadTask = nil
-            collectionsTask?.cancel()
-            collectionsTask = nil
         }
         .sheet(isPresented: $showingFollowersList) {
             stitchersSheet
@@ -117,27 +117,17 @@ struct ProfileView: View {
         .sheet(isPresented: $showingEditProfile) {
             editProfileSheet
         }
-        .fullScreenCover(isPresented: $showingVideoPlayer) {
-            if let video = selectedVideo {
-                FullscreenVideoView(
-                    video: video,
-                    overlayContext: viewModel.isOwnProfile ? .profileOwn : .profileOther,
-                    onDismiss: {
-                        print("📱 PROFILE: Dismissing fullscreen")
-                        // PHASE 1 FIX: Use unified notification
-                        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
-                        showingVideoPlayer = false
-                        selectedVideo = nil
-                    }
-                )
-            } else {
-                Color.red.ignoresSafeArea()
-                    .overlay(
-                        Text("selectedVideo is nil!")
-                            .foregroundColor(.white)
-                            .font(.headline)
-                    )
-            }
+        // FIXED: Use item-based fullScreenCover to avoid race condition
+        .fullScreenCover(item: $videoPresentation) { presentation in
+            FullscreenVideoView(
+                video: presentation.video,
+                overlayContext: presentation.context,
+                onDismiss: {
+                    print("📱 PROFILE: Dismissing fullscreen")
+                    NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                    videoPresentation = nil
+                }
+            )
         }
         // Collection Composer Sheet
         .sheet(isPresented: $showingCollectionComposer) {
@@ -149,8 +139,7 @@ struct ProfileView: View {
                         onDismiss: {
                             showingCollectionComposer = false
                             selectedDraft = nil
-                            collectionsTask?.cancel()
-                            collectionsTask = Task { await loadCollections() }
+                            Task { await loadCollections() }
                         }
                     )
                 }
@@ -185,8 +174,7 @@ struct ProfileView: View {
                         ToolbarItem(placement: .navigationBarLeading) {
                             Button("Done") {
                                 showingAllCollections = false
-                                collectionsTask?.cancel()
-                                collectionsTask = Task { await loadCollections() }
+                                Task { await loadCollections() }
                             }
                             .foregroundColor(.cyan)
                         }
@@ -195,9 +183,8 @@ struct ProfileView: View {
                 .preferredColorScheme(.dark)
             }
         }
-        .onChange(of: showingVideoPlayer) { oldValue, newValue in
-            print("🔍 DEBUG: showingVideoPlayer changed from \(oldValue) to \(newValue)")
-            print("🔍 DEBUG: selectedVideo = \(selectedVideo?.id ?? "nil")")
+        .onChange(of: videoPresentation) { oldValue, newValue in
+            print("🔍 DEBUG: videoPresentation changed to \(newValue?.id ?? "nil")")
         }
         .alert("Delete Video", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -292,10 +279,10 @@ struct ProfileView: View {
                 // Remove from local array
                 userDrafts.removeAll { $0.id == draft.id }
                 
-                print("🗑️ PROFILE: Deleted draft \(draft.id)")
+                print("ðŸ—‘ï¸ PROFILE: Deleted draft \(draft.id)")
             } catch {
                 collectionError = "Failed to delete draft: \(error.localizedDescription)"
-                print("❌ PROFILE: Failed to delete draft: \(error)")
+                print("âŒ PROFILE: Failed to delete draft: \(error)")
             }
         }
     }
@@ -305,25 +292,19 @@ struct ProfileView: View {
     private func loadCollections() async {
         guard let userID = viewModel.currentUser?.id else { return }
         
-        // PHASE 1 FIX: Check for cancellation
-        guard !Task.isCancelled else { return }
-        
         isLoadingCollections = true
         
         do {
             let collectionService = CollectionService()
             userCollections = try await collectionService.getUserCollections(userID: userID)
             
-            // PHASE 1 FIX: Check for cancellation
-            guard !Task.isCancelled else { return }
-            
             if viewModel.isOwnProfile {
                 userDrafts = try await collectionService.loadUserDrafts(creatorID: userID)
             }
             
-            print("📚 PROFILE: Loaded \(userCollections.count) collections, \(userDrafts.count) drafts")
+            print("ðŸ“š PROFILE: Loaded \(userCollections.count) collections, \(userDrafts.count) drafts")
         } catch {
-            print("❌ PROFILE: Failed to load collections: \(error)")
+            print("âŒ PROFILE: Failed to load collections: \(error)")
         }
         
         isLoadingCollections = false
@@ -704,24 +685,21 @@ struct ProfileView: View {
         )
     }
     
-    // MARK: - Video Navigation (PHASE 1 FIX: Unified notification)
+    // MARK: - Video Navigation (FIXED - Item-based presentation)
     
     private func openVideoInFullscreen(video: CoreVideoMetadata) {
         print("📱 PROFILE: Tapped video \(video.id.prefix(8))")
         
-        // PHASE 1 FIX: Use unified notification
-        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
+        // Kill all players first
+        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
         
-        // Set video IMMEDIATELY
-        selectedVideo = video
-        print("🔍 DEBUG: selectedVideo = \(selectedVideo?.id ?? "nil")")
-        
-        // Present with small delay for cleanup
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            print("🔍 DEBUG: About to set showingVideoPlayer = true")
-            print("🔍 DEBUG: selectedVideo still = \(self.selectedVideo?.id ?? "nil")")
-            self.showingVideoPlayer = true
-            print("🔍 DEBUG: showingVideoPlayer is now \(self.showingVideoPlayer)")
+        // Present with small delay for cleanup, using item-based presentation
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            self.videoPresentation = VideoPresentation(
+                id: video.id,
+                video: video,
+                context: viewModel.isOwnProfile ? .profileOwn : .profileOther
+            )
         }
     }
     
@@ -846,23 +824,23 @@ struct ProfileView: View {
         var bioComponents: [String] = []
         
         if clout > OptimizationConfig.User.defaultStartingClout * 5 {
-            bioComponents.append("🌟 High performer")
+            bioComponents.append("ðŸŒŸ High performer")
         }
         
         if videoCount >= OptimizationConfig.Threading.maxChildrenPerThread {
-            bioComponents.append("📹 Active creator")
+            bioComponents.append("ðŸ“¹ Active creator")
         }
         
         if followerCount >= 100 {
-            bioComponents.append("👥 Community leader")
+            bioComponents.append("ðŸ’¥ Community leader")
         }
         
         if user.tier != .rookie {
-            bioComponents.append("🚀 \(user.tier.displayName)")
+            bioComponents.append("ðŸš€ \(user.tier.displayName)")
         }
         
         if user.isVerified {
-            bioComponents.append("✅ Verified")
+            bioComponents.append("âœ… Verified")
         }
         
         let bio = bioComponents.joined(separator: " | ")
@@ -872,13 +850,13 @@ struct ProfileView: View {
     private func generateSampleBio(for user: BasicUserInfo) -> String? {
         switch user.tier {
         case .founder:
-            return "Building the future of social video 🚀 | Creator of Stitch Social"
+            return "Building the future of social video ðŸš€ | Creator of Stitch Social"
         case .coFounder:
-            return "Co-founder at Stitch Social | Passionate about connecting creators 🎬"
+            return "Co-founder at Stitch Social | Passionate about connecting creators ðŸŽ¬"
         case .topCreator:
-            return "Top creator with \(viewModel.formatClout(user.clout)) clout | Making viral content daily ✨"
+            return "Top creator with \(viewModel.formatClout(user.clout)) clout | Making viral content daily âœ¨"
         case .partner:
-            return "Official partner creator | \(viewModel.userVideos.count) threads and counting 🔥"
+            return "Official partner creator | \(viewModel.userVideos.count) threads and counting ðŸ”¥"
         default:
             return nil
         }

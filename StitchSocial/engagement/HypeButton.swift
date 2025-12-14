@@ -5,6 +5,7 @@
 //  Layer 8: UI - Progressive Tapping Hype Button with 3D Effects and Floating Icons
 //  Dependencies: EngagementManager (Layer 6), FloatingIconManager
 //  Features: 3D depth, progressive tapping, TikTok-style floating flame animations
+//  UPDATED: New hybrid clout system with tier-based visual hypes and clout caps
 //
 
 import SwiftUI
@@ -28,23 +29,35 @@ struct ProgressiveHypeButton: View {
     @State private var showingError = false
     @State private var errorMessage = ""
     @State private var pulsePhase: Double = 0
+    @State private var showingCloutCapWarning = false
     
     // MARK: - Computed Properties
     private var engagementState: VideoEngagementState {
         engagementManager.getEngagementState(videoID: videoID, userID: currentUserID)
     }
     
-    private var isInstantMode: Bool {
-        EngagementCalculator.isInstantMode(totalEngagements: engagementState.totalEngagements)
-    }
-    
-    private var tapProgress: Double {
-        engagementState.hypeProgress
-    }
-    
-    // Use the existing EngagementManager property
     private var isProcessing: Bool {
         engagementManager.isProcessingEngagement
+    }
+    
+    // Clout cap tracking
+    private var hasHitCloutCap: Bool {
+        engagementState.hasHitCloutCap(for: userTier)
+    }
+    
+    private var hasHitEngagementCap: Bool {
+        engagementState.hasHitEngagementCap()
+    }
+    
+    private var isNearCloutCap: Bool {
+        let remaining = engagementState.getRemainingCloutAllowance(for: userTier)
+        let max = EngagementConfig.getMaxCloutPerUserPerVideo(for: userTier)
+        return Double(remaining) / Double(max) < 0.2 // Less than 20% remaining
+    }
+    
+    // NEW: Visual hype multiplier for this tier
+    private var visualHypeMultiplier: Int {
+        EngagementConfig.getVisualHypeMultiplier(for: userTier)
     }
     
     var body: some View {
@@ -53,21 +66,21 @@ struct ProgressiveHypeButton: View {
                 // 3D Button Base with depth
                 buttonBase
                 
-                // Progress ring (always show if there's progress)
-                if tapProgress > 0 {
-                    progressRing
-                }
-                
                 // 3D Flame Icon with depth
                 flameIcon
                 
-                // Tap counter (show if there are current taps)
-                if engagementState.hypeCurrentTaps > 0 {
-                    tapCounter
-                }
-                
                 // Hype count display (always shown)
                 hypeCountDisplay
+                
+                // NEW: Clout cap warning overlay
+                if showingCloutCapWarning {
+                    cloutCapWarningOverlay
+                }
+                
+                // NEW: Near cap indicator
+                if isNearCloutCap && !hasHitCloutCap {
+                    nearCapIndicator
+                }
             }
             .scaleEffect(isPressed ? 0.9 : 1.0)
             .rotation3DEffect(
@@ -75,8 +88,10 @@ struct ProgressiveHypeButton: View {
                 axis: (x: 1, y: 0, z: 0)
             )
             .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isPressed)
+            .opacity(hasHitCloutCap || hasHitEngagementCap ? 0.5 : 1.0)
         }
         .buttonStyle(PlainButtonStyle())
+        .disabled(hasHitCloutCap || hasHitEngagementCap)
         .background(
             GeometryReader { geo in
                 Color.clear
@@ -121,11 +136,15 @@ struct ProgressiveHypeButton: View {
                     .opacity(0.4 - Double(layer) * 0.1)
             }
             
-            // Main button background
+            // Main button background with cap indicator color
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [
+                        colors: hasHitCloutCap ? [
+                            Color.red.opacity(0.4),
+                            Color.black.opacity(0.7),
+                            Color.black.opacity(0.9)
+                        ] : [
                             Color.black.opacity(0.4),
                             Color.black.opacity(0.7),
                             Color.black.opacity(0.9)
@@ -140,7 +159,9 @@ struct ProgressiveHypeButton: View {
                     Circle()
                         .stroke(
                             LinearGradient(
-                                colors: isProcessing ?
+                                colors: hasHitCloutCap ?
+                                [.red, .orange] :
+                                isProcessing ?
                                 [.orange, .red, .yellow] : [.orange.opacity(0.6), .red.opacity(0.4)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -155,9 +176,9 @@ struct ProgressiveHypeButton: View {
     
     private var flameIcon: some View {
         ZStack {
-            // Shadow flames for depth (always flame, never bolt)
+            // Shadow flames for depth (always flame)
             ForEach(0..<3, id: \.self) { layer in
-                Image(systemName: "flame.fill")
+                Image(systemName: hasHitCloutCap ? "flame.slash.fill" : "flame.fill")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(
                         LinearGradient(
@@ -173,60 +194,22 @@ struct ProgressiveHypeButton: View {
                     .opacity(0.3 - Double(layer) * 0.1)
             }
             
-            // Main flame icon with gradient (always flame, never bolt)
-            Image(systemName: "flame.fill")
+            // Main flame icon with gradient
+            Image(systemName: hasHitCloutCap ? "flame.slash.fill" : "flame.fill")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [.yellow, .orange, .red, .black.opacity(0.2)],
+                        colors: hasHitCloutCap ?
+                        [.red, .orange, .black.opacity(0.5)] :
+                        [.yellow, .orange, .red, .black.opacity(0.2)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .shadow(color: .orange, radius: 6, x: 0, y: 0)
+                .shadow(color: hasHitCloutCap ? .red : .orange, radius: 6, x: 0, y: 0)
                 .shadow(color: .black.opacity(0.4), radius: 2, x: 1, y: 1)
-                .scaleEffect(1.0 + sin(pulsePhase * 2) * 0.1)
+                .scaleEffect(hasHitCloutCap ? 1.0 : (1.0 + sin(pulsePhase * 2) * 0.1))
         }
-    }
-    
-    private var progressRing: some View {
-        Circle()
-            .trim(from: 0, to: tapProgress)
-            .stroke(
-                LinearGradient(
-                    colors: [.orange, .red, .yellow],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                style: StrokeStyle(lineWidth: 3, lineCap: .round)
-            )
-            .frame(width: 36, height: 36)
-            .rotationEffect(.degrees(-90))
-            .shadow(color: .orange.opacity(0.6), radius: 2, x: 0, y: 0)
-            .animation(.easeInOut(duration: 0.3), value: tapProgress)
-    }
-    
-    private var tapCounter: some View {
-        VStack(spacing: 1) {
-            Text("\(engagementState.hypeCurrentTaps)")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundColor(.white)
-                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
-            
-            Rectangle()
-                .fill(Color.white.opacity(0.8))
-                .frame(width: 8, height: 1)
-                .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 0.5)
-            
-            Text("\(engagementState.hypeRequiredTaps)")
-                .font(.system(size: 8, weight: .medium))
-                .foregroundColor(.white.opacity(0.9))
-                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
-        }
-        .offset(y: -35)
-        .transition(.scale.combined(with: .opacity))
-        .animation(.spring(response: 0.2, dampingFraction: 0.8), value: engagementState.hypeCurrentTaps)
-        .animation(.spring(response: 0.2, dampingFraction: 0.8), value: engagementState.hypeRequiredTaps)
     }
     
     private var hypeCountDisplay: some View {
@@ -235,6 +218,34 @@ struct ProgressiveHypeButton: View {
             .foregroundColor(.white)
             .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
             .offset(y: -35)
+    }
+    
+    // NEW: Near cap indicator
+    private var nearCapIndicator: some View {
+        Circle()
+            .stroke(Color.orange, lineWidth: 2)
+            .frame(width: 48, height: 48)
+            .opacity(0.6 + sin(pulsePhase * 3) * 0.3)
+    }
+    
+    // NEW: Clout cap warning overlay
+    private var cloutCapWarningOverlay: some View {
+        ZStack {
+            Circle()
+                .fill(Color.red.opacity(0.3))
+                .frame(width: 50, height: 50)
+                .overlay(
+                    Circle()
+                        .stroke(Color.red, lineWidth: 2)
+                )
+            
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(.red)
+                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
+        }
+        .scaleEffect(1.2)
+        .transition(.scale.combined(with: .opacity))
     }
     
     private var errorMessageOverlay: some View {
@@ -265,6 +276,18 @@ struct ProgressiveHypeButton: View {
     
     /// Handle tap interaction with floating flame spawning
     private func handleTap() {
+        // Check caps first
+        if hasHitCloutCap {
+            showCloutCapWarning()
+            return
+        }
+        
+        if hasHitEngagementCap {
+            showError("Maximum engagements reached for this video")
+            triggerErrorHaptic()
+            return
+        }
+        
         withAnimation(.spring(response: 0.1, dampingFraction: 0.6)) {
             isPressed = true
         }
@@ -281,13 +304,28 @@ struct ProgressiveHypeButton: View {
         let impact = UIImpactFeedbackGenerator(style: .heavy)
         impact.impactOccurred()
         
-        // Spawn floating flame from button position
-        let isFirstFounderTap = userTier == .founder && engagementState.totalEngagements == 0
-        iconManager.spawnHypeIcon(
-            from: buttonPosition,
-            userTier: userTier,
-            isFirstFounderTap: isFirstFounderTap
-        )
+        // Determine if this is first engagement for special effects
+        let isFirstEngagement = engagementState.hypeEngagements == 0
+        let isPremiumTier = EngagementConfig.hasFirstTapBonus(tier: userTier)
+        
+        // Spawn floating flame from button position (with tier-based multiplier)
+        if isFirstEngagement && isPremiumTier {
+            // Premium tier first tap - spawn multiple flames
+            iconManager.spawnMultipleIcons(
+                from: buttonPosition,
+                count: min(visualHypeMultiplier / 4, 5), // Scale particle count with multiplier
+                iconType: .hype,
+                animationType: .founderExplosion,
+                userTier: userTier
+            )
+        } else {
+            // Regular tap
+            iconManager.spawnHypeIcon(
+                from: buttonPosition,
+                userTier: userTier,
+                isFirstFounderTap: false
+            )
+        }
         
         // Process engagement using existing manager
         Task {
@@ -304,18 +342,9 @@ struct ProgressiveHypeButton: View {
                         let successImpact = UIImpactFeedbackGenerator(style: .rigid)
                         successImpact.impactOccurred()
                         
-                        // Spawn additional celebration effects for special cases
-                        if isFirstFounderTap {
-                            // Extra explosion for founder first tap
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                iconManager.spawnMultipleIcons(
-                                    from: buttonPosition,
-                                    count: 3,
-                                    iconType: .hype,
-                                    animationType: .founderExplosion,
-                                    userTier: userTier
-                                )
-                            }
+                        // Check if near cap after this engagement
+                        if isNearCloutCap {
+                            showCloutNearCapNotice()
                         }
                     }
                 }
@@ -332,6 +361,31 @@ struct ProgressiveHypeButton: View {
                 isPressed = false
             }
         }
+    }
+    
+    /// Show clout cap warning
+    private func showCloutCapWarning() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            showingCloutCapWarning = true
+        }
+        
+        let warningImpact = UINotificationFeedbackGenerator()
+        warningImpact.notificationOccurred(.warning)
+        
+        let maxClout = EngagementConfig.getMaxCloutPerUserPerVideo(for: userTier)
+        showError("You've given max clout (\(maxClout)) to this video!")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeOut(duration: 0.3)) {
+                showingCloutCapWarning = false
+            }
+        }
+    }
+    
+    /// Show near cap notice
+    private func showCloutNearCapNotice() {
+        let remaining = engagementState.getRemainingCloutAllowance(for: userTier)
+        showError("Only \(remaining) clout remaining for this video")
     }
     
     /// Show error message

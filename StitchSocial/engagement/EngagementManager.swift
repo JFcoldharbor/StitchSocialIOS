@@ -2,61 +2,18 @@
 //  EngagementManager.swift
 //  StitchSocial
 //
-//  Layer 6: Coordination - Main Engagement Processing Manager WITH FIREBASE PERSISTENCE
-//  Dependencies: VideoEngagementService (Layer 4), VideoService (Layer 4), UserService (Layer 4)
-//  Features: Progressive tapping, hype rating management, notification integration, FIREBASE PERSISTENCE
-//  FIXED: Added NotificationCenter posts to trigger UI updates after engagement
+//  Layer 6: Coordination - Main Engagement Processing Manager
+//  Dependencies: VideoEngagementService, VideoService, UserService
+//  Features: Progressive tapping, hype rating management, INSTANT ENGAGEMENTS
+//  UPDATED: Simplified to instant engagements (no progressive tapping)
 //
 
 import Foundation
 import SwiftUI
 import FirebaseAuth
 
-/// Simple video engagement data for UI display
-struct VideoEngagement: Codable, Identifiable {
-    let id: String
-    let videoID: String
-    let creatorID: String
-    var hypeCount: Int
-    var coolCount: Int
-    var shareCount: Int
-    var replyCount: Int
-    var viewCount: Int
-    var lastEngagementAt: Date
-    
-    init(videoID: String, creatorID: String, hypeCount: Int = 0, coolCount: Int = 0, shareCount: Int = 0, replyCount: Int = 0, viewCount: Int = 0, lastEngagementAt: Date = Date()) {
-        self.id = videoID
-        self.videoID = videoID
-        self.creatorID = creatorID
-        self.hypeCount = hypeCount
-        self.coolCount = coolCount
-        self.shareCount = shareCount
-        self.replyCount = replyCount
-        self.viewCount = viewCount
-        self.lastEngagementAt = lastEngagementAt
-    }
-    
-    /// Total engagement count
-    var totalEngagements: Int {
-        return hypeCount + coolCount
-    }
-    
-    /// Engagement ratio (hype vs total)
-    var engagementRatio: Double {
-        let total = totalEngagements
-        return total > 0 ? Double(hypeCount) / Double(total) : 0.5
-    }
-}
+// MARK: - Engagement Manager
 
-/// Hype rating status for UI
-struct HypeRatingStatus {
-    let canEngage: Bool
-    let currentPercent: Double
-    let message: String
-    let color: String
-}
-
-/// Main engagement processing manager WITH FIREBASE PERSISTENCE
 @MainActor
 class EngagementManager: ObservableObject {
     
@@ -87,7 +44,6 @@ class EngagementManager: ObservableObject {
         self.videoService = videoService
         self.userService = userService
         
-        // Create VideoEngagementService if not provided
         if let providedService = videoEngagementService {
             self.videoEngagementService = providedService
         } else {
@@ -97,12 +53,12 @@ class EngagementManager: ObservableObject {
             )
         }
         
-        print("🎯 ENGAGEMENT MANAGER: Initialized with VideoEngagementService + Firebase persistence")
+        print("🎯 ENGAGEMENT MANAGER: Initialized with instant engagements")
     }
     
     // MARK: - Public Interface
     
-    /// Get or create engagement state for video/user pair WITH FIREBASE LOADING
+    /// Get or create engagement state for video/user pair
     func getEngagementState(videoID: String, userID: String) -> VideoEngagementState {
         let key = "\(videoID)_\(userID)"
         
@@ -110,46 +66,17 @@ class EngagementManager: ObservableObject {
             return existingState
         }
         
-        // Try to load from Firebase in background
         Task {
             await loadEngagementStateFromFirebase(videoID: videoID, userID: userID)
         }
         
-        // Return new state for immediate use
         let newState = VideoEngagementState(videoID: videoID, userID: userID)
         engagementStates[key] = newState
         return newState
     }
     
-    /// Load engagement state from Firebase
-    private func loadEngagementStateFromFirebase(videoID: String, userID: String) async {
-        let key = "\(videoID)_\(userID)"
-        
-        do {
-            if let loadedState = try await videoEngagementService.loadEngagementState(key: key) {
-                await MainActor.run {
-                    engagementStates[key] = loadedState
-                    print("🔄 ENGAGEMENT MANAGER: Loaded state from Firebase for \(key)")
-                }
-            }
-        } catch {
-            print("⚠️ ENGAGEMENT MANAGER: Failed to load state from Firebase for \(key): \(error)")
-        }
-    }
+    // MARK: - Process Hype (instant engagement)
     
-    /// Save engagement state to Firebase
-    private func saveEngagementStateToFirebase(_ state: VideoEngagementState) async {
-        let key = "\(state.videoID)_\(state.userID)"
-        
-        do {
-            try await videoEngagementService.saveEngagementState(key: key, state: state)
-            print("💾 ENGAGEMENT MANAGER: Saved state to Firebase for \(key)")
-        } catch {
-            print("❌ ENGAGEMENT MANAGER: Failed to save state to Firebase for \(key): \(error)")
-        }
-    }
-    
-    /// Process hype engagement - returns true if successful WITH FIREBASE PERSISTENCE
     func processHype(videoID: String, userID: String, userTier: UserTier) async throws -> Bool {
         
         // Rate limiting check
@@ -158,65 +85,83 @@ class EngagementManager: ObservableObject {
             throw StitchError.validationError("Please wait before engaging again")
         }
         
+        isProcessingEngagement = true
+        defer { isProcessingEngagement = false }
+        
+        lastEngagementTime[videoID] = Date()
+        
+        var state = getEngagementState(videoID: videoID, userID: userID)
+        
+        // Check caps
+        if state.hasHitCloutCap(for: userTier) {
+            throw StitchError.validationError("Clout cap reached for this video")
+        }
+        
+        if state.hasHitEngagementCap() {
+            throw StitchError.validationError("Engagement cap reached for this video")
+        }
+        
         // Check hype rating
         let cost = EngagementCalculator.calculateHypeRatingCost(tier: userTier)
         guard EngagementCalculator.canAffordEngagement(currentHypeRating: userHypeRating, cost: cost) else {
             throw StitchError.validationError("Insufficient hype rating")
         }
         
-        isProcessingEngagement = true
-        defer { isProcessingEngagement = false }
+        // Instant engagement - no tapping progress
+        state.addHypeEngagement()
         
-        lastEngagementTime[videoID] = Date()
+        // Deduct hype rating
+        userHypeRating = EngagementCalculator.applyHypeRatingCost(currentRating: userHypeRating, cost: cost)
         
-        // Get engagement state (will load from Firebase if needed)
-        var state = getEngagementState(videoID: videoID, userID: userID)
+        // Calculate rewards
+        let visualHypeIncrement = EngagementConfig.getVisualHypeMultiplier(for: userTier)
+        let tapNumber = state.hypeEngagements
+        let isFirstEngagement = (state.hypeEngagements == 1)
+        let currentCloutFromUser = state.totalCloutGiven
         
-        // Process tap
-        let wasComplete = state.addHypeTap()
+        let cloutAwarded = EngagementCalculator.calculateCloutReward(
+            giverTier: userTier,
+            tapNumber: tapNumber,
+            isFirstEngagement: isFirstEngagement,
+            currentCloutFromThisUser: currentCloutFromUser
+        )
         
-        // Update local state
+        // Record clout
+        state.recordCloutAwarded(cloutAwarded, isHype: true)
         engagementStates["\(videoID)_\(userID)"] = state
-        
-        // ALWAYS SAVE STATE TO FIREBASE (for persistence)
         await saveEngagementStateToFirebase(state)
         
-        if wasComplete {
-            // Engagement complete - deduct hype rating
-            userHypeRating = EngagementCalculator.applyHypeRatingCost(currentRating: userHypeRating, cost: cost)
+        // UPDATE VIDEO IN FIREBASE - fetch, increment, update
+        do {
+            let video = try await videoService.getVideo(id: videoID)
+            let newHypeCount = video.hypeCount + visualHypeIncrement
             
-            // Use VideoEngagementService to complete engagement
-            // This handles: video update, clout award, milestone detection, and notifications
-            let result = try await videoEngagementService.processProgressiveTap(
+            try await videoService.updateVideoEngagement(
                 videoID: videoID,
-                userID: userID,
-                engagementType: .hype,
-                userTier: userTier
+                hypeCount: newHypeCount,
+                coolCount: video.coolCount,
+                viewCount: video.viewCount,
+                temperature: video.temperature,
+                lastEngagementAt: Date()
             )
-            
-            // Mark engagement complete and save again
-            state.completeHypeEngagement()
-            engagementStates["\(videoID)_\(userID)"] = state
-            await saveEngagementStateToFirebase(state)
-            
-            print("🔥 ENGAGEMENT MANAGER: Hype engagement completed and persisted")
-            print("🔥 Result: \(result.message)")
-            
-            // ✅ FIXED: Post notification to trigger UI update
-            NotificationCenter.default.post(
-                name: NSNotification.Name("VideoEngagementUpdated"),
-                object: nil,
-                userInfo: ["videoID": videoID]
-            )
-            
-            return true
+        } catch {
+            print("❌ Failed to update video: \(error)")
         }
         
-        print("🔥 ENGAGEMENT MANAGER: Hype tap progress saved to Firebase")
-        return false // Still tapping
+        print("🔥 HYPE: +\(visualHypeIncrement) hypes, +\(cloutAwarded) clout")
+        
+        // Post notification
+        NotificationCenter.default.post(
+            name: NSNotification.Name("VideoEngagementUpdated"),
+            object: nil,
+            userInfo: ["videoID": videoID]
+        )
+        
+        return true
     }
     
-    /// Process cool engagement - returns true if successful WITH FIREBASE PERSISTENCE
+    // MARK: - Process Cool (instant engagement)
+    
     func processCool(videoID: String, userID: String, userTier: UserTier) async throws -> Bool {
         
         // Rate limiting check
@@ -230,51 +175,85 @@ class EngagementManager: ObservableObject {
         
         lastEngagementTime[videoID] = Date()
         
-        // Get engagement state (will load from Firebase if needed)
         var state = getEngagementState(videoID: videoID, userID: userID)
         
-        // Process tap
-        let wasComplete = state.addCoolTap()
-        
-        // Update local state
-        engagementStates["\(videoID)_\(userID)"] = state
-        
-        // ALWAYS SAVE STATE TO FIREBASE (for persistence)
-        await saveEngagementStateToFirebase(state)
-        
-        if wasComplete {
-            // Use VideoEngagementService to complete engagement
-            // This handles: video update, clout award, milestone detection, and notifications
-            let result = try await videoEngagementService.processProgressiveTap(
-                videoID: videoID,
-                userID: userID,
-                engagementType: .cool,
-                userTier: userTier
-            )
-            
-            // Mark engagement complete and save again
-            state.completeCoolEngagement()
-            engagementStates["\(videoID)_\(userID)"] = state
-            await saveEngagementStateToFirebase(state)
-            
-            print("❄️ ENGAGEMENT MANAGER: Cool engagement completed and persisted")
-            print("❄️ Result: \(result.message)")
-            
-            // ✅ FIXED: Post notification to trigger UI update
-            NotificationCenter.default.post(
-                name: NSNotification.Name("VideoEngagementUpdated"),
-                object: nil,
-                userInfo: ["videoID": videoID]
-            )
-            
-            return true
+        // Check engagement cap
+        if state.hasHitEngagementCap() {
+            throw StitchError.validationError("Engagement cap reached for this video")
         }
         
-        print("❄️ ENGAGEMENT MANAGER: Cool tap progress saved to Firebase")
-        return false // Still tapping
+        // Instant engagement - no tapping progress
+        state.addCoolEngagement()
+        
+        // Calculate rewards
+        let visualCoolIncrement = 1  // Cool is always 1
+        let tapNumber = state.coolEngagements
+        let cloutPenalty = EngagementCalculator.calculateCoolPenalty()
+        
+        // Record clout (negative)
+        state.recordCloutAwarded(cloutPenalty, isHype: false)
+        engagementStates["\(videoID)_\(userID)"] = state
+        await saveEngagementStateToFirebase(state)
+        
+        // UPDATE VIDEO IN FIREBASE - fetch, increment, update
+        do {
+            let video = try await videoService.getVideo(id: videoID)
+            let newCoolCount = video.coolCount + visualCoolIncrement
+            
+            try await videoService.updateVideoEngagement(
+                videoID: videoID,
+                hypeCount: video.hypeCount,
+                coolCount: newCoolCount,
+                viewCount: video.viewCount,
+                temperature: video.temperature,
+                lastEngagementAt: Date()
+            )
+        } catch {
+            print("❌ Failed to update video: \(error)")
+        }
+        
+        print("❄️ COOL: +\(visualCoolIncrement) cool, \(cloutPenalty) clout")
+        
+        // Post notification
+        NotificationCenter.default.post(
+            name: NSNotification.Name("VideoEngagementUpdated"),
+            object: nil,
+            userInfo: ["videoID": videoID]
+        )
+        
+        return true
     }
     
-    /// Get hype rating status for UI
+    // MARK: - Firebase Persistence
+    
+    private func loadEngagementStateFromFirebase(videoID: String, userID: String) async {
+        let key = "\(videoID)_\(userID)"
+        
+        do {
+            if let loadedState = try await videoEngagementService.loadEngagementState(key: key) {
+                await MainActor.run {
+                    engagementStates[key] = loadedState
+                    print("📄 Loaded state from Firebase for \(key)")
+                }
+            }
+        } catch {
+            print("⚠️ Failed to load state from Firebase: \(error)")
+        }
+    }
+    
+    private func saveEngagementStateToFirebase(_ state: VideoEngagementState) async {
+        let key = "\(state.videoID)_\(state.userID)"
+        
+        do {
+            try await videoEngagementService.saveEngagementState(key: key, state: state)
+            print("💾 Saved state to Firebase for \(key)")
+        } catch {
+            print("❌ Failed to save state to Firebase: \(error)")
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
     func getHypeRatingStatus() -> HypeRatingStatus {
         let canEngage = userHypeRating >= 1.0
         
@@ -306,33 +285,27 @@ class EngagementManager: ObservableObject {
         )
     }
     
-    /// Check if currently processing engagement
     func isCurrentlyProcessing(videoID: String, userID: String) -> Bool {
         return isProcessingEngagement
     }
     
-    /// Get current milestone for UI display
     func getCurrentMilestone(videoID: String, userID: String) -> TapMilestone? {
-        let state = getEngagementState(videoID: videoID, userID: userID)
-        let progress = state.hypeProgress
-        return EngagementCalculator.detectMilestone(progress: progress)
+        // No milestones with instant engagements
+        return nil
     }
     
-    /// Clear milestone display
     func clearMilestone(videoID: String, userID: String) {
-        // No-op for now - milestones are calculated dynamically
+        // No-op for now
     }
     
-    /// Set processing state
     func setProcessing(videoID: String, userID: String, isProcessing: Bool) {
         self.isProcessingEngagement = isProcessing
     }
     
-    // MARK: - Preload States for Performance
+    // MARK: - Preload & Cleanup
     
-    /// Preload engagement states for multiple videos (for feed performance)
     func preloadEngagementStates(videoIDs: [String], userID: String) async {
-        print("📦 ENGAGEMENT MANAGER: Preloading \(videoIDs.count) engagement states")
+        print("📦 Preloading \(videoIDs.count) engagement states")
         
         await withTaskGroup(of: Void.self) { group in
             for videoID in videoIDs {
@@ -342,10 +315,9 @@ class EngagementManager: ObservableObject {
             }
         }
         
-        print("✅ ENGAGEMENT MANAGER: Preloading complete")
+        print("✅ Preloading complete")
     }
     
-    /// Clear old engagement states (memory management)
     func clearOldStates() {
         let cutoffTime = Date().addingTimeInterval(-3600) // 1 hour ago
         
@@ -358,7 +330,16 @@ class EngagementManager: ObservableObject {
         }
         
         if !keysToRemove.isEmpty {
-            print("🧹 ENGAGEMENT MANAGER: Cleared \(keysToRemove.count) old states")
+            print("🧹 Cleared \(keysToRemove.count) old states")
         }
     }
+}
+
+// MARK: - Hype Rating Status
+
+struct HypeRatingStatus {
+    let canEngage: Bool
+    let currentPercent: Double
+    let message: String
+    let color: String
 }

@@ -16,6 +16,10 @@ import FirebaseAuth
 @MainActor
 class FollowManager: ObservableObject {
     
+    // MARK: - Singleton
+    
+    static let shared = FollowManager()
+    
     // MARK: - Published State
     
     /// Follow states for all users: [userID: isFollowing]
@@ -42,9 +46,9 @@ class FollowManager: ObservableObject {
     
     // MARK: - Initialization
     
-    init(notificationService: NotificationService? = nil) {
+    private init(notificationService: NotificationService? = nil) {
         self.notificationService = notificationService ?? NotificationService()
-        print("🔗 FOLLOW MANAGER: Initialized with auto-follow protection + notifications")
+        print("🔗 FOLLOW MANAGER: Singleton initialized with auto-follow protection + notifications")
     }
     
     // MARK: - Public Interface
@@ -61,12 +65,21 @@ class FollowManager: ObservableObject {
             return
         }
         
+        // Prevent duplicate requests
+        guard !loadingStates.contains(userID) else {
+            print("⏳ FOLLOW MANAGER: Already processing request for \(userID)")
+            return
+        }
+        
         // Start loading state
         loadingStates.insert(userID)
         
         // Get current state before optimistic update
         let wasFollowing = followingStates[userID] ?? false
         let newFollowingState = !wasFollowing
+        
+        print("🔗 FOLLOW MANAGER: Toggle follow for \(userID)")
+        print("   Current state: \(wasFollowing) → New state: \(newFollowingState)")
         
         // CHECK FOR UNFOLLOW PROTECTION (James Fortune only)
         if wasFollowing && !newFollowingState {
@@ -85,16 +98,11 @@ class FollowManager: ObservableObject {
         
         // Optimistic UI update (immediate visual feedback)
         followingStates[userID] = newFollowingState
-        
-        // CRITICAL FIX: Force UI update immediately
-        DispatchQueue.main.async {
-            self.objectWillChange.send()
-        }
+        objectWillChange.send() // Force immediate UI update
         
         // Haptic feedback for better UX
         triggerHapticFeedback()
         
-        print("🔗 FOLLOW MANAGER: \(newFollowingState ? "Following" : "Unfollowing") user \(userID)")
         print("🔗 FOLLOW MANAGER: Optimistic state set to: \(newFollowingState)")
         
         do {
@@ -149,6 +157,7 @@ class FollowManager: ObservableObject {
         } catch {
             // Revert optimistic UI update on error
             followingStates[userID] = wasFollowing
+            objectWillChange.send() // Force UI revert
             
             let errorMessage = "Failed to \(newFollowingState ? "follow" : "unfollow") user: \(error.localizedDescription)"
             lastError = errorMessage
@@ -157,10 +166,16 @@ class FollowManager: ObservableObject {
             
             // Notify error callback
             onFollowError?(userID, error)
+            
+            // Verify actual state from Firebase after error
+            await refreshFollowState(for: userID)
         }
         
-        // Clear loading state
+        // Clear loading state and force final UI update
         loadingStates.remove(userID)
+        objectWillChange.send()
+        
+        print("🏁 FOLLOW MANAGER: Toggle complete for \(userID). Final state: \(followingStates[userID] ?? false)")
     }
     
     // MARK: - Unfollow Protection for Special Users

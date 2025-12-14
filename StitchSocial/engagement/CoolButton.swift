@@ -5,6 +5,7 @@
 //  Layer 8: UI - Progressive Tapping Cool Button with 3D Effects and Floating Icons
 //  Dependencies: EngagementManager (Layer 6), FloatingIconManager
 //  Features: 3D depth, progressive tapping, TikTok-style floating snowflake animations
+//  UPDATED: New hybrid clout system with tier-based visual hypes and clout caps
 //
 
 import SwiftUI
@@ -29,23 +30,25 @@ struct ProgressiveCoolButton: View {
     @State private var errorMessage = ""
     @State private var shimmerPhase: Double = 0
     @State private var showingTrollWarning = false
+    @State private var showingCloutCapWarning = false
     
     // MARK: - Computed Properties
     private var engagementState: VideoEngagementState {
         engagementManager.getEngagementState(videoID: videoID, userID: currentUserID)
     }
     
-    private var isInstantMode: Bool {
-        EngagementCalculator.isInstantMode(totalEngagements: engagementState.totalEngagements)
-    }
-    
-    private var tapProgress: Double {
-        engagementState.coolProgress
-    }
-    
-    // Use the existing EngagementManager property
     private var isProcessing: Bool {
         engagementManager.isProcessingEngagement
+    }
+    
+    // Engagement cap tracking
+    private var hasHitEngagementCap: Bool {
+        engagementState.hasHitEngagementCap()
+    }
+    
+    // NEW: Visual hype multiplier for this tier (Cool uses same multipliers)
+    private var visualCoolMultiplier: Int {
+        EngagementConfig.getVisualHypeMultiplier(for: userTier)
     }
     
     var body: some View {
@@ -54,18 +57,8 @@ struct ProgressiveCoolButton: View {
                 // 3D Button Base
                 coolButtonBase
                 
-                // Progress ring (always show if there's progress)
-                if tapProgress > 0 {
-                    coolProgressRing
-                }
-                
                 // 3D Snowflake Icon
                 snowflakeIcon
-                
-                // Tap counter (show if there are current taps)
-                if engagementState.coolCurrentTaps > 0 {
-                    coolTapCounter
-                }
                 
                 // Cool count display (always shown)
                 coolCountDisplay
@@ -74,6 +67,11 @@ struct ProgressiveCoolButton: View {
                 if showingTrollWarning {
                     trollWarningOverlay
                 }
+                
+                // NEW: Engagement cap warning
+                if showingCloutCapWarning {
+                    cloutCapWarningOverlay
+                }
             }
             .scaleEffect(isPressed ? 0.9 : 1.0)
             .rotation3DEffect(
@@ -81,8 +79,10 @@ struct ProgressiveCoolButton: View {
                 axis: (x: 1, y: 0, z: 0)
             )
             .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isPressed)
+            .opacity(hasHitEngagementCap ? 0.5 : 1.0)
         }
         .buttonStyle(PlainButtonStyle())
+        .disabled(hasHitEngagementCap)
         .background(
             GeometryReader { geo in
                 Color.clear
@@ -126,11 +126,15 @@ struct ProgressiveCoolButton: View {
                     .opacity(0.3 - Double(layer) * 0.075)
             }
             
-            // Main button background
+            // Main button background with cap indicator
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: [
+                        colors: hasHitEngagementCap ? [
+                            Color.red.opacity(0.4),
+                            Color.blue.opacity(0.3),
+                            Color.black.opacity(0.8)
+                        ] : [
                             Color.black.opacity(0.4),
                             Color.blue.opacity(0.3),
                             Color.black.opacity(0.8)
@@ -145,7 +149,9 @@ struct ProgressiveCoolButton: View {
                     Circle()
                         .stroke(
                             LinearGradient(
-                                colors: isProcessing ?
+                                colors: hasHitEngagementCap ?
+                                [.red, .orange] :
+                                isProcessing ?
                                 [.cyan, .blue, .white] : [.cyan.opacity(0.8), .blue.opacity(0.6), .white.opacity(0.4)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -160,9 +166,9 @@ struct ProgressiveCoolButton: View {
     
     private var snowflakeIcon: some View {
         ZStack {
-            // Shadow snowflakes for depth (always snowflake, never tornado)
+            // Shadow snowflakes for depth (always snowflake)
             ForEach(0..<3, id: \.self) { layer in
-                Image(systemName: "snowflake")
+                Image(systemName: hasHitEngagementCap ? "snowflake.slash" : "snowflake")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(
                         LinearGradient(
@@ -178,60 +184,22 @@ struct ProgressiveCoolButton: View {
                     .opacity(0.3 - Double(layer) * 0.1)
             }
             
-            // Main snowflake icon with gradient (always snowflake, never tornado)
-            Image(systemName: "snowflake")
+            // Main snowflake icon with gradient
+            Image(systemName: hasHitEngagementCap ? "snowflake.slash" : "snowflake")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [.white, .cyan, .blue, .black.opacity(0.1)],
+                        colors: hasHitEngagementCap ?
+                        [.red, .orange, .black.opacity(0.5)] :
+                        [.white, .cyan, .blue, .black.opacity(0.1)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .shadow(color: .cyan, radius: 6, x: 0, y: 0)
+                .shadow(color: hasHitEngagementCap ? .red : .cyan, radius: 6, x: 0, y: 0)
                 .shadow(color: .black.opacity(0.3), radius: 2, x: 1, y: 1)
-                .rotationEffect(.degrees(shimmerPhase * 2))
+                .rotationEffect(.degrees(hasHitEngagementCap ? 0 : shimmerPhase * 2))
         }
-    }
-    
-    private var coolProgressRing: some View {
-        Circle()
-            .trim(from: 0, to: tapProgress)
-            .stroke(
-                LinearGradient(
-                    colors: [.cyan, .blue, .white],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                style: StrokeStyle(lineWidth: 3, lineCap: .round)
-            )
-            .frame(width: 36, height: 36)
-            .rotationEffect(.degrees(-90))
-            .shadow(color: .cyan.opacity(0.6), radius: 2, x: 0, y: 0)
-            .animation(.easeInOut(duration: 0.3), value: tapProgress)
-    }
-    
-    private var coolTapCounter: some View {
-        VStack(spacing: 1) {
-            Text("\(engagementState.coolCurrentTaps)")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundColor(.white)
-                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
-            
-            Rectangle()
-                .fill(Color.cyan.opacity(0.8))
-                .frame(width: 8, height: 1)
-                .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 0.5)
-            
-            Text("\(engagementState.coolRequiredTaps)")
-                .font(.system(size: 8, weight: .medium))
-                .foregroundColor(.white.opacity(0.9))
-                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
-        }
-        .offset(y: -35)
-        .transition(.scale.combined(with: .opacity))
-        .animation(.spring(response: 0.2, dampingFraction: 0.8), value: engagementState.coolCurrentTaps)
-        .animation(.spring(response: 0.2, dampingFraction: 0.8), value: engagementState.coolRequiredTaps)
     }
     
     private var coolCountDisplay: some View {
@@ -255,6 +223,26 @@ struct ProgressiveCoolButton: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 16, weight: .bold))
                 .foregroundColor(.red)
+                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
+        }
+        .scaleEffect(1.2)
+        .transition(.scale.combined(with: .opacity))
+    }
+    
+    // NEW: Clout cap warning overlay
+    private var cloutCapWarningOverlay: some View {
+        ZStack {
+            Circle()
+                .fill(Color.orange.opacity(0.3))
+                .frame(width: 50, height: 50)
+                .overlay(
+                    Circle()
+                        .stroke(Color.orange, lineWidth: 2)
+                )
+            
+            Image(systemName: "hand.raised.fill")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(.orange)
                 .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
         }
         .scaleEffect(1.2)
@@ -289,6 +277,12 @@ struct ProgressiveCoolButton: View {
     
     /// Handle tap interaction with floating snowflake spawning
     private func handleTap() {
+        // Check engagement cap
+        if hasHitEngagementCap {
+            showEngagementCapWarning()
+            return
+        }
+        
         withAnimation(.spring(response: 0.1, dampingFraction: 0.6)) {
             isPressed = true
         }
@@ -303,13 +297,28 @@ struct ProgressiveCoolButton: View {
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.impactOccurred()
         
+        // Determine if this is first engagement for special effects
+        let isFirstEngagement = engagementState.coolEngagements == 0
+        let isPremiumTier = EngagementConfig.hasFirstTapBonus(tier: userTier)
+        
         // Spawn floating snowflake from button position
-        let isFirstFounderTap = userTier == .founder && engagementState.totalEngagements == 0
-        iconManager.spawnCoolIcon(
-            from: buttonPosition,
-            userTier: userTier,
-            isFirstFounderTap: isFirstFounderTap
-        )
+        if isFirstEngagement && isPremiumTier {
+            // Premium tier first tap - spawn multiple snowflakes
+            iconManager.spawnMultipleIcons(
+                from: buttonPosition,
+                count: min(visualCoolMultiplier / 4, 5), // Scale particle count with multiplier
+                iconType: .cool,
+                animationType: .founderExplosion,
+                userTier: userTier
+            )
+        } else {
+            // Regular tap
+            iconManager.spawnCoolIcon(
+                from: buttonPosition,
+                userTier: userTier,
+                isFirstFounderTap: false
+            )
+        }
         
         // Process engagement using existing manager
         Task {
@@ -325,20 +334,6 @@ struct ProgressiveCoolButton: View {
                         // Success haptic
                         let successImpact = UIImpactFeedbackGenerator(style: .light)
                         successImpact.impactOccurred()
-                        
-                        // Spawn additional celebration effects for special cases
-                        if isFirstFounderTap {
-                            // Extra ice explosion for founder first tap
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                iconManager.spawnMultipleIcons(
-                                    from: buttonPosition,
-                                    count: 3,
-                                    iconType: .cool,
-                                    animationType: .founderExplosion,
-                                    userTier: userTier
-                                )
-                            }
-                        }
                     }
                 }
                 
@@ -358,12 +353,11 @@ struct ProgressiveCoolButton: View {
     
     /// Check if should show troll warning
     private func shouldShowTrollWarning() -> Bool {
-        // Simple troll detection - rapid cool taps
-        let recentTaps = engagementState.coolCurrentTaps
+        // Simple troll detection - excessive cool engagements
         let totalCools = engagementState.coolEngagements
         
-        // Warn if user is spamming cool on their own content or excessive cooling
-        return totalCools > 10 && recentTaps > 5
+        // Warn if user is spamming cool on content
+        return totalCools > 10
     }
     
     /// Show troll warning
@@ -380,6 +374,24 @@ struct ProgressiveCoolButton: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             withAnimation(.easeOut(duration: 0.3)) {
                 showingTrollWarning = false
+            }
+        }
+    }
+    
+    /// Show engagement cap warning
+    private func showEngagementCapWarning() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            showingCloutCapWarning = true
+        }
+        
+        let warningImpact = UINotificationFeedbackGenerator()
+        warningImpact.notificationOccurred(.warning)
+        
+        showError("Maximum engagements reached for this video!")
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeOut(duration: 0.3)) {
+                showingCloutCapWarning = false
             }
         }
     }

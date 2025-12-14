@@ -43,7 +43,7 @@ struct NotificationView: View {
     
     @StateObject private var viewModel: NotificationViewModel
     @StateObject private var discoveryService = DiscoveryService()
-    @StateObject private var followManager = FollowManager()
+    @ObservedObject var followManager = FollowManager.shared
     @EnvironmentObject private var authService: AuthService
     
     // MARK: - UI State
@@ -60,8 +60,13 @@ struct NotificationView: View {
     
     // MARK: - Navigation State
     
-    @State private var selectedUserID: String?
-    @State private var showingProfile = false
+    /// Wrapper for profile presentation to work with item-based sheet
+    struct ProfilePresentation: Identifiable {
+        let id: String  // userID
+        var userID: String { id }
+    }
+    
+    @State private var profilePresentation: ProfilePresentation?
     @State private var selectedVideoID: String?
     @State private var showingVideoThread = false
     
@@ -120,10 +125,10 @@ struct NotificationView: View {
         .onDisappear {
             stopAutoScroll()
         }
-        .sheet(isPresented: $showingProfile) {
-            if let userID = selectedUserID {
-                CreatorProfileView(userID: userID)
-            }
+        // FIXED: Use item-based sheet presentation to avoid race condition
+        // The userID is guaranteed to be non-nil when the sheet presents
+        .sheet(item: $profilePresentation) { presentation in
+            CreatorProfileView(userID: presentation.userID)
         }
         .sheet(isPresented: $showingVideoThread) {
             if let videoID = selectedVideoID {
@@ -261,8 +266,7 @@ struct NotificationView: View {
                     users: recentUsers,
                     currentIndex: $currentAvatarIndex,
                     onUserTap: { userID in
-                        selectedUserID = userID
-                        showingProfile = true
+                        profilePresentation = ProfilePresentation(id: userID)
                     }
                 )
             }
@@ -298,8 +302,7 @@ struct NotificationView: View {
                     videos: Array(leaderboardVideos.prefix(5)),
                     onVideoTap: { videoID in
                         if let video = leaderboardVideos.first(where: { $0.id == videoID }) {
-                            selectedUserID = video.creatorID
-                            showingProfile = true
+                            profilePresentation = ProfilePresentation(id: video.creatorID)
                         }
                     }
                 )
@@ -402,8 +405,7 @@ struct NotificationView: View {
             onTap: { await handleNotificationTap(notification) },
             onMarkAsRead: { await viewModel.markAsRead(notification.id) },
             onProfileTap: { senderID in
-                selectedUserID = senderID
-                showingProfile = true
+                profilePresentation = ProfilePresentation(id: senderID)
             }
         )
         .environmentObject(followManager)
@@ -482,7 +484,7 @@ struct NotificationView: View {
         let senderIDs = viewModel.filteredNotifications.map { $0.senderID }
         if !senderIDs.isEmpty {
             await followManager.loadFollowStates(for: senderIDs)
-            print("✅ NOTIFICATION VIEW: Loaded follow states for \(senderIDs.count) senders")
+            print("âœ… NOTIFICATION VIEW: Loaded follow states for \(senderIDs.count) senders")
         }
     }
     
@@ -498,11 +500,11 @@ struct NotificationView: View {
             await MainActor.run {
                 recentUsers = users
                 leaderboardVideos = videos
-                print("✅ DISCOVERY: Loaded \(users.count) users, \(videos.count) videos")
+                print("âœ… DISCOVERY: Loaded \(users.count) users, \(videos.count) videos")
             }
             
         } catch {
-            print("❌ DISCOVERY: Failed to load - \(error)")
+            print("âŒ DISCOVERY: Failed to load - \(error)")
         }
         
         isLoadingDiscovery = false
@@ -523,9 +525,8 @@ struct NotificationView: View {
         
         // For follow notifications, navigate to the sender's profile instead
         if notification.notificationType == .follow {
-            selectedUserID = notification.senderID
-            showingProfile = true
-            print("📱 Navigation to profile: \(notification.senderID)")
+            profilePresentation = ProfilePresentation(id: notification.senderID)
+            print("ðŸ“± Navigation to profile: \(notification.senderID)")
             return
         }
         
@@ -534,10 +535,10 @@ struct NotificationView: View {
            let videoID = rawNotification.payload["videoID"], !videoID.isEmpty {
             selectedVideoID = videoID
             showingVideoThread = true
-            print("📱 Navigation to video: \(videoID)")
+            print("ðŸ“± Navigation to video: \(videoID)")
         } else {
-            print("📱 No videoID in notification payload for type: \(notification.notificationType.rawValue)")
-            print("📱 Payload contents: \(viewModel.allNotifications.first(where: { $0.id == notification.id })?.payload ?? [:])")
+            print("ðŸ“± No videoID in notification payload for type: \(notification.notificationType.rawValue)")
+            print("ðŸ“± Payload contents: \(viewModel.allNotifications.first(where: { $0.id == notification.id })?.payload ?? [:])")
         }
     }
 }
@@ -592,7 +593,7 @@ struct NotificationRowView: View {
                     .frame(width: 40, height: 40)
                     .clipShape(Circle())
                     .onAppear {
-                        print("🖼️ PROFILE IMAGE: Loading from URL - \(profileImageURL)")
+                        print("ðŸ–¼ï¸ PROFILE IMAGE: Loading from URL - \(profileImageURL)")
                     }
             } else {
                 Circle()
@@ -604,9 +605,9 @@ struct NotificationRowView: View {
                             .foregroundColor(.white.opacity(0.5))
                     )
                     .onAppear {
-                        print("⚠️ PROFILE IMAGE: Missing in payload - \(notification.payload)")
-                        print("⚠️ Notification ID: \(notification.id)")
-                        print("⚠️ Sender ID: \(notification.senderID)")
+                        print("âš ï¸ PROFILE IMAGE: Missing in payload - \(notification.payload)")
+                        print("âš ï¸ Notification ID: \(notification.id)")
+                        print("âš ï¸ Sender ID: \(notification.senderID)")
                     }
             }
         }
