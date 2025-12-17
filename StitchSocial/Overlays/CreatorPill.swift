@@ -25,17 +25,50 @@ struct CreatorPill: View {
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 8) {
-                // Profile Image
-                AsyncImage(url: URL(string: profileImageURL ?? "")) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
+                // Profile Image - with error handling
+                ZStack {
                     Circle()
                         .fill(Color.gray.opacity(0.3))
+                    
+                    if let urlString = profileImageURL,
+                       let url = URL(string: urlString),
+                       !urlString.isEmpty {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                                    .frame(width: isThread ? 28 : 24, height: isThread ? 28 : 24)
+                                    .clipShape(Circle())
+                            case .failure:
+                                Circle()
+                                    .fill(Color.gray.opacity(0.3))
+                                    .overlay(
+                                        Image(systemName: "person.fill")
+                                            .font(.system(size: isThread ? 12 : 10))
+                                            .foregroundColor(.white.opacity(0.6))
+                                    )
+                            case .empty:
+                                Circle()
+                                    .fill(Color.gray.opacity(0.3))
+                            @unknown default:
+                                Circle()
+                                    .fill(Color.gray.opacity(0.3))
+                            }
+                        }
+                        .frame(width: isThread ? 28 : 24, height: isThread ? 28 : 24)
+                    } else {
+                        Circle()
+                            .fill(Color.gray.opacity(0.3))
+                            .overlay(
+                                Image(systemName: "person.fill")
+                                    .font(.system(size: isThread ? 12 : 10))
+                                    .foregroundColor(.white.opacity(0.6))
+                            )
+                    }
                 }
                 .frame(width: isThread ? 28 : 24, height: isThread ? 28 : 24)
-                .clipShape(Circle())
                 .overlay(
                     Circle()
                         .stroke(

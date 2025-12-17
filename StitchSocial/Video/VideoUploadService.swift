@@ -4,7 +4,7 @@
 //
 //  Layer 4: Core Services - Video Upload Management
 //  Handles Firebase Storage uploads and metadata persistence
-//  UPDATED: Added follower notification trigger for new video uploads
+//  UPDATED: Now passes actual aspectRatio to VideoService instead of hardcoding 9:16
 //
 
 import Foundation
@@ -111,7 +111,11 @@ class VideoUploadService: ObservableObject {
                 error: nil
             )
             
+            // Log aspect ratio for debugging
+            let orientation = VideoOrientation.from(aspectRatio: technicalMetadata.aspectRatio)
             print("✅ UPLOAD SERVICE: Video uploaded successfully - \(metadata.title)")
+            print("📐 UPLOAD SERVICE: Detected \(orientation.displayName) video (aspect ratio: \(String(format: "%.3f", technicalMetadata.aspectRatio)))")
+            
             return result
             
         } catch {
@@ -135,7 +139,7 @@ class VideoUploadService: ObservableObject {
     }
     
     /// Creates video document in Firestore using VideoService
-    /// UPDATED: Now triggers follower notifications for new videos and sends mention notifications
+    /// UPDATED: Now passes actual aspectRatio to VideoService methods
     func createVideoDocument(
         uploadResult: VideoUploadResult,
         metadata: VideoUploadMetadata,
@@ -150,8 +154,13 @@ class VideoUploadService: ObservableObject {
         
         let createdVideo: CoreVideoMetadata
         
+        // Log the aspect ratio being passed
+        let orientation = VideoOrientation.from(aspectRatio: uploadResult.aspectRatio)
+        print("📐 UPLOAD SERVICE: Creating \(orientation.displayName) video document with aspect ratio \(String(format: "%.3f", uploadResult.aspectRatio))")
+        
         switch recordingContext {
         case .newThread:
+            // ✅ FIXED: Now passing actual aspectRatio instead of hardcoding 9:16
             createdVideo = try await videoService.createThread(
                 title: metadata.title,
                 description: metadata.description,
@@ -160,7 +169,8 @@ class VideoUploadService: ObservableObject {
                 creatorID: metadata.creatorID,
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
-                fileSize: uploadResult.fileSize
+                fileSize: uploadResult.fileSize,
+                aspectRatio: uploadResult.aspectRatio  // ✅ NEW: Pass actual aspect ratio
             )
             
             // 🔍 DEBUG: Check auth state
@@ -168,8 +178,6 @@ class VideoUploadService: ObservableObject {
             print("🔍 DEBUG: createdVideo.creatorID = \(createdVideo.creatorID)")
             
             // 🎬 NEW VIDEO NOTIFICATION: Notify followers for new thread videos
-            // IMPORTANT: Use createdVideo.creatorID (corrected Firebase UID) not metadata.creatorID
-            // Send synchronously to preserve auth context
             do {
                 print("🔍 DEBUG: Getting followers...")
                 let followerIDs = try await userService.getFollowerIDs(userID: createdVideo.creatorID)
@@ -195,10 +203,10 @@ class VideoUploadService: ObservableObject {
             } catch {
                 print("❌ ERROR DETAILS: \(error)")
                 print("⚠️ UPLOAD SERVICE: Failed to send follower notifications - \(error)")
-                // Don't fail upload if notification fails
             }
             
         case .stitchToThread(let threadID, _):
+            // ✅ FIXED: Now passing actual aspectRatio instead of hardcoding 9:16
             createdVideo = try await videoService.createChildReply(
                 parentID: threadID,
                 title: metadata.title,
@@ -208,15 +216,15 @@ class VideoUploadService: ObservableObject {
                 creatorID: metadata.creatorID,
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
-                fileSize: uploadResult.fileSize
+                fileSize: uploadResult.fileSize,
+                aspectRatio: uploadResult.aspectRatio  // ✅ NEW: Pass actual aspect ratio
             )
             
-            // 🎬 STITCH NOTIFICATION: Trigger stitch notification
+            // 🎬 STITCH NOTIFICATION
             Task {
                 do {
-                    // Get thread details for notification
                     let threadVideo = try await videoService.getVideo(id: threadID)
-                    let threadUserIDs: [String] = [] // Get from thread if available
+                    let threadUserIDs: [String] = []
                     
                     try await notificationService.sendStitchNotification(
                         videoID: createdVideo.id,
@@ -232,6 +240,7 @@ class VideoUploadService: ObservableObject {
             }
             
         case .replyToVideo(let videoID, _):
+            // ✅ FIXED: Now passing actual aspectRatio instead of hardcoding 9:16
             createdVideo = try await videoService.createChildReply(
                 parentID: videoID,
                 title: metadata.title,
@@ -241,14 +250,15 @@ class VideoUploadService: ObservableObject {
                 creatorID: metadata.creatorID,
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
-                fileSize: uploadResult.fileSize
+                fileSize: uploadResult.fileSize,
+                aspectRatio: uploadResult.aspectRatio  // ✅ NEW: Pass actual aspect ratio
             )
             
-            // 🎬 STITCH NOTIFICATION: Trigger stitch notification for reply
+            // 🎬 STITCH NOTIFICATION for reply
             Task {
                 do {
                     let parentVideo = try await videoService.getVideo(id: videoID)
-                    let threadUserIDs: [String] = [] // Get from thread if available
+                    let threadUserIDs: [String] = []
                     
                     try await notificationService.sendStitchNotification(
                         videoID: createdVideo.id,
@@ -264,6 +274,7 @@ class VideoUploadService: ObservableObject {
             }
             
         case .continueThread(let threadID, _):
+            // ✅ FIXED: Now passing actual aspectRatio instead of hardcoding 9:16
             createdVideo = try await videoService.createChildReply(
                 parentID: threadID,
                 title: metadata.title,
@@ -273,14 +284,15 @@ class VideoUploadService: ObservableObject {
                 creatorID: metadata.creatorID,
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
-                fileSize: uploadResult.fileSize
+                fileSize: uploadResult.fileSize,
+                aspectRatio: uploadResult.aspectRatio  // ✅ NEW: Pass actual aspect ratio
             )
             
-            // 🎬 STITCH NOTIFICATION: Trigger stitch notification for thread continuation
+            // 🎬 STITCH NOTIFICATION for thread continuation
             Task {
                 do {
                     let threadVideo = try await videoService.getVideo(id: threadID)
-                    let threadUserIDs: [String] = [] // Get from thread if available
+                    let threadUserIDs: [String] = []
                     
                     try await notificationService.sendStitchNotification(
                         videoID: createdVideo.id,
@@ -306,22 +318,19 @@ class VideoUploadService: ObservableObject {
             
             // Send mention notifications
             for taggedUserID in taggedUserIDs {
-                // Don't notify if user tagged themselves
                 guard taggedUserID != metadata.creatorID else { continue }
                 
                 Task {
                     do {
-                        // ✅ FIXED: Using createdVideo.id instead of metadata.id
                         try await notificationService.sendMentionNotification(
                             to: taggedUserID,
-                            videoID: createdVideo.id,        // ✅ CORRECT: Use created video ID
+                            videoID: createdVideo.id,
                             videoTitle: metadata.title,
                             mentionContext: "tagged in video"
                         )
                         print("✅ MENTION: Notification sent to tagged user \(taggedUserID)")
                     } catch {
                         print("⚠️ UPLOAD SERVICE: Failed to send mention notification to \(taggedUserID) - \(error)")
-                        // Don't fail upload if notification fails
                     }
                 }
             }
@@ -341,23 +350,19 @@ class VideoUploadService: ObservableObject {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    // Check file exists
                     guard FileManager.default.fileExists(atPath: videoURL.path) else {
                         continuation.resume(throwing: UploadError.fileNotFound("Video file not found"))
                         return
                     }
                     
-                    // Get file size
                     let resourceValues = try videoURL.resourceValues(forKeys: [.fileSizeKey])
                     let fileSize = resourceValues.fileSize ?? 0
                     
-                    // Validate file size (max 100MB)
                     guard fileSize <= 100 * 1024 * 1024 else {
                         continuation.resume(throwing: UploadError.fileTooLarge("File size exceeds 100MB limit"))
                         return
                     }
                     
-                    // Load video data
                     let videoData = try Data(contentsOf: videoURL)
                     continuation.resume(returning: videoData)
                     
@@ -406,13 +411,11 @@ class VideoUploadService: ObservableObject {
                 }
             }
             
-            // Track upload progress
             uploadTask.observe(.progress) { [weak self] snapshot in
                 guard let progress = snapshot.progress else { return }
                 let percentComplete = Double(progress.completedUnitCount) / Double(progress.totalUnitCount)
                 
                 Task { @MainActor in
-                    // Map video upload progress to 30-70% of total progress
                     let mappedProgress = 0.3 + (percentComplete * 0.4)
                     self?.uploadProgress = mappedProgress
                 }
@@ -437,7 +440,7 @@ class VideoUploadService: ObservableObject {
         return downloadURL.absoluteString
     }
     
-    /// Generates thumbnail from video
+    /// Generates thumbnail from video - IMPROVED: Better thumbnail extraction
     private func generateThumbnail(from videoURL: URL) async throws -> Data {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -446,13 +449,15 @@ class VideoUploadService: ObservableObject {
                 imageGenerator.appliesPreferredTrackTransform = true
                 imageGenerator.maximumSize = CGSize(width: 1080, height: 1920)
                 
+                // Generate at 0.5 seconds for better action capture
                 let time = CMTime(seconds: 0.5, preferredTimescale: 600)
                 
                 do {
                     let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
                     let image = UIImage(cgImage: cgImage)
                     
-                    guard let jpegData = image.jpegData(compressionQuality: 0.8) else {
+                    // Use higher quality JPEG compression
+                    guard let jpegData = image.jpegData(compressionQuality: 0.9) else {
                         continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed to convert thumbnail to JPEG"))
                         return
                     }
@@ -466,7 +471,7 @@ class VideoUploadService: ObservableObject {
         }
     }
     
-    /// Extracts technical metadata from video
+    /// Extracts technical metadata from video - IMPROVED: Better aspect ratio detection
     private func extractTechnicalMetadata(from videoURL: URL) async throws -> TechnicalMetadata {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -482,18 +487,29 @@ class VideoUploadService: ObservableObject {
                         let resourceValues = try videoURL.resourceValues(forKeys: [.fileSizeKey])
                         let fileSize = Int64(resourceValues.fileSize ?? 0)
                         
-                        // Get aspect ratio from video track
-                        var aspectRatio: Double = 9.0/16.0 // Default
+                        // Get aspect ratio from video track - IMPROVED
+                        var aspectRatio: Double = 9.0/16.0 // Default portrait
                         let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                        
                         if let videoTrack = videoTracks.first {
                             let naturalSize = try await videoTrack.load(.naturalSize)
                             let preferredTransform = try await videoTrack.load(.preferredTransform)
+                            
+                            // Apply transform to get actual display size
                             let size = naturalSize.applying(preferredTransform)
                             let width = abs(size.width)
                             let height = abs(size.height)
+                            
                             if height > 0 {
                                 aspectRatio = Double(width / height)
                             }
+                            
+                            // Log orientation for debugging
+                            let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
+                            print("📐 METADATA: Detected \(orientation.displayName) video")
+                            print("📐 METADATA: Natural size: \(Int(naturalSize.width))x\(Int(naturalSize.height))")
+                            print("📐 METADATA: Transformed size: \(Int(width))x\(Int(height))")
+                            print("📐 METADATA: Aspect ratio: \(String(format: "%.3f", aspectRatio))")
                         }
                         
                         let metadata = TechnicalMetadata(
@@ -514,7 +530,6 @@ class VideoUploadService: ObservableObject {
     
     // MARK: - Helper Methods
     
-    /// Updates upload progress and current task
     private func updateProgress(_ progress: Double, task: String) async {
         await MainActor.run {
             self.uploadProgress = progress
@@ -522,7 +537,6 @@ class VideoUploadService: ObservableObject {
         }
     }
     
-    /// Records upload metrics for analytics
     private func recordUploadMetrics(
         duration: TimeInterval,
         success: Bool,
@@ -539,7 +553,6 @@ class VideoUploadService: ObservableObject {
         
         uploadMetrics.append(metrics)
         
-        // Keep only last 50 uploads
         if uploadMetrics.count > 50 {
             uploadMetrics.removeFirst()
         }
@@ -547,7 +560,6 @@ class VideoUploadService: ObservableObject {
         print("📊 UPLOAD SERVICE: Metrics - Duration: \(String(format: "%.2f", duration))s, Success: \(success), File Size: \(fileSize) bytes")
     }
     
-    /// Gets upload statistics
     func getUploadStats() -> UploadStats {
         let avgDuration = uploadMetrics.isEmpty ? 0 : uploadMetrics.reduce(0) { $0 + $1.duration } / Double(uploadMetrics.count)
         let successRate = totalUploads > 0 ? Double(successfulUploads) / Double(totalUploads) * 100 : 100.0
@@ -560,7 +572,6 @@ class VideoUploadService: ObservableObject {
         )
     }
     
-    /// Clears upload error
     func clearError() {
         lastUploadError = nil
     }

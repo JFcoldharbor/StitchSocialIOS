@@ -124,7 +124,7 @@ struct ProfileView: View {
                 overlayContext: presentation.context,
                 onDismiss: {
                     print("📱 PROFILE: Dismissing fullscreen")
-                    NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+                    NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                     videoPresentation = nil
                 }
             )
@@ -691,7 +691,7 @@ struct ProfileView: View {
         print("📱 PROFILE: Tapped video \(video.id.prefix(8))")
         
         // Kill all players first
-        NotificationCenter.default.post(name: .RealkillAllVideoPlayers, object: nil)
+        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
         
         // Present with small delay for cleanup, using item-based presentation
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {

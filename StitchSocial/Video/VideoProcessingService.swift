@@ -1,11 +1,11 @@
 //
 //  VideoProcessingService.swift
-//  CleanBeta
+//  StitchSocial
 //
 //  Layer 4: Core Services - Video Technical Analysis & Compression
 //  Handles video quality assessment, format validation, and compression
 //  Pure AVFoundation processing - no Firebase or AI dependencies
-//  FIXED: Simplified compression to prevent black video issues in portrait-only mode
+//  UPDATED: Orientation-aware compression with improved quality for all tiers
 //
 
 import Foundation
@@ -13,8 +13,44 @@ import AVFoundation
 import CoreImage
 import VideoToolbox
 
+// MARK: - Video Orientation Detection
+
+/// Video orientation based on aspect ratio
+/// SINGLE DEFINITION - Used by VideoService, VideoUploadService, VideoProcessingService
+enum VideoOrientation: String {
+    case portrait   // Height > Width (aspect ratio < 0.9)
+    case landscape  // Width > Height (aspect ratio > 1.1)
+    case square     // Width ≈ Height (aspect ratio 0.9-1.1)
+    
+    /// Human-readable display name
+    var displayName: String {
+        switch self {
+        case .portrait: return "Portrait"
+        case .landscape: return "Landscape"
+        case .square: return "Square"
+        }
+    }
+    
+    /// Determine orientation from aspect ratio (width/height)
+    static func from(aspectRatio: Double) -> VideoOrientation {
+        if aspectRatio < 0.9 {
+            return .portrait
+        } else if aspectRatio > 1.1 {
+            return .landscape
+        } else {
+            return .square
+        }
+    }
+    
+    /// Determine orientation from dimensions
+    static func from(width: CGFloat, height: CGFloat) -> VideoOrientation {
+        guard height > 0 else { return .square }
+        return from(aspectRatio: Double(width / height))
+    }
+}
+
 /// Service for technical video analysis, quality assessment, and compression
-/// FIXED: Removed problematic video composition transforms that caused black videos
+/// UPDATED: Now detects orientation and uses appropriate presets
 @MainActor
 class VideoProcessingService: ObservableObject {
     
@@ -126,10 +162,10 @@ class VideoProcessingService: ObservableObject {
         }
     }
     
-    // MARK: - Video Compression (FIXED: SIMPLIFIED FOR PORTRAIT-ONLY)
+    // MARK: - Video Compression (ORIENTATION-AWARE)
     
-    /// Compress video with simplified approach to prevent black video issues
-    /// FIXED: Removed problematic video composition transforms for portrait-only videos
+    /// Compress video with orientation-aware approach for best quality
+    /// UPDATED: Detects orientation and selects appropriate preset
     func compress(
         videoURL: URL,
         userTier: UserTier,
@@ -138,8 +174,6 @@ class VideoProcessingService: ObservableObject {
     ) async throws -> URL {
         
         let startTime = Date()
-        
-        print("🗜️ PROCESSING SERVICE: Starting SIMPLIFIED compression for \(userTier.displayName)")
         
         await MainActor.run {
             self.isProcessing = true
@@ -153,18 +187,27 @@ class VideoProcessingService: ObservableObject {
             await updateProgress(0.1, task: "Validating video file...")
             try await validateVideoFile(videoURL)
             
-            // STEP 2: Basic video analysis
+            // STEP 2: Detect video orientation
+            await updateProgress(0.15, task: "Detecting video orientation...")
+            let orientation = try await detectVideoOrientation(videoURL: videoURL)
+            print("🎬 PROCESSING SERVICE: Detected orientation: \(orientation.rawValue)")
+            
+            // STEP 3: Basic video analysis
             await updateProgress(0.2, task: "Analyzing video...")
             let asset = AVAsset(url: videoURL)
             let duration = try await asset.load(.duration).seconds
             
-            print("🎯 PROCESSING SERVICE: \(String(format: "%.1f", duration))s video for \(userTier.displayName)")
+            print("🎯 PROCESSING SERVICE: \(String(format: "%.1f", duration))s \(orientation.rawValue) video for \(userTier.displayName)")
             
-            // STEP 3: Choose optimal preset based on user tier and duration
+            // STEP 4: Choose optimal preset based on orientation and user tier
             await updateProgress(0.3, task: "Selecting compression preset...")
-            let exportPreset = selectOptimalPreset(duration: duration, userTier: userTier)
+            let exportPreset = selectOptimalPreset(
+                duration: duration,
+                userTier: userTier,
+                orientation: orientation
+            )
             
-            // STEP 4: Setup export session with simple preset (NO VIDEO COMPOSITION)
+            // STEP 5: Setup export session with simple preset (NO VIDEO COMPOSITION)
             await updateProgress(0.4, task: "Setting up compression...")
             
             guard let exportSession = AVAssetExportSession(
@@ -174,16 +217,15 @@ class VideoProcessingService: ObservableObject {
                 throw VideoProcessingError.compressionFailed("Failed to create export session")
             }
             
-            // STEP 5: Configure basic output settings (NO CUSTOM TRANSFORMS)
+            // STEP 6: Configure basic output settings (NO CUSTOM TRANSFORMS)
             let outputURL = generateCompressedVideoURL()
             exportSession.outputURL = outputURL
             exportSession.outputFileType = .mp4
             exportSession.shouldOptimizeForNetworkUse = true
             
-            // FIXED: NO VIDEO COMPOSITION - let AVFoundation handle everything naturally
-            print("✅ PROCESSING SERVICE: Using preset \(exportPreset) - NO CUSTOM COMPOSITION")
+            print("✅ PROCESSING SERVICE: Using preset \(exportPreset) for \(orientation.rawValue) video - NO CUSTOM COMPOSITION")
             
-            // STEP 6: Add validation to check output before upload
+            // STEP 7: Export with progress monitoring
             await updateProgress(0.5, task: "Compressing video...")
             
             return try await withCheckedThrowingContinuation { continuation in
@@ -217,7 +259,7 @@ class VideoProcessingService: ObservableObject {
                             return
                         }
                         
-                        // FIXED: Use sync validation to avoid async issues
+                        // Use sync validation to avoid async issues
                         guard self.validateCompressedVideoSync(outputURL) else {
                             continuation.resume(throwing: VideoProcessingError.compressionFailed("Output video validation failed - may be black/corrupt"))
                             return
@@ -233,15 +275,16 @@ class VideoProcessingService: ObservableObject {
                             let compressedSize = self.getFileSize(outputURL)
                             let compressionRatio = originalSize > 0 ? Double(originalSize) / Double(compressedSize) : 1.0
                             
-                            print("✅ SIMPLIFIED COMPRESSION: \(self.formatFileSize(originalSize)) → \(self.formatFileSize(compressedSize))")
+                            print("✅ ORIENTATION-AWARE COMPRESSION: \(self.formatFileSize(originalSize)) → \(self.formatFileSize(compressedSize))")
                             print("✅ COMPRESSION RATIO: \(String(format: "%.1fx", compressionRatio))")
                             print("✅ PROCESSING TIME: \(String(format: "%.1fs", processingTime))")
                             print("✅ PRESET USED: \(exportPreset)")
+                            print("✅ ORIENTATION: \(orientation.rawValue)")
                             
                             self.recordProcessingMetrics(
                                 duration: processingTime,
                                 success: true,
-                                qualityScore: 85.0, // Simplified scoring
+                                qualityScore: 85.0,
                                 error: nil
                             )
                         }
@@ -316,41 +359,161 @@ class VideoProcessingService: ObservableObject {
         }
     }
     
-    // MARK: - NEW: Preset Selection for Portrait Videos
+    // MARK: - NEW: Video Orientation Detection
     
-    /// Select optimal export preset based on duration and user tier
-    /// Uses simpler presets to avoid black video issues
-    private func selectOptimalPreset(duration: TimeInterval, userTier: UserTier) -> String {
-        // For portrait-only videos, use proven presets without custom composition
+    /// Detect video orientation from video file
+    /// Returns .portrait, .landscape, or .square based on actual dimensions
+    func detectVideoOrientation(videoURL: URL) async throws -> VideoOrientation {
+        let asset = AVAsset(url: videoURL)
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
         
-        switch userTier {
-        case .founder, .topCreator, .legendary:
-            // High tier users get highest quality
-            if duration <= 15.0 {
-                return AVAssetExportPreset1920x1080 // Full HD for short videos
-            } else {
-                return AVAssetExportPreset1280x720 // HD for longer videos
-            }
+        guard let videoTrack = videoTracks.first else {
+            print("⚠️ PROCESSING SERVICE: No video track found, defaulting to portrait")
+            return .portrait
+        }
+        
+        // Get natural size and transform
+        let naturalSize = try await videoTrack.load(.naturalSize)
+        let preferredTransform = try await videoTrack.load(.preferredTransform)
+        
+        // Apply transform to get actual display dimensions
+        let transformedSize = naturalSize.applying(preferredTransform)
+        let width = abs(transformedSize.width)
+        let height = abs(transformedSize.height)
+        
+        let orientation = VideoOrientation.from(width: width, height: height)
+        
+        print("🎬 ORIENTATION DETECTION: \(Int(width))x\(Int(height)) → \(orientation.rawValue)")
+        
+        return orientation
+    }
+    
+    /// Get video dimensions with transform applied
+    func getVideoDimensions(videoURL: URL) async throws -> (width: CGFloat, height: CGFloat, aspectRatio: Double) {
+        let asset = AVAsset(url: videoURL)
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        
+        guard let videoTrack = videoTracks.first else {
+            throw VideoProcessingError.noVideoTrack("No video track found")
+        }
+        
+        let naturalSize = try await videoTrack.load(.naturalSize)
+        let preferredTransform = try await videoTrack.load(.preferredTransform)
+        
+        let transformedSize = naturalSize.applying(preferredTransform)
+        let width = abs(transformedSize.width)
+        let height = abs(transformedSize.height)
+        let aspectRatio = height > 0 ? Double(width / height) : 9.0/16.0
+        
+        return (width, height, aspectRatio)
+    }
+    
+    // MARK: - UPDATED: Preset Selection (Orientation-Aware)
+    
+    /// Select optimal export preset based on duration, user tier, AND orientation
+    /// UPDATED: 720p minimum for ALL tiers (no more 640x480 for rookies)
+    /// UPDATED: Uses appropriate presets for portrait vs landscape
+    private func selectOptimalPreset(duration: TimeInterval, userTier: UserTier, orientation: VideoOrientation) -> String {
+        
+        // For portrait videos, we need to be careful with preset selection
+        // Most presets are landscape-oriented (e.g., 1920x1080)
+        // We'll use the preset that best matches the video orientation
+        
+        switch orientation {
+        case .portrait:
+            // Portrait videos: Height > Width
+            // Use presets that work well with portrait content
+            return selectPortraitPreset(duration: duration, userTier: userTier)
             
-        case .partner, .elite, .influencer:
-            // Mid tier users get good quality
-            return AVAssetExportPreset1280x720 // HD
+        case .landscape:
+            // Landscape videos: Width > Height
+            // Standard presets work well here
+            return selectLandscapePreset(duration: duration, userTier: userTier)
             
-        case .veteran, .rising:
-            // Standard users get good balanced quality
-            return AVAssetExportPreset960x540 // qHD
-            
-        case .rookie:
-            // New users get efficient compression
-            return AVAssetExportPreset640x480 // SD
-            
-        @unknown default:
-            // Handle any future cases
-            return AVAssetExportPreset1280x720 // Default to HD
+        case .square:
+            // Square videos: Use balanced preset
+            return selectSquarePreset(duration: duration, userTier: userTier)
         }
     }
     
-    // MARK: - NEW: Output Validation
+    /// Select preset for portrait videos
+    /// Uses presets that maintain quality without stretching
+    private func selectPortraitPreset(duration: TimeInterval, userTier: UserTier) -> String {
+        switch userTier {
+        case .founder, .coFounder, .topCreator, .legendary:
+            // High tier users get highest quality
+            // 1920x1080 preset works for portrait (will be 1080x1920 after transform)
+            if duration <= 15.0 {
+                return AVAssetExportPreset1920x1080
+            } else {
+                return AVAssetExportPreset1280x720
+            }
+            
+        case .partner, .elite, .influencer, .ambassador:
+            // Mid tier users get good quality
+            return AVAssetExportPreset1280x720
+            
+        case .veteran, .rising:
+            // Standard users get balanced quality
+            // UPDATED: Use 720p instead of qHD for better quality
+            return AVAssetExportPreset1280x720
+            
+        case .rookie:
+            // UPDATED: Rookies now get 720p minimum (NOT 640x480!)
+            // This is a significant quality improvement
+            return AVAssetExportPreset1280x720
+            
+        @unknown default:
+            return AVAssetExportPreset1280x720
+        }
+    }
+    
+    /// Select preset for landscape videos
+    private func selectLandscapePreset(duration: TimeInterval, userTier: UserTier) -> String {
+        switch userTier {
+        case .founder, .coFounder, .topCreator, .legendary:
+            // High tier users get highest quality
+            if duration <= 15.0 {
+                return AVAssetExportPreset1920x1080
+            } else {
+                return AVAssetExportPreset1280x720
+            }
+            
+        case .partner, .elite, .influencer, .ambassador:
+            return AVAssetExportPreset1280x720
+            
+        case .veteran, .rising:
+            return AVAssetExportPreset1280x720
+            
+        case .rookie:
+            // UPDATED: Rookies get 720p for landscape too
+            return AVAssetExportPreset1280x720
+            
+        @unknown default:
+            return AVAssetExportPreset1280x720
+        }
+    }
+    
+    /// Select preset for square videos
+    private func selectSquarePreset(duration: TimeInterval, userTier: UserTier) -> String {
+        // Square videos work well with standard presets
+        switch userTier {
+        case .founder, .coFounder, .topCreator, .legendary:
+            return AVAssetExportPreset1920x1080
+            
+        case .partner, .elite, .influencer, .ambassador:
+            return AVAssetExportPreset1280x720
+            
+        case .veteran, .rising, .rookie:
+            // All get 720p for square videos
+            return AVAssetExportPreset1280x720
+            
+        @unknown default:
+            return AVAssetExportPreset1280x720
+        }
+    }
+    
+    // MARK: - Output Validation
     
     /// Simple validation that compressed video exists and has reasonable size
     /// Called synchronously from completion handler

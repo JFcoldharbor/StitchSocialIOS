@@ -5,7 +5,7 @@
 //  Layer 4: Core Services - Video CRUD and Thread Management
 //  Dependencies: Firebase Firestore, Firebase Storage, FirebaseSchema
 //  Features: Thread hierarchy, video data operations, temperature calculation, user tagging, viewer tracking
-//  FIXED: Auto-fetch username when creatorName is empty
+//  UPDATED: Dynamic aspect ratio support - no more hardcoded 9:16
 //
 
 import Foundation
@@ -14,6 +14,9 @@ import FirebaseStorage
 import FirebaseAuth
 
 // MARK: - Supporting Data Structures
+
+// NOTE: VideoOrientation is defined in VideoProcessingService.swift
+// Do not duplicate here to avoid "Invalid redeclaration" errors
 
 /// Swipe direction for preloading optimization
 enum SwipeDirection {
@@ -100,6 +103,7 @@ class VideoService: ObservableObject {
     // MARK: - Create Operations
     
     /// Create new thread (parent video) with Firebase Auth validation and auto-username fetch
+    /// UPDATED: Now accepts aspectRatio parameter instead of hardcoding 9:16
     func createThread(
         title: String,
         description: String = "",
@@ -108,7 +112,8 @@ class VideoService: ObservableObject {
         creatorID: String,
         creatorName: String,
         duration: TimeInterval,
-        fileSize: Int64
+        fileSize: Int64,
+        aspectRatio: Double = 9.0/16.0  // NEW: Default to portrait but accept actual value
     ) async throws -> CoreVideoMetadata {
         
         // CRITICAL: Validate creatorID is Firebase Auth UID
@@ -120,13 +125,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
-        // ðŸ”¥ FIX: If creatorName is empty, fetch username from Firestore
+        // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -134,14 +139,18 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
         let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
+        
+        // Determine video orientation for logging
+        let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
+        print("📐 VIDEO SERVICE: Creating \(orientation.displayName) video with aspect ratio \(String(format: "%.3f", aspectRatio))")
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -150,7 +159,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
             FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,
-            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,  // âœ… USE FETCHED VALUE
+            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,
             FirebaseSchema.VideoDocument.createdAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
             
@@ -173,9 +182,9 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.milestone1000Reached: false,
             FirebaseSchema.VideoDocument.milestone15000Reached: false,
             
-            // Content metadata
+            // Content metadata - FIXED: Use actual aspect ratio
             FirebaseSchema.VideoDocument.duration: duration,
-            FirebaseSchema.VideoDocument.aspectRatio: 9.0/16.0,
+            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // ✅ NOW DYNAMIC
             FirebaseSchema.VideoDocument.fileSize: fileSize,
             FirebaseSchema.VideoDocument.qualityScore: 50,
             
@@ -191,11 +200,12 @@ class VideoService: ObservableObject {
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("âœ… VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
+        print("✅ VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
         return video
     }
     
     /// Create child reply in thread with Firebase Auth validation and auto-username fetch
+    /// UPDATED: Now accepts aspectRatio parameter instead of hardcoding 9:16
     func createChildReply(
         parentID: String,
         title: String,
@@ -205,7 +215,8 @@ class VideoService: ObservableObject {
         creatorID: String,
         creatorName: String,
         duration: TimeInterval,
-        fileSize: Int64
+        fileSize: Int64,
+        aspectRatio: Double = 9.0/16.0  // NEW: Default to portrait but accept actual value
     ) async throws -> CoreVideoMetadata {
         
         // CRITICAL: Validate creatorID is Firebase Auth UID
@@ -217,13 +228,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
-        // ðŸ”¥ FIX: If creatorName is empty, fetch username from Firestore
+        // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -231,10 +242,10 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
@@ -250,6 +261,10 @@ class VideoService: ObservableObject {
         
         let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
         
+        // Determine video orientation for logging
+        let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
+        print("📐 VIDEO SERVICE: Creating \(orientation.displayName) reply with aspect ratio \(String(format: "%.3f", aspectRatio))")
+        
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
             FirebaseSchema.VideoDocument.title: title,
@@ -257,7 +272,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.videoURL: videoURL,
             FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
             FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,
-            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,  // âœ… USE FETCHED VALUE
+            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,
             FirebaseSchema.VideoDocument.createdAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
             
@@ -281,9 +296,9 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.milestone1000Reached: false,
             FirebaseSchema.VideoDocument.milestone15000Reached: false,
             
-            // Content metadata
+            // Content metadata - FIXED: Use actual aspect ratio
             FirebaseSchema.VideoDocument.duration: duration,
-            FirebaseSchema.VideoDocument.aspectRatio: 9.0/16.0,
+            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // ✅ NOW DYNAMIC
             FirebaseSchema.VideoDocument.fileSize: fileSize,
             FirebaseSchema.VideoDocument.qualityScore: 50,
             
@@ -311,7 +326,7 @@ class VideoService: ObservableObject {
         }
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("âœ… VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
+        print("✅ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
         return video
     }
     
@@ -637,7 +652,7 @@ class VideoService: ObservableObject {
                 FirebaseSchema.VideoDocument.updatedAt: Timestamp()
             ])
         
-        print("ðŸ·ï¸ VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
+        print("🏷️ VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
     }
     
     /// Record user interaction (views and shares only)
@@ -980,7 +995,7 @@ class VideoService: ObservableObject {
             id: id,
             title: title,
             description: description,
-            taggedUserIDs: taggedUserIDs,  // â† MOVE HERE (after description)
+            taggedUserIDs: taggedUserIDs,
             videoURL: videoURL,
             thumbnailURL: thumbnailURL,
             creatorID: creatorID,
@@ -1012,6 +1027,7 @@ class VideoService: ObservableObject {
             replyTimestamp: replyTimestamp
         )
     }
+    
     /// Calculate video temperature
     private func calculateVideoTemperature(
         hypeCount: Int,

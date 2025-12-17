@@ -4,7 +4,8 @@
 //
 //  Layer 4: Services - User Suggestion Service (Uses SearchService)
 //  Dependencies: SearchService, FollowManager
-//  Features: Smart display logic, frequency control
+//  Features: Smart display logic, frequency control, tracks shown users
+//  FIXED: Prevents showing same users repeatedly
 //
 
 import Foundation
@@ -25,6 +26,10 @@ class SuggestionService: ObservableObject {
     @Published var isLoading = false
     @Published var lastRefreshTime: Date?
     
+    // ✅ FIX: Track shown users to prevent repeats
+    private var shownUserIDs: Set<String> = []
+    private let maxShownBeforeReset = 50 // After showing 50 users, allow repeats
+    
     // MARK: - Configuration
     
     private let cacheExpiration: TimeInterval = 300 // 5 minutes
@@ -40,31 +45,73 @@ class SuggestionService: ObservableObject {
         self.followManager = followManager ?? FollowManager.shared
         self.userService = userService ?? UserService()
         
-        print("💡 SUGGESTION SERVICE: Initialized")
+        print("💡 SUGGESTION SERVICE: Initialized with user tracking")
     }
     
     // MARK: - Main Methods
     
-    /// Get suggested users (delegates to SearchService)
+    /// Get suggested users (filters out already shown and already following)
     func getSuggestions(limit: Int = 10) async throws -> [BasicUserInfo] {
         isLoading = true
         defer { isLoading = false }
         
-        print("💡 SUGGESTION: Getting suggestions from SearchService")
+        print("💡 SUGGESTION: Getting suggestions (shown: \(shownUserIDs.count))")
+        
+        // Get current user to filter out people they follow
+        guard let currentUserID = Auth.auth().currentUser?.uid else {
+            print("❌ SUGGESTION: No auth user")
+            return []
+        }
+        
+        // Request MORE than needed to account for filtering
+        let fetchLimit = limit * 3
         
         // Use SearchService's getSuggestedUsers method
-        let suggestions = try await searchService.getSuggestedUsers(limit: limit)
+        let allSuggestions = try await searchService.getSuggestedUsers(limit: fetchLimit)
+        
+        print("💡 SUGGESTION: Got \(allSuggestions.count) raw suggestions")
+        
+        // ✅ FIX: Filter out already shown AND already following
+        let followingIDs = try await userService.getFollowingIDs(userID: currentUserID)
+        
+        let filteredSuggestions = allSuggestions.filter { user in
+            let notShown = !shownUserIDs.contains(user.id)
+            let notFollowing = !followingIDs.contains(user.id)
+            let notSelf = user.id != currentUserID
+            
+            return notShown && notFollowing && notSelf
+        }
+        
+        print("💡 SUGGESTION: Filtered to \(filteredSuggestions.count) new suggestions")
+        
+        // Take only what we need
+        let finalSuggestions = Array(filteredSuggestions.prefix(limit))
+        
+        // Track shown users
+        for user in finalSuggestions {
+            shownUserIDs.insert(user.id)
+        }
+        
+        // ✅ FIX: Reset tracking if we've shown too many
+        if shownUserIDs.count > maxShownBeforeReset {
+            print("💡 SUGGESTION: Resetting shown users (had \(shownUserIDs.count))")
+            shownUserIDs.removeAll()
+        }
         
         lastRefreshTime = Date()
         
-        print("💡 SUGGESTION: Got \(suggestions.count) suggestions")
-        return suggestions
+        print("💡 SUGGESTION: Returning \(finalSuggestions.count) unique suggestions")
+        return finalSuggestions
     }
     
-    /// Refresh suggestions manually
+    /// Refresh suggestions manually (clears shown tracking)
     func refreshSuggestions(limit: Int = 10) async throws -> [BasicUserInfo] {
-        print("💡 SUGGESTION: Manual refresh requested")
-        lastRefreshTime = nil // Clear cache
+        print("💡 SUGGESTION: Manual refresh - clearing shown users")
+        
+        // ✅ FIX: Clear shown users on manual refresh for truly new content
+        shownUserIDs.removeAll()
+        lastRefreshTime = nil
+        
         return try await getSuggestions(limit: limit)
     }
     
@@ -103,5 +150,16 @@ class SuggestionService: ObservableObject {
             print("❌ SUGGESTION: Error getting following count: \(error)")
             return 0
         }
+    }
+    
+    /// Reset shown user tracking (for testing)
+    func resetShownUsers() {
+        shownUserIDs.removeAll()
+        print("💡 SUGGESTION: Manually reset shown users")
+    }
+    
+    /// Get stats for debugging
+    func getStats() -> (shown: Int, maxBeforeReset: Int) {
+        return (shownUserIDs.count, maxShownBeforeReset)
     }
 }

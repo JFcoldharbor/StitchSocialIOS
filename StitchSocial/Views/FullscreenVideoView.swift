@@ -505,11 +505,11 @@ struct VideoPlayerComponent: View {
             } else if isLoading {
                 loadingState
             } else {
-                VideoPlayer(player: player)
-                    .aspectRatio(contentMode: .fill)
+                CustomVideoPlayerView(player: player)
                     .frame(width: geometry.size.width, height: geometry.size.height)
+                    .background(Color.black)
                     .clipped()
-                    .ignoresSafeArea(.all)
+                    .edgesIgnoringSafeArea(.all)
             }
         }
         .onAppear {
@@ -631,7 +631,7 @@ struct VideoPlayerComponent: View {
     
     private func setupKillObserver() {
         killObserver = NotificationCenter.default.addObserver(
-            forName: .RealkillAllVideoPlayers,
+            forName: .killAllVideoPlayers,
             object: nil,
             queue: .main
         ) { _ in
