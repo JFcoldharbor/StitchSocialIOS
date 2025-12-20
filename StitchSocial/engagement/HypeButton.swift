@@ -5,7 +5,7 @@
 //  Layer 8: UI - Progressive Tapping Hype Button with 3D Effects and Floating Icons
 //  Dependencies: EngagementManager (Layer 6), FloatingIconManager
 //  Features: 3D depth, progressive tapping, TikTok-style floating flame animations
-//  UPDATED: New hybrid clout system with tier-based visual hypes and clout caps
+//  UPDATED: Self-engagement restriction - only founders can hype their own content
 //
 
 import SwiftUI
@@ -16,6 +16,7 @@ struct ProgressiveHypeButton: View {
     
     // MARK: - Properties
     let videoID: String
+    let creatorID: String  // NEW: Video creator's ID for self-engagement check
     let currentHypeCount: Int
     let currentUserID: String
     let userTier: UserTier
@@ -40,6 +41,23 @@ struct ProgressiveHypeButton: View {
         engagementManager.isProcessingEngagement
     }
     
+    // MARK: - Self-Engagement Check (NEW)
+    
+    /// Check if user is trying to engage with their own content
+    private var isSelfEngagement: Bool {
+        currentUserID == creatorID
+    }
+    
+    /// Check if user is a founder tier (allowed to self-engage)
+    private var isFounderTier: Bool {
+        userTier == .founder || userTier == .coFounder
+    }
+    
+    /// Whether self-engagement should be blocked
+    private var shouldBlockSelfEngagement: Bool {
+        isSelfEngagement && !isFounderTier
+    }
+    
     // Clout cap tracking
     private var hasHitCloutCap: Bool {
         engagementState.hasHitCloutCap(for: userTier)
@@ -60,6 +78,11 @@ struct ProgressiveHypeButton: View {
         EngagementConfig.getVisualHypeMultiplier(for: userTier)
     }
     
+    /// Whether button should be disabled
+    private var isDisabled: Bool {
+        shouldBlockSelfEngagement || hasHitCloutCap || hasHitEngagementCap
+    }
+    
     var body: some View {
         Button(action: handleTap) {
             ZStack {
@@ -72,13 +95,18 @@ struct ProgressiveHypeButton: View {
                 // Hype count display (always shown)
                 hypeCountDisplay
                 
+                // NEW: Self-engagement indicator
+                if shouldBlockSelfEngagement {
+                    selfEngagementOverlay
+                }
+                
                 // NEW: Clout cap warning overlay
                 if showingCloutCapWarning {
                     cloutCapWarningOverlay
                 }
                 
                 // NEW: Near cap indicator
-                if isNearCloutCap && !hasHitCloutCap {
+                if isNearCloutCap && !hasHitCloutCap && !shouldBlockSelfEngagement {
                     nearCapIndicator
                 }
             }
@@ -88,10 +116,10 @@ struct ProgressiveHypeButton: View {
                 axis: (x: 1, y: 0, z: 0)
             )
             .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isPressed)
-            .opacity(hasHitCloutCap || hasHitEngagementCap ? 0.5 : 1.0)
+            .opacity(isDisabled ? 0.5 : 1.0)
         }
         .buttonStyle(PlainButtonStyle())
-        .disabled(hasHitCloutCap || hasHitEngagementCap)
+        .disabled(isDisabled)
         .background(
             GeometryReader { geo in
                 Color.clear
@@ -136,11 +164,15 @@ struct ProgressiveHypeButton: View {
                     .opacity(0.4 - Double(layer) * 0.1)
             }
             
-            // Main button background with cap indicator color
+            // Main button background with cap/self-engagement indicator color
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: hasHitCloutCap ? [
+                        colors: shouldBlockSelfEngagement ? [
+                            Color.gray.opacity(0.4),
+                            Color.black.opacity(0.7),
+                            Color.black.opacity(0.9)
+                        ] : hasHitCloutCap ? [
                             Color.red.opacity(0.4),
                             Color.black.opacity(0.7),
                             Color.black.opacity(0.9)
@@ -159,7 +191,9 @@ struct ProgressiveHypeButton: View {
                     Circle()
                         .stroke(
                             LinearGradient(
-                                colors: hasHitCloutCap ?
+                                colors: shouldBlockSelfEngagement ?
+                                [.gray, .gray.opacity(0.6)] :
+                                hasHitCloutCap ?
                                 [.red, .orange] :
                                 isProcessing ?
                                 [.orange, .red, .yellow] : [.orange.opacity(0.6), .red.opacity(0.4)],
@@ -170,7 +204,7 @@ struct ProgressiveHypeButton: View {
                         )
                         .opacity(0.8 + sin(pulsePhase) * 0.2)
                 )
-                .shadow(color: .orange.opacity(0.3), radius: 4, x: 0, y: 2)
+                .shadow(color: shouldBlockSelfEngagement ? .gray.opacity(0.3) : .orange.opacity(0.3), radius: 4, x: 0, y: 2)
         }
     }
     
@@ -178,7 +212,7 @@ struct ProgressiveHypeButton: View {
         ZStack {
             // Shadow flames for depth (always flame)
             ForEach(0..<3, id: \.self) { layer in
-                Image(systemName: hasHitCloutCap ? "flame.slash.fill" : "flame.fill")
+                Image(systemName: shouldBlockSelfEngagement ? "flame.slash.fill" : hasHitCloutCap ? "flame.slash.fill" : "flame.fill")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(
                         LinearGradient(
@@ -195,20 +229,22 @@ struct ProgressiveHypeButton: View {
             }
             
             // Main flame icon with gradient
-            Image(systemName: hasHitCloutCap ? "flame.slash.fill" : "flame.fill")
+            Image(systemName: shouldBlockSelfEngagement ? "flame.slash.fill" : hasHitCloutCap ? "flame.slash.fill" : "flame.fill")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(
                     LinearGradient(
-                        colors: hasHitCloutCap ?
+                        colors: shouldBlockSelfEngagement ?
+                        [.gray, .gray.opacity(0.7), .black.opacity(0.5)] :
+                        hasHitCloutCap ?
                         [.red, .orange, .black.opacity(0.5)] :
                         [.yellow, .orange, .red, .black.opacity(0.2)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .shadow(color: hasHitCloutCap ? .red : .orange, radius: 6, x: 0, y: 0)
+                .shadow(color: shouldBlockSelfEngagement ? .gray : hasHitCloutCap ? .red : .orange, radius: 6, x: 0, y: 0)
                 .shadow(color: .black.opacity(0.4), radius: 2, x: 1, y: 1)
-                .scaleEffect(hasHitCloutCap ? 1.0 : (1.0 + sin(pulsePhase * 2) * 0.1))
+                .scaleEffect(shouldBlockSelfEngagement || hasHitCloutCap ? 1.0 : (1.0 + sin(pulsePhase * 2) * 0.1))
         }
     }
     
@@ -218,6 +254,25 @@ struct ProgressiveHypeButton: View {
             .foregroundColor(.white)
             .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
             .offset(y: -35)
+    }
+    
+    // NEW: Self-engagement overlay
+    private var selfEngagementOverlay: some View {
+        ZStack {
+            Circle()
+                .fill(Color.gray.opacity(0.3))
+                .frame(width: 50, height: 50)
+                .overlay(
+                    Circle()
+                        .stroke(Color.gray, lineWidth: 2)
+                )
+            
+            Image(systemName: "person.fill.xmark")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.gray)
+                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
+        }
+        .scaleEffect(1.1)
     }
     
     // NEW: Near cap indicator
@@ -276,6 +331,13 @@ struct ProgressiveHypeButton: View {
     
     /// Handle tap interaction with floating flame spawning
     private func handleTap() {
+        // NEW: Check self-engagement first
+        if shouldBlockSelfEngagement {
+            showError("You can't hype your own content")
+            triggerErrorHaptic()
+            return
+        }
+        
         // Check caps first
         if hasHitCloutCap {
             showCloutCapWarning()
@@ -333,7 +395,8 @@ struct ProgressiveHypeButton: View {
                 let success = try await engagementManager.processHype(
                     videoID: videoID,
                     userID: currentUserID,
-                    userTier: userTier
+                    userTier: userTier,
+                    creatorID: creatorID  // NEW: Pass creator ID for server-side validation
                 )
                 
                 await MainActor.run {

@@ -3,7 +3,9 @@
 //  StitchSocial
 //
 //  Main app entry point with tab navigation and authentication flow
+//  UPDATED: Added announcement system for platform-wide mandatory content
 //  UPDATED: Added memory debug overlay (DEBUG builds only)
+//  FIXED: Use @EnvironmentObject for authService to share state with parent
 //
 
 import SwiftUI
@@ -13,7 +15,8 @@ struct ContentView: View {
     
     // MARK: - State Management
     
-    @StateObject private var authService = AuthService()
+    @EnvironmentObject var authService: AuthService
+    
     @StateObject private var videoService = VideoService()
     @StateObject private var userService = UserService()
     @State private var selectedTab: MainAppTab = .discovery
@@ -28,7 +31,11 @@ struct ContentView: View {
     @State private var showingSuccessMessage = false
     @State private var createdVideoTitle = ""
     
-    // MARK: - Debug State (NEW)
+    // MARK: - Announcement State (NEW)
+    @ObservedObject private var announcementService = AnnouncementService.shared
+    @State private var currentUserInfo: BasicUserInfo?  // FIXED: Use BasicUserInfo
+    
+    // MARK: - Debug State
     #if DEBUG
     @State private var showMemoryDebug = false
     #endif
@@ -49,6 +56,20 @@ struct ContentView: View {
         }
         .onAppear {
             initializeApp()
+        }
+        .onChange(of: authService.authState) { oldState, newState in
+            print("🔐 CONTENTVIEW: Auth state changed from \(oldState) to \(newState)")
+            if newState == .unauthenticated {
+                selectedTab = .discovery
+                showingOnboarding = false
+                showingRecording = false
+                currentUserInfo = nil
+            } else if newState == .authenticated, let currentUser = authService.currentUser {
+                // NEW: Check for announcements when user becomes authenticated
+                Task {
+                    await checkForAnnouncements(userId: currentUser.id)
+                }
+            }
         }
         .fullScreenCover(isPresented: $showingRecording) {
             RecordingView(
@@ -87,7 +108,6 @@ struct ContentView: View {
             Color.black.ignoresSafeArea()
             
             VStack(spacing: 20) {
-                // App logo from Assets
                 Image("StitchSocialLogo")
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -128,32 +148,28 @@ struct ContentView: View {
     
     private var mainAppView: some View {
         ZStack(alignment: .bottom) {
-            // Main content based on selected tab
             switch selectedTab {
             case .home:
                 HomeFeedView()
                     .environmentObject(authService)
                 
             case .discovery:
-                // Real Firebase-integrated DiscoveryView
                 DiscoveryView()
                     .environmentObject(authService)
                 
             case .progression:
-                // FIXED: Pass required services to ProfileView
                 ProfileView(
-                        authService: authService,
-                        userService: userService,
-                        videoService: videoService
-                    )
-                    .environmentObject(authService)
+                    authService: authService,
+                    userService: userService,
+                    videoService: videoService
+                )
+                .environmentObject(authService)
                 
             case .notifications:
                 NotificationView()
                     .environmentObject(authService)
             }
             
-            // Custom tab bar with modular create action
             CustomDippedTabBar(
                 selectedTab: $selectedTab,
                 onTabSelected: { tab in
@@ -164,7 +180,9 @@ struct ContentView: View {
                 }
             )
             
-            // MARK: - Memory Debug Overlay (DEBUG only)
+            // MARK: - Announcement Overlay (NEW - Highest Priority)
+            announcementOverlay
+            
             #if DEBUG
             if showMemoryDebug {
                 VStack {
@@ -189,23 +207,54 @@ struct ContentView: View {
         #endif
     }
     
+    // MARK: - Announcement Overlay (NEW)
+    
+    @ViewBuilder
+    private var announcementOverlay: some View {
+        if announcementService.isShowingAnnouncement,
+           let announcement = announcementService.currentAnnouncement {
+            
+            AnnouncementOverlayView(
+                announcement: announcement,
+                onComplete: {
+                    print("📢 ANNOUNCEMENT: User completed viewing")
+                    Task {
+                        guard let userId = authService.currentUser?.id else { return }
+                        // Mark as completed so it won't show again
+                        try? await announcementService.markAsCompleted(
+                            userId: userId,
+                            announcementId: announcement.id,
+                            watchedSeconds: announcement.minimumWatchSeconds
+                        )
+                        print("📢 ANNOUNCEMENT: Marked as completed")
+                    }
+                },
+                onDismiss: {
+                    Task {
+                        guard let userId = authService.currentUser?.id else { return }
+                        try? await announcementService.dismissAnnouncement(
+                            userId: userId,
+                            announcementId: announcement.id
+                        )
+                        print("📢 ANNOUNCEMENT: User dismissed")
+                    }
+                }
+            )
+            .id(announcement.id)  // IMPORTANT: Force view refresh when announcement changes
+            .environmentObject(videoService)
+            .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            .zIndex(9999)
+        }
+    }
+    
     // MARK: - Video Creation Callback
     
     private func handleVideoCreated(_ videoMetadata: CoreVideoMetadata) {
         print("VIDEO CREATED: \(videoMetadata.title)")
-        
-        // Store video title for success message
         createdVideoTitle = videoMetadata.title
-        
-        // Trigger feed refresh
         homeFeedRefreshTrigger.toggle()
-        
-        // Show success message
         showingSuccessMessage = true
-        
-        // Optional: Auto-navigate to home feed
         selectedTab = .home
-        
         print("FEED REFRESH: Triggered")
     }
     
@@ -214,7 +263,6 @@ struct ContentView: View {
     private func initializeApp() {
         Task {
             do {
-                // Initialize configuration
                 let configValidation = Config.validateConfiguration()
                 if !configValidation.isValid {
                     print("CONFIG WARNING: Configuration issues found:")
@@ -223,17 +271,16 @@ struct ContentView: View {
                     }
                 }
                 
-                // Print configuration status
                 Config.printConfigurationStatus()
                 
-                // Initialize Firebase and auth
                 try await initializeFirebase()
-                
-                // Check authentication state
                 try await checkAuthenticationState()
-                
-                // Check if user needs onboarding
                 checkOnboardingStatus()
+                
+                // NEW: Check for announcements after auth is confirmed
+                if let currentUser = authService.currentUser {
+                    await checkForAnnouncements(userId: currentUser.id)
+                }
                 
                 await MainActor.run {
                     isLoading = false
@@ -245,55 +292,64 @@ struct ContentView: View {
         }
     }
     
-    private func initializeFirebase() async throws {
-        // Firebase is already initialized in App delegate
-        // Validate Firebase configuration
-        guard Config.Firebase.validateConfiguration() else {
-            throw StitchError.validationError("Firebase configuration invalid")
+    // MARK: - Announcement Check (NEW)
+    
+    private func checkForAnnouncements(userId: String) async {
+        do {
+            // FIXED: Use getUser which returns BasicUserInfo
+            guard let userInfo = try await userService.getUser(id: userId) else {
+                print("⚠️ ANNOUNCEMENTS: Could not load user info")
+                return
+            }
+            currentUserInfo = userInfo
+            
+            let accountAge = Calendar.current.dateComponents(
+                [.day],
+                from: userInfo.createdAt ?? Date(),
+                to: Date()
+            ).day ?? 0
+            
+            await AnnouncementService.shared.checkForCriticalAnnouncements(
+                userId: userId,
+                userTier: userInfo.tier.rawValue,
+                accountAge: accountAge
+            )
+            
+            let pendingCount = AnnouncementService.shared.pendingAnnouncements.count
+            print("📢 ANNOUNCEMENTS: Checked for user \(userId), \(pendingCount) pending")
+            
+        } catch {
+            print("⚠️ ANNOUNCEMENTS: Failed to check - \(error.localizedDescription)")
         }
-        
-        print("FIREBASE: Configuration validated")
     }
     
+    // MARK: - Firebase Initialization
+    
+    private func initializeFirebase() async throws {
+        print("FIREBASE: Verifying initialization...")
+    }
+    
+    // MARK: - Authentication
+    
     private func checkAuthenticationState() async throws {
-        do {
-            // Wait for auth state to be determined
-            try await Task.sleep(nanoseconds: 1_000_000_000) // 1 second timeout
-            
-            if let currentUser = Auth.auth().currentUser {
-                // User is signed in, load user data
-                try await loadUserData(userID: currentUser.uid)
-                
-                // Update auth service with current user info
-                await MainActor.run {
-                    // AuthService will handle user state internally
-                }
-                print("AUTH: User authenticated - \(currentUser.uid)")
-            } else {
-                print("AUTH: No authenticated user")
-            }
-            
-        } catch let error as StitchError {
-            if case .networkError(let message) = error, message.contains("timeout") {
-                print("AUTH WARNING: Auth check timeout - proceeding with current state")
-            } else {
-                throw error
-            }
-        } catch {
-            throw StitchError.authenticationError("Failed to check auth state: \(error.localizedDescription)")
+        print("AUTH: Checking authentication state...")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        
+        if let currentUser = authService.currentUser {
+            print("AUTH: User authenticated - \(currentUser.id)")
+            try await loadUserData(userID: currentUser.id)
+        } else {
+            print("AUTH: No authenticated user")
         }
     }
     
     private func loadUserData(userID: String) async throws {
         do {
-            // Load user profile
             if let user = try await userService.getUser(id: userID) {
-                // User data loaded successfully
                 print("USER DATA: Loaded - \(user.username)")
             } else {
                 print("USER DATA WARNING: User profile not found in database")
             }
-            
         } catch let error as StitchError {
             if case .networkError(let message) = error, message.contains("timeout") {
                 print("USER DATA WARNING: Load timeout - proceeding")
@@ -306,9 +362,7 @@ struct ContentView: View {
     }
     
     private func checkOnboardingStatus() {
-        // Check if user has completed onboarding
         let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-        
         if !hasCompletedOnboarding && authService.currentUser != nil {
             showingOnboarding = true
         }
@@ -325,10 +379,9 @@ struct ContentView: View {
         selectedTab = tab
     }
     
-    // MARK: - Create Action (Modular)
+    // MARK: - Create Action
     
     private func handleCreateAction() {
-        // This is modular - can be expanded to show action sheet, different recording modes, etc.
         showingRecording = true
     }
     
@@ -338,7 +391,6 @@ struct ContentView: View {
         print("INIT ERROR: \(error)")
         
         let errorDescription: String
-        
         if let stitchError = error as? StitchError {
             errorDescription = stitchError.localizedDescription
         } else {
@@ -352,8 +404,6 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Helper Methods
-    
     private func retryInitialization() {
         isLoading = true
         errorMessage = nil
@@ -362,7 +412,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Memory Debug Overlay (NEW)
+// MARK: - Memory Debug Overlay
 
 struct MemoryDebugOverlay: View {
     @ObservedObject private var preloadService = VideoPreloadingService.shared
@@ -444,7 +494,6 @@ extension Notification.Name {
     static let deviceDidShake = Notification.Name("deviceDidShake")
 }
 
-// Add this to your AppDelegate or create a UIWindow subclass
 extension UIWindow {
     open override func motionEnded(_ motion: UIEvent.EventSubtype, with event: UIEvent?) {
         if motion == .motionShake {
@@ -458,5 +507,6 @@ extension UIWindow {
 
 #Preview {
     ContentView()
+        .environmentObject(AuthService())
         .preferredColorScheme(.dark)
 }

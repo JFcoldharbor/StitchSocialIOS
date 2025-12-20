@@ -4,6 +4,7 @@
 //
 //  Layer 4: Services - Video Watermarking for Sharing
 //  Features: Jumping watermark, end screen, sound effect
+//  UPDATED: Increased watermark size by 50% for better visibility
 //
 
 import Foundation
@@ -40,7 +41,7 @@ class VideoWatermarkService {
     
     // Jump interval in seconds
     private let jumpInterval: Double = 2.0
-    private let watermarkPadding: CGFloat = 20.0
+    private let watermarkPadding: CGFloat = 30.0  // Increased from 20 to match larger watermark
     private let watermarkOpacity: Float = 1.0
     
     // End screen duration
@@ -834,11 +835,11 @@ class VideoWatermarkService {
         let rawScale = min(videoSize.width, videoSize.height) / 1080.0
         let scale = max(rawScale, 0.8)
         
-        // Original sizes - no background box
-        let logoSize: CGFloat = 36 * scale
-        let textWidth: CGFloat = 140 * scale
-        let width = logoSize + 10 * scale + textWidth
-        let height = logoSize + 8 * scale
+        // INCREASED SIZES - 50% bigger for better visibility
+        let logoSize: CGFloat = 54 * scale       // Was 36
+        let textWidth: CGFloat = 200 * scale     // Was 140
+        let width = logoSize + 12 * scale + textWidth
+        let height = logoSize + 10 * scale
         let scaledSize = CGSize(width: width, height: height)
         
         // Create context with transparency (no background)
@@ -861,7 +862,7 @@ class VideoWatermarkService {
             print("✅ WATERMARK: Using custom StitchSocialLogo")
         } else {
             print("⚠️ WATERMARK: StitchSocialLogo not found, using fallback")
-            let iconConfig = UIImage.SymbolConfiguration(pointSize: 28 * scale, weight: .semibold)
+            let iconConfig = UIImage.SymbolConfiguration(pointSize: 42 * scale, weight: .semibold)  // Was 28
             if let icon = UIImage(systemName: "film.stack", withConfiguration: iconConfig)?
                 .withTintColor(.white, renderingMode: .alwaysOriginal) {
                 icon.draw(in: logoRect)
@@ -869,16 +870,16 @@ class VideoWatermarkService {
         }
         
         // Text to the right of logo
-        let textX = logoRect.maxX + 10 * scale
+        let textX = logoRect.maxX + 12 * scale
         
         // Shadow for visibility on any background
         let shadowStyle = NSShadow()
         shadowStyle.shadowColor = UIColor.black.withAlphaComponent(0.8)
-        shadowStyle.shadowOffset = CGSize(width: 1, height: 1)
-        shadowStyle.shadowBlurRadius = 3
+        shadowStyle.shadowOffset = CGSize(width: 1.5, height: 1.5)
+        shadowStyle.shadowBlurRadius = 4
         
-        // Username - original size 16pt
-        let usernameFont = UIFont.systemFont(ofSize: 16 * scale, weight: .bold)
+        // Username - INCREASED from 16pt to 24pt
+        let usernameFont = UIFont.systemFont(ofSize: 24 * scale, weight: .bold)
         let usernameAttributes: [NSAttributedString.Key: Any] = [
             .font: usernameFont,
             .foregroundColor: UIColor.white,
@@ -889,12 +890,12 @@ class VideoWatermarkService {
             x: textX,
             y: 4 * scale,
             width: textWidth,
-            height: 22 * scale
+            height: 32 * scale  // Was 22
         )
         usernameText.draw(in: usernameRect, withAttributes: usernameAttributes)
         
-        // StitchSocial - original size 13pt
-        let appFont = UIFont.systemFont(ofSize: 13 * scale, weight: .medium)
+        // StitchSocial - INCREASED from 13pt to 19pt
+        let appFont = UIFont.systemFont(ofSize: 19 * scale, weight: .medium)
         let appAttributes: [NSAttributedString.Key: Any] = [
             .font: appFont,
             .foregroundColor: UIColor.white.withAlphaComponent(0.9),
@@ -903,9 +904,9 @@ class VideoWatermarkService {
         let appText = "StitchSocial" as NSString
         let appRect = CGRect(
             x: textX,
-            y: 26 * scale,
+            y: 36 * scale,  // Was 26
             width: textWidth,
-            height: 18 * scale
+            height: 26 * scale  // Was 18
         )
         appText.draw(in: appRect, withAttributes: appAttributes)
         

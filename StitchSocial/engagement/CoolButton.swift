@@ -5,7 +5,7 @@
 //  Layer 8: UI - Progressive Tapping Cool Button with 3D Effects and Floating Icons
 //  Dependencies: EngagementManager (Layer 6), FloatingIconManager
 //  Features: 3D depth, progressive tapping, TikTok-style floating snowflake animations
-//  UPDATED: New hybrid clout system with tier-based visual hypes and clout caps
+//  UPDATED: Self-engagement restriction - only founders can cool their own content
 //
 
 import SwiftUI
@@ -16,6 +16,7 @@ struct ProgressiveCoolButton: View {
     
     // MARK: - Properties
     let videoID: String
+    let creatorID: String  // NEW: Video creator's ID for self-engagement check
     let currentCoolCount: Int
     let currentUserID: String
     let userTier: UserTier
@@ -41,6 +42,23 @@ struct ProgressiveCoolButton: View {
         engagementManager.isProcessingEngagement
     }
     
+    // MARK: - Self-Engagement Check (NEW)
+    
+    /// Check if user is trying to engage with their own content
+    private var isSelfEngagement: Bool {
+        currentUserID == creatorID
+    }
+    
+    /// Check if user is a founder tier (allowed to self-engage)
+    private var isFounderTier: Bool {
+        userTier == .founder || userTier == .coFounder
+    }
+    
+    /// Whether self-engagement should be blocked
+    private var shouldBlockSelfEngagement: Bool {
+        isSelfEngagement && !isFounderTier
+    }
+    
     // Engagement cap tracking
     private var hasHitEngagementCap: Bool {
         engagementState.hasHitEngagementCap()
@@ -49,6 +67,11 @@ struct ProgressiveCoolButton: View {
     // NEW: Visual hype multiplier for this tier (Cool uses same multipliers)
     private var visualCoolMultiplier: Int {
         EngagementConfig.getVisualHypeMultiplier(for: userTier)
+    }
+    
+    /// Whether button should be disabled
+    private var isDisabled: Bool {
+        shouldBlockSelfEngagement || hasHitEngagementCap
     }
     
     var body: some View {
@@ -62,6 +85,11 @@ struct ProgressiveCoolButton: View {
                 
                 // Cool count display (always shown)
                 coolCountDisplay
+                
+                // NEW: Self-engagement indicator
+                if shouldBlockSelfEngagement {
+                    selfEngagementOverlay
+                }
                 
                 // Troll warning overlay
                 if showingTrollWarning {
@@ -79,10 +107,10 @@ struct ProgressiveCoolButton: View {
                 axis: (x: 1, y: 0, z: 0)
             )
             .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isPressed)
-            .opacity(hasHitEngagementCap ? 0.5 : 1.0)
+            .opacity(isDisabled ? 0.5 : 1.0)
         }
         .buttonStyle(PlainButtonStyle())
-        .disabled(hasHitEngagementCap)
+        .disabled(isDisabled)
         .background(
             GeometryReader { geo in
                 Color.clear
@@ -126,11 +154,15 @@ struct ProgressiveCoolButton: View {
                     .opacity(0.3 - Double(layer) * 0.075)
             }
             
-            // Main button background with cap indicator
+            // Main button background with cap/self-engagement indicator
             Circle()
                 .fill(
                     RadialGradient(
-                        colors: hasHitEngagementCap ? [
+                        colors: shouldBlockSelfEngagement ? [
+                            Color.gray.opacity(0.4),
+                            Color.gray.opacity(0.3),
+                            Color.black.opacity(0.8)
+                        ] : hasHitEngagementCap ? [
                             Color.red.opacity(0.4),
                             Color.blue.opacity(0.3),
                             Color.black.opacity(0.8)
@@ -149,7 +181,9 @@ struct ProgressiveCoolButton: View {
                     Circle()
                         .stroke(
                             LinearGradient(
-                                colors: hasHitEngagementCap ?
+                                colors: shouldBlockSelfEngagement ?
+                                [.gray, .gray.opacity(0.6)] :
+                                hasHitEngagementCap ?
                                 [.red, .orange] :
                                 isProcessing ?
                                 [.cyan, .blue, .white] : [.cyan.opacity(0.8), .blue.opacity(0.6), .white.opacity(0.4)],
@@ -160,7 +194,7 @@ struct ProgressiveCoolButton: View {
                         )
                         .opacity(0.7 + sin(shimmerPhase) * 0.3)
                 )
-                .shadow(color: .cyan.opacity(0.3), radius: 4, x: 0, y: 2)
+                .shadow(color: shouldBlockSelfEngagement ? .gray.opacity(0.3) : .cyan.opacity(0.3), radius: 4, x: 0, y: 2)
         }
     }
     
@@ -168,7 +202,7 @@ struct ProgressiveCoolButton: View {
         ZStack {
             // Shadow snowflakes for depth (always snowflake)
             ForEach(0..<3, id: \.self) { layer in
-                Image(systemName: hasHitEngagementCap ? "snowflake.slash" : "snowflake")
+                Image(systemName: shouldBlockSelfEngagement ? "snowflake.slash" : hasHitEngagementCap ? "snowflake.slash" : "snowflake")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(
                         LinearGradient(
@@ -185,20 +219,22 @@ struct ProgressiveCoolButton: View {
             }
             
             // Main snowflake icon with gradient
-            Image(systemName: hasHitEngagementCap ? "snowflake.slash" : "snowflake")
+            Image(systemName: shouldBlockSelfEngagement ? "snowflake.slash" : hasHitEngagementCap ? "snowflake.slash" : "snowflake")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(
                     LinearGradient(
-                        colors: hasHitEngagementCap ?
+                        colors: shouldBlockSelfEngagement ?
+                        [.gray, .gray.opacity(0.7), .black.opacity(0.5)] :
+                        hasHitEngagementCap ?
                         [.red, .orange, .black.opacity(0.5)] :
                         [.white, .cyan, .blue, .black.opacity(0.1)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
                 )
-                .shadow(color: hasHitEngagementCap ? .red : .cyan, radius: 6, x: 0, y: 0)
+                .shadow(color: shouldBlockSelfEngagement ? .gray : hasHitEngagementCap ? .red : .cyan, radius: 6, x: 0, y: 0)
                 .shadow(color: .black.opacity(0.3), radius: 2, x: 1, y: 1)
-                .rotationEffect(.degrees(hasHitEngagementCap ? 0 : shimmerPhase * 2))
+                .rotationEffect(.degrees(shouldBlockSelfEngagement || hasHitEngagementCap ? 0 : shimmerPhase * 2))
         }
     }
     
@@ -208,6 +244,25 @@ struct ProgressiveCoolButton: View {
             .foregroundColor(.white)
             .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
             .offset(y: -35)
+    }
+    
+    // NEW: Self-engagement overlay
+    private var selfEngagementOverlay: some View {
+        ZStack {
+            Circle()
+                .fill(Color.gray.opacity(0.3))
+                .frame(width: 50, height: 50)
+                .overlay(
+                    Circle()
+                        .stroke(Color.gray, lineWidth: 2)
+                )
+            
+            Image(systemName: "person.fill.xmark")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.gray)
+                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
+        }
+        .scaleEffect(1.1)
     }
     
     private var trollWarningOverlay: some View {
@@ -277,6 +332,13 @@ struct ProgressiveCoolButton: View {
     
     /// Handle tap interaction with floating snowflake spawning
     private func handleTap() {
+        // NEW: Check self-engagement first
+        if shouldBlockSelfEngagement {
+            showError("You can't cool your own content")
+            triggerErrorHaptic()
+            return
+        }
+        
         // Check engagement cap
         if hasHitEngagementCap {
             showEngagementCapWarning()
@@ -326,7 +388,8 @@ struct ProgressiveCoolButton: View {
                 let success = try await engagementManager.processCool(
                     videoID: videoID,
                     userID: currentUserID,
-                    userTier: userTier
+                    userTier: userTier,
+                    creatorID: creatorID  // NEW: Pass creator ID for server-side validation
                 )
                 
                 await MainActor.run {
@@ -404,6 +467,12 @@ struct ProgressiveCoolButton: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             showingError = false
         }
+    }
+    
+    /// Trigger error haptic
+    private func triggerErrorHaptic() {
+        let errorImpact = UINotificationFeedbackGenerator()
+        errorImpact.notificationOccurred(.error)
     }
     
     /// Start shimmer animation

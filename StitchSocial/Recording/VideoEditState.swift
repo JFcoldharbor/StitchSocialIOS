@@ -2,17 +2,13 @@
 //  VideoEditState.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 12/14/25.
-//
-
-
-//
-//  VideoEditState.swift
-//  StitchSocial
-//
 //  Layer 3: State Management - Video Edit State During Review
 //  Dependencies: Foundation, AVFoundation
 //  Features: Tracks trim, filter, caption state before posting
+//
+//  🔧 UPDATED: Added compression state tracking
+//  🔧 UPDATED: Better trim detection (checks both start AND end)
+//  🔧 UPDATED: Added finalVideoURL that prefers compressed/processed
 //
 
 import Foundation
@@ -57,6 +53,14 @@ struct VideoEditState: Codable {
     var processedVideoURL: URL?
     var processedThumbnailURL: URL?
     
+    // MARK: - 🆕 NEW: Compression State
+    
+    var compressedVideoURL: URL?
+    var compressionComplete: Bool
+    var compressionProgress: Double
+    var originalFileSize: Int64
+    var compressedFileSize: Int64
+    
     // MARK: - Draft State
     
     var draftID: String
@@ -92,6 +96,13 @@ struct VideoEditState: Codable {
         self.processedVideoURL = nil
         self.processedThumbnailURL = nil
         
+        // Default: not compressed
+        self.compressedVideoURL = nil
+        self.compressionComplete = false
+        self.compressionProgress = 0.0
+        self.originalFileSize = 0
+        self.compressedFileSize = 0
+        
         // Draft metadata
         self.draftID = draftID
         self.lastModified = Date()
@@ -100,9 +111,17 @@ struct VideoEditState: Codable {
     // MARK: - Modification Methods
     
     mutating func updateTrimRange(start: TimeInterval, end: TimeInterval) {
+        let oldStart = trimStartTime
+        let oldEnd = trimEndTime
+        
         trimStartTime = max(0, min(start, videoDuration))
         trimEndTime = max(trimStartTime, min(end, videoDuration))
         lastModified = Date()
+        
+        // 🆕 Invalidate compression if trim changed significantly
+        if abs(oldStart - trimStartTime) > 0.5 || abs(oldEnd - trimEndTime) > 0.5 {
+            invalidateCompression()
+        }
     }
     
     mutating func setFilter(_ filter: VideoFilter?, intensity: Double = 1.0) {
@@ -127,6 +146,34 @@ struct VideoEditState: Codable {
             lastModified = Date()
         }
     }
+    
+    // MARK: - 🆕 NEW: Compression Methods
+    
+    mutating func setCompressedVideo(url: URL, originalSize: Int64, compressedSize: Int64) {
+        compressedVideoURL = url
+        compressionComplete = true
+        compressionProgress = 1.0
+        self.originalFileSize = originalSize
+        self.compressedFileSize = compressedSize
+        lastModified = Date()
+    }
+    
+    mutating func updateCompressionProgress(_ progress: Double) {
+        compressionProgress = max(0.0, min(1.0, progress))
+    }
+    
+    mutating func invalidateCompression() {
+        // Clean up old compressed file
+        if let url = compressedVideoURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        compressedVideoURL = nil
+        compressionComplete = false
+        compressionProgress = 0.0
+        compressedFileSize = 0
+    }
+    
+    // MARK: - Processing State
     
     mutating func startProcessing() {
         isProcessing = true
@@ -162,6 +209,39 @@ struct VideoEditState: Codable {
         return true
     }
     
+    // MARK: - 🔧 IMPROVED: Edit Detection
+    
+    /// Detects if start was trimmed (more than 0.1s from beginning)
+    var hasStartTrim: Bool {
+        trimStartTime > 0.1
+    }
+    
+    /// Detects if end was trimmed (more than 0.1s from end)
+    var hasEndTrim: Bool {
+        trimEndTime < (videoDuration - 0.1)
+    }
+    
+    /// 🔧 FIXED: Properly detects BOTH start and end trimming
+    var hasTrim: Bool {
+        hasStartTrim || hasEndTrim
+    }
+    
+    var hasFilter: Bool {
+        selectedFilter != nil
+    }
+    
+    var hasCaptions: Bool {
+        !captions.isEmpty
+    }
+    
+    var hasEdits: Bool {
+        hasTrim || hasFilter || hasCaptions
+    }
+    
+    var hasCompression: Bool {
+        compressionComplete && compressedVideoURL != nil
+    }
+    
     // MARK: - Export Readiness
     
     var isReadyToPost: Bool {
@@ -176,26 +256,24 @@ struct VideoEditState: Codable {
         return true
     }
     
-    var hasEdits: Bool {
-        // Check if any edits were made
-        let hasTrim = trimStartTime > 0 || trimEndTime < videoDuration
-        let hasFilter = selectedFilter != nil
-        let hasCaptions = !captions.isEmpty
-        
-        return hasTrim || hasFilter || hasCaptions
-    }
-    
     var isProcessingComplete: Bool {
         return processedVideoURL != nil && processedThumbnailURL != nil
     }
     
-    // MARK: - Final Video URL
+    // MARK: - 🔧 IMPROVED: Final Video URL
     
-    /// Returns the URL to use for posting (processed if edited, original if not)
+    /// Returns the URL to use for posting
+    /// Priority: processed (if edited) > compressed > original
     var finalVideoURL: URL {
+        // If user made edits, use processed version
         if hasEdits, let processed = processedVideoURL {
             return processed
         }
+        // Otherwise prefer compressed version
+        if hasCompression, let compressed = compressedVideoURL {
+            return compressed
+        }
+        // Fall back to original
         return videoURL
     }
     
@@ -204,6 +282,21 @@ struct VideoEditState: Codable {
             return processedThumbnailURL
         }
         return nil // Will generate from original
+    }
+    
+    // MARK: - 🆕 NEW: Compression Stats
+    
+    var compressionRatio: Double {
+        guard originalFileSize > 0, compressedFileSize > 0 else { return 1.0 }
+        return Double(compressedFileSize) / Double(originalFileSize)
+    }
+    
+    var compressionSavingsPercent: Double {
+        (1.0 - compressionRatio) * 100.0
+    }
+    
+    var compressionSavingsFormatted: String {
+        String(format: "%.0f%% smaller", compressionSavingsPercent)
     }
 }
 

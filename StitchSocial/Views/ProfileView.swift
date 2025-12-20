@@ -7,6 +7,7 @@
 //  Features: Lightweight thumbnails, profile refresh, proper video playback with vertical navigation
 //  FIXED: Removed .onAppear/.onDisappear modifiers that were breaking fullScreenCover
 //  UPDATED: Added Collections Row between header and tabs
+//  UPDATED: Added pinned videos support and infinite scroll pagination
 //
 
 import SwiftUI
@@ -279,10 +280,10 @@ struct ProfileView: View {
                 // Remove from local array
                 userDrafts.removeAll { $0.id == draft.id }
                 
-                print("ðŸ—‘ï¸ PROFILE: Deleted draft \(draft.id)")
+                print("🗑️ PROFILE: Deleted draft \(draft.id)")
             } catch {
                 collectionError = "Failed to delete draft: \(error.localizedDescription)"
-                print("âŒ PROFILE: Failed to delete draft: \(error)")
+                print("❌ PROFILE: Failed to delete draft: \(error)")
             }
         }
     }
@@ -302,9 +303,9 @@ struct ProfileView: View {
                 userDrafts = try await collectionService.loadUserDrafts(creatorID: userID)
             }
             
-            print("ðŸ“š PROFILE: Loaded \(userCollections.count) collections, \(userDrafts.count) drafts")
+            print("📚 PROFILE: Loaded \(userCollections.count) collections, \(userDrafts.count) drafts")
         } catch {
-            print("âŒ PROFILE: Failed to load collections: \(error)")
+            print("❌ PROFILE: Failed to load collections: \(error)")
         }
         
         isLoadingCollections = false
@@ -540,7 +541,7 @@ struct ProfileView: View {
     
     private func statsRow(user: BasicUserInfo) -> some View {
         HStack(spacing: 30) {
-            statItem(title: "Videos", value: "\(viewModel.userVideos.count)")
+            statItem(title: "Videos", value: "\(viewModel.userVideos.count + viewModel.pinnedVideos.count)")
             
             Button(action: {
                 Task {
@@ -667,7 +668,7 @@ struct ProfileView: View {
         .buttonStyle(PlainButtonStyle())
     }
     
-    // MARK: - Video Grid Section
+    // MARK: - Video Grid Section (UPDATED with Pinning & Pagination)
     
     private var videoGridSection: some View {
         ProfileVideoGrid(
@@ -676,11 +677,39 @@ struct ProfileView: View {
             tabTitles: viewModel.tabTitles,
             isLoading: viewModel.isLoadingVideos,
             isCurrentUserProfile: viewModel.isOwnProfile,
+            pinnedVideos: viewModel.pinnedVideos,
+            canPinMore: viewModel.pinnedVideoIDs.count < ProfileViewModel.maxPinnedVideos,
+            hasMoreVideos: viewModel.hasMoreVideos,
+            isLoadingMore: viewModel.isLoadingMoreVideos,
             onVideoTap: { video, index, videos in
                 openVideoInFullscreen(video: video)
             },
             onVideoDelete: { video in
                 Task { await deleteVideo(video) }
+            },
+            onPinVideo: { video in
+                Task {
+                    let success = await viewModel.pinVideo(video)
+                    if success {
+                        print("📌 PROFILE: Pinned video \(video.id)")
+                    }
+                }
+            },
+            onUnpinVideo: { video in
+                Task {
+                    let success = await viewModel.unpinVideo(video)
+                    if success {
+                        print("📌 PROFILE: Unpinned video \(video.id)")
+                    }
+                }
+            },
+            isVideoPinned: { video in
+                viewModel.isVideoPinned(video)
+            },
+            onLoadMore: {
+                Task {
+                    await viewModel.loadMoreVideos()
+                }
             }
         )
     }
@@ -824,23 +853,23 @@ struct ProfileView: View {
         var bioComponents: [String] = []
         
         if clout > OptimizationConfig.User.defaultStartingClout * 5 {
-            bioComponents.append("ðŸŒŸ High performer")
+            bioComponents.append("🌟 High performer")
         }
         
         if videoCount >= OptimizationConfig.Threading.maxChildrenPerThread {
-            bioComponents.append("ðŸ“¹ Active creator")
+            bioComponents.append("📹 Active creator")
         }
         
         if followerCount >= 100 {
-            bioComponents.append("ðŸ’¥ Community leader")
+            bioComponents.append("👥 Community leader")
         }
         
         if user.tier != .rookie {
-            bioComponents.append("ðŸš€ \(user.tier.displayName)")
+            bioComponents.append("🚀 \(user.tier.displayName)")
         }
         
         if user.isVerified {
-            bioComponents.append("âœ… Verified")
+            bioComponents.append("✅ Verified")
         }
         
         let bio = bioComponents.joined(separator: " | ")
@@ -850,13 +879,13 @@ struct ProfileView: View {
     private func generateSampleBio(for user: BasicUserInfo) -> String? {
         switch user.tier {
         case .founder:
-            return "Building the future of social video ðŸš€ | Creator of Stitch Social"
+            return "Building the future of social video 🚀 | Creator of Stitch Social"
         case .coFounder:
-            return "Co-founder at Stitch Social | Passionate about connecting creators ðŸŽ¬"
+            return "Co-founder at Stitch Social | Passionate about connecting creators 🎬"
         case .topCreator:
-            return "Top creator with \(viewModel.formatClout(user.clout)) clout | Making viral content daily âœ¨"
+            return "Top creator with \(viewModel.formatClout(user.clout)) clout | Making viral content daily ✨"
         case .partner:
-            return "Official partner creator | \(viewModel.userVideos.count) threads and counting ðŸ”¥"
+            return "Official partner creator | \(viewModel.userVideos.count) threads and counting 🔥"
         default:
             return nil
         }

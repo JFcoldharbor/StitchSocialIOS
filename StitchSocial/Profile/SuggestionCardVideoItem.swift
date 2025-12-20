@@ -2,14 +2,6 @@
 //  SuggestionCardVideoItem.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 12/17/25.
-//
-
-
-//
-//  SuggestionCardVideoItem.swift
-//  StitchSocial
-//
 //  Suggestion card that acts as a video item in the feed
 //  Swipe up/down like a normal video to navigate
 //
@@ -55,6 +47,7 @@ struct SuggestionCardVideoItem: View {
                     // Current user card
                     if currentIndex < suggestions.count {
                         userCard(suggestions[currentIndex])
+                            .offset(x: dragOffset)
                     }
                     
                     Spacer()
@@ -63,7 +56,7 @@ struct SuggestionCardVideoItem: View {
                     progressIndicators
                     
                     // Swipe hint
-                    Text("Swipe up for next • Swipe down to skip")
+                    Text("Swipe left/right for users • Swipe up/down for feed")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.6))
                         .padding(.bottom, 40)
@@ -73,8 +66,8 @@ struct SuggestionCardVideoItem: View {
             .gesture(
                 DragGesture()
                     .onChanged { value in
-                        // Only allow vertical drag
-                        dragOffset = value.translation.height
+                        // Allow both directions during drag
+                        dragOffset = value.translation.width
                     }
                     .onEnded { value in
                         handleSwipe(value)
@@ -208,25 +201,47 @@ struct SuggestionCardVideoItem: View {
         }
         
         let threshold: CGFloat = 50
+        let absWidth = abs(value.translation.width)
+        let absHeight = abs(value.translation.height)
         
-        if value.translation.height < -threshold {
-            // Swiped up - next user or dismiss
-            if currentIndex < suggestions.count - 1 {
-                withAnimation {
-                    currentIndex += 1
-                }
-            } else {
+        // Determine dominant direction
+        if absWidth > absHeight {
+            // HORIZONTAL SWIPE - Navigate between users
+            if value.translation.width < -threshold {
+                // Swiped left - next user
+                nextUser()
+            } else if value.translation.width > threshold {
+                // Swiped right - previous user
+                previousUser()
+            }
+        } else {
+            // VERTICAL SWIPE - Exit to feed navigation
+            if abs(value.translation.height) > threshold {
+                // Any vertical swipe dismisses card to continue feed
                 onDismiss()
             }
-        } else if value.translation.height > threshold {
-            // Swiped down - previous or dismiss
-            if currentIndex > 0 {
-                withAnimation {
-                    currentIndex -= 1
-                }
-            } else {
-                onDismiss()
+        }
+    }
+    
+    private func nextUser() {
+        if currentIndex < suggestions.count - 1 {
+            withAnimation(.spring(response: 0.3)) {
+                currentIndex += 1
             }
+        } else {
+            // Last user, dismiss to continue feed
+            onDismiss()
+        }
+    }
+    
+    private func previousUser() {
+        if currentIndex > 0 {
+            withAnimation(.spring(response: 0.3)) {
+                currentIndex -= 1
+            }
+        } else {
+            // First user and swiped right, dismiss to continue feed
+            onDismiss()
         }
     }
 }

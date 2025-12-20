@@ -4,8 +4,7 @@
 //
 //  Layer 8: Views - Navigation Logic for HomeFeed
 //  Dependencies: SwiftUI, ThreadData
-//  Features: Thread/stitch navigation, offset management, smooth animations
-//  OPTION A FIX: Removed onPlaybackShouldResume - VideoPlayerComponent is self-sufficient
+//  Features: Thread/stitch navigation, offset management, smooth animations, session resume
 //
 
 import SwiftUI
@@ -31,7 +30,7 @@ class HomeFeedNavigationController: ObservableObject {
     var onVideoChanged: ((CoreVideoMetadata) -> Void)?
     var onLoadMore: (() -> Void)?
     var onNavigationTracked: (() -> Void)?
-    // REMOVED: onPlaybackShouldResume - VideoPlayerComponent handles its own playback
+    var onPlaybackShouldResume: (() -> Void)?
     
     // MARK: - Setup
     
@@ -64,6 +63,41 @@ class HomeFeedNavigationController: ObservableObject {
                 return nil
             }
             return thread.childVideos[childIndex]
+        }
+    }
+    
+    // MARK: - Session Resume - Jump to Position
+    
+    /// Jump directly to a saved position (for "pick up where you left off")
+    func jumpToPosition(threadIndex: Int, stitchIndex: Int) {
+        // Validate thread index
+        guard threadIndex >= 0 && threadIndex < threads.count else {
+            print("⚠️ NAV: Invalid thread index \(threadIndex), max is \(threads.count - 1)")
+            return
+        }
+        
+        // Validate stitch index
+        let maxStitchIndex = threads[threadIndex].childVideos.count
+        let validatedStitchIndex = min(stitchIndex, maxStitchIndex)
+        
+        // Update indices
+        currentThreadIndex = threadIndex
+        currentStitchIndex = validatedStitchIndex
+        
+        // Update offsets (no animation for instant jump)
+        verticalOffset = -CGFloat(threadIndex) * containerSize.height
+        horizontalOffset = -CGFloat(validatedStitchIndex) * containerSize.width
+        
+        // Notify of video change
+        if let newVideo = getCurrentVideo() {
+            onVideoChanged?(newVideo)
+        }
+        
+        print("📍 NAV: Jumped to position - thread \(threadIndex), stitch \(validatedStitchIndex)")
+        
+        // Resume playback after brief delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.onPlaybackShouldResume?()
         }
     }
     
@@ -125,11 +159,12 @@ class HomeFeedNavigationController: ObservableObject {
             onVideoChanged?(newVideo)
         }
         
-        // Track navigation
         onNavigationTracked?()
         
-        // REMOVED: onPlaybackShouldResume delay
-        // VideoPlayerComponent will automatically play when isActive becomes true
+        // Resume playback after animation completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.onPlaybackShouldResume?()
+        }
         
         print("🎬 MOVED TO THREAD: \(threadIndex)")
     }
@@ -152,11 +187,10 @@ class HomeFeedNavigationController: ObservableObject {
             onVideoChanged?(newVideo)
         }
         
-        // Track navigation
-        onNavigationTracked?()
-        
-        // REMOVED: onPlaybackShouldResume delay
-        // VideoPlayerComponent will automatically play when isActive becomes true
+        // Resume playback after animation completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            self.onPlaybackShouldResume?()
+        }
         
         print("🎯 MOVED TO STITCH: \(stitchIndex)")
     }

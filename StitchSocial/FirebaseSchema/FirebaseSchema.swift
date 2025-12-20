@@ -215,6 +215,9 @@ struct FirebaseSchema {
         static let privacySettings = "privacySettings"
         static let contentPreferences = "contentPreferences"
         
+        // PINNED VIDEOS (Profile feature - max 3 threads)
+        static let pinnedVideoIDs = "pinnedVideoIDs"
+        
         /// Full document path in stitchfin database
         static func documentPath(userID: String) -> String {
             return Collections.fullPath(for: Collections.users) + "/\(userID)"

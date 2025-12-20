@@ -5,7 +5,7 @@
 //  Layer 6: Coordination - Main Engagement Processing Manager
 //  Dependencies: VideoEngagementService, VideoService, UserService
 //  Features: Progressive tapping, hype rating management, INSTANT ENGAGEMENTS
-//  UPDATED: Simplified to instant engagements (no progressive tapping)
+//  UPDATED: Self-engagement restriction - only founders can engage with their own content
 //
 
 import Foundation
@@ -75,9 +75,30 @@ class EngagementManager: ObservableObject {
         return newState
     }
     
+    // MARK: - Self-Engagement Validation (NEW)
+    
+    /// Check if self-engagement should be allowed
+    /// - Returns: true if engagement should be allowed, false if blocked
+    private func canSelfEngage(userID: String, creatorID: String, userTier: UserTier) -> Bool {
+        // Not self-engagement - always allowed
+        if userID != creatorID {
+            return true
+        }
+        
+        // Self-engagement - only founders/co-founders allowed
+        return userTier == .founder || userTier == .coFounder
+    }
+    
     // MARK: - Process Hype (instant engagement)
     
-    func processHype(videoID: String, userID: String, userTier: UserTier) async throws -> Bool {
+    func processHype(videoID: String, userID: String, userTier: UserTier, creatorID: String? = nil) async throws -> Bool {
+        
+        // NEW: Self-engagement validation
+        if let creatorID = creatorID {
+            guard canSelfEngage(userID: userID, creatorID: creatorID, userTier: userTier) else {
+                throw StitchError.validationError("You can't hype your own content")
+            }
+        }
         
         // Rate limiting check
         if let lastTime = lastEngagementTime[videoID],
@@ -162,7 +183,14 @@ class EngagementManager: ObservableObject {
     
     // MARK: - Process Cool (instant engagement)
     
-    func processCool(videoID: String, userID: String, userTier: UserTier) async throws -> Bool {
+    func processCool(videoID: String, userID: String, userTier: UserTier, creatorID: String? = nil) async throws -> Bool {
+        
+        // NEW: Self-engagement validation
+        if let creatorID = creatorID {
+            guard canSelfEngage(userID: userID, creatorID: creatorID, userTier: userTier) else {
+                throw StitchError.validationError("You can't cool your own content")
+            }
+        }
         
         // Rate limiting check
         if let lastTime = lastEngagementTime[videoID],
@@ -233,7 +261,7 @@ class EngagementManager: ObservableObject {
             if let loadedState = try await videoEngagementService.loadEngagementState(key: key) {
                 await MainActor.run {
                     engagementStates[key] = loadedState
-                    print("📄 Loaded state from Firebase for \(key)")
+                    print("🔄 Loaded state from Firebase for \(key)")
                 }
             }
         } catch {

@@ -3,8 +3,10 @@
 //  StitchSocial
 //
 //  Layer 4: Core Services - Video Upload Management
-//  Handles Firebase Storage uploads and metadata persistence
-//  UPDATED: Now passes actual aspectRatio to VideoService instead of hardcoding 9:16
+//
+//  🔧 UPDATED: Removed hard 100MB rejection - now auto-compresses
+//  🔧 UPDATED: Uses FastVideoCompressor as fallback
+//  🔧 UPDATED: Better error messages for file size issues
 //
 
 import Foundation
@@ -15,7 +17,7 @@ import AVFoundation
 import UIKit
 
 /// Dedicated service for handling video uploads to Firebase
-/// Manages file uploads, thumbnail generation, and metadata persistence
+/// Now with automatic compression fallback for large files
 @MainActor
 class VideoUploadService: ObservableObject {
     
@@ -33,6 +35,12 @@ class VideoUploadService: ObservableObject {
     private let maxRetries = 2
     private let timeoutInterval: TimeInterval = 60.0
     
+    /// Maximum upload size (100 MB)
+    static let maxUploadSize: Int64 = 100 * 1024 * 1024
+    
+    /// Target size when compression is needed (50 MB for safe margin)
+    static let targetCompressedSize: Int64 = 50 * 1024 * 1024
+    
     // MARK: - Analytics
     
     @Published var totalUploads: Int = 0
@@ -42,7 +50,7 @@ class VideoUploadService: ObservableObject {
     // MARK: - Public Interface
     
     /// Uploads video with metadata to Firebase
-    /// Returns complete upload result with all URLs and metadata
+    /// 🔧 UPDATED: Now auto-compresses if file exceeds 100MB limit
     func uploadVideo(
         videoURL: URL,
         metadata: VideoUploadMetadata,
@@ -59,33 +67,37 @@ class VideoUploadService: ObservableObject {
         }
         
         do {
-            // Step 1: Validate video file
+            // Step 1: Check file size and compress if needed
+            await updateProgress(0.05, task: "Checking video size...")
+            let finalVideoURL = try await ensureUploadableSize(videoURL: videoURL)
+            
+            // Step 2: Validate video file
             await updateProgress(0.1, task: "Validating video...")
-            let videoData = try await validateAndLoadVideo(videoURL)
+            let videoData = try await loadVideoData(finalVideoURL)
             
-            // Step 2: Generate thumbnail
+            // Step 3: Generate thumbnail
             await updateProgress(0.2, task: "Generating thumbnail...")
-            let thumbnailData = try await generateThumbnail(from: videoURL)
+            let thumbnailData = try await generateThumbnail(from: finalVideoURL)
             
-            // Step 3: Upload video to Storage
+            // Step 4: Upload video to Storage
             await updateProgress(0.3, task: "Uploading video...")
             let videoStorageURL = try await uploadVideoToStorage(
                 videoData: videoData,
                 metadata: metadata
             )
             
-            // Step 4: Upload thumbnail to Storage
+            // Step 5: Upload thumbnail to Storage
             await updateProgress(0.7, task: "Uploading thumbnail...")
             let thumbnailStorageURL = try await uploadThumbnailToStorage(
                 thumbnailData: thumbnailData,
                 videoID: metadata.videoID
             )
             
-            // Step 5: Get video technical metadata
+            // Step 6: Get video technical metadata
             await updateProgress(0.9, task: "Processing metadata...")
-            let technicalMetadata = try await extractTechnicalMetadata(from: videoURL)
+            let technicalMetadata = try await extractTechnicalMetadata(from: finalVideoURL)
             
-            // Step 6: Complete upload
+            // Step 7: Complete upload
             await updateProgress(1.0, task: "Upload complete!")
             
             let result = VideoUploadResult(
@@ -103,7 +115,11 @@ class VideoUploadService: ObservableObject {
                 self.successfulUploads += 1
             }
             
-            // Record successful upload metrics
+            // Cleanup compressed file if we created one
+            if finalVideoURL != videoURL {
+                try? FileManager.default.removeItem(at: finalVideoURL)
+            }
+            
             recordUploadMetrics(
                 duration: Date().timeIntervalSince(startTime),
                 success: true,
@@ -111,10 +127,9 @@ class VideoUploadService: ObservableObject {
                 error: nil
             )
             
-            // Log aspect ratio for debugging
             let orientation = VideoOrientation.from(aspectRatio: technicalMetadata.aspectRatio)
             print("✅ UPLOAD SERVICE: Video uploaded successfully - \(metadata.title)")
-            print("📐 UPLOAD SERVICE: Detected \(orientation.displayName) video (aspect ratio: \(String(format: "%.3f", technicalMetadata.aspectRatio)))")
+            print("📐 UPLOAD SERVICE: \(orientation.displayName) video (aspect ratio: \(String(format: "%.3f", technicalMetadata.aspectRatio)))")
             
             return result
             
@@ -125,7 +140,6 @@ class VideoUploadService: ObservableObject {
                 self.totalUploads += 1
             }
             
-            // Record failed upload metrics
             recordUploadMetrics(
                 duration: Date().timeIntervalSince(startTime),
                 success: false,
@@ -138,8 +152,81 @@ class VideoUploadService: ObservableObject {
         }
     }
     
-    /// Creates video document in Firestore using VideoService
-    /// UPDATED: Now passes actual aspectRatio to VideoService methods
+    // MARK: - 🆕 NEW: Smart Size Check with Auto-Compression
+    
+    /// Ensures video is under upload size limit, compressing if necessary
+    private func ensureUploadableSize(videoURL: URL) async throws -> URL {
+        let fileSize = try getFileSize(videoURL)
+        
+        print("📦 UPLOAD: File size is \(formatFileSize(fileSize))")
+        
+        // If under limit, use as-is
+        if fileSize <= Self.maxUploadSize {
+            print("✅ UPLOAD: File is within size limit")
+            return videoURL
+        }
+        
+        // Need to compress
+        print("⚠️ UPLOAD: File exceeds \(formatFileSize(Self.maxUploadSize)), compressing...")
+        await updateProgress(0.05, task: "Compressing large video...")
+        
+        let compressor = FastVideoCompressor.shared
+        
+        do {
+            let result = try await compressor.compress(
+                sourceURL: videoURL,
+                targetSizeMB: Double(Self.targetCompressedSize) / 1024.0 / 1024.0,
+                progressCallback: { [weak self] progress in
+                    Task { @MainActor in
+                        // Map compression progress to 5-10% of overall progress
+                        self?.uploadProgress = 0.05 + (progress * 0.05)
+                        self?.currentTask = "Compressing: \(Int(progress * 100))%"
+                    }
+                }
+            )
+            
+            print("✅ UPLOAD: Compressed \(formatFileSize(fileSize)) → \(formatFileSize(result.compressedSize))")
+            
+            // Verify it's now under limit
+            if result.compressedSize <= Self.maxUploadSize {
+                return result.outputURL
+            } else {
+                // Still too big after compression - this is rare but possible for very long videos
+                throw UploadError.fileTooLarge(
+                    "Video is still \(formatFileSize(result.compressedSize)) after compression. " +
+                    "Try trimming the video to under 2 minutes or recording at lower quality."
+                )
+            }
+            
+        } catch let compressionError as CompressionError {
+            throw UploadError.compressionFailed(compressionError.localizedDescription)
+        }
+    }
+    
+    // MARK: - File Loading
+    
+    /// Loads video data (without hard size rejection)
+    private func loadVideoData(_ videoURL: URL) async throws -> Data {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    guard FileManager.default.fileExists(atPath: videoURL.path) else {
+                        continuation.resume(throwing: UploadError.fileNotFound("Video file not found"))
+                        return
+                    }
+                    
+                    let videoData = try Data(contentsOf: videoURL)
+                    continuation.resume(returning: videoData)
+                    
+                } catch {
+                    continuation.resume(throwing: UploadError.fileLoadFailed("Failed to load video: \(error.localizedDescription)"))
+                }
+            }
+        }
+    }
+    
+    // MARK: - Creates video document in Firestore
+    
     func createVideoDocument(
         uploadResult: VideoUploadResult,
         metadata: VideoUploadMetadata,
@@ -154,13 +241,11 @@ class VideoUploadService: ObservableObject {
         
         let createdVideo: CoreVideoMetadata
         
-        // Log the aspect ratio being passed
         let orientation = VideoOrientation.from(aspectRatio: uploadResult.aspectRatio)
-        print("📐 UPLOAD SERVICE: Creating \(orientation.displayName) video document with aspect ratio \(String(format: "%.3f", uploadResult.aspectRatio))")
+        print("📐 UPLOAD SERVICE: Creating \(orientation.displayName) video document")
         
         switch recordingContext {
         case .newThread:
-            // ✅ FIXED: Now passing actual aspectRatio instead of hardcoding 9:16
             createdVideo = try await videoService.createThread(
                 title: metadata.title,
                 description: metadata.description,
@@ -170,43 +255,29 @@ class VideoUploadService: ObservableObject {
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize,
-                aspectRatio: uploadResult.aspectRatio  // ✅ NEW: Pass actual aspect ratio
+                aspectRatio: uploadResult.aspectRatio
             )
             
-            // 🔍 DEBUG: Check auth state
-            print("🔍 DEBUG: Auth.auth().currentUser = \(Auth.auth().currentUser?.uid ?? "NIL")")
-            print("🔍 DEBUG: createdVideo.creatorID = \(createdVideo.creatorID)")
-            
-            // 🎬 NEW VIDEO NOTIFICATION: Notify followers for new thread videos
-            do {
-                print("🔍 DEBUG: Getting followers...")
-                let followerIDs = try await userService.getFollowerIDs(userID: createdVideo.creatorID)
-                print("🔍 DEBUG: Got \(followerIDs.count) followers: \(followerIDs)")
-                
-                if !followerIDs.isEmpty {
-                    print("🔍 DEBUG: About to call sendNewVideoNotification")
-                    print("🔍 DEBUG: creatorID = \(createdVideo.creatorID)")
-                    print("🔍 DEBUG: videoID = \(createdVideo.id)")
-                    print("🔍 DEBUG: followerIDs = \(followerIDs)")
-                    
-                    try await notificationService.sendNewVideoNotification(
-                        creatorID: createdVideo.creatorID,
-                        creatorUsername: metadata.creatorName,
-                        videoID: createdVideo.id,
-                        videoTitle: createdVideo.title,
-                        followerIDs: followerIDs
-                    )
-                    print("✅ UPLOAD SERVICE: Notified \(followerIDs.count) followers of new video")
-                } else {
-                    print("ℹ️ UPLOAD SERVICE: No followers to notify for user \(createdVideo.creatorID)")
+            // Notify followers
+            Task {
+                do {
+                    let followerIDs = try await userService.getFollowerIDs(userID: createdVideo.creatorID)
+                    if !followerIDs.isEmpty {
+                        try await notificationService.sendNewVideoNotification(
+                            creatorID: createdVideo.creatorID,
+                            creatorUsername: metadata.creatorName,
+                            videoID: createdVideo.id,
+                            videoTitle: createdVideo.title,
+                            followerIDs: followerIDs
+                        )
+                        print("✅ UPLOAD SERVICE: Notified \(followerIDs.count) followers")
+                    }
+                } catch {
+                    print("⚠️ UPLOAD SERVICE: Failed to notify followers - \(error)")
                 }
-            } catch {
-                print("❌ ERROR DETAILS: \(error)")
-                print("⚠️ UPLOAD SERVICE: Failed to send follower notifications - \(error)")
             }
             
         case .stitchToThread(let threadID, _):
-            // ✅ FIXED: Now passing actual aspectRatio instead of hardcoding 9:16
             createdVideo = try await videoService.createChildReply(
                 parentID: threadID,
                 title: metadata.title,
@@ -217,30 +288,26 @@ class VideoUploadService: ObservableObject {
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize,
-                aspectRatio: uploadResult.aspectRatio  // ✅ NEW: Pass actual aspect ratio
+                aspectRatio: uploadResult.aspectRatio
             )
             
-            // 🎬 STITCH NOTIFICATION
+            // Stitch notification
             Task {
                 do {
                     let threadVideo = try await videoService.getVideo(id: threadID)
-                    let threadUserIDs: [String] = []
-                    
                     try await notificationService.sendStitchNotification(
                         videoID: createdVideo.id,
                         videoTitle: metadata.title,
                         originalCreatorID: threadVideo.creatorID,
                         parentCreatorID: nil,
-                        threadUserIDs: threadUserIDs
+                        threadUserIDs: []
                     )
-                    print("✅ UPLOAD SERVICE: Sent stitch notification")
                 } catch {
                     print("⚠️ UPLOAD SERVICE: Failed to send stitch notification - \(error)")
                 }
             }
             
         case .replyToVideo(let videoID, _):
-            // ✅ FIXED: Now passing actual aspectRatio instead of hardcoding 9:16
             createdVideo = try await videoService.createChildReply(
                 parentID: videoID,
                 title: metadata.title,
@@ -251,30 +318,26 @@ class VideoUploadService: ObservableObject {
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize,
-                aspectRatio: uploadResult.aspectRatio  // ✅ NEW: Pass actual aspect ratio
+                aspectRatio: uploadResult.aspectRatio
             )
             
-            // 🎬 STITCH NOTIFICATION for reply
+            // Reply notification
             Task {
                 do {
                     let parentVideo = try await videoService.getVideo(id: videoID)
-                    let threadUserIDs: [String] = []
-                    
                     try await notificationService.sendStitchNotification(
                         videoID: createdVideo.id,
                         videoTitle: metadata.title,
                         originalCreatorID: parentVideo.creatorID,
                         parentCreatorID: parentVideo.creatorID,
-                        threadUserIDs: threadUserIDs
+                        threadUserIDs: []
                     )
-                    print("✅ UPLOAD SERVICE: Sent reply notification")
                 } catch {
                     print("⚠️ UPLOAD SERVICE: Failed to send reply notification - \(error)")
                 }
             }
             
         case .continueThread(let threadID, _):
-            // ✅ FIXED: Now passing actual aspectRatio instead of hardcoding 9:16
             createdVideo = try await videoService.createChildReply(
                 parentID: threadID,
                 title: metadata.title,
@@ -285,95 +348,55 @@ class VideoUploadService: ObservableObject {
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize,
-                aspectRatio: uploadResult.aspectRatio  // ✅ NEW: Pass actual aspect ratio
+                aspectRatio: uploadResult.aspectRatio
             )
             
-            // 🎬 STITCH NOTIFICATION for thread continuation
             Task {
                 do {
                     let threadVideo = try await videoService.getVideo(id: threadID)
-                    let threadUserIDs: [String] = []
-                    
                     try await notificationService.sendStitchNotification(
                         videoID: createdVideo.id,
                         videoTitle: metadata.title,
                         originalCreatorID: threadVideo.creatorID,
                         parentCreatorID: nil,
-                        threadUserIDs: threadUserIDs
+                        threadUserIDs: []
                     )
-                    print("✅ UPLOAD SERVICE: Sent thread continuation notification")
                 } catch {
                     print("⚠️ UPLOAD SERVICE: Failed to send thread notification - \(error)")
                 }
             }
         }
         
-        // 📌 MENTION NOTIFICATIONS: Send to tagged users if any
+        // Handle tagged users
         if !taggedUserIDs.isEmpty {
             try await videoService.updateVideoTags(
                 videoID: createdVideo.id,
                 taggedUserIDs: taggedUserIDs
             )
-            print("📌 UPLOAD SERVICE: Saved \(taggedUserIDs.count) tagged users to video \(createdVideo.id)")
+            print("📌 UPLOAD SERVICE: Saved \(taggedUserIDs.count) tagged users")
             
-            // Send mention notifications
             for taggedUserID in taggedUserIDs {
                 guard taggedUserID != metadata.creatorID else { continue }
                 
                 Task {
-                    do {
-                        try await notificationService.sendMentionNotification(
-                            to: taggedUserID,
-                            videoID: createdVideo.id,
-                            videoTitle: metadata.title,
-                            mentionContext: "tagged in video"
-                        )
-                        print("✅ MENTION: Notification sent to tagged user \(taggedUserID)")
-                    } catch {
-                        print("⚠️ UPLOAD SERVICE: Failed to send mention notification to \(taggedUserID) - \(error)")
-                    }
+                    try? await notificationService.sendMentionNotification(
+                        to: taggedUserID,
+                        videoID: createdVideo.id,
+                        videoTitle: metadata.title,
+                        mentionContext: "tagged in video"
+                    )
                 }
             }
-            print("📬 UPLOAD SERVICE: Sent \(taggedUserIDs.count) mention notifications")
         }
         
         await updateProgress(1.0, task: "Video created successfully!")
-        
         print("✅ UPLOAD SERVICE: Video document created - \(createdVideo.id)")
+        
         return createdVideo
     }
     
     // MARK: - Private Upload Methods
     
-    /// Validates video file and loads data
-    private func validateAndLoadVideo(_ videoURL: URL) async throws -> Data {
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    guard FileManager.default.fileExists(atPath: videoURL.path) else {
-                        continuation.resume(throwing: UploadError.fileNotFound("Video file not found"))
-                        return
-                    }
-                    
-                    let resourceValues = try videoURL.resourceValues(forKeys: [.fileSizeKey])
-                    let fileSize = resourceValues.fileSize ?? 0
-                    
-                    guard fileSize <= 100 * 1024 * 1024 else {
-                        continuation.resume(throwing: UploadError.fileTooLarge("File size exceeds 100MB limit"))
-                        return
-                    }
-                    
-                    let videoData = try Data(contentsOf: videoURL)
-                    continuation.resume(returning: videoData)
-                    
-                } catch {
-                    continuation.resume(throwing: UploadError.fileLoadFailed("Failed to load video: \(error.localizedDescription)"))
-                }
-            }
-        }
-    }
-    
-    /// Uploads video data to Firebase Storage with progress tracking
     private func uploadVideoToStorage(
         videoData: Data,
         metadata: VideoUploadMetadata
@@ -423,7 +446,6 @@ class VideoUploadService: ObservableObject {
         }
     }
     
-    /// Uploads thumbnail to Firebase Storage
     private func uploadThumbnailToStorage(
         thumbnailData: Data,
         videoID: String
@@ -434,13 +456,12 @@ class VideoUploadService: ObservableObject {
         let metadata = StorageMetadata()
         metadata.contentType = "image/jpeg"
         
-        let _ = try await storageRef.putDataAsync(thumbnailData, metadata: metadata)
+        _ = try await storageRef.putDataAsync(thumbnailData, metadata: metadata)
         let downloadURL = try await storageRef.downloadURL()
         
         return downloadURL.absoluteString
     }
     
-    /// Generates thumbnail from video - IMPROVED: Better thumbnail extraction
     private func generateThumbnail(from videoURL: URL) async throws -> Data {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -449,86 +470,72 @@ class VideoUploadService: ObservableObject {
                 imageGenerator.appliesPreferredTrackTransform = true
                 imageGenerator.maximumSize = CGSize(width: 1080, height: 1920)
                 
-                // Generate at 0.5 seconds for better action capture
                 let time = CMTime(seconds: 0.5, preferredTimescale: 600)
                 
                 do {
                     let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
                     let image = UIImage(cgImage: cgImage)
                     
-                    // Use higher quality JPEG compression
                     guard let jpegData = image.jpegData(compressionQuality: 0.9) else {
-                        continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed to convert thumbnail to JPEG"))
+                        continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed to convert to JPEG"))
                         return
                     }
                     
                     continuation.resume(returning: jpegData)
                     
                 } catch {
-                    continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed to generate thumbnail: \(error.localizedDescription)"))
+                    continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed: \(error.localizedDescription)"))
                 }
             }
         }
     }
     
-    /// Extracts technical metadata from video - IMPROVED: Better aspect ratio detection
     private func extractTechnicalMetadata(from videoURL: URL) async throws -> TechnicalMetadata {
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                Task {
-                    do {
-                        let asset = AVAsset(url: videoURL)
-                        
-                        // Get duration
-                        let duration = try await asset.load(.duration)
-                        let seconds = CMTimeGetSeconds(duration)
-                        
-                        // Get file size
-                        let resourceValues = try videoURL.resourceValues(forKeys: [.fileSizeKey])
-                        let fileSize = Int64(resourceValues.fileSize ?? 0)
-                        
-                        // Get aspect ratio from video track - IMPROVED
-                        var aspectRatio: Double = 9.0/16.0 // Default portrait
-                        let videoTracks = try await asset.loadTracks(withMediaType: .video)
-                        
-                        if let videoTrack = videoTracks.first {
-                            let naturalSize = try await videoTrack.load(.naturalSize)
-                            let preferredTransform = try await videoTrack.load(.preferredTransform)
-                            
-                            // Apply transform to get actual display size
-                            let size = naturalSize.applying(preferredTransform)
-                            let width = abs(size.width)
-                            let height = abs(size.height)
-                            
-                            if height > 0 {
-                                aspectRatio = Double(width / height)
-                            }
-                            
-                            // Log orientation for debugging
-                            let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-                            print("📐 METADATA: Detected \(orientation.displayName) video")
-                            print("📐 METADATA: Natural size: \(Int(naturalSize.width))x\(Int(naturalSize.height))")
-                            print("📐 METADATA: Transformed size: \(Int(width))x\(Int(height))")
-                            print("📐 METADATA: Aspect ratio: \(String(format: "%.3f", aspectRatio))")
-                        }
-                        
-                        let metadata = TechnicalMetadata(
-                            duration: seconds,
-                            fileSize: fileSize,
-                            aspectRatio: aspectRatio
-                        )
-                        
-                        continuation.resume(returning: metadata)
-                        
-                    } catch {
-                        continuation.resume(throwing: UploadError.metadataExtractionFailed("Failed to extract metadata: \(error.localizedDescription)"))
-                    }
-                }
+        let asset = AVAsset(url: videoURL)
+        
+        let duration = try await asset.load(.duration)
+        let seconds = CMTimeGetSeconds(duration)
+        
+        let fileSize = try getFileSize(videoURL)
+        
+        var aspectRatio: Double = 9.0/16.0
+        let videoTracks = try await asset.loadTracks(withMediaType: .video)
+        
+        if let videoTrack = videoTracks.first {
+            let naturalSize = try await videoTrack.load(.naturalSize)
+            let preferredTransform = try await videoTrack.load(.preferredTransform)
+            
+            let size = naturalSize.applying(preferredTransform)
+            let width = abs(size.width)
+            let height = abs(size.height)
+            
+            if height > 0 {
+                aspectRatio = Double(width / height)
             }
+            
+            let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
+            print("📐 METADATA: \(orientation.displayName) - \(Int(width))x\(Int(height))")
         }
+        
+        return TechnicalMetadata(
+            duration: seconds,
+            fileSize: fileSize,
+            aspectRatio: aspectRatio
+        )
     }
     
     // MARK: - Helper Methods
+    
+    private func getFileSize(_ url: URL) throws -> Int64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        return attributes[.size] as? Int64 ?? 0
+    }
+    
+    private func formatFileSize(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
+    }
     
     private func updateProgress(_ progress: Double, task: String) async {
         await MainActor.run {
@@ -556,8 +563,6 @@ class VideoUploadService: ObservableObject {
         if uploadMetrics.count > 50 {
             uploadMetrics.removeFirst()
         }
-        
-        print("📊 UPLOAD SERVICE: Metrics - Duration: \(String(format: "%.2f", duration))s, Success: \(success), File Size: \(fileSize) bytes")
     }
     
     func getUploadStats() -> UploadStats {
@@ -579,7 +584,6 @@ class VideoUploadService: ObservableObject {
 
 // MARK: - Data Models
 
-/// Input metadata for video upload
 struct VideoUploadMetadata {
     let videoID: String
     let title: String
@@ -604,7 +608,6 @@ struct VideoUploadMetadata {
     }
 }
 
-/// Result of successful video upload
 struct VideoUploadResult {
     let videoURL: String
     let thumbnailURL: String
@@ -614,14 +617,12 @@ struct VideoUploadResult {
     let videoID: String
 }
 
-/// Technical metadata extracted from video
 struct TechnicalMetadata {
     let duration: TimeInterval
     let fileSize: Int64
     let aspectRatio: Double
 }
 
-/// Upload error types
 enum UploadError: Error, LocalizedError {
     case fileNotFound(String)
     case fileTooLarge(String)
@@ -629,29 +630,23 @@ enum UploadError: Error, LocalizedError {
     case uploadFailed(String)
     case thumbnailGenerationFailed(String)
     case metadataExtractionFailed(String)
+    case compressionFailed(String)
     case unknown(String)
     
     var errorDescription: String? {
         switch self {
-        case .fileNotFound(let message):
-            return "File Not Found: \(message)"
-        case .fileTooLarge(let message):
-            return "File Too Large: \(message)"
-        case .fileLoadFailed(let message):
-            return "File Load Failed: \(message)"
-        case .uploadFailed(let message):
-            return "Upload Failed: \(message)"
-        case .thumbnailGenerationFailed(let message):
-            return "Thumbnail Generation Failed: \(message)"
-        case .metadataExtractionFailed(let message):
-            return "Metadata Extraction Failed: \(message)"
-        case .unknown(let message):
-            return "Unknown Error: \(message)"
+        case .fileNotFound(let msg): return "File Not Found: \(msg)"
+        case .fileTooLarge(let msg): return "File Too Large: \(msg)"
+        case .fileLoadFailed(let msg): return "File Load Failed: \(msg)"
+        case .uploadFailed(let msg): return "Upload Failed: \(msg)"
+        case .thumbnailGenerationFailed(let msg): return "Thumbnail Failed: \(msg)"
+        case .metadataExtractionFailed(let msg): return "Metadata Failed: \(msg)"
+        case .compressionFailed(let msg): return "Compression Failed: \(msg)"
+        case .unknown(let msg): return msg
         }
     }
 }
 
-/// Upload performance metrics
 struct UploadMetrics {
     let timestamp: Date
     let duration: TimeInterval
@@ -660,7 +655,6 @@ struct UploadMetrics {
     let error: String?
 }
 
-/// Upload statistics
 struct UploadStats {
     let totalUploads: Int
     let successfulUploads: Int

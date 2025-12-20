@@ -4,6 +4,7 @@
 //
 //  FIXED: Upload timing - now only uploads after user confirms "Post" in ThreadComposer
 //  FIXED: Retain cycle issues causing crashes on exit + tier-based recording durations
+//  🆕 UPDATED: Background compression starts when recording completes (CapCut-style)
 //
 
 import Foundation
@@ -110,7 +111,7 @@ struct VideoMetadata {
     var aiSuggestedHashtags: [String] = []
 }
 
-// MARK: - Recording Controller (FIXED RETAIN CYCLES + TIER-BASED)
+// MARK: - Recording Controller (FIXED RETAIN CYCLES + TIER-BASED + BACKGROUND COMPRESSION)
 
 @MainActor
 class RecordingController: ObservableObject {
@@ -127,9 +128,19 @@ class RecordingController: ObservableObject {
     
     // MARK: - Recording Timer State (FIXED)
     
-    private var recordingTimer: Timer?  // FIXED: Not @Published to avoid main actor issues in deinit
+    private var recordingTimer: Timer?
     @Published var recordingDuration: TimeInterval = 0
     @Published var recordingStartTime: Date?
+    
+    // MARK: - 🆕 NEW: Background Compression State
+    
+    @Published var compressedVideoURL: URL?
+    @Published var compressionComplete: Bool = false
+    @Published var compressionProgress: Double = 0.0
+    @Published var originalFileSize: Int64 = 0
+    @Published var compressedFileSize: Int64 = 0
+    
+    private var compressionTask: Task<Void, Never>?
     
     // MARK: - Dependencies
     
@@ -137,6 +148,7 @@ class RecordingController: ObservableObject {
     private let authService: AuthService
     private let aiAnalyzer: AIVideoAnalyzer
     private let videoCoordinator: VideoCoordinator
+    private let fastCompressor = FastVideoCompressor.shared  // 🆕 NEW
     let cameraManager: CinematicCameraManager
     
     // MARK: - Configuration - TIER-BASED RECORDING DURATIONS
@@ -176,12 +188,11 @@ class RecordingController: ObservableObject {
             videoService: videoService,
             userService: UserService(),
             aiAnalyzer: aiAnalyzer,
-            videoProcessor: VideoProcessingService(),
             uploadService: VideoUploadService(),
             cachingService: nil
         )
         
-        print("🎬 RECORDING CONTROLLER: Initialized with tier-based recording")
+        print("🎬 RECORDING CONTROLLER: Initialized with tier-based recording + background compression")
     }
     
     // MARK: - Camera Management
@@ -197,8 +208,8 @@ class RecordingController: ObservableObject {
     }
     
     func stopCameraSession() async {
-        // FIXED: Direct timer cleanup to prevent retain cycles
         stopRecordingTimer()
+        cancelBackgroundCompression()  // 🆕 Cancel any running compression
         await cameraManager.stopSession()
         print("✅ CONTROLLER: Camera session stopped")
     }
@@ -213,11 +224,13 @@ class RecordingController: ObservableObject {
         recordingStartTime = Date()
         recordingDuration = 0
         
+        // 🆕 Reset compression state for new recording
+        resetCompressionState()
+        
         if !isUnlimitedRecording {
             startRecordingTimer()
         }
         
-        // FIXED: Use weak self in camera callback to prevent retain cycle
         cameraManager.startRecording { [weak self] videoURL in
             Task { @MainActor [weak self] in
                 await self?.handleRecordingCompleted(videoURL)
@@ -244,7 +257,6 @@ class RecordingController: ObservableObject {
     private func startRecordingTimer() {
         stopRecordingTimer()
         
-        // FIXED: Proper weak self handling to prevent retain cycles
         recordingTimer = Timer.scheduledTimer(withTimeInterval: recordingTickInterval, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             Task { @MainActor [weak self] in
@@ -325,7 +337,113 @@ class RecordingController: ObservableObject {
         await handleRecordingCompleted(videoURL)
     }
     
-    // MARK: - Post-Recording Processing (FIXED - NO PREMATURE UPLOAD)
+    // MARK: - 🆕 NEW: Background Compression
+    
+    /// Start background compression immediately after recording (CapCut-style)
+    private func startBackgroundCompression(_ videoURL: URL) {
+        // Cancel any existing compression
+        cancelBackgroundCompression()
+        
+        print("🚀 BACKGROUND COMPRESSION: Starting while user reviews...")
+        
+        compressionTask = Task { [weak self] in
+            guard let self = self else { return }
+            
+            do {
+                // Get original file size
+                let originalSize = self.getFileSize(videoURL)
+                await MainActor.run {
+                    self.originalFileSize = originalSize
+                }
+                
+                print("🚀 BACKGROUND COMPRESSION: Original size \(originalSize / 1024 / 1024)MB")
+                
+                let result = try await self.fastCompressor.compress(
+                    sourceURL: videoURL,
+                    targetSizeMB: 50.0,  // Target 50MB for safe margin under 100MB limit
+                    preserveResolution: false,
+                    progressCallback: { [weak self] progress in
+                        Task { @MainActor [weak self] in
+                            self?.compressionProgress = progress
+                        }
+                    }
+                )
+                
+                // Check if task was cancelled
+                guard !Task.isCancelled else {
+                    print("⚠️ BACKGROUND COMPRESSION: Cancelled")
+                    return
+                }
+                
+                await MainActor.run {
+                    self.compressedVideoURL = result.outputURL
+                    self.compressedFileSize = result.compressedSize
+                    self.compressionComplete = true
+                    self.compressionProgress = 1.0
+                }
+                
+                let savings = 100.0 - (Double(result.compressedSize) / Double(result.originalSize) * 100.0)
+                print("✅ BACKGROUND COMPRESSION: Complete!")
+                print("   📦 \(result.originalSize / 1024 / 1024)MB → \(result.compressedSize / 1024 / 1024)MB")
+                print("   📉 \(String(format: "%.0f", savings))% smaller")
+                print("   ⏱️ \(String(format: "%.1f", result.processingTime))s")
+                
+            } catch {
+                print("⚠️ BACKGROUND COMPRESSION: Failed - \(error.localizedDescription)")
+                // Not fatal - we'll compress on-demand during upload if needed
+            }
+        }
+    }
+    
+    /// Cancel background compression (e.g., when user goes back to re-record)
+    func cancelBackgroundCompression() {
+        compressionTask?.cancel()
+        compressionTask = nil
+    }
+    
+    /// Invalidate compression (call when trim changes significantly)
+    func invalidateCompression() {
+        cancelBackgroundCompression()
+        
+        // Clean up old compressed file
+        if let url = compressedVideoURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        
+        resetCompressionState()
+        print("🔄 COMPRESSION: Invalidated (trim changed)")
+    }
+    
+    private func resetCompressionState() {
+        compressedVideoURL = nil
+        compressionComplete = false
+        compressionProgress = 0.0
+        originalFileSize = 0
+        compressedFileSize = 0
+    }
+    
+    private func getFileSize(_ url: URL) -> Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+    }
+    
+    // MARK: - 🆕 NEW: Compression Status Helpers
+    
+    /// Formatted compression savings (e.g., "45% smaller")
+    var compressionSavingsText: String {
+        guard originalFileSize > 0, compressedFileSize > 0 else { return "" }
+        let savings = 100.0 - (Double(compressedFileSize) / Double(originalFileSize) * 100.0)
+        return String(format: "%.0f%% smaller", savings)
+    }
+    
+    /// The best video URL to use for upload (compressed if available)
+    var bestVideoURLForUpload: URL? {
+        if compressionComplete, let compressed = compressedVideoURL {
+            return compressed
+        }
+        return recordedVideoURL
+    }
+    
+    // MARK: - Post-Recording Processing (🔧 UPDATED WITH BACKGROUND COMPRESSION)
     
     private func handleRecordingCompleted(_ videoURL: URL?) async {
         guard let videoURL = videoURL else {
@@ -340,10 +458,17 @@ class RecordingController: ObservableObject {
         await saveVideoToGallery(videoURL)
         
         recordedVideoURL = videoURL
+        
+        // 🆕 START BACKGROUND COMPRESSION IMMEDIATELY
+        // This runs while user reviews the video, so by the time they tap "Post"
+        // the video is already compressed (CapCut-style instant posting)
+        startBackgroundCompression(videoURL)
+        
         currentPhase = .complete
         recordingPhase = .complete
         
         print("✅ RECORDING: Ready for ThreadComposer")
+        print("✅ Background compression started")
         print("✅ Upload will occur when user confirms 'Post'")
     }
     
@@ -429,6 +554,7 @@ class RecordingController: ObservableObject {
         currentPhase = .ready
         recordedVideoURL = nil
         aiAnalysisResult = nil
+        cancelBackgroundCompression()  // 🆕 Cancel compression too
     }
     
     func handleBackToRecording() {
@@ -436,12 +562,15 @@ class RecordingController: ObservableObject {
         recordedVideoURL = nil
         aiAnalysisResult = nil
         resetMetadata()
+        cancelBackgroundCompression()  // 🆕 Cancel compression
+        resetCompressionState()        // 🆕 Reset compression state
     }
     
     // MARK: - Error Handling (FIXED)
     
     private func handleRecordingError(_ message: String) {
         stopRecordingTimer()
+        cancelBackgroundCompression()  // 🆕 Cancel compression on error
         errorMessage = message
         currentPhase = .error(message)
         recordingPhase = .error(message)
@@ -455,6 +584,7 @@ class RecordingController: ObservableObject {
         recordingPhase = .ready
         recordingDuration = 0
         recordingStartTime = nil
+        resetCompressionState()  // 🆕 Reset compression state
     }
     
     // MARK: - Helper Methods
@@ -484,9 +614,9 @@ class RecordingController: ObservableObject {
     // MARK: - Cleanup (FIXED)
     
     deinit {
-        // FIXED: Don't create Task in deinit - direct timer cleanup only
         recordingTimer?.invalidate()
         recordingTimer = nil
+        compressionTask?.cancel()  // 🆕 Cancel compression task
         print("🎬 RECORDING CONTROLLER: Deinitialized")
     }
 }

@@ -4,7 +4,7 @@
 //
 //  Foundation layer - References existing UserTier and BadgeType
 //  Centralized configuration for all special users (founders, celebrities, ambassadors)
-//  Updated: Added Puma, ohshitsad, Walt, email.euni with proper tier values
+//  Updated: Added developers@stitchsocial.me as main admin account
 //
 
 import Foundation
@@ -106,6 +106,21 @@ struct SpecialUsersConfig {
             specialPerks: ["auto_follow", "unfollow_protection", "priority_support", "admin_access", "clout_per_new_user"],
             isAutoFollowed: true,
             priority: 1000
+        ),
+        
+        // MARK: - MAIN ADMIN ACCOUNT
+        
+        "developers@stitchsocial.me": SpecialUserEntry(
+            email: "developers@stitchsocial.me",
+            role: .founder,
+            tierRawValue: "founder",
+            startingClout: 50000,
+            customTitle: "Stitch Official 🎬",
+            customBio: "Official Stitch Social Account | Platform Updates & Announcements",
+            badgeRawValues: ["founder_crown", "verified", "early_adopter"],
+            specialPerks: ["priority_support", "admin_access", "content_seeding", "managed_profiles", "unlimited_uploads"],
+            isAutoFollowed: false,
+            priority: 950
         ),
         
         // MARK: - CO-FOUNDER (NO AUTO-FOLLOW)
@@ -520,9 +535,10 @@ extension SpecialUsersConfig {
 
 /*
  
- COMPLETE SPECIAL USERS LIST (15 total):
+ COMPLETE SPECIAL USERS LIST (16 total):
  
  ✅ james@stitchsocial.me - Founder (AUTO-FOLLOW ONLY)
+ ✅ developers@stitchsocial.me - Main Admin Account (50k) - NEW
  ✅ bernadette@stitchsocial.me - Co-Founder
  ✅ ironmanfitness662@yahoo.com - Fitness Influencer (15k)
  ✅ dpalance28@gmail.com - Social Influencer (15k)
@@ -539,6 +555,7 @@ extension SpecialUsersConfig {
  ✅ srbentleyga@gmail.com - Tech Developer (5k)
  
  CRITICAL NOTES:
+ - developers@stitchsocial.me is the official Stitch admin account with full privileges
  - Black Ink users now use tierRawValue: "ambassador" (15k-20k range)
  - Teddy Ruks, Chaney, and Rae Sremmurd use tierRawValue: "elite" (20k+)
  - All users have isAutoFollowed: false EXCEPT James Fortune

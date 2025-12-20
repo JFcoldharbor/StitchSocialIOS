@@ -5,6 +5,7 @@
 //  Layer 8: Views - Settings Interface with Referral System
 //  Dependencies: AuthService (Layer 4), ReferralButton (Layer 8), Config (Layer 1)
 //  Features: Account management, referral system, sign-out, app info
+//  FIXED: Improved sign-out flow - let auth state drive navigation instead of manual dismiss
 //
 
 import SwiftUI
@@ -48,6 +49,15 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                         .foregroundColor(.cyan)
                 }
+            }
+        }
+        // FIXED: Listen for auth state changes to auto-dismiss on sign-out
+        .onChange(of: authService.authState) { oldState, newState in
+            if newState == .unauthenticated {
+                // Auth state changed to unauthenticated, dismiss settings
+                // ContentView will automatically show LoginView
+                print("🔐 SETTINGS: Auth state changed to unauthenticated, dismissing")
+                dismiss()
             }
         }
         .alert("Sign Out", isPresented: $showingSignOutConfirmation) {
@@ -317,17 +327,28 @@ struct SettingsView: View {
     private func performSignOut() async {
         isSigningOut = true
         
+        print("🔐 SETTINGS: Starting sign-out process")
+        
         do {
             try await authService.signOut()
-            await MainActor.run {
-                dismiss()
-            }
+            
+            // FIXED: Don't manually dismiss here
+            // The .onChange(of: authService.authState) will handle dismissal
+            // when authState changes to .unauthenticated
+            // This ensures proper cleanup and state synchronization
+            
+            print("✅ SETTINGS: Sign-out successful, waiting for auth state change")
+            
+            // Note: isSigningOut doesn't need to be reset because the view will be dismissed
+            // and deallocated once auth state changes
+            
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to sign out: \(error.localizedDescription)"
                 showingError = true
                 isSigningOut = false
             }
+            print("❌ SETTINGS: Sign-out failed: \(error.localizedDescription)")
         }
     }
     

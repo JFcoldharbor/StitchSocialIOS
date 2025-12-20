@@ -3,12 +3,11 @@
 //  StitchSocial
 //
 //  Layer 6: Coordination - PARALLEL Video Creation Workflow Orchestration
-//  Dependencies: VideoService, UserService, AIVideoAnalyzer, VideoProcessingService, VideoUploadService, AudioExtractionService, NotificationService
-//  Orchestrates: Recording → [Audio Extraction + Compression + AI Analysis] → Upload → Feed Integration
-//  OPTIMIZATION: Parallel processing for sub-20 second video creation
-//  FIXED: Added UserService dependency for follower notifications
-//  UPDATED: Added user tagging support with mention notifications
-//  UPDATED: Added stitch/reply notification logic with parent/child thread awareness
+//
+//  🔧 UPDATED: Integrated FastVideoCompressor for CapCut-style speed
+//  🔧 UPDATED: Added trim support (trimStartTime, trimEndTime)
+//  🔧 UPDATED: Added pre-compression support (use already-compressed video)
+//  🔧 UPDATED: Background compression starts when recording ends
 //
 
 import Foundation
@@ -17,7 +16,7 @@ import AVFoundation
 import FirebaseFirestore
 
 /// Orchestrates parallel video creation workflow for maximum speed
-/// Coordinates between audio extraction, compression, AI analysis, upload, and feed services simultaneously
+/// Now uses FastVideoCompressor for CapCut-style 5-10 second compression
 @MainActor
 class VideoCoordinator: ObservableObject {
     
@@ -26,7 +25,7 @@ class VideoCoordinator: ObservableObject {
     private let videoService: VideoService
     private let userService: UserService
     private let aiAnalyzer: AIVideoAnalyzer
-    private let videoProcessor: VideoProcessingService
+    private let fastCompressor: FastVideoCompressor  // 🆕 NEW: Fast hardware compression
     private let uploadService: VideoUploadService
     private let cachingService: CachingService?
     private let audioExtractor: AudioExtractionService
@@ -56,6 +55,12 @@ class VideoCoordinator: ObservableObject {
     @Published var uploadResult: VideoUploadResult?
     @Published var createdVideo: CoreVideoMetadata?
     
+    // MARK: - 🆕 NEW: Pre-compression State (Background compression)
+    
+    @Published var preCompressedVideoURL: URL?
+    @Published var preCompressionComplete: Bool = false
+    @Published var preCompressionProgress: Double = 0.0
+    
     // MARK: - Error Handling
     
     @Published var lastError: VideoCreationError?
@@ -75,13 +80,15 @@ class VideoCoordinator: ObservableObject {
     private let feedIntegrationEnabled = true
     private let parallelProcessingEnabled = true
     
+    /// Target file size for compression (50MB for safe margin under 100MB limit)
+    private let targetFileSizeMB: Double = 50.0
+    
     // MARK: - Initialization
     
     init(
         videoService: VideoService,
         userService: UserService,
         aiAnalyzer: AIVideoAnalyzer,
-        videoProcessor: VideoProcessingService,
         uploadService: VideoUploadService,
         cachingService: CachingService? = nil,
         audioExtractor: AudioExtractionService? = nil,
@@ -90,25 +97,83 @@ class VideoCoordinator: ObservableObject {
         self.videoService = videoService
         self.userService = userService
         self.aiAnalyzer = aiAnalyzer
-        self.videoProcessor = videoProcessor
+        self.fastCompressor = FastVideoCompressor.shared  // 🆕 Use singleton
         self.uploadService = uploadService
         self.cachingService = cachingService
         self.audioExtractor = audioExtractor ?? AudioExtractionService()
         self.notificationService = notificationService ?? NotificationService()
         
-        print("🎬 VIDEO COORDINATOR: Initialized with PARALLEL PROCESSING + MANUAL OVERRIDE + USER TAGGING + STITCH NOTIFICATIONS + FOLLOWER NOTIFICATIONS")
+        print("🎬 VIDEO COORDINATOR: Initialized with FAST COMPRESSION + TRIM SUPPORT")
     }
     
-    // MARK: - PARALLEL VIDEO CREATION WORKFLOW (UPDATED: Follower + Stitch Notifications)
+    // MARK: - 🆕 NEW: Background Pre-Compression
     
-    /// OPTIMIZED: Parallel video creation workflow with MANUAL title/description override + user tagging + stitch/follower notifications
-    /// Runs audio extraction, compression, and AI analysis simultaneously
-    /// UPDATED: Now sends follower notifications for new videos and stitch/reply notifications
+    /// Start compression immediately when recording ends (CapCut-style)
+    /// Call this as soon as recording stops, before user enters review screen
+    func startBackgroundCompression(videoURL: URL) {
+        guard preCompressedVideoURL == nil else {
+            print("⚠️ BACKGROUND COMPRESS: Already have pre-compressed video")
+            return
+        }
+        
+        preCompressionComplete = false
+        preCompressionProgress = 0.0
+        
+        print("🚀 BACKGROUND COMPRESS: Starting while user reviews...")
+        
+        Task {
+            do {
+                let result = try await fastCompressor.compress(
+                    sourceURL: videoURL,
+                    targetSizeMB: targetFileSizeMB,
+                    preserveResolution: false,
+                    progressCallback: { [weak self] progress in
+                        Task { @MainActor in
+                            self?.preCompressionProgress = progress
+                        }
+                    }
+                )
+                
+                await MainActor.run {
+                    self.preCompressedVideoURL = result.outputURL
+                    self.preCompressionComplete = true
+                    print("✅ BACKGROUND COMPRESS: Complete - \(result.compressedSize / 1024 / 1024)MB in \(String(format: "%.1f", result.processingTime))s")
+                }
+                
+            } catch {
+                print("⚠️ BACKGROUND COMPRESS: Failed - \(error.localizedDescription)")
+                // Not fatal - we'll compress on-demand during post
+            }
+        }
+    }
+    
+    /// Invalidate pre-compression (call when user changes trim)
+    func invalidatePreCompression() {
+        if let url = preCompressedVideoURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        preCompressedVideoURL = nil
+        preCompressionComplete = false
+        preCompressionProgress = 0.0
+        print("🔄 BACKGROUND COMPRESS: Invalidated (trim changed)")
+    }
+    
+    // MARK: - 🔧 UPDATED: Main Video Creation (with trim support)
+    
+    /// Process video creation with optional trim parameters
+    /// - Parameters:
+    ///   - recordedVideoURL: Original recorded video
+    ///   - trimStartTime: Optional trim start (nil = no trim)
+    ///   - trimEndTime: Optional trim end (nil = no trim)
+    ///   - preCompressedURL: Optional pre-compressed video (from background compression)
     func processVideoCreation(
         recordedVideoURL: URL,
         recordingContext: RecordingContext,
         userID: String,
         userTier: UserTier,
+        trimStartTime: TimeInterval? = nil,
+        trimEndTime: TimeInterval? = nil,
+        preCompressedURL: URL? = nil,
         manualTitle: String? = nil,
         manualDescription: String? = nil,
         taggedUserIDs: [String] = []
@@ -122,33 +187,35 @@ class VideoCoordinator: ObservableObject {
         isProcessing = true
         self.recordedVideoURL = recordedVideoURL
         
-        print("🚀 PARALLEL WORKFLOW: Starting optimized parallel processing")
-        print("🚀 TARGET: Sub-20 second video creation")
+        print("🚀 FAST WORKFLOW: Starting optimized processing")
         print("🎬 VIDEO: \(recordedVideoURL.lastPathComponent)")
-        print("🎬 CONTEXT: \(recordingContext)")
-        print("🎬 USER: \(userID)")
         
-        // Log manual overrides if provided
-        if let manualTitle = manualTitle {
-            print("✏️ MANUAL OVERRIDE: Title = '\(manualTitle)'")
-        }
-        if let manualDescription = manualDescription {
-            print("✏️ MANUAL OVERRIDE: Description = '\(manualDescription)'")
+        // Log trim info
+        if let start = trimStartTime, let end = trimEndTime {
+            print("✂️ TRIM: \(String(format: "%.1f", start))s - \(String(format: "%.1f", end))s")
         }
         
-        // Log tagged users
-        if !taggedUserIDs.isEmpty {
-            print("🏷️ TAGGED USERS: \(taggedUserIDs.count) users - \(taggedUserIDs)")
+        // Log pre-compression status
+        if let preURL = preCompressedURL ?? preCompressedVideoURL, preCompressionComplete {
+            print("⚡ PRE-COMPRESSED: Using background-compressed video")
         }
         
-        defer { isProcessing = false }
+        defer {
+            isProcessing = false
+            // Clear pre-compression state after use
+            preCompressedVideoURL = nil
+            preCompressionComplete = false
+        }
         
         do {
             // PHASE 1: PARALLEL PROCESSING (0-70%)
             let parallelResults = try await performParallelProcessing(
                 videoURL: recordedVideoURL,
                 userID: userID,
-                userTier: userTier
+                userTier: userTier,
+                trimStartTime: trimStartTime,
+                trimEndTime: trimEndTime,
+                preCompressedURL: preCompressedURL ?? preCompressedVideoURL
             )
             
             // PHASE 2: UPLOAD (70-90%)
@@ -170,7 +237,7 @@ class VideoCoordinator: ObservableObject {
                 taggedUserIDs: taggedUserIDs
             )
             
-            // PHASE 4: SEND MENTION NOTIFICATIONS
+            // PHASE 4: NOTIFICATIONS
             if !taggedUserIDs.isEmpty {
                 await sendMentionNotifications(
                     videoID: createdVideo.id,
@@ -180,7 +247,6 @@ class VideoCoordinator: ObservableObject {
                 )
             }
             
-            // PHASE 5: SEND STITCH/REPLY NOTIFICATIONS (NEW)
             await sendStitchNotifications(
                 createdVideo: createdVideo,
                 recordingContext: recordingContext,
@@ -201,20 +267,22 @@ class VideoCoordinator: ObservableObject {
         }
     }
     
-    // MARK: - PHASE 1: PARALLEL PROCESSING
+    // MARK: - 🔧 UPDATED: Parallel Processing with FastVideoCompressor
     
-    /// Run audio extraction, compression, and AI analysis in parallel
     private func performParallelProcessing(
         videoURL: URL,
         userID: String,
-        userTier: UserTier
+        userTier: UserTier,
+        trimStartTime: TimeInterval?,
+        trimEndTime: TimeInterval?,
+        preCompressedURL: URL?
     ) async throws -> ParallelProcessingResult {
         
         currentPhase = .parallelProcessing
-        currentTask = "Starting parallel processing..."
+        currentTask = "Processing video..."
         await updateProgress(0.0)
         
-        print("⚡ PARALLEL: Starting simultaneous audio + compression + AI")
+        print("⚡ PARALLEL: Starting audio + compression + AI")
         
         var audioResult: AudioExtractionResult?
         var compressionResult: CompressionResult?
@@ -229,38 +297,74 @@ class VideoCoordinator: ObservableObject {
                 let audioResult = try await self.audioExtractor.extractAudio(from: videoURL) { progress in
                     Task { @MainActor in
                         self.audioExtractionProgress = progress
-                        Task {
-                            await self.updateParallelProgress()
-                        }
+                        await self.updateParallelProgress()
                     }
                 }
                 
                 return .audioExtraction(audioResult)
             }
             
-            // Task 2: Video Compression
+            // Task 2: Fast Video Compression (🆕 UPDATED)
             group.addTask { [weak self] in
                 guard let self = self else { throw VideoCreationError.unknown("Coordinator deallocated") }
                 
-                print("🗜️ PARALLEL: Starting VideoProcessingService compression with userTier: \(userTier.displayName)")
+                let startTime = Date()
+                var compressedURL: URL
+                var originalSize: Int64
+                var compressedSize: Int64
                 
-                let compressedURL = try await self.videoProcessor.compress(
-                    videoURL: videoURL,
-                    userTier: userTier,
-                    targetSizeMB: 3.0,
-                    progressCallback: { progress in
-                        Task { @MainActor in
-                            self.compressionProgress = progress
-                            Task {
+                // Check if we have pre-compressed video (no trim change)
+                if let preURL = preCompressedURL, trimStartTime == nil {
+                    print("⚡ COMPRESSION: Using pre-compressed video!")
+                    compressedURL = preURL
+                    originalSize = await self.getFileSize(videoURL)
+                    compressedSize = await self.getFileSize(preURL)
+                    
+                    await MainActor.run {
+                        self.compressionProgress = 1.0
+                    }
+                    
+                } else if let start = trimStartTime, let end = trimEndTime {
+                    // Compress WITH trim (single pass - most efficient)
+                    print("🗜️ COMPRESSION: Fast compress + trim in single pass")
+                    
+                    let result = try await self.fastCompressor.compressWithTrim(
+                        sourceURL: videoURL,
+                        startTime: start,
+                        endTime: end,
+                        targetSizeMB: self.targetFileSizeMB
+                    )
+                    
+                    compressedURL = result.outputURL
+                    originalSize = result.originalSize
+                    compressedSize = result.compressedSize
+                    
+                    await MainActor.run {
+                        self.compressionProgress = 1.0
+                    }
+                    
+                } else {
+                    // Standard fast compression (no trim)
+                    print("🗜️ COMPRESSION: Fast compress (no trim)")
+                    
+                    let result = try await self.fastCompressor.compress(
+                        sourceURL: videoURL,
+                        targetSizeMB: self.targetFileSizeMB,
+                        progressCallback: { progress in
+                            Task { @MainActor in
+                                self.compressionProgress = progress
                                 await self.updateParallelProgress()
                             }
                         }
-                    }
-                )
+                    )
+                    
+                    compressedURL = result.outputURL
+                    originalSize = result.originalSize
+                    compressedSize = result.compressedSize
+                }
                 
-                let originalSize = await self.getFileSize(videoURL)
-                let compressedSize = await self.getFileSize(compressedURL)
-                let ratio = Double(compressedSize) / Double(originalSize)
+                let processingTime = Date().timeIntervalSince(startTime)
+                let ratio = originalSize > 0 ? Double(compressedSize) / Double(originalSize) : 1.0
                 
                 let result = CompressionResult(
                     originalURL: videoURL,
@@ -269,8 +373,10 @@ class VideoCoordinator: ObservableObject {
                     compressedSize: compressedSize,
                     compressionRatio: ratio,
                     qualityScore: 0.85,
-                    processingTime: 0
+                    processingTime: processingTime
                 )
+                
+                print("✅ COMPRESSION: \(originalSize / 1024 / 1024)MB → \(compressedSize / 1024 / 1024)MB in \(String(format: "%.1f", processingTime))s")
                 
                 return .compression(result)
             }
@@ -288,9 +394,7 @@ class VideoCoordinator: ObservableObject {
                 
                 await MainActor.run {
                     self.aiAnalysisProgress = 1.0
-                    Task {
-                        await self.updateParallelProgress()
-                    }
+                    Task { await self.updateParallelProgress() }
                 }
                 
                 return .aiAnalysis(aiResult)
@@ -306,14 +410,12 @@ class VideoCoordinator: ObservableObject {
                     compressionResult = result
                     self.compressionResult = result
                     self.compressedVideoURL = result.outputURL
-                    print("🗜️ PARALLEL: Compression complete - \(result.compressionRatio * 100)% of original")
+                    print("🗜️ PARALLEL: Compression complete - \(String(format: "%.0f", result.compressionRatio * 100))% of original")
                 case .aiAnalysis(let result):
                     aiResult = result
                     self.aiAnalysisResult = result
                     if let title = result?.title {
                         print("🧠 PARALLEL: AI analysis complete - '\(title)'")
-                    } else {
-                        print("🧠 PARALLEL: AI analysis complete - No results")
                     }
                 }
             }
@@ -336,9 +438,8 @@ class VideoCoordinator: ObservableObject {
         }
     }
     
-    // MARK: - PHASE 2: PARALLEL UPLOAD
+    // MARK: - PHASE 2: Upload
     
-    /// Upload compressed video and thumbnail simultaneously
     private func performParallelUpload(
         compressionResult: CompressionResult,
         aiResult: VideoAnalysisResult?,
@@ -350,7 +451,7 @@ class VideoCoordinator: ObservableObject {
         currentTask = "Uploading video..."
         await updateProgress(0.7)
         
-        print("☁️ PARALLEL UPLOAD: Starting")
+        print("☁️ UPLOAD: Starting with compressed video (\(compressionResult.compressedSize / 1024 / 1024)MB)")
         
         let metadata = VideoUploadMetadata(
             title: aiResult?.title ?? getDefaultTitle(for: recordingContext),
@@ -360,6 +461,7 @@ class VideoCoordinator: ObservableObject {
             creatorName: ""
         )
         
+        // Upload the COMPRESSED video (not original!)
         let result = try await uploadService.uploadVideo(
             videoURL: compressionResult.outputURL,
             metadata: metadata,
@@ -369,40 +471,33 @@ class VideoCoordinator: ObservableObject {
         await updateProgress(0.9)
         uploadResult = result
         
-        print("☁️ PARALLEL UPLOAD: Complete - \(result.videoURL)")
+        print("☁️ UPLOAD: Complete - \(result.videoURL)")
         return result
     }
     
-    // MARK: - PHASE 3: FEED INTEGRATION
+    // MARK: - PHASE 3: Feed Integration
     
-    /// Feed integration - saves taggedUserIDs to video document
     private func performFeedIntegration(
         uploadResult: VideoUploadResult,
         analysisResult: VideoAnalysisResult?,
         recordingContext: RecordingContext,
         userID: String,
-        manualTitle: String? = nil,
-        manualDescription: String? = nil,
-        taggedUserIDs: [String] = []
+        manualTitle: String?,
+        manualDescription: String?,
+        taggedUserIDs: [String]
     ) async throws -> CoreVideoMetadata {
         
         currentPhase = .integrating
         currentTask = "Creating video document..."
         await updateProgress(0.9)
         
-        guard !userID.isEmpty && !uploadResult.videoURL.isEmpty else {
-            throw VideoCreationError.feedIntegrationFailed("Invalid data")
-        }
+        let finalTitle = manualTitle ?? analysisResult?.title ?? getDefaultTitle(for: recordingContext)
+        let finalDescription = manualDescription ?? analysisResult?.description ?? getDefaultDescription(for: recordingContext)
         
-        // Smart hashtag handling
         let smartHashtags = generateSmartHashtags(
             aiHashtags: analysisResult?.hashtags,
             recordingContext: recordingContext
         )
-        
-        // Use manual overrides if provided, otherwise fall back to AI/defaults
-        let finalTitle = manualTitle ?? analysisResult?.title ?? getDefaultTitle(for: recordingContext)
-        let finalDescription = manualDescription ?? analysisResult?.description ?? getDefaultDescription(for: recordingContext)
         
         let metadata = VideoUploadMetadata(
             title: finalTitle,
@@ -412,28 +507,8 @@ class VideoCoordinator: ObservableObject {
             creatorName: ""
         )
         
-        // Enhanced logging
-        if let manual = manualTitle {
-            print("🔗 FEED INTEGRATION: Using MANUAL title: '\(manual)'")
-        } else if let aiTitle = analysisResult?.title {
-            print("🔗 FEED INTEGRATION: Using AI-generated title: '\(aiTitle)'")
-        } else {
-            print("🔗 FEED INTEGRATION: Using default title: '\(finalTitle)'")
-        }
+        print("📝 FEED INTEGRATION: Title = '\(finalTitle)'")
         
-        if let manual = manualDescription {
-            print("🔗 FEED INTEGRATION: Using MANUAL description: '\(manual)'")
-        } else if let aiDesc = analysisResult?.description {
-            print("🔗 FEED INTEGRATION: Using AI-generated description: '\(aiDesc)'")
-        } else {
-            print("🔗 FEED INTEGRATION: Using default description")
-        }
-        
-        if !taggedUserIDs.isEmpty {
-            print("🔗 FEED INTEGRATION: Tagged users: \(taggedUserIDs)")
-        }
-        
-        // Create video document with tagged users + trigger notifications
         let createdVideo = try await uploadService.createVideoDocument(
             uploadResult: uploadResult,
             metadata: metadata,
@@ -447,216 +522,97 @@ class VideoCoordinator: ObservableObject {
         await updateProgress(1.0)
         self.createdVideo = createdVideo
         
-        print("🔗 FEED INTEGRATION: Success - \(createdVideo.id)")
-        print("🔗 FINAL VIDEO TITLE: '\(createdVideo.title)'")
-        print("🔗 FINAL VIDEO DESCRIPTION: '\(createdVideo.description)'")
-        print("🔗 TAGGED USERS: \(createdVideo.taggedUserIDs.count)")
         return createdVideo
     }
     
-    // MARK: - PHASE 4: MENTION NOTIFICATIONS
+    // MARK: - Notifications
     
-    /// Send mention notifications to all tagged users
     private func sendMentionNotifications(
         videoID: String,
         videoTitle: String,
         taggerUserID: String,
         taggedUserIDs: [String]
     ) async {
-        guard !taggedUserIDs.isEmpty else { return }
-        
-        print("📬 MENTIONS: Sending notifications to \(taggedUserIDs.count) tagged users")
-        
         for taggedUserID in taggedUserIDs {
-            // Don't send notification if user tagged themselves
             guard taggedUserID != taggerUserID else { continue }
             
             do {
                 try await notificationService.sendMentionNotification(
                     to: taggedUserID,
-                    videoID: videoID,              // ✅ ADD THIS LINE
+                    videoID: videoID,
                     videoTitle: videoTitle,
                     mentionContext: "tagged in video"
                 )
-                
-                print("✅ MENTION: Notification sent to user \(taggedUserID)")
-                
+                print("✅ MENTION: Sent to \(taggedUserID)")
             } catch {
-                print("⚠️ MENTION: Failed to notify user \(taggedUserID) - \(error)")
+                print("⚠️ MENTION: Failed for \(taggedUserID) - \(error)")
             }
         }
-        
-        print("📬 MENTIONS: All notifications sent")
     }
     
-    // MARK: - PHASE 5: STITCH/REPLY NOTIFICATIONS (NEW)
-    
-    /// Send stitch/reply notifications based on parent/child thread logic
     private func sendStitchNotifications(
         createdVideo: CoreVideoMetadata,
         recordingContext: RecordingContext,
         creatorUserID: String
     ) async {
-        // Only send stitch notifications for replies/stitches
-        guard case .stitchToThread(let parentVideoID, _) = recordingContext else {
-            print("📬 STITCH: Not a reply/stitch, skipping notifications")
-            return
-        }
-        
-        print("📬 STITCH: Starting notification process for video \(createdVideo.id)")
+        guard case .stitchToThread(let parentVideoID, _) = recordingContext else { return }
         
         do {
-            // Get parent video to understand thread structure
             let parentVideo = try await videoService.getVideo(id: parentVideoID)
             
-            // Determine who to notify based on thread structure
-            let recipientIDs = try await determineStitchRecipients(
-                parentVideo: parentVideo,
-                newVideoDepth: createdVideo.conversationDepth,
-                creatorUserID: creatorUserID
-            )
-            
-            guard !recipientIDs.isEmpty else {
-                print("📬 STITCH: No recipients to notify")
-                return
-            }
-            
-            // Get thread users for notification
-            let threadUserIDs = recipientIDs.filter { $0 != creatorUserID }
-            
-            // Determine parent creator for notification
-            let parentCreatorID: String? = {
-                if createdVideo.conversationDepth == 2 {
-                    // Replying to child - notify child's parent
-                    return parentVideo.creatorID
-                }
-                return nil
-            }()
-            
-            // Send stitch notification
             try await notificationService.sendStitchNotification(
                 videoID: createdVideo.id,
                 videoTitle: createdVideo.title,
-                originalCreatorID: getOriginalCreatorID(from: parentVideo),
-                parentCreatorID: parentCreatorID,
-                threadUserIDs: threadUserIDs
+                originalCreatorID: parentVideo.creatorID,
+                parentCreatorID: parentVideo.creatorID,
+                threadUserIDs: []
             )
-            
-            print("✅ STITCH: Notifications sent to \(threadUserIDs.count) users")
-            
+            print("✅ STITCH: Notification sent")
         } catch {
-            print("⚠️ STITCH: Failed to send notifications - \(error)")
+            print("⚠️ STITCH: Notification failed - \(error)")
         }
-    }
-    
-    /// Determine who should receive stitch notifications based on thread structure
-    private func determineStitchRecipients(
-        parentVideo: CoreVideoMetadata,
-        newVideoDepth: Int,
-        creatorUserID: String
-    ) async throws -> [String] {
-        var recipients: Set<String> = []
-        
-        // Always notify original creator
-        let originalCreatorID = getOriginalCreatorID(from: parentVideo)
-        recipients.insert(originalCreatorID)
-        
-        if newVideoDepth == 1 {
-            // REPLYING TO PARENT (depth 0 → depth 1)
-            // Notify: parent creator + all users in parent thread
-            print("📬 STITCH: Replying to PARENT - notifying all parent thread users")
-            
-            recipients.insert(parentVideo.creatorID)
-            
-           
-        } else if newVideoDepth == 2 {
-            // REPLYING TO CHILD (depth 1 → depth 2)
-            // Notify: child creator + child's direct parent only
-            print("📬 STITCH: Replying to CHILD - notifying child + parent only")
-            
-            recipients.insert(parentVideo.creatorID) // Child creator
-            
-            // Get child's parent
-            if let grandparentID = parentVideo.replyToVideoID {
-                let grandparent = try await videoService.getVideo(id: grandparentID)
-                recipients.insert(grandparent.creatorID)
-            }
-        }
-        
-        // Remove the creator from recipients (don't notify yourself)
-        recipients.remove(creatorUserID)
-        
-        return Array(recipients)
-    }
-    
-    /// Get original thread creator (depth 0 video)
-    private func getOriginalCreatorID(from video: CoreVideoMetadata) -> String {
-        // If this is depth 0, it's the original
-        if video.conversationDepth == 0 {
-            return video.creatorID
-        }
-        
-        // Otherwise, need to traverse up (we'll use threadID logic)
-        // For now, return the creator of the current video as fallback
-        return video.creatorID
-    }
-    
-    /// Get all participants in a thread
-    private func getThreadParticipants(threadID: String) async throws -> Set<String> {
-        var participants: Set<String> = []
-        
-        // Get all videos in this thread
-        let threadVideos = try await videoService.getThreadVideos(threadID: threadID)
-        
-        for video in threadVideos {
-            participants.insert(video.creatorID)
-        }
-        
-        return participants
     }
     
     // MARK: - Helper Methods
     
-    /// Update combined parallel progress
     private func updateParallelProgress() async {
-        let audioWeight = 0.2
-        let compressionWeight = 0.4
-        let aiWeight = 0.4
+        let weights = (audio: 0.2, compression: 0.5, ai: 0.3)
         
-        let combinedProgress = (
-            audioExtractionProgress * audioWeight +
-            compressionProgress * compressionWeight +
-            aiAnalysisProgress * aiWeight
+        let combined = (
+            audioExtractionProgress * weights.audio +
+            compressionProgress * weights.compression +
+            aiAnalysisProgress * weights.ai
         )
         
-        await updateProgress(combinedProgress * 0.7)
+        await updateProgress(combined * 0.7)
         
         let activeTasks = [
             audioExtractionProgress < 1.0 ? "Audio" : nil,
-            compressionProgress < 1.0 ? "Compression" : nil,
+            compressionProgress < 1.0 ? "Compressing" : nil,
             aiAnalysisProgress < 1.0 ? "AI" : nil
         ].compactMap { $0 }
         
         if !activeTasks.isEmpty {
-            currentTask = "Processing: \(activeTasks.joined(separator: ", "))"
+            currentTask = activeTasks.joined(separator: " + ")
         }
     }
     
-    /// Complete workflow with timing analytics
     private func completeVideoCreation(createdVideo: CoreVideoMetadata, totalTime: TimeInterval) async {
         currentPhase = .complete
-        currentTask = "Video created successfully!"
+        currentTask = "Video created!"
         
         creationMetrics.totalVideosCreated += 1
         creationMetrics.lastCreatedVideoID = createdVideo.id
         performanceStats.averageCreationTime = totalTime
         
-        print("🎉 PARALLEL WORKFLOW: COMPLETE!")
+        if totalTime < 20 {
+            performanceStats.sub20SecondCount += 1
+        }
+        
+        print("🎉 WORKFLOW COMPLETE!")
         print("⏱️ TOTAL TIME: \(String(format: "%.1f", totalTime))s")
-        print("🎯 TARGET ACHIEVED: \(totalTime < 20 ? "YES" : "NO") (sub-20s)")
+        print("🎯 SUB-20s: \(totalTime < 20 ? "YES ✓" : "NO")")
     }
-    
-    // MARK: - Error Handling & Cleanup
     
     private func handleCreationError(_ error: Error) async {
         currentPhase = .error
@@ -666,12 +622,11 @@ class VideoCoordinator: ObservableObject {
     }
     
     private func performCleanup() async {
-        if let compressedURL = compressedVideoURL, compressedURL != recordedVideoURL {
-            try? FileManager.default.removeItem(at: compressedURL)
+        if let url = compressedVideoURL, url != recordedVideoURL {
+            try? FileManager.default.removeItem(at: url)
         }
-        
-        if let audioURL = extractedAudioURL {
-            try? FileManager.default.removeItem(at: audioURL)
+        if let url = extractedAudioURL {
+            try? FileManager.default.removeItem(at: url)
         }
     }
     
@@ -679,110 +634,62 @@ class VideoCoordinator: ObservableObject {
         overallProgress = progress
     }
     
-    /// Generate smart hashtags combining AI + context + trending
-    private func generateSmartHashtags(
-        aiHashtags: [String]?,
-        recordingContext: RecordingContext
-    ) -> [String] {
-        var smartHashtags: [String] = []
-        
-        // 1. AI hashtags (if available)
-        if let aiTags = aiHashtags {
-            smartHashtags.append(contentsOf: aiTags.prefix(3))
-        }
-        
-        // 2. Context-based hashtags
-        switch recordingContext {
-        case .newThread:
-            smartHashtags.append("original")
-        case .stitchToThread:
-            smartHashtags.append("stitch")
-        case .replyToVideo:
-            smartHashtags.append("reply")
-        case .continueThread:
-            smartHashtags.append("continuation")
-        }
-        
-        return Array(Set(smartHashtags)).prefix(5).map { $0 }
+    private func getFileSize(_ url: URL) async -> Int64 {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
     }
     
-    /// Get default title based on context
+    private func generateSmartHashtags(aiHashtags: [String]?, recordingContext: RecordingContext) -> [String] {
+        var tags: [String] = aiHashtags?.prefix(3).map { $0 } ?? []
+        
+        switch recordingContext {
+        case .newThread: tags.append("original")
+        case .stitchToThread: tags.append("stitch")
+        case .replyToVideo: tags.append("reply")
+        case .continueThread: tags.append("continuation")
+        }
+        
+        return Array(Set(tags)).prefix(5).map { $0 }
+    }
+    
     private func getDefaultTitle(for context: RecordingContext) -> String {
         switch context {
-        case .newThread:
-            return "New Thread"
-        case .stitchToThread(_, let info):
-            return "Stitch to \(info.creatorName)"
-        case .replyToVideo(_, let info):
-            return "Reply to \(info.creatorName)"
-        case .continueThread(_, let info):
-            return "Continuing: \(info.title)"
+        case .newThread: return "New Thread"
+        case .stitchToThread(_, let info): return "Stitch to \(info.creatorName)"
+        case .replyToVideo(_, let info): return "Reply to \(info.creatorName)"
+        case .continueThread(_, let info): return "Continuing: \(info.title)"
         }
     }
     
-    /// Get default description based on context
     private func getDefaultDescription(for context: RecordingContext) -> String {
         switch context {
-        case .newThread:
-            return "Check out my new thread!"
-        case .stitchToThread(_, let info):
-            return "Stitching to thread by \(info.creatorName)"
-        case .replyToVideo(_, let info):
-            return "Replying to video by \(info.creatorName)"
-        case .continueThread(_, let info):
-            return "Continuing thread: \(info.title)"
+        case .newThread: return "Check out my new thread!"
+        case .stitchToThread(_, let info): return "Stitching to thread by \(info.creatorName)"
+        case .replyToVideo(_, let info): return "Replying to video by \(info.creatorName)"
+        case .continueThread(_, let info): return "Continuing thread: \(info.title)"
         }
     }
     
-    /// Get default hashtags based on context
     private func getDefaultHashtags(for context: RecordingContext) -> [String] {
         switch context {
-        case .newThread:
-            return ["newthread", "original"]
-        case .stitchToThread:
-            return ["stitch"]
-        case .replyToVideo:
-            return ["reply"]
-        case .continueThread:
-            return ["continuation"]
+        case .newThread: return ["newthread", "original"]
+        case .stitchToThread: return ["stitch"]
+        case .replyToVideo: return ["reply"]
+        case .continueThread: return ["continuation"]
         }
-    }
-    
-    /// Get file size helper
-    private func getFileSize(_ url: URL) async -> Int64 {
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            return attributes[.size] as? Int64 ?? 0
-        } catch {
-            print("⚠️ FILE SIZE: Could not get file size for \(url.lastPathComponent)")
-            return 0
-        }
-    }
-    
-    /// Format file size for display
-    private func formatFileSize(_ bytes: Int64) async -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
     }
 }
 
 // MARK: - Supporting Types
 
 enum VideoCreationPhase: String, CaseIterable {
-    case ready = "ready"
-    case parallelProcessing = "parallel_processing"
-    case uploading = "uploading"
-    case integrating = "integrating"
-    case complete = "complete"
-    case error = "error"
+    case ready, parallelProcessing, uploading, integrating, complete, error
     
     var displayName: String {
         switch self {
         case .ready: return "Ready"
         case .parallelProcessing: return "Processing"
-        case .uploading: return "Upload"
-        case .integrating: return "Integration"
+        case .uploading: return "Uploading"
+        case .integrating: return "Finishing"
         case .complete: return "Complete"
         case .error: return "Error"
         }
@@ -814,15 +721,15 @@ enum VideoCreationError: LocalizedError {
     
     var errorDescription: String? {
         switch self {
-        case .invalidVideo(let message): return "Invalid Video: \(message)"
-        case .analysisTimeout: return "Analysis took too long"
-        case .compressionFailed(let message): return "Compression Failed: \(message)"
-        case .uploadFailed(let message): return "Upload Failed: \(message)"
-        case .feedIntegrationFailed(let message): return "Integration Failed: \(message)"
-        case .networkError(let message): return "Network Error: \(message)"
+        case .invalidVideo(let msg): return "Invalid Video: \(msg)"
+        case .analysisTimeout: return "Analysis timed out"
+        case .compressionFailed(let msg): return "Compression Failed: \(msg)"
+        case .uploadFailed(let msg): return "Upload Failed: \(msg)"
+        case .feedIntegrationFailed(let msg): return "Integration Failed: \(msg)"
+        case .networkError(let msg): return "Network Error: \(msg)"
         case .userNotFound: return "User not found"
         case .permissionDenied: return "Permission denied"
-        case .unknown(let message): return "Unknown Error: \(message)"
+        case .unknown(let msg): return msg
         }
     }
 }

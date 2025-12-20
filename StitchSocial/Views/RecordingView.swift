@@ -348,36 +348,26 @@ struct RecordingView: View {
     // MARK: - Actions
     
     private func handleExit() {
-        // FIXED: Proper cleanup to prevent retain cycles and crashes
-        
         // Stop recording first if active
         if controller.currentPhase.isRecording {
             controller.stopRecording()
         }
         
-        // Use controller's method to stop timer (since timer is private)
+        // Use controller's method to stop timer
         controller.stopRecordingTimer()
         
-        // Kill all background activity and videos before exiting
-        BackgroundActivityManager.shared.killAllBackgroundActivity(reason: "Recording exit")
-        
-        // Send additional kill notifications for immediate effect
-        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
-        NotificationCenter.default.post(name: NSNotification.Name("killAllVideoPlayers"), object: nil)
-        NotificationCenter.default.post(name: NSNotification.Name("PauseAllVideos"), object: nil)
-        
-        // Do camera cleanup without waiting
+        // Do camera cleanup
         Task { @MainActor in
             await controller.stopCameraSession()
             
-            // CRITICAL: Restore audio session before dismissal
+            // Restore audio session before dismissal
             await restorePlaybackAudioSession()
             
-            // Ensure all strong references are cleared
+            // Clear references
             controller.recordedVideoURL = nil
             controller.aiAnalysisResult = nil
             
-            // Safe dismissal after cleanup
+            // Dismiss
             onCancel()
         }
     }
@@ -462,7 +452,7 @@ struct RecordingView: View {
     // MARK: - Camera Lifecycle
     
     private func setupCamera() {
-        // FIXED: Use the correct notification name that exists in the project
+        // Kill feed videos before starting camera
         NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
         
         // Set up recording audio session

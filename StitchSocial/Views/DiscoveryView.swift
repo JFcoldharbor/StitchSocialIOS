@@ -4,6 +4,9 @@
 //
 //  Enhanced with deep time-based randomization
 //  Shows varied content from all time periods, not just newest
+//  FIXED: Fullscreen handling now uses .fullScreenCover(item:) to prevent video stopping
+//  FIXED: Observes AnnouncementService to stop video playback when announcement shows
+//  FIXED: loadMoreContent APPENDS to end without reshuffling seen content
 //
 
 import SwiftUI
@@ -48,6 +51,7 @@ class DiscoveryViewModel: ObservableObject {
                 }
                 
                 videos = validVideos
+                // Shuffle on INITIAL load only
                 applyFilterAndShuffle()
                 errorMessage = nil
                 
@@ -61,7 +65,7 @@ class DiscoveryViewModel: ObservableObject {
         }
     }
     
-    // MARK: - Load More with Deep Randomization
+    // MARK: - Load More (APPEND to end, NO reshuffle)
     
     func loadMoreContent() async {
         guard !isLoading else { return }
@@ -70,35 +74,36 @@ class DiscoveryViewModel: ObservableObject {
         defer { isLoading = false }
         
         do {
-            print("📥 DISCOVERY: Loading more randomized content")
+            print("📥 DISCOVERY: Loading more content (appending to end)")
             
-            // Load another deep randomized batch
-            let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 20)
+            // Load another batch
+            let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 30)
             let newVideos = threads.map { $0.parentVideo }
             
             await MainActor.run {
                 // Filter out videos with empty IDs
                 let validVideos = newVideos.filter { !$0.id.isEmpty }
                 
-                // Add to existing videos
+                // FIXED: Just append to END - don't reshuffle!
                 videos.append(contentsOf: validVideos)
-                applyFilterAndShuffle()
+                filteredVideos.append(contentsOf: validVideos)
                 
-                print("✅ DISCOVERY: Added \(validVideos.count) more videos, total: \(filteredVideos.count)")
+                print("✅ DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
             }
         } catch {
             print("❌ DISCOVERY: Failed to load more: \(error)")
         }
     }
     
-    // MARK: - Refresh Content
+    // MARK: - Refresh Content (full reset + reshuffle)
     
     func refreshContent() async {
         videos = []
+        filteredVideos = []
         await loadInitialContent()
     }
     
-    // MARK: - Randomize Content
+    // MARK: - Randomize Content (explicit reshuffle)
     
     func randomizeContent() {
         // Ultra-shuffle existing videos
@@ -265,6 +270,17 @@ enum DiscoveryCategory: String, CaseIterable {
     }
 }
 
+// MARK: - Video Presentation Wrapper (for item-based fullScreenCover)
+
+struct DiscoveryVideoPresentation: Identifiable, Equatable {
+    let id: String
+    let video: CoreVideoMetadata
+    
+    static func == (lhs: DiscoveryVideoPresentation, rhs: DiscoveryVideoPresentation) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 // MARK: - Enhanced DiscoveryView
 
 struct DiscoveryView: View {
@@ -272,64 +288,49 @@ struct DiscoveryView: View {
     @StateObject private var viewModel = DiscoveryViewModel()
     @EnvironmentObject private var authService: AuthService
     
+    // NEW: Observe announcement service to pause videos when announcement shows
+    @ObservedObject private var announcementService = AnnouncementService.shared
+    
     @State private var selectedCategory: DiscoveryCategory = .all
     @State private var discoveryMode: DiscoveryMode = .swipe
     @State private var currentSwipeIndex: Int = 0
-    @State private var selectedVideo: CoreVideoMetadata?
-    @State private var isFullscreenMode = false
     @State private var showingSearch = false
+    
+    // FIXED: Use item-based presentation instead of boolean
+    @State private var videoPresentation: DiscoveryVideoPresentation?
     
     var body: some View {
         ZStack {
-            if !isFullscreenMode {
-                // Normal Discovery Interface
-                ZStack {
-                    // Background Gradient
-                    LinearGradient(
-                        colors: [
-                            Color.black,
-                            Color.purple.opacity(0.3),
-                            Color.pink.opacity(0.2),
-                            Color.black
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .ignoresSafeArea()
-                    
-                    VStack(spacing: 0) {
-                        // Header
-                        headerView
-                        
-                        // Category Selector
-                        categorySelector
-                        
-                        // Content
-                        if viewModel.isLoading && viewModel.videos.isEmpty {
-                            loadingView
-                        } else if let errorMessage = viewModel.errorMessage {
-                            errorView(errorMessage)
-                        } else {
-                            contentView
-                        }
-                    }
-                }
-            } else {
-                // Fullscreen Mode
-                if let video = selectedVideo {
-                    FullscreenVideoView(video: video) {
-                        withAnimation(.easeInOut(duration: 0.4)) {
-                            isFullscreenMode = false
-                        }
-                        selectedVideo = nil
-                    }
-                    .ignoresSafeArea()
-                    .transition(.move(edge: .bottom))
+            // Background Gradient
+            LinearGradient(
+                colors: [
+                    Color.black,
+                    Color.purple.opacity(0.3),
+                    Color.pink.opacity(0.2),
+                    Color.black
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                // Header
+                headerView
+                
+                // Category Selector
+                categorySelector
+                
+                // Content
+                if viewModel.isLoading && viewModel.videos.isEmpty {
+                    loadingView
+                } else if let errorMessage = viewModel.errorMessage {
+                    errorView(errorMessage)
+                } else {
+                    contentView
                 }
             }
         }
-        .navigationBarHidden(isFullscreenMode)
-        .statusBarHidden(isFullscreenMode)
         .task {
             if viewModel.filteredVideos.isEmpty {
                 await viewModel.loadInitialContent()
@@ -337,6 +338,26 @@ struct DiscoveryView: View {
         }
         .sheet(isPresented: $showingSearch) {
             SearchView()
+        }
+        // FIXED: Use item-based fullScreenCover to prevent video stopping
+        // Use .fullscreen context to get FULL overlay (not minimal .discovery overlay)
+        .fullScreenCover(item: $videoPresentation) { presentation in
+            FullscreenVideoView(
+                video: presentation.video,
+                overlayContext: .fullscreen,
+                onDismiss: {
+                    print("📱 DISCOVERY: Dismissing fullscreen")
+                    videoPresentation = nil
+                }
+            )
+        }
+        // NEW: React to announcement state changes
+        .onChange(of: announcementService.isShowingAnnouncement) { _, isShowing in
+            if isShowing {
+                print("📢 DISCOVERY: Announcement showing - pausing videos")
+            } else {
+                print("📢 DISCOVERY: Announcement dismissed - can resume videos")
+            }
         }
     }
     
@@ -444,57 +465,66 @@ struct DiscoveryView: View {
     
     @ViewBuilder
     private var contentView: some View {
-        switch discoveryMode {
-        case .swipe:
-            ZStack(alignment: .top) {
-                DiscoverySwipeCards(
-                    videos: viewModel.filteredVideos,
-                    currentIndex: $currentSwipeIndex,
-                    onVideoTap: { video in
-                        selectedVideo = video
-                        withAnimation(.easeInOut(duration: 0.4)) {
-                            isFullscreenMode = true
+        // NEW: Don't render video content at all when announcement is showing
+        // This ensures no background video playback
+        if announcementService.isShowingAnnouncement {
+            // Show placeholder while announcement is displayed
+            Color.clear
+        } else {
+            switch discoveryMode {
+            case .swipe:
+                ZStack(alignment: .top) {
+                    DiscoverySwipeCards(
+                        videos: viewModel.filteredVideos,
+                        currentIndex: $currentSwipeIndex,
+                        onVideoTap: { video in
+                            // FIXED: Use item-based presentation
+                            videoPresentation = DiscoveryVideoPresentation(
+                                id: video.id,
+                                video: video
+                            )
+                        },
+                        onNavigateToProfile: { _ in },
+                        onNavigateToThread: { _ in }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onChange(of: currentSwipeIndex) { _, newValue in
+                        // Load more when getting close to end
+                        if newValue >= viewModel.filteredVideos.count - 10 {
+                            Task {
+                                await viewModel.loadMoreContent()
+                            }
                         }
+                    }
+                    
+                    // Swipe Instructions
+                    swipeInstructionsIndicator
+                        .padding(.top, 20)
+                }
+                
+            case .grid:
+                DiscoveryGridView(
+                    videos: viewModel.filteredVideos,
+                    onVideoTap: { video in
+                        // FIXED: Use item-based presentation
+                        videoPresentation = DiscoveryVideoPresentation(
+                            id: video.id,
+                            video: video
+                        )
                     },
-                    onNavigateToProfile: { _ in },
-                    onNavigateToThread: { _ in }
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onChange(of: currentSwipeIndex) { _, newValue in
-                    // Load more when getting close to end
-                    if newValue >= viewModel.filteredVideos.count - 10 {
+                    onLoadMore: {
                         Task {
                             await viewModel.loadMoreContent()
                         }
-                    }
-                }
-                
-                // Swipe Instructions
-                swipeInstructionsIndicator
-                    .padding(.top, 20)
+                    },
+                    onRefresh: {
+                        Task {
+                            await viewModel.refreshContent()
+                        }
+                    },
+                    isLoadingMore: viewModel.isLoading
+                )
             }
-            
-        case .grid:
-            DiscoveryGridView(
-                videos: viewModel.filteredVideos,
-                onVideoTap: { video in
-                    selectedVideo = video
-                    withAnimation(.easeInOut(duration: 0.4)) {
-                        isFullscreenMode = true
-                    }
-                },
-                onLoadMore: {
-                    Task {
-                        await viewModel.loadMoreContent()
-                    }
-                },
-                onRefresh: {
-                    Task {
-                        await viewModel.refreshContent()
-                    }
-                },
-                isLoadingMore: viewModel.isLoading
-            )
         }
     }
     
