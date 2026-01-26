@@ -363,8 +363,16 @@ class HomeFeedService: ObservableObject {
         let deepBatch = try await getDeepCutContent(followingIDs: followingIDs, limit: 5, excludeVideoIDs: exclusionSet)
         newThreads.append(contentsOf: deepBatch)
         
-        let dedupedNew = deduplicateThreads(newThreads)
-        let shuffledNew = dedupedNew.shuffled()
+        // Single pass: deduplicate while building shuffled result
+        var seenIDs = Set<String>()
+        var shuffledNew: [ThreadData] = []
+        
+        for thread in newThreads.shuffled() {
+            if !seenIDs.contains(thread.id) {
+                seenIDs.insert(thread.id)
+                shuffledNew.append(thread)
+            }
+        }
         
         if !shuffledNew.isEmpty {
             currentFeed.append(contentsOf: shuffledNew)

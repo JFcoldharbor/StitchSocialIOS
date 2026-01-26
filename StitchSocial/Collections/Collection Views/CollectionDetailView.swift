@@ -581,10 +581,14 @@ class CollectionDetailViewModel: ObservableObject {
     }
     
     convenience init(collection: VideoCollection) {
+        // Services are created here in MainActor context
+        let collectionService = CollectionService()
+        let videoService = VideoService()
+        
         self.init(
             collection: collection,
-            collectionService: CollectionService(),
-            videoService: VideoService()
+            collectionService: collectionService,
+            videoService: videoService
         )
     }
     
@@ -614,4 +618,3 @@ struct CollectShareSheet: UIViewControllerRepresentable {
     
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
-

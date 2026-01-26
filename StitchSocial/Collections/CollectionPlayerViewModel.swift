@@ -148,11 +148,15 @@ class CollectionPlayerViewModel: ObservableObject {
         collection: VideoCollection,
         userID: String
     ) {
+        // Services are created here in MainActor context
+        let collectionService = CollectionService()
+        let videoService = VideoService()
+        
         self.init(
             collection: collection,
             userID: userID,
-            collectionService: CollectionService(),
-            videoService: VideoService()
+            collectionService: collectionService,
+            videoService: videoService
         )
     }
     

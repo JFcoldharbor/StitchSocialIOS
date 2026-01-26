@@ -4,30 +4,8 @@
 //
 //  Layer 8: Views - Smart Reply Awareness Notification (COMPACT VERSION)
 //  Dependencies: SwiftUI, UIKit (haptics)
-//  Features: Small, subtle notifications for parent videos with replies
+//  Features: Small, subtle notifications with optional video thumbnail
 //
-
-// MARK: - SWIPE NOTIFICATION DESIGN - NO AUTO-NAVIGATION
-//
-// UPDATED APPROACH: Show swipe instructions instead of auto-moving
-// - Shows "Swipe → for X replies" message
-// - NO countdown timer that auto-navigates
-// - NO automatic movement to child videos
-// - Users must manually swipe horizontally to see replies
-// - Appears at 70% through parent videos with replies
-// - Auto-hides after 4 seconds
-// - Compact, readable design
-//
-// NAVIGATION DIRECTIONS:
-// - VERTICAL = Thread to Thread (parent to parent)
-// - HORIZONTAL = Parent to Child (within same thread)
-//
-// USER BEHAVIOR:
-// 1. Parent video plays
-// 2. At 70%, notification shows "Swipe → for 3 replies"
-// 3. User sees notification, manually swipes right
-// 4. App navigates horizontally to first child video
-// 5. User can continue swiping through replies
 
 import SwiftUI
 
@@ -38,6 +16,7 @@ struct ReplyNotificationConfig {
     let hasReplies: Bool
     let replyCount: Int
     let currentStitchIndex: Int
+    let thumbnailURL: String?  // ⭐ NEW: Optional thumbnail
     
     /// Only show on parent videos (index 0) with replies - SHOWS SWIPE INSTRUCTION
     var shouldShow: Bool {
@@ -102,12 +81,17 @@ struct FloatingBubbleNotification: View {
         }
     }
     
+    // ⭐ NEW: Check if we should show thumbnail
+    private var hasThumbnail: Bool {
+        return config.thumbnailURL != nil && !config.thumbnailURL!.isEmpty
+    }
+    
     // MARK: - Body
     
     var body: some View {
         // COMPLETELY NON-BLOCKING: Notification as pure overlay
         if isVisible {
-            compactBubbleContent
+            bubbleContent
                 .scaleEffect(scale)
                 .opacity(opacity)
                 .position(
@@ -125,9 +109,102 @@ struct FloatingBubbleNotification: View {
         }
     }
     
-    // MARK: - Compact Bubble Content
+    // MARK: - Bubble Content (Text or Thumbnail)
     
-    private var compactBubbleContent: some View {
+    @ViewBuilder
+    private var bubbleContent: some View {
+        if hasThumbnail {
+            // ⭐ NEW: Show thumbnail version
+            thumbnailBubbleContent
+        } else {
+            // Original: Show text version
+            textBubbleContent
+        }
+    }
+    
+    // MARK: - Thumbnail Bubble Content
+    
+    private var thumbnailBubbleContent: some View {
+        ZStack {
+            // Thumbnail background
+            AsyncImage(url: URL(string: config.thumbnailURL ?? "")) { phase in
+                switch phase {
+                case .empty:
+                    Color.gray.opacity(0.3)
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFill()
+                case .failure:
+                    Color.gray.opacity(0.3)
+                @unknown default:
+                    Color.gray.opacity(0.3)
+                }
+            }
+            .frame(width: 48, height: 64)
+            .clipped()
+            .cornerRadius(6)
+            
+            // Overlay gradient for depth
+            RoundedRectangle(cornerRadius: 6)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.3),
+                            Color.clear,
+                            Color.black.opacity(0.5)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 48, height: 64)
+            
+            // Arrow overlay
+            Image(systemName: "arrow.right")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.orange, .pink],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .shadow(color: .orange.opacity(0.5), radius: 3, x: 0, y: 0)
+        }
+        .frame(width: 48, height: 64)
+        .background(
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.8),
+                            Color.purple.opacity(0.3)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 56, height: 72)
+        )
+        .overlay(
+            Capsule()
+                .stroke(
+                    LinearGradient(
+                        colors: [.cyan, .purple, .pink],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    lineWidth: 1.5
+                )
+                .frame(width: 56, height: 72)
+        )
+        .shadow(color: .cyan.opacity(0.3), radius: 4, x: 0, y: 2)
+    }
+    
+    // MARK: - Text Bubble Content (Original)
+    
+    private var textBubbleContent: some View {
         HStack(spacing: 6) {
             // Reply icon with gradient
             Image(systemName: showingSwipeMessage ? "bubble.left.fill" : "scissors")
@@ -239,14 +316,10 @@ struct FloatingBubbleNotification: View {
     private func finishCountdown() {
         countdownTimer?.invalidate()
         countdownTimer = nil
-        
-        // FIXED: No auto-navigation - just show swipe instruction
-        // User must manually swipe to see replies
         hideNotification()
     }
     
     private func handleTap() {
-        // FIXED: Manual tap shows swipe hint, no auto-navigation
         cleanup()
         
         // Vibrant haptic feedback for colorful app
@@ -278,20 +351,47 @@ struct FloatingBubbleNotification: View {
 
 extension FloatingBubbleNotification {
     
-    /// Create notification for parent video with replies - FIXED NAVIGATION
+    /// Create notification for parent video with replies
     static func parentVideoWithReplies(
         videoDuration: TimeInterval,
         currentPosition: TimeInterval,
         replyCount: Int,
         currentStitchIndex: Int,
-        onViewReplies: @escaping () -> Void, // SHOULD CALL: coordinator.smoothMoveToStitch(1)
+        onViewReplies: @escaping () -> Void,
         onDismiss: @escaping () -> Void
     ) -> FloatingBubbleNotification {
         let config = ReplyNotificationConfig(
             videoDuration: videoDuration,
             hasReplies: replyCount > 0,
             replyCount: replyCount,
-            currentStitchIndex: currentStitchIndex
+            currentStitchIndex: currentStitchIndex,
+            thumbnailURL: nil  // ⭐ NEW: No thumbnail by default
+        )
+        
+        return FloatingBubbleNotification(
+            config: config,
+            currentVideoPosition: currentPosition,
+            onViewReplies: onViewReplies,
+            onDismiss: onDismiss
+        )
+    }
+    
+    /// ⭐ NEW: Create notification with video thumbnail
+    static func parentVideoWithThumbnail(
+        videoDuration: TimeInterval,
+        currentPosition: TimeInterval,
+        replyCount: Int,
+        currentStitchIndex: Int,
+        thumbnailURL: String,
+        onViewReplies: @escaping () -> Void,
+        onDismiss: @escaping () -> Void
+    ) -> FloatingBubbleNotification {
+        let config = ReplyNotificationConfig(
+            videoDuration: videoDuration,
+            hasReplies: replyCount > 0,
+            replyCount: replyCount,
+            currentStitchIndex: currentStitchIndex,
+            thumbnailURL: thumbnailURL  // ⭐ NEW: Use provided thumbnail
         )
         
         return FloatingBubbleNotification(
@@ -341,7 +441,8 @@ extension FloatingBubbleNotification {
             videoDuration: duration,
             hasReplies: nextStitchTitle != nil,
             replyCount: 1,
-            currentStitchIndex: 0
+            currentStitchIndex: 0,
+            thumbnailURL: nil
         )
         
         return FloatingBubbleNotification(
@@ -365,7 +466,8 @@ extension FloatingBubbleNotification {
             videoDuration: duration,
             hasReplies: nextStitchTitle != nil,
             replyCount: 1,
-            currentStitchIndex: 0
+            currentStitchIndex: 0,
+            thumbnailURL: nil
         )
         
         return FloatingBubbleNotification(
@@ -389,7 +491,8 @@ extension FloatingBubbleNotification {
             videoDuration: duration,
             hasReplies: nextStitchTitle != nil,
             replyCount: 1,
-            currentStitchIndex: 0
+            currentStitchIndex: 0,
+            thumbnailURL: nil
         )
         
         return FloatingBubbleNotification(

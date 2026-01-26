@@ -21,8 +21,10 @@ struct AnnouncementOverlayView: View {
     let onComplete: () -> Void
     let onDismiss: () -> Void
     
-    // Video service for fetching video URL
+    // Services
     @EnvironmentObject private var videoService: VideoService
+    @StateObject private var authService = AuthService()
+    @StateObject private var userService = UserService()
     
     // Navigation state
     @State private var showingCreatorProfile: Bool = false
@@ -85,17 +87,12 @@ struct AnnouncementOverlayView: View {
         }
         .fullScreenCover(isPresented: $showingCreatorProfile) {
             if let creatorID = creatorUserID {
-                NavigationStack {
-                    CreatorProfileView(userID: creatorID)
-                        .toolbar {
-                            ToolbarItem(placement: .navigationBarLeading) {
-                                Button("Close") {
-                                    showingCreatorProfile = false
-                                }
-                                .foregroundColor(.white)
-                            }
-                        }
-                }
+                ProfileView(
+                    authService: authService,
+                    userService: userService,
+                    videoService: videoService,
+                    viewingUserID: creatorID
+                )
             }
         }
     }

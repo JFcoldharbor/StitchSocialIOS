@@ -3,14 +3,19 @@
 //  StitchSocial
 //
 //  Layer 6: Coordination - Main Engagement Processing Manager
-//  Dependencies: VideoEngagementService, VideoService, UserService
-//  Features: Progressive tapping, hype rating management, INSTANT ENGAGEMENTS
+//  Dependencies: VideoEngagementService, VideoService, UserService, NotificationService
+//  Features: Progressive tapping, hype rating management, INSTANT ENGAGEMENTS, Push Notifications
 //  UPDATED: Self-engagement restriction - only founders can engage with their own content
+//  UPDATED: Added NotificationService integration for hype/cool notifications
+//  UPDATED: Added 60-second grace period with side-switching and long-press removal
 //
 
 import Foundation
 import SwiftUI
 import FirebaseAuth
+
+// MARK: - Engagement Side Enum
+
 
 // MARK: - Engagement Manager
 
@@ -22,6 +27,7 @@ class EngagementManager: ObservableObject {
     private let videoService: VideoService
     private let videoEngagementService: VideoEngagementService
     private let userService: UserService
+    private let notificationService: NotificationService
     
     // MARK: - Published State
     
@@ -39,10 +45,12 @@ class EngagementManager: ObservableObject {
     init(
         videoService: VideoService,
         userService: UserService,
-        videoEngagementService: VideoEngagementService? = nil
+        videoEngagementService: VideoEngagementService? = nil,
+        notificationService: NotificationService? = nil
     ) {
         self.videoService = videoService
         self.userService = userService
+        self.notificationService = notificationService ?? NotificationService()
         
         if let providedService = videoEngagementService {
             self.videoEngagementService = providedService
@@ -53,7 +61,7 @@ class EngagementManager: ObservableObject {
             )
         }
         
-        print("🎯 ENGAGEMENT MANAGER: Initialized with instant engagements")
+        print("🎯 ENGAGEMENT MANAGER: Initialized with instant engagements, notifications, and grace period")
     }
     
     // MARK: - Public Interface
@@ -75,7 +83,7 @@ class EngagementManager: ObservableObject {
         return newState
     }
     
-    // MARK: - Self-Engagement Validation (NEW)
+    // MARK: - Self-Engagement Validation
     
     /// Check if self-engagement should be allowed
     /// - Returns: true if engagement should be allowed, false if blocked
@@ -89,11 +97,11 @@ class EngagementManager: ObservableObject {
         return userTier == .founder || userTier == .coFounder
     }
     
-    // MARK: - Process Hype (instant engagement)
+    // MARK: - Process Hype (instant engagement with grace period)
     
     func processHype(videoID: String, userID: String, userTier: UserTier, creatorID: String? = nil) async throws -> Bool {
         
-        // NEW: Self-engagement validation
+        // Self-engagement validation
         if let creatorID = creatorID {
             guard canSelfEngage(userID: userID, creatorID: creatorID, userTier: userTier) else {
                 throw StitchError.validationError("You can't hype your own content")
@@ -112,6 +120,43 @@ class EngagementManager: ObservableObject {
         lastEngagementTime[videoID] = Date()
         
         var state = getEngagementState(videoID: videoID, userID: userID)
+        
+        // 🆕 CHECK GRACE PERIOD IF TRYING TO SWITCH SIDES
+        if state.currentSide == .cool && !state.isWithinGracePeriod {
+            throw StitchError.validationError("Cannot switch from cool to hype after grace period")
+        }
+        
+        // 🆕 IF SWITCHING DURING GRACE PERIOD - RESET
+        if state.currentSide == .cool && state.isWithinGracePeriod {
+            print("🔄 SWITCHING: Cool → Hype (within grace period)")
+            let originalCools = state.coolEngagements
+            state.coolEngagements = 0
+            state.hypeEngagements = 0
+            state.totalCloutGiven = 0
+            
+            // Update video counts to remove cools
+            do {
+                let video = try await videoService.getVideo(id: videoID)
+                let newCoolCount = max(0, video.coolCount - originalCools)
+                try await videoService.updateVideoEngagement(
+                    videoID: videoID,
+                    hypeCount: video.hypeCount,
+                    coolCount: newCoolCount,
+                    viewCount: video.viewCount,
+                    temperature: video.temperature,
+                    lastEngagementAt: Date()
+                )
+                print("✅ SWITCHING: Removed \(originalCools) cools")
+            } catch {
+                print("⚠️ SWITCHING: Failed to update video counts: \(error)")
+            }
+        }
+        
+        // 🆕 SET FIRST ENGAGEMENT TIMESTAMP IF FIRST TAP
+        if state.firstEngagementAt == nil {
+            state.firstEngagementAt = Date()
+            print("⏱️ GRACE PERIOD: Started (60 seconds)")
+        }
         
         // Check caps
         if state.hasHitCloutCap(for: userTier) {
@@ -153,8 +198,9 @@ class EngagementManager: ObservableObject {
         await saveEngagementStateToFirebase(state)
         
         // UPDATE VIDEO IN FIREBASE - fetch, increment, update
+        let video: CoreVideoMetadata
         do {
-            let video = try await videoService.getVideo(id: videoID)
+            video = try await videoService.getVideo(id: videoID)
             let newHypeCount = video.hypeCount + visualHypeIncrement
             
             try await videoService.updateVideoEngagement(
@@ -167,9 +213,27 @@ class EngagementManager: ObservableObject {
             )
         } catch {
             print("❌ Failed to update video: \(error)")
+            throw error
         }
         
         print("🔥 HYPE: +\(visualHypeIncrement) hypes, +\(cloutAwarded) clout")
+        
+        // SEND NOTIFICATION TO VIDEO CREATOR
+        if let creatorID = creatorID, creatorID != userID {
+            Task {
+                do {
+                    try await notificationService.sendEngagementNotification(
+                        to: creatorID,
+                        videoID: videoID,
+                        engagementType: "hype",
+                        videoTitle: video.title
+                    )
+                    print("✅ HYPE NOTIFICATION: Sent to \(creatorID)")
+                } catch {
+                    print("⚠️ HYPE NOTIFICATION: Failed to send - \(error.localizedDescription)")
+                }
+            }
+        }
         
         // Post notification
         NotificationCenter.default.post(
@@ -181,11 +245,11 @@ class EngagementManager: ObservableObject {
         return true
     }
     
-    // MARK: - Process Cool (instant engagement)
+    // MARK: - Process Cool (instant engagement with grace period)
     
     func processCool(videoID: String, userID: String, userTier: UserTier, creatorID: String? = nil) async throws -> Bool {
         
-        // NEW: Self-engagement validation
+        // Self-engagement validation
         if let creatorID = creatorID {
             guard canSelfEngage(userID: userID, creatorID: creatorID, userTier: userTier) else {
                 throw StitchError.validationError("You can't cool your own content")
@@ -205,6 +269,46 @@ class EngagementManager: ObservableObject {
         
         var state = getEngagementState(videoID: videoID, userID: userID)
         
+        // 🆕 CHECK GRACE PERIOD IF TRYING TO SWITCH SIDES
+        if state.currentSide == .hype && !state.isWithinGracePeriod {
+            throw StitchError.validationError("Cannot switch from hype to cool after grace period")
+        }
+        
+        // 🆕 IF SWITCHING DURING GRACE PERIOD - RESET
+        if state.currentSide == .hype && state.isWithinGracePeriod {
+            print("🔄 SWITCHING: Hype → Cool (within grace period)")
+            let originalHypes = state.hypeEngagements
+            let tierMultiplier = EngagementConfig.getVisualHypeMultiplier(for: userTier)
+            let hypeDecrement = originalHypes * tierMultiplier
+            
+            state.hypeEngagements = 0
+            state.coolEngagements = 0
+            state.totalCloutGiven = 0
+            
+            // Update video counts to remove hypes
+            do {
+                let video = try await videoService.getVideo(id: videoID)
+                let newHypeCount = max(0, video.hypeCount - hypeDecrement)
+                try await videoService.updateVideoEngagement(
+                    videoID: videoID,
+                    hypeCount: newHypeCount,
+                    coolCount: video.coolCount,
+                    viewCount: video.viewCount,
+                    temperature: video.temperature,
+                    lastEngagementAt: Date()
+                )
+                print("✅ SWITCHING: Removed \(originalHypes) hypes (\(hypeDecrement) visual)")
+            } catch {
+                print("⚠️ SWITCHING: Failed to update video counts: \(error)")
+            }
+        }
+        
+        // 🆕 SET FIRST ENGAGEMENT TIMESTAMP IF FIRST TAP
+        if state.firstEngagementAt == nil {
+            state.firstEngagementAt = Date()
+            print("⏱️ GRACE PERIOD: Started (60 seconds)")
+        }
+        
         // Check engagement cap
         if state.hasHitEngagementCap() {
             throw StitchError.validationError("Engagement cap reached for this video")
@@ -214,7 +318,7 @@ class EngagementManager: ObservableObject {
         state.addCoolEngagement()
         
         // Calculate rewards
-        let visualCoolIncrement = 1  // Cool is always 1
+        let visualCoolIncrement = 1
         let tapNumber = state.coolEngagements
         let cloutPenalty = EngagementCalculator.calculateCoolPenalty()
         
@@ -224,8 +328,9 @@ class EngagementManager: ObservableObject {
         await saveEngagementStateToFirebase(state)
         
         // UPDATE VIDEO IN FIREBASE - fetch, increment, update
+        let video: CoreVideoMetadata
         do {
-            let video = try await videoService.getVideo(id: videoID)
+            video = try await videoService.getVideo(id: videoID)
             let newCoolCount = video.coolCount + visualCoolIncrement
             
             try await videoService.updateVideoEngagement(
@@ -238,9 +343,27 @@ class EngagementManager: ObservableObject {
             )
         } catch {
             print("❌ Failed to update video: \(error)")
+            throw error
         }
         
         print("❄️ COOL: +\(visualCoolIncrement) cool, \(cloutPenalty) clout")
+        
+        // SEND NOTIFICATION TO VIDEO CREATOR
+        if let creatorID = creatorID, creatorID != userID {
+            Task {
+                do {
+                    try await notificationService.sendEngagementNotification(
+                        to: creatorID,
+                        videoID: videoID,
+                        engagementType: "cool",
+                        videoTitle: video.title
+                    )
+                    print("✅ COOL NOTIFICATION: Sent to \(creatorID)")
+                } catch {
+                    print("⚠️ COOL NOTIFICATION: Failed to send - \(error.localizedDescription)")
+                }
+            }
+        }
         
         // Post notification
         NotificationCenter.default.post(
@@ -252,6 +375,76 @@ class EngagementManager: ObservableObject {
         return true
     }
     
+    // MARK: - 🆕 Remove All Engagement (Long Press)
+    
+    func removeAllEngagement(videoID: String, userID: String, userTier: UserTier) async throws -> Bool {
+        print("🗑️ REMOVE ALL: Attempting to remove engagement")
+        
+        var state = getEngagementState(videoID: videoID, userID: userID)
+        
+        // Check if within grace period
+        guard state.isWithinGracePeriod else {
+            print("❌ REMOVE ALL: Grace period expired")
+            throw StitchError.validationError("Cannot remove engagement after grace period")
+        }
+        
+        print("✅ REMOVE ALL: Within grace period, proceeding...")
+        
+        // Store original counts for Firebase update
+        let originalHypes = state.hypeEngagements
+        let originalCools = state.coolEngagements
+        
+        // Calculate visual decrements
+        let tierMultiplier = EngagementConfig.getVisualHypeMultiplier(for: userTier)
+        let hypeDecrement = originalHypes * tierMultiplier
+        let coolDecrement = originalCools
+        
+        // Reset everything
+        state.hypeEngagements = 0
+        state.coolEngagements = 0
+        state.totalEngagements = 0
+        state.totalCloutGiven = 0
+        state.firstEngagementAt = nil
+        state.lastEngagementAt = Date()
+        
+        // Update in-memory state
+        let key = "\(videoID)_\(userID)"
+        engagementStates[key] = state
+        await saveEngagementStateToFirebase(state)
+        
+        // Update video counts in Firebase
+        do {
+            let video = try await videoService.getVideo(id: videoID)
+            
+            let newHypeCount = max(0, video.hypeCount - hypeDecrement)
+            let newCoolCount = max(0, video.coolCount - coolDecrement)
+            
+            try await videoService.updateVideoEngagement(
+                videoID: videoID,
+                hypeCount: newHypeCount,
+                coolCount: newCoolCount,
+                viewCount: video.viewCount,
+                temperature: video.temperature,
+                lastEngagementAt: Date()
+            )
+            
+            print("✅ REMOVE ALL: Removed \(originalHypes) hypes (\(hypeDecrement) visual) and \(originalCools) cools")
+            
+            // Post notification
+            NotificationCenter.default.post(
+                name: NSNotification.Name("VideoEngagementUpdated"),
+                object: nil,
+                userInfo: ["videoID": videoID]
+            )
+            
+            return true
+            
+        } catch {
+            print("❌ REMOVE ALL: Failed to update video: \(error)")
+            throw error
+        }
+    }
+    
     // MARK: - Firebase Persistence
     
     private func loadEngagementStateFromFirebase(videoID: String, userID: String) async {
@@ -261,7 +454,7 @@ class EngagementManager: ObservableObject {
             if let loadedState = try await videoEngagementService.loadEngagementState(key: key) {
                 await MainActor.run {
                     engagementStates[key] = loadedState
-                    print("🔄 Loaded state from Firebase for \(key)")
+                    print("📄 Loaded state from Firebase for \(key)")
                 }
             }
         } catch {
@@ -318,12 +511,11 @@ class EngagementManager: ObservableObject {
     }
     
     func getCurrentMilestone(videoID: String, userID: String) -> TapMilestone? {
-        // No milestones with instant engagements
         return nil
     }
     
     func clearMilestone(videoID: String, userID: String) {
-        // No-op for now
+        // No-op
     }
     
     func setProcessing(videoID: String, userID: String, isProcessing: Bool) {
@@ -347,7 +539,7 @@ class EngagementManager: ObservableObject {
     }
     
     func clearOldStates() {
-        let cutoffTime = Date().addingTimeInterval(-3600) // 1 hour ago
+        let cutoffTime = Date().addingTimeInterval(-3600)
         
         let keysToRemove = engagementStates.compactMap { key, state in
             state.lastEngagementAt < cutoffTime ? key : nil

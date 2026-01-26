@@ -61,7 +61,11 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         segmentNumber: Int? = nil,
         segmentTitle: String? = nil,
         isCollectionSegment: Bool = false,
-        replyTimestamp: TimeInterval? = nil
+        replyTimestamp: TimeInterval? = nil,
+        // Spin-off support
+        spinOffFromVideoID: String? = nil,
+        spinOffFromThreadID: String? = nil,
+        spinOffCount: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -97,6 +101,10 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         self.segmentTitle = segmentTitle
         self.isCollectionSegment = isCollectionSegment
         self.replyTimestamp = replyTimestamp
+        // Spin-off support
+        self.spinOffFromVideoID = spinOffFromVideoID
+        self.spinOffFromThreadID = spinOffFromThreadID
+        self.spinOffCount = spinOffCount
     }
     
     // MARK: - Thread/Parent-Child-Stepchild Logic
@@ -139,6 +147,16 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     var segmentTitle: String?        // Optional title for this segment
     var isCollectionSegment: Bool    // True if this video is a collection segment
     var replyTimestamp: TimeInterval? // Timestamp in parent video this reply references
+    
+    // MARK: - Spin-off Support
+    var spinOffFromVideoID: String?   // The video this thread is a spin-off from
+    var spinOffFromThreadID: String?  // The root thread this spin-off came from
+    var spinOffCount: Int             // How many spin-offs reference THIS video
+    
+    /// True if this thread is a spin-off from another video
+    var isSpinOff: Bool {
+        return spinOffFromVideoID != nil
+    }
     
     /// Display title for collection segments - uses segmentTitle if available, falls back to "Part N"
     var segmentDisplayTitle: String {
@@ -313,13 +331,13 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     /// Temperature emoji representation
     var temperatureEmoji: String {
         switch temperature.lowercased() {
-        case "fire", "blazing": return "ðŸ”¥"
-        case "hot": return "ðŸŒ¶ï¸"
-        case "warm": return "â˜€ï¸"
-        case "neutral": return "ðŸ˜"
-        case "cool": return "â„ï¸"
-        case "cold", "frozen": return "ðŸ§Š"
-        default: return "ðŸ“Š"
+        case "fire", "blazing": return "Ã°Å¸â€Â¥"
+        case "hot": return "Ã°Å¸Å’Â¶Ã¯Â¸Â"
+        case "warm": return "Ã¢Ëœâ‚¬Ã¯Â¸Â"
+        case "neutral": return "Ã°Å¸ËœÂ"
+        case "cool": return "Ã¢Ââ€žÃ¯Â¸Â"
+        case "cold", "frozen": return "Ã°Å¸Â§Å "
+        default: return "Ã°Å¸â€œÅ "
         }
     }
     
@@ -473,6 +491,57 @@ extension CoreVideoMetadata {
             lastEngagementAt: nil
         )
     }
+    
+    /// Creates a spin-off thread from another video (depth 2 response alternative)
+    static func spinOffThread(
+        from sourceVideoID: String,
+        sourceThreadID: String,
+        title: String,
+        description: String = "",
+        taggedUserIDs: [String] = [],
+        videoURL: String,
+        thumbnailURL: String,
+        creatorID: String,
+        creatorName: String,
+        duration: TimeInterval,
+        fileSize: Int64,
+        aspectRatio: Double = 9.0/16.0
+    ) -> CoreVideoMetadata {
+        let newID = UUID().uuidString
+        return CoreVideoMetadata(
+            id: newID,
+            title: title,
+            description: description,
+            taggedUserIDs: taggedUserIDs,
+            videoURL: videoURL,
+            thumbnailURL: thumbnailURL,
+            creatorID: creatorID,
+            creatorName: creatorName,
+            createdAt: Date(),
+            threadID: newID,  // Self-referential - this IS a new thread
+            replyToVideoID: nil,
+            conversationDepth: 0,  // New thread starts at depth 0
+            viewCount: 0,
+            hypeCount: 0,
+            coolCount: 0,
+            replyCount: 0,
+            shareCount: 0,
+            temperature: "neutral",
+            qualityScore: 50,
+            engagementRatio: 0.5,
+            velocityScore: 0.0,
+            trendingScore: 0.0,
+            duration: duration,
+            aspectRatio: aspectRatio,
+            fileSize: fileSize,
+            discoverabilityScore: 0.5,
+            isPromoted: false,
+            lastEngagementAt: nil,
+            spinOffFromVideoID: sourceVideoID,
+            spinOffFromThreadID: sourceThreadID,
+            spinOffCount: 0
+        )
+    }
 }
 
 // MARK: - Engagement Updates (UPDATED: Include description and taggedUserIDs in copy methods)
@@ -530,7 +599,10 @@ extension CoreVideoMetadata {
             fileSize: fileSize,
             discoverabilityScore: discoverabilityScore,
             isPromoted: isPromoted,
-            lastEngagementAt: Date()
+            lastEngagementAt: Date(),
+            spinOffFromVideoID: spinOffFromVideoID,
+            spinOffFromThreadID: spinOffFromThreadID,
+            spinOffCount: spinOffCount
         )
     }
     
@@ -569,7 +641,10 @@ extension CoreVideoMetadata {
             fileSize: fileSize,
             discoverabilityScore: discoverabilityScore ?? self.discoverabilityScore,
             isPromoted: isPromoted ?? self.isPromoted,
-            lastEngagementAt: lastEngagementAt
+            lastEngagementAt: lastEngagementAt,
+            spinOffFromVideoID: spinOffFromVideoID,
+            spinOffFromThreadID: spinOffFromThreadID,
+            spinOffCount: spinOffCount
         )
     }
 }

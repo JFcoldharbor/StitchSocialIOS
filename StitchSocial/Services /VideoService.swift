@@ -125,13 +125,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
         // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -139,10 +139,10 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
@@ -150,7 +150,7 @@ class VideoService: ObservableObject {
         
         // Determine video orientation for logging
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-        print("📐 VIDEO SERVICE: Creating \(orientation.displayName) video with aspect ratio \(String(format: "%.3f", aspectRatio))")
+        print("ðŸ“ VIDEO SERVICE: Creating \(orientation.displayName) video with aspect ratio \(String(format: "%.3f", aspectRatio))")
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -184,7 +184,7 @@ class VideoService: ObservableObject {
             
             // Content metadata - FIXED: Use actual aspect ratio
             FirebaseSchema.VideoDocument.duration: duration,
-            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // ✅ NOW DYNAMIC
+            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // âœ… NOW DYNAMIC
             FirebaseSchema.VideoDocument.fileSize: fileSize,
             FirebaseSchema.VideoDocument.qualityScore: 50,
             
@@ -200,7 +200,118 @@ class VideoService: ObservableObject {
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("✅ VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
+        print("âœ… VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
+        return video
+    }
+    
+    /// Create spin-off thread - a new thread that references an original video
+    /// Spin-offs are new threads (depth 0) but with attribution to the original video
+    func createSpinOffThread(
+        originalVideoID: String,
+        originalThreadID: String,
+        title: String,
+        description: String = "",
+        videoURL: String,
+        thumbnailURL: String,
+        creatorID: String,
+        creatorName: String,
+        duration: TimeInterval,
+        fileSize: Int64,
+        aspectRatio: Double = 9.0/16.0
+    ) async throws -> CoreVideoMetadata {
+        
+        // CRITICAL: Validate creatorID is Firebase Auth UID
+        guard let currentFirebaseUID = Auth.auth().currentUser?.uid else {
+            throw StitchError.authenticationError("No authenticated user found")
+        }
+        
+        let validatedCreatorID = currentFirebaseUID
+        
+        if creatorID != validatedCreatorID {
+            print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+        }
+        
+        // FIX: If creatorName is empty, fetch username
+        var finalCreatorName = creatorName
+        if finalCreatorName.isEmpty {
+            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            let userDoc = try await db.collection(FirebaseSchema.Collections.users)
+                .document(validatedCreatorID)
+                .getDocument()
+            
+            if let userData = userDoc.data(),
+               let username = userData[FirebaseSchema.UserDocument.username] as? String {
+                finalCreatorName = username
+                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+            } else {
+                finalCreatorName = "unknown_user"
+                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
+            }
+        }
+        
+        let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
+        
+        let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
+        print("📹 VIDEO SERVICE: Creating spin-off \(orientation.displayName) video referencing \(originalVideoID)")
+        
+        let videoData: [String: Any] = [
+            FirebaseSchema.VideoDocument.id: videoID,
+            FirebaseSchema.VideoDocument.title: title,
+            FirebaseSchema.VideoDocument.description: description,
+            FirebaseSchema.VideoDocument.videoURL: videoURL,
+            FirebaseSchema.VideoDocument.thumbnailURL: thumbnailURL,
+            FirebaseSchema.VideoDocument.creatorID: validatedCreatorID,
+            FirebaseSchema.VideoDocument.creatorName: finalCreatorName,
+            FirebaseSchema.VideoDocument.createdAt: Timestamp(),
+            FirebaseSchema.VideoDocument.updatedAt: Timestamp(),
+            
+            // Thread hierarchy - NEW thread (depth 0) with spin-off attribution
+            FirebaseSchema.VideoDocument.threadID: videoID,  // Its own thread
+            FirebaseSchema.VideoDocument.conversationDepth: 0,
+            FirebaseSchema.VideoDocument.spinOffFromVideoID: originalVideoID,  // Reference to original video
+            FirebaseSchema.VideoDocument.spinOffFromThreadID: originalThreadID,  // Reference to original thread
+            
+            // Basic engagement
+            FirebaseSchema.VideoDocument.viewCount: 0,
+            FirebaseSchema.VideoDocument.hypeCount: 0,
+            FirebaseSchema.VideoDocument.coolCount: 0,
+            FirebaseSchema.VideoDocument.replyCount: 0,
+            FirebaseSchema.VideoDocument.shareCount: 0,
+            FirebaseSchema.VideoDocument.spinOffCount: 0,  // Track spin-offs from this video
+            
+            // Milestone tracking
+            FirebaseSchema.VideoDocument.firstHypeReceived: false,
+            FirebaseSchema.VideoDocument.firstCoolReceived: false,
+            FirebaseSchema.VideoDocument.milestone10Reached: false,
+            FirebaseSchema.VideoDocument.milestone400Reached: false,
+            FirebaseSchema.VideoDocument.milestone1000Reached: false,
+            FirebaseSchema.VideoDocument.milestone15000Reached: false,
+            
+            // Content metadata
+            FirebaseSchema.VideoDocument.duration: duration,
+            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,
+            FirebaseSchema.VideoDocument.fileSize: fileSize,
+            FirebaseSchema.VideoDocument.qualityScore: 50,
+            
+            // Temperature system
+            FirebaseSchema.VideoDocument.temperature: "neutral",
+            
+            // Status
+            FirebaseSchema.VideoDocument.isDeleted: false,
+            FirebaseSchema.VideoDocument.discoverabilityScore: 0.5,
+            FirebaseSchema.VideoDocument.isPromoted: false
+        ]
+        
+        try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
+        
+        // Increment spinOffCount on the original video
+        let originalVideoRef = db.collection(FirebaseSchema.Collections.videos).document(originalVideoID)
+        try await originalVideoRef.updateData([
+            FirebaseSchema.VideoDocument.spinOffCount: FieldValue.increment(Int64(1))
+        ])
+        
+        let video = createCoreVideoMetadata(from: videoData, id: videoID)
+        print("✅ VIDEO SERVICE: Created spin-off thread \(videoID) by @\(finalCreatorName) from original \(originalVideoID)")
         return video
     }
     
@@ -228,13 +339,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
         // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -242,10 +353,10 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
@@ -263,7 +374,7 @@ class VideoService: ObservableObject {
         
         // Determine video orientation for logging
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-        print("📐 VIDEO SERVICE: Creating \(orientation.displayName) reply with aspect ratio \(String(format: "%.3f", aspectRatio))")
+        print("ðŸ“ VIDEO SERVICE: Creating \(orientation.displayName) reply with aspect ratio \(String(format: "%.3f", aspectRatio))")
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -298,7 +409,7 @@ class VideoService: ObservableObject {
             
             // Content metadata - FIXED: Use actual aspect ratio
             FirebaseSchema.VideoDocument.duration: duration,
-            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // ✅ NOW DYNAMIC
+            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // âœ… NOW DYNAMIC
             FirebaseSchema.VideoDocument.fileSize: fileSize,
             FirebaseSchema.VideoDocument.qualityScore: 50,
             
@@ -326,7 +437,26 @@ class VideoService: ObservableObject {
         }
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("✅ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
+        print("âœ… VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
+        
+        // 🔔 NOTIFY PARENT CREATOR OF NEW REPLY
+        let parentCreatorID = parentData[FirebaseSchema.VideoDocument.creatorID] as? String
+        if let parentCreatorID = parentCreatorID, parentCreatorID != validatedCreatorID {
+            Task {
+                do {
+                    let notificationService = NotificationService()
+                    try await notificationService.sendReplyNotification(
+                        to: parentCreatorID,
+                        videoID: videoID,
+                        videoTitle: title
+                    )
+                    print("✅ REPLY NOTIFICATION: Sent to parent creator \(parentCreatorID)")
+                } catch {
+                    print("⚠️ REPLY NOTIFICATION: Failed - \(error)")
+                }
+            }
+        }
+        
         return video
     }
     
@@ -479,7 +609,7 @@ class VideoService: ObservableObject {
     
     /// Get all videos belonging to a collection, sorted by segment number
     func getVideosByCollection(collectionID: String) async throws -> [CoreVideoMetadata] {
-        print("📚 VIDEO SERVICE: Fetching videos for collection \(collectionID)")
+        print("ðŸ“š VIDEO SERVICE: Fetching videos for collection \(collectionID)")
         
         let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
             .whereField("collectionID", isEqualTo: collectionID)
@@ -490,7 +620,7 @@ class VideoService: ObservableObject {
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
-        print("📚 VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
+        print("ðŸ“š VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
         return videos
     }
     
@@ -499,7 +629,7 @@ class VideoService: ObservableObject {
     func getTimestampedReplies(videoID: String? = nil, segmentID: String? = nil) async throws -> [CoreVideoMetadata] {
         let targetID = videoID ?? segmentID ?? ""
         guard !targetID.isEmpty else {
-            print("⚠️ VIDEO SERVICE: No videoID or segmentID provided for timestamped replies")
+            print("âš ï¸ VIDEO SERVICE: No videoID or segmentID provided for timestamped replies")
             return []
         }
         
@@ -513,7 +643,7 @@ class VideoService: ObservableObject {
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
-        print("📚 VIDEO SERVICE: Loaded \(replies.count) timestamped replies for \(targetID)")
+        print("ðŸ“š VIDEO SERVICE: Loaded \(replies.count) timestamped replies for \(targetID)")
         return replies
     }
     
@@ -652,7 +782,7 @@ class VideoService: ObservableObject {
                 FirebaseSchema.VideoDocument.updatedAt: Timestamp()
             ])
         
-        print("🏷️ VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
+        print("ðŸ·ï¸ VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
     }
     
     /// Record user interaction (views and shares only)
@@ -1080,5 +1210,35 @@ class VideoService: ObservableObject {
         } catch {
             return .rookie
         }
+    }
+    
+    // MARK: - Recording Limits (Tier-Based)
+    
+    /// Get maximum recording duration for a user tier (in seconds)
+    func getMaxRecordingDuration(for tier: UserTier) -> TimeInterval {
+        switch tier {
+        case .rookie: return 30          // 30 seconds
+        case .rising: return 45          // 45 seconds
+        case .veteran: return 60         // 1 minute
+        case .influencer: return 90      // 1.5 minutes
+        case .ambassador: return 120     // 2 minutes
+        case .elite: return 180          // 3 minutes
+        case .partner: return 300        // 5 minutes
+        case .legendary: return 480      // 8 minutes
+        case .topCreator: return 600     // 10 minutes
+        case .founder, .coFounder: return 900  // 15 minutes (technical limit)
+        }
+    }
+    
+    /// Check if user can continue recording based on current duration
+    func canContinueRecording(currentDuration: TimeInterval, userTier: UserTier) -> Bool {
+        let maxDuration = getMaxRecordingDuration(for: userTier)
+        return currentDuration < maxDuration
+    }
+    
+    /// Get remaining recording time for user's tier
+    func getRemainingTime(currentDuration: TimeInterval, userTier: UserTier) -> TimeInterval {
+        let maxDuration = getMaxRecordingDuration(for: userTier)
+        return max(0, maxDuration - currentDuration)
     }
 }

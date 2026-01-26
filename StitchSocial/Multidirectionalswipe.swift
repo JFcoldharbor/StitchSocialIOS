@@ -163,10 +163,10 @@ extension MultidirectionalSwipeGesture {
         
         let translation = value.translation
         
-        // Apply sensitivity and response multiplier
+        // Pre-multiplied constant: 2.2 * 1.6 = 3.52
         let amplifiedTranslation = CGSize(
-            width: translation.width * config.sensitivity * config.responseMultiplier,
-            height: translation.height * config.sensitivity * config.responseMultiplier
+            width: translation.width * 3.52,
+            height: translation.height * 3.52
         )
         
         dragOffset = amplifiedTranslation
@@ -512,7 +512,6 @@ struct MultidirectionalSwipeModifier: ViewModifier {
                 )
                 .scaleEffect(showVisualFeedback && currentFeedback.shouldCommit ? 0.97 : 1.0)
                 .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.85), value: scrollOffset)
-                .animation(.easeOut(duration: 0.15), value: currentFeedback.isActive)
                 .gesture(
                     MultidirectionalSwipeGesture(
                         config: config,
@@ -580,36 +579,38 @@ struct MultidirectionalSwipeModifier: ViewModifier {
                     endPoint: currentFeedback.direction == .horizontal ? .trailing : .bottom
                 )
                 
-                // Direction indicators with prediction
-                HStack {
-                    if currentFeedback.dragOffset.width > 0 || currentFeedback.predictedDirection == .horizontalRight {
-                        Image(systemName: "chevron.left")
-                            .foregroundColor(.white.opacity(0.7))
-                            .font(.system(size: 18, weight: .medium))
+                // Directional hints - only show when active
+                if currentFeedback.direction == .horizontal {
+                    HStack {
+                        if currentFeedback.dragOffset.width > 0 {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        Spacer()
+                        if currentFeedback.dragOffset.width < 0 {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                     }
-                    Spacer()
-                    if currentFeedback.dragOffset.width < 0 || currentFeedback.predictedDirection == .horizontalLeft {
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(.white.opacity(0.7))
-                            .font(.system(size: 18, weight: .medium))
+                    .padding(.horizontal, 30)
+                } else {
+                    VStack {
+                        if currentFeedback.dragOffset.height > 0 {
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        Spacer()
+                        if currentFeedback.dragOffset.height < 0 {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
                     }
+                    .padding(.vertical, 40)
                 }
-                .padding(.horizontal, 30)
-                
-                VStack {
-                    if currentFeedback.dragOffset.height > 0 || currentFeedback.predictedDirection == .verticalDown {
-                        Image(systemName: "chevron.up")
-                            .foregroundColor(.white.opacity(0.7))
-                            .font(.system(size: 18, weight: .medium))
-                    }
-                    Spacer()
-                    if currentFeedback.dragOffset.height < 0 || currentFeedback.predictedDirection == .verticalUp {
-                        Image(systemName: "chevron.down")
-                            .foregroundColor(.white.opacity(0.7))
-                            .font(.system(size: 18, weight: .medium))
-                    }
-                }
-                .padding(.vertical, 40)
             }
             .opacity(currentFeedback.progress * 0.9)
             .scaleEffect(0.9 + (currentFeedback.progress * 0.1))

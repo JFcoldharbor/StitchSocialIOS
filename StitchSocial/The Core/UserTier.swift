@@ -191,14 +191,14 @@ enum StitchNotificationType: String, CaseIterable, Codable {
 }
 
 /// Core notification document for Firebase
-struct StitchNotification: Codable, Identifiable {
+struct StitchNotification: Identifiable {  // ✅
     let id: String
     let recipientID: String
     let senderID: String
     let type: StitchNotificationType
     let title: String
     let message: String
-    let payload: [String: String]
+    let payload: [String: Any]
     let isRead: Bool
     let createdAt: Date
     let readAt: Date?
@@ -211,7 +211,7 @@ struct StitchNotification: Codable, Identifiable {
         type: StitchNotificationType,
         title: String,
         message: String,
-        payload: [String: String] = [:],
+        payload: [String: Any] = [:],  // ✅ Changed from [String: String]
         isRead: Bool = false,
         createdAt: Date = Date(),
         readAt: Date? = nil,

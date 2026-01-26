@@ -5,7 +5,7 @@
 //  Layer 8: Views - Video Player with OptimizationConfig Integration (FIXED VERSION)
 //  Dependencies: AVFoundation, CoreVideoMetadata, InteractionType, ContextualVideoOverlay
 //  Features: Proper video display, ContextualVideoOverlay integration, thread navigation, edge-to-edge display
-//  FIXED: Removed profile notification listeners that caused thumbnail kill storm
+//  UPDATED: Integrated StitchFullscreenThumbnail navigator with progress bars
 //
 
 import SwiftUI
@@ -20,6 +20,8 @@ struct VideoPlayerView: View {
     let video: CoreVideoMetadata
     let isActive: Bool
     let onEngagement: ((InteractionType) -> Void)?
+    let overlayContext: OverlayContext  // Context for ContextualVideoOverlay
+    let isConversationParticipant: Bool  // NEW: For carousel participant detection
     
     // MARK: - Thread Navigation Properties
     let threadVideos: [CoreVideoMetadata]?
@@ -38,6 +40,9 @@ struct VideoPlayerView: View {
     // MARK: - Thread Navigation State
     @State private var gestureDirection: VideoNavigationDirection = .none
     
+    // ⭐ NEW: Track drag offset for thumbnail navigator
+    @State private var threadDragOffset: CGFloat = 0
+    
     // MARK: - OPTIMIZATION State
     @State private var memoryPressureDetected: Bool = false
     @State private var batteryOptimizationActive: Bool = false
@@ -48,10 +53,18 @@ struct VideoPlayerView: View {
     @State private var currentPlaybackTime: TimeInterval = 0
     
     // MARK: - Default Initializer (Backward Compatible)
-    init(video: CoreVideoMetadata, isActive: Bool, onEngagement: ((InteractionType) -> Void)?) {
+    init(
+        video: CoreVideoMetadata,
+        isActive: Bool,
+        onEngagement: ((InteractionType) -> Void)?,
+        overlayContext: OverlayContext = .homeFeed,  // Default to homeFeed for backward compatibility
+        isConversationParticipant: Bool = false  // Default to false (not in carousel conversation)
+    ) {
         self.video = video
         self.isActive = isActive
         self.onEngagement = onEngagement
+        self.overlayContext = overlayContext
+        self.isConversationParticipant = isConversationParticipant
         self.threadVideos = nil
         self.currentIndex = 0
         self.onNavigate = nil
@@ -68,11 +81,15 @@ struct VideoPlayerView: View {
         threadVideos: [CoreVideoMetadata]?,
         currentIndex: Int,
         navigationContext: VideoPlayerContext?,
-        onNavigate: ((VideoNavigationDirection, Int) -> Void)?
+        onNavigate: ((VideoNavigationDirection, Int) -> Void)?,
+        overlayContext: OverlayContext = .homeFeed,  // Default to homeFeed
+        isConversationParticipant: Bool = false  // Default to false
     ) {
         self.video = video
         self.isActive = isActive
         self.onEngagement = onEngagement
+        self.overlayContext = overlayContext
+        self.isConversationParticipant = isConversationParticipant
         self.threadVideos = threadVideos
         self.currentIndex = currentIndex
         self.onNavigate = onNavigate
@@ -91,11 +108,15 @@ struct VideoPlayerView: View {
         navigationContext: VideoPlayerContext?,
         currentThreadPosition: Int,
         totalStitchesInThread: Int,
-        onNavigate: ((VideoNavigationDirection, Int) -> Void)?
+        onNavigate: ((VideoNavigationDirection, Int) -> Void)?,
+        overlayContext: OverlayContext = .homeFeed,  // Default to homeFeed
+        isConversationParticipant: Bool = false  // Default to false
     ) {
         self.video = video
         self.isActive = isActive
         self.onEngagement = onEngagement
+        self.overlayContext = overlayContext
+        self.isConversationParticipant = isConversationParticipant
         self.threadVideos = threadVideos
         self.currentIndex = currentIndex
         self.onNavigate = onNavigate
@@ -134,10 +155,12 @@ struct VideoPlayerView: View {
                 if isActive && !batteryOptimizationActive {
                     ContextualVideoOverlay(
                         video: video,
-                        context: .homeFeed,
+                        context: overlayContext,  // Use the provided overlay context
                         currentUserID: "current-user-id",
                         threadVideo: nil,
                         isVisible: true,
+                        actualReplyCount: nil,
+                        isConversationParticipant: isConversationParticipant,  // Pass participant status
                         onAction: { action in
                             handleOverlayAction(action)
                         }
@@ -158,6 +181,15 @@ struct VideoPlayerView: View {
                         .background(Color.black.opacity(0.7))
                         .cornerRadius(8)
                     }
+                }
+                
+                // ⭐ NEW: Thumbnail Navigator with Facebook Stories-style progress bars
+                if let threadVideos = threadVideos, threadVideos.count > 1, isActive {
+                    FullscreenThumbnailNavigator(
+                        videos: threadVideos,
+                        currentIndex: currentIndex,
+                        offsetX: threadDragOffset
+                    )
                 }
                 
                 // Thread Position Indicator (overlay only if enabled)
@@ -229,267 +261,157 @@ struct VideoPlayerView: View {
         
         let enableHardwareDecoding = !batteryOptimizationActive
         let enablePreloading = !memoryPressureDetected
-        
         playerManager.setupVideo(
             url: video.videoURL,
             enableHardwareDecoding: enableHardwareDecoding,
             enablePreloading: enablePreloading
         )
-        
-        if isActive {
-            playerManager.play()
-        } else {
-            playerManager.pause()
-        }
-        
-        currentVideoID = video.id
     }
     
     private func setupOptimizationMonitoring() {
-        performanceTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
-            checkMemoryPressure()
-            checkBatteryStatus()
-        }
+        // Note: Memory warnings are monitored in VideoPlayerManager
+        // SwiftUI Views (structs) cannot use @objc and #selector
     }
     
     private func cleanupOptimizations() {
-        performanceTimer?.invalidate()
-        performanceTimer = nil
         playerManager.cleanup()
     }
     
-    private func checkMemoryPressure() {
-        var memoryInfo = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size)/4
-        
-        let result = withUnsafeMutablePointer(to: &memoryInfo) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
-            }
-        }
-        
-        if result == KERN_SUCCESS {
-            let memoryUsage = memoryInfo.resident_size
-            let memoryThreshold: UInt64 = 500 * 1024 * 1024
-            
-            if memoryUsage > memoryThreshold && !memoryPressureDetected {
-                print("📱 OPTIMIZATION: Memory pressure detected - \(memoryUsage / 1024 / 1024)MB")
-                memoryPressureDetected = true
-            } else if memoryUsage < memoryThreshold && memoryPressureDetected {
-                memoryPressureDetected = false
-            }
-        }
-    }
-    
-    private func checkBatteryStatus() {
-        UIDevice.current.isBatteryMonitoringEnabled = true
-        let batteryLevel = UIDevice.current.batteryLevel
-        let batteryState = UIDevice.current.batteryState
-        
-        let shouldOptimizeForBattery = (batteryLevel < 0.2 && batteryState != .charging)
-        
-        if shouldOptimizeForBattery != batteryOptimizationActive {
-            batteryOptimizationActive = shouldOptimizeForBattery
-            print("🔋 OPTIMIZATION: Battery optimization \(batteryOptimizationActive ? "enabled" : "disabled")")
-        }
-    }
-    
     private func shouldAllowNavigation() -> Bool {
-        return !memoryPressureDetected && !batteryOptimizationActive
+        return (threadVideos?.count ?? 0) > 1
     }
     
     private func shouldShowPositionIndicator() -> Bool {
-        guard let threadVideos = threadVideos, let currentThreadPosition = currentThreadPosition else {
-            return false
-        }
-        return threadVideos.count > 1
-    }
-    
-    private var threadPositionIndicator: some View {
-        VStack {
-            Spacer()
-            HStack {
-                Spacer()
-                
-                if let current = currentThreadPosition,
-                   let total = totalStitchesInThread {
-                    
-                    VStack(spacing: 4) {
-                        Text("\(current)/\(total)")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.white)
-                        
-                        GeometryReader { geo in
-                            ZStack(alignment: .leading) {
-                                Rectangle()
-                                    .fill(Color.white.opacity(0.3))
-                                
-                                Rectangle()
-                                    .fill(Color.white)
-                                    .frame(width: geo.size.width * CGFloat(current) / CGFloat(total))
-                            }
-                        }
-                        .frame(height: 2)
-                        .cornerRadius(1)
-                    }
-                    .padding(.horizontal, 16)
-                    .frame(width: 80)
-                }
-                Spacer()
-            }
-            .padding(.bottom, 100)
-        }
-    }
-    
-    private var memoryPressureOverlay: some View {
-        VStack {
-            HStack {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.red)
-                Text("Memory Warning")
-                    .font(.caption)
-                    .foregroundColor(.red)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.black.opacity(0.8))
-            .cornerRadius(8)
-            
-            Spacer()
-        }
-        .padding(.top, 50)
-    }
-    
-    private func handleOverlayAction(_ action: ContextualOverlayAction) {
-        switch action {
-        case .profile:
-            print("VIDEO PLAYER: Profile action")
-        case .more:
-            print("VIDEO PLAYER: More action")
-        default:
-            print("VIDEO PLAYER: Other action")
-        }
+        return (threadVideos?.count ?? 0) > 1 && currentThreadPosition == nil
     }
     
     private func handleThreadDrag(value: DragGesture.Value) {
-        let horizontalThreshold: CGFloat = 100
-        let verticalThreshold: CGFloat = 50
+        // ⭐ NEW: Track drag offset for thumbnail navigator
+        threadDragOffset = value.translation.width
         
-        if abs(value.translation.width) > abs(value.translation.height) {
+        let translation = value.translation
+        let isDraggingHorizontally = abs(translation.width) > abs(translation.height)
+        
+        if isDraggingHorizontally {
             gestureDirection = .horizontal
-        } else if abs(value.translation.height) > verticalThreshold {
-            gestureDirection = .vertical
         }
     }
     
     private func handleThreadDragEnd(value: DragGesture.Value) {
-        let threshold: CGFloat = 100
+        // ⭐ NEW: Reset drag offset
+        threadDragOffset = 0
         
-        switch gestureDirection {
-        case .horizontal:
-            if value.translation.width > threshold {
-                onNavigate?(.horizontal, -1)
-            } else if value.translation.width < -threshold {
-                onNavigate?(.horizontal, 1)
-            }
-        case .vertical:
-            if value.translation.height > threshold {
-                onNavigate?(.vertical, -1)
-            } else if value.translation.height < -threshold {
-                onNavigate?(.vertical, 1)
-            }
-        case .none:
-            break
+        let translation = value.translation
+        let threshold: CGFloat = 100
+        let isDraggingRight = translation.width > threshold
+        let isDraggingLeft = translation.width < -threshold
+        
+        if isDraggingRight && currentIndex > 0 {
+            onNavigate?(.previous, currentIndex - 1)
+            gestureDirection = .horizontal
+        } else if isDraggingLeft && currentIndex < (threadVideos?.count ?? 1) - 1 {
+            onNavigate?(.next, currentIndex + 1)
+            gestureDirection = .horizontal
         }
         
         gestureDirection = .none
     }
     
-    private func hasNextStitchInThread() -> Bool {
-        guard let threadVideos = threadVideos else { return false }
-        return currentIndex < threadVideos.count - 1
-    }
-    
-    private func navigateToNext() {
-        guard hasNextStitchInThread() else { return }
-        
-        let newIndex = currentIndex + 1
-        onNavigate?(.horizontal, newIndex)
-        
-        let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-        impactFeedback.impactOccurred()
-    }
-    
     private func handleStitchReveal() {
-        navigateToNext()
-        showFloatingBubble = false
+        print("USER ACTION: Tapped view replies")
+    }
+    
+    private func handleOverlayAction(_ action: ContextualOverlayAction) {
+        print("OVERLAY ACTION: \(action)")
+    }
+    
+    private var threadPositionIndicator: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let position = currentThreadPosition, let total = totalStitchesInThread {
+                Text("\(position + 1) of \(total)")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white.opacity(0.9))
+            } else if let total = totalStitchesInThread {
+                Text("1 of \(total)")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            
+            HStack(spacing: 2) {
+                Image(systemName: "film.fill")
+                    .font(.caption2)
+                    .foregroundColor(.cyan)
+                Text("Thread")
+                    .font(.caption2)
+                    .foregroundColor(.cyan)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.5))
+        .cornerRadius(6)
+        .padding()
+    }
+    
+    private var memoryPressureOverlay: some View {
+        VStack {
+            Spacer()
+            HStack {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3)
+                    .foregroundColor(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Memory Pressure")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                    Text("Some features are disabled")
+                        .font(.caption2)
+                        .opacity(0.8)
+                }
+                Spacer()
+            }
+            .padding()
+            .background(Color.black.opacity(0.7))
+            .cornerRadius(8)
+            .padding()
+        }
     }
     
     private func updateFloatingBubbleVisibility() {
-        let shouldShow = shouldShowFloatingBubble()
-        
-        if shouldShow != showFloatingBubble {
-            withAnimation(.easeInOut(duration: 0.3)) {
-                showFloatingBubble = shouldShow
-            }
-        }
-    }
-    
-    private func shouldShowFloatingBubble() -> Bool {
-        guard let totalStitches = totalStitchesInThread, totalStitches > 1 else {
-            return false
-        }
-        
-        guard video.duration > 0 else {
-            return false
-        }
-        
-        let triggerTime = video.duration * 0.7
-        let shouldShow = currentPlaybackTime >= triggerTime
-        
-        return shouldShow
+        let isShowingBubbleByTime = (currentPlaybackTime / max(video.duration, 1.0)) < 0.1
+        showFloatingBubble = isShowingBubbleByTime && (totalStitchesInThread ?? 0) > 1 && currentIndex == 0
     }
 }
 
-// MARK: - Video Player Manager (OPTIMIZED & FIXED)
+// MARK: - Video Player Manager
 
-@MainActor
-class VideoPlayerManager: ObservableObject {
-    @Published var player: AVPlayer?
+class VideoPlayerManager: NSObject, ObservableObject {
     @Published var isPlaying = false
-    @Published var currentTime: Double = 0
-    @Published var duration: Double = 0
-    
-    private var timeObserver: Any?
-    private var statusObserver: NSKeyValueObservation?
-    private var killObserver: NSObjectProtocol?
-    private var uiInteractionObservers: [NSObjectProtocol] = []
-    private var cancellables = Set<AnyCancellable>()
-    private var currentVideoURL: String?
-    
-    private static var globalActivePlayerCount = 0
+    @Published var duration: TimeInterval = 0
+    @Published var currentTime: TimeInterval = 0
     
     var onTimeUpdate: ((TimeInterval) -> Void)?
     
+    var player: AVPlayer?
+    private var timeObserver: Any?
+    private var killObserver: NSObjectProtocol?
+    private var uiInteractionObservers: [NSObjectProtocol] = []
+    private var currentVideoURL: String?
+    private var cancellables = Set<AnyCancellable>()
+    
+    private static var globalActivePlayerCount = 0
+    
+    override init() {
+        super.init()
+    }
+    
     deinit {
-        Task { @MainActor in
-            cleanup()
-        }
+        cleanup()
     }
     
     func setupVideo(url: String, enableHardwareDecoding: Bool = true, enablePreloading: Bool = true) {
-        if url == currentVideoURL && player != nil {
-            print("VIDEO PLAYER OPTIMIZATION: Skipping duplicate setup")
-            return
-        }
-        
-        cleanup()
-        
-        guard Self.globalActivePlayerCount < 10 else {
-            print("🚫 VIDEO PLAYER OPTIMIZATION: Player creation blocked - at limit")
-            return
-        }
-        
         guard let videoURL = URL(string: url) else {
             print("VIDEO MANAGER: Invalid URL")
             return
@@ -709,6 +631,8 @@ enum VideoNavigationDirection {
     case none
     case horizontal
     case vertical
+    case previous
+    case next
 }
 
 enum VideoPlayerContext {

@@ -18,12 +18,14 @@ struct StitchSocialApp: App {
     // Shared services for entire app
     @StateObject private var notificationService = NotificationService()
     @StateObject private var authService = AuthService()
+    @StateObject private var muteManager = MuteContextManager.shared
     
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(notificationService)
                 .environmentObject(authService)
+                .environmentObject(muteManager)
                 .overlay(
                     // Toast notification overlay above all content
                     AppToastOverlay(notificationService: notificationService)
@@ -41,6 +43,12 @@ struct StitchSocialApp: App {
                     // Print config status if debug mode
                     if Config.Features.enableDebugLogging {
                         Config.printConfigurationStatus()
+                    }
+                    
+                    // Run backfill for existing users (one-time)
+                    Task {
+                        let userService = UserService()
+                        await userService.backfillDefaultFollows()
                     }
                 }
         }

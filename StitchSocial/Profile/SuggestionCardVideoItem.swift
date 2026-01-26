@@ -16,6 +16,13 @@ struct SuggestionCardVideoItem: View {
     
     @State private var currentIndex: Int = 0
     @State private var dragOffset: CGFloat = 0
+    @State private var selectedUserID: String?  // 🔧 For profile navigation
+    @State private var showingProfile = false  // 🔧 For profile sheet
+    
+    // 🔧 Services for ProfileView
+    @StateObject private var authService = AuthService()
+    @StateObject private var userService = UserService()
+    @StateObject private var videoService = VideoService()
     
     var body: some View {
         GeometryReader { geometry in
@@ -73,6 +80,16 @@ struct SuggestionCardVideoItem: View {
                         handleSwipe(value)
                     }
             )
+        }
+        .sheet(isPresented: $showingProfile) {
+            if let userID = selectedUserID {
+                ProfileView(
+                    authService: authService,
+                    userService: userService,
+                    videoService: videoService,
+                    viewingUserID: userID
+                )
+            }
         }
     }
     
@@ -139,7 +156,8 @@ struct SuggestionCardVideoItem: View {
             // Buttons
             HStack(spacing: 12) {
                 Button(action: {
-                    onNavigateToProfile(user.id)
+                    selectedUserID = user.id  // 🔧 Set user ID for profile
+                    showingProfile = true      // 🔧 Show profile sheet
                 }) {
                     HStack {
                         Image(systemName: "person.circle")
@@ -151,7 +169,9 @@ struct SuggestionCardVideoItem: View {
                     .padding(.vertical, 10)
                     .background(Color.white.opacity(0.2))
                     .cornerRadius(20)
+                    .frame(maxWidth: .infinity)  // 🔧 Expand for tappable area
                 }
+                .buttonStyle(PlainButtonStyle())  // 🔧 Proper button styling
                 
                 Button(action: {
                     Task {
@@ -165,7 +185,9 @@ struct SuggestionCardVideoItem: View {
                         .padding(.vertical, 10)
                         .background(Color.blue)
                         .cornerRadius(20)
+                        .frame(maxWidth: .infinity)  // 🔧 Expand for tappable area
                 }
+                .buttonStyle(PlainButtonStyle())  // 🔧 Proper button styling
             }
         }
         .padding(30)

@@ -21,6 +21,7 @@ class ProfileViewModel: ObservableObject {
     let authService: AuthService
     private let userService: UserService
     private let videoService: VideoService
+    private let viewingUserID: String?  // NEW: For viewing other users' profiles
     
     // MARK: - Profile State
     
@@ -40,6 +41,18 @@ class ProfileViewModel: ObservableObject {
     @Published var isLoadingFollowing = false
     @Published var isLoadingFollowers = false
     @Published var isFollowing = false
+    
+    // MARK: - Social Pagination State (NEW)
+    
+    @Published var hasMoreFollowers = true
+    @Published var hasMoreFollowing = true
+    @Published var isLoadingMoreFollowers = false
+    @Published var isLoadingMoreFollowing = false
+    private var allFollowerIDs: [String] = []
+    private var allFollowingIDs: [String] = []
+    private var loadedFollowerCount = 0
+    private var loadedFollowingCount = 0
+    private let socialBatchSize = 30
     
     // MARK: - Video Grid State
     
@@ -78,10 +91,11 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - Initialization
     
-    init(authService: AuthService, userService: UserService, videoService: VideoService) {
+    init(authService: AuthService, userService: UserService, videoService: VideoService, viewingUserID: String? = nil) {
         self.authService = authService
         self.userService = userService
         self.videoService = videoService
+        self.viewingUserID = viewingUserID
         self.animationController = ProfileAnimationController()
         
         // Setup NotificationCenter observers for profile refresh
@@ -148,32 +162,39 @@ class ProfileViewModel: ObservableObject {
     
     /// Load profile instantly with placeholder, then enhance with real data
     func loadProfile() async {
-        guard let currentUserID = authService.currentUserID else {
-            errorMessage = "Authentication required"
-            return
+        // Determine which user to load
+        let userIDToLoad: String
+        if let viewingUserID = viewingUserID {
+            userIDToLoad = viewingUserID
+        } else {
+            guard let currentUserID = authService.currentUserID else {
+                errorMessage = "Authentication required"
+                return
+            }
+            userIDToLoad = currentUserID
         }
         
-        print("PROFILE: Starting instant load for user \(currentUserID)")
+        print("PROFILE: Starting instant load for user \(userIDToLoad)")
         
         // STEP 1: Check cache for instant display
-        if let cached = getCachedProfile(userID: currentUserID) {
+        if let cached = getCachedProfile(userID: userIDToLoad) {
             currentUser = cached
             isShowingPlaceholder = false
             print("PROFILE CACHE HIT: Instant display")
             
             // Load enhancements in background
             Task {
-                await loadEnhancementsInBackground(userID: currentUserID)
+                await loadEnhancementsInBackground(userID: userIDToLoad)
             }
             return
         }
         
         // STEP 2: Show placeholder profile immediately
-        showPlaceholderProfile(userID: currentUserID)
+        showPlaceholderProfile(userID: userIDToLoad)
         
         // STEP 3: Load real profile in background
         Task {
-            await loadRealProfileInBackground(userID: currentUserID)
+            await loadRealProfileInBackground(userID: userIDToLoad)
         }
         
         print("PROFILE: UI ready with placeholder")
@@ -617,24 +638,33 @@ class ProfileViewModel: ObservableObject {
     
     // MARK: - Social Data Loading
     
-    /// Load following list with reduced limit
+    /// Load following list with pagination support
     private func loadFollowingLazily(userID: String, limit: Int) async {
         await MainActor.run {
             self.isLoadingFollowing = true
         }
         
         do {
-            // Get following IDs and convert to BasicUserInfo objects
+            // Get all following IDs first (for pagination)
             let followingIDs = try await userService.getFollowingIDs(userID: userID)
-            let limitedFollowingIDs = Array(followingIDs.prefix(limit))
-            let followingUsers = try await userService.getUsers(ids: limitedFollowingIDs)
+            
+            await MainActor.run {
+                self.allFollowingIDs = followingIDs
+                self.loadedFollowingCount = 0
+            }
+            
+            // Load first batch
+            let firstBatchIDs = Array(followingIDs.prefix(socialBatchSize))
+            let followingUsers = try await userService.getUsers(ids: firstBatchIDs)
             
             await MainActor.run {
                 self.followingList = followingUsers
+                self.loadedFollowingCount = followingUsers.count
+                self.hasMoreFollowing = followingIDs.count > self.loadedFollowingCount
                 self.isLoadingFollowing = false
             }
             
-            print("PROFILE FOLLOWING: Loaded \(followingUsers.count) following users")
+            print("PROFILE FOLLOWING: Loaded \(followingUsers.count)/\(followingIDs.count) following users")
             
         } catch {
             await MainActor.run {
@@ -644,28 +674,105 @@ class ProfileViewModel: ObservableObject {
         }
     }
     
-    /// Load followers list with reduced limit
+    /// Load more following users (pagination)
+    func loadMoreFollowing() async {
+        guard !isLoadingMoreFollowing,
+              hasMoreFollowing,
+              loadedFollowingCount < allFollowingIDs.count else { return }
+        
+        await MainActor.run {
+            self.isLoadingMoreFollowing = true
+        }
+        
+        do {
+            let startIndex = loadedFollowingCount
+            let endIndex = min(startIndex + socialBatchSize, allFollowingIDs.count)
+            let nextBatchIDs = Array(allFollowingIDs[startIndex..<endIndex])
+            
+            let moreUsers = try await userService.getUsers(ids: nextBatchIDs)
+            
+            await MainActor.run {
+                self.followingList.append(contentsOf: moreUsers)
+                self.loadedFollowingCount += moreUsers.count
+                self.hasMoreFollowing = self.loadedFollowingCount < self.allFollowingIDs.count
+                self.isLoadingMoreFollowing = false
+            }
+            
+            print("PROFILE FOLLOWING: Loaded more - \(self.loadedFollowingCount)/\(allFollowingIDs.count)")
+            
+        } catch {
+            await MainActor.run {
+                self.isLoadingMoreFollowing = false
+            }
+            print("PROFILE FOLLOWING ERROR: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Load followers list with pagination support
     private func loadFollowersLazily(userID: String, limit: Int) async {
         await MainActor.run {
             self.isLoadingFollowers = true
         }
         
         do {
-            // Get follower IDs and convert to BasicUserInfo objects
+            // Get all follower IDs first (for pagination)
             let followerIDs = try await userService.getFollowerIDs(userID: userID)
-            let limitedFollowerIDs = Array(followerIDs.prefix(limit))
-            let followers = try await userService.getUsers(ids: limitedFollowerIDs)
+            
+            await MainActor.run {
+                self.allFollowerIDs = followerIDs
+                self.loadedFollowerCount = 0
+            }
+            
+            // Load first batch
+            let firstBatchIDs = Array(followerIDs.prefix(socialBatchSize))
+            let followers = try await userService.getUsers(ids: firstBatchIDs)
 
             await MainActor.run {
                 self.followersList = followers
+                self.loadedFollowerCount = followers.count
+                self.hasMoreFollowers = followerIDs.count > self.loadedFollowerCount
                 self.isLoadingFollowers = false
             }
             
-            print("PROFILE FOLLOWERS: Loaded \(followers.count) followers")
+            print("PROFILE FOLLOWERS: Loaded \(followers.count)/\(followerIDs.count) followers")
             
         } catch {
             await MainActor.run {
                 self.isLoadingFollowers = false
+            }
+            print("PROFILE FOLLOWERS ERROR: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Load more followers (pagination)
+    func loadMoreFollowers() async {
+        guard !isLoadingMoreFollowers,
+              hasMoreFollowers,
+              loadedFollowerCount < allFollowerIDs.count else { return }
+        
+        await MainActor.run {
+            self.isLoadingMoreFollowers = true
+        }
+        
+        do {
+            let startIndex = loadedFollowerCount
+            let endIndex = min(startIndex + socialBatchSize, allFollowerIDs.count)
+            let nextBatchIDs = Array(allFollowerIDs[startIndex..<endIndex])
+            
+            let moreUsers = try await userService.getUsers(ids: nextBatchIDs)
+            
+            await MainActor.run {
+                self.followersList.append(contentsOf: moreUsers)
+                self.loadedFollowerCount += moreUsers.count
+                self.hasMoreFollowers = self.loadedFollowerCount < self.allFollowerIDs.count
+                self.isLoadingMoreFollowers = false
+            }
+            
+            print("PROFILE FOLLOWERS: Loaded more - \(self.loadedFollowerCount)/\(allFollowerIDs.count)")
+            
+        } catch {
+            await MainActor.run {
+                self.isLoadingMoreFollowers = false
             }
             print("PROFILE FOLLOWERS ERROR: \(error.localizedDescription)")
         }
@@ -705,12 +812,12 @@ class ProfileViewModel: ObservableObject {
     
     func loadFollowing() async {
         guard let user = currentUser else { return }
-        await loadFollowingLazily(userID: user.id, limit: 50)
+        await loadFollowingLazily(userID: user.id, limit: socialBatchSize)
     }
     
     func loadFollowers() async {
         guard let user = currentUser else { return }
-        await loadFollowersLazily(userID: user.id, limit: 50)
+        await loadFollowersLazily(userID: user.id, limit: socialBatchSize)
     }
     
     func loadUserVideos() async {

@@ -69,13 +69,13 @@ struct OptimizationConfig {
     /// Thread hierarchy limits and settings
     struct Threading {
         /// Maximum children per thread (direct replies to thread starter)
-        static let maxChildrenPerThread = 10
+        static let maxChildrenPerThread = 150
         
         /// Maximum stepchildren per child (replies to child videos)
         static let maxStepchildrenPerChild = 10
         
         /// Maximum conversation depth (Thread -> Child -> Stepchild)
-        static let maxConversationDepth = 2
+        static let maxConversationDepth = 20
         
         /// Thread auto-lock timeout (no new replies after X hours)
         static let autoLockTimeoutHours: TimeInterval = 24 * 7 // 7 days

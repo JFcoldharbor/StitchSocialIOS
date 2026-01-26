@@ -18,11 +18,17 @@ struct ProfileView: View {
     // MARK: - Dependencies
     
     @StateObject private var viewModel: ProfileViewModel
+    private let authService: AuthService
     private let userService: UserService
+    private let videoService: VideoService
+    private let viewingUserID: String?
+    @Environment(\.dismiss) var dismiss
+    
     
     // MARK: - State Variables
     
     @State private var scrollOffset: CGFloat = 0
+    @State private var dragOffset: CGFloat = 0  // 🔧 For swipe down to dismiss
     @State private var showStickyTabBar = false
     @State private var showingFollowersList = false
     @State private var showingSettings = false
@@ -61,19 +67,24 @@ struct ProfileView: View {
     @State private var showingCollectionComposer = false
     @State private var showingCollectionPlayer = false
     @State private var selectedCollection: VideoCollection?
+    @EnvironmentObject var muteManager: MuteContextManager
     @State private var selectedDraft: CollectionDraft?
     @State private var showingAllCollections = false
     @State private var collectionError: String?
     
     // MARK: - Initialization
     
-    init(authService: AuthService, userService: UserService, videoService: VideoService? = nil) {
+    init(authService: AuthService, userService: UserService, videoService: VideoService? = nil, viewingUserID: String? = nil) {
         let videoSvc = videoService ?? VideoService()
+        self.authService = authService
         self.userService = userService
+        self.videoService = videoSvc
+        self.viewingUserID = viewingUserID
         self._viewModel = StateObject(wrappedValue: ProfileViewModel(
             authService: authService,
             userService: userService,
-            videoService: videoSvc
+            videoService: videoSvc,
+            viewingUserID: viewingUserID
         ))
     }
     
@@ -92,12 +103,52 @@ struct ProfileView: View {
             } else {
                 noUserView
             }
+            
+            // Close button for viewing other user's profile
+            if viewingUserID != nil {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button(action: { dismiss() }) {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(12)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                    }
+                    .padding()
+                    Spacer()
+                }
+            }
         }
-        .task {
+        .offset(y: max(0, dragOffset))  // 🔧 Allow dragging down only
+        .gesture(
+            DragGesture()
+                .onChanged { value in
+                    // Only allow swipe down when viewing other user
+                    if viewingUserID != nil {
+                        dragOffset = value.translation.height
+                    }
+                }
+                .onEnded { value in
+                    // Dismiss if swiped down more than 100 points
+                    if viewingUserID != nil && value.translation.height > 100 {
+                        dismiss()
+                    } else {
+                        // Snap back
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            dragOffset = 0
+                        }
+                    }
+                }
+        )
+        .task(id: viewingUserID) {
             await viewModel.loadProfile()
             await loadCollections()
         }
-        .onAppear {
+.onAppear {
             if let user = viewModel.currentUser {
                 let hypeProgress = CGFloat(viewModel.calculateHypeProgress())
                 viewModel.animationController.startEntranceSequence(hypeProgress: hypeProgress)
@@ -609,7 +660,7 @@ struct ProfileView: View {
                 }
                 
                 Button(action: { /* Future implementation */ }) {
-                    Text("Message")
+                    Text("Subscribe")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
@@ -777,7 +828,10 @@ struct ProfileView: View {
                 followersList: viewModel.followersList,
                 followingList: viewModel.followingList,
                 isLoadingFollowers: viewModel.isLoadingFollowers,
-                isLoadingFollowing: viewModel.isLoadingFollowing
+                isLoadingFollowing: viewModel.isLoadingFollowing,
+                authService: authService,
+                userService: userService,
+                videoService: videoService
             )
             .navigationTitle("Stitchers")
             .navigationBarTitleDisplayMode(.inline)
@@ -1157,8 +1211,12 @@ extension ProfileView {
         let followingList: [BasicUserInfo]
         let isLoadingFollowers: Bool
         let isLoadingFollowing: Bool
+        let authService: AuthService
+        let userService: UserService
+        let videoService: VideoService
         
         @State private var selectedTab = 0
+        @ObservedObject private var followManager = FollowManager.shared
         
         var body: some View {
             VStack(spacing: 0) {
@@ -1223,7 +1281,12 @@ extension ProfileView {
                             ScrollView {
                                 LazyVStack {
                                     ForEach(followersList, id: \.id) { user in
-                                        ProfileUserRowView(user: user)
+                                        ProfileUserRowView(
+                                            user: user,
+                                            authService: authService,
+                                            userService: userService,
+                                            videoService: videoService
+                                        )
                                     }
                                 }
                                 .padding()
@@ -1242,7 +1305,12 @@ extension ProfileView {
                             ScrollView {
                                 LazyVStack {
                                     ForEach(followingList, id: \.id) { user in
-                                        ProfileUserRowView(user: user)
+                                        ProfileUserRowView(
+                                            user: user,
+                                            authService: authService,
+                                            userService: userService,
+                                            videoService: videoService
+                                        )
                                     }
                                 }
                                 .padding()
@@ -1251,12 +1319,27 @@ extension ProfileView {
                     }
                 }
             }
+            .onAppear {
+                // Batch load follow states for all users
+                Task {
+                    let allUserIDs = (followersList + followingList).map { $0.id }
+                    await followManager.loadFollowStates(for: allUserIDs)
+                }
+            }
         }
     }
     
     struct ProfileUserRowView: View {
         let user: BasicUserInfo
+        let authService: AuthService
+        let userService: UserService
+        let videoService: VideoService
         @State private var showingProfile = false
+        @ObservedObject private var followManager = FollowManager.shared
+        
+        private var isCurrentUser: Bool {
+            user.id == authService.currentUserID
+        }
         
         var body: some View {
             HStack {
@@ -1286,33 +1369,63 @@ extension ProfileView {
                 
                 Spacer()
                 
-                Button(action: {
-                    // TODO: Implement follow toggle
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "person.plus.fill")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                        
-                        Text("Follow")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(Color.cyan)
-                    )
+                // Don't show follow button for current user
+                if !isCurrentUser {
+                    followButton
                 }
             }
             .padding(.horizontal)
             .padding(.vertical, 8)
+            .onAppear {
+                Task {
+                    await followManager.loadFollowState(for: user.id)
+                }
+            }
             .sheet(isPresented: $showingProfile) {
-                CreatorProfileView(userID: user.id)
+                ProfileView(
+                    authService: authService,
+                    userService: userService,
+                    videoService: videoService,
+                    viewingUserID: user.id
+                )
                     .navigationBarHidden(true)
             }
+        }
+        
+        @ViewBuilder
+        private var followButton: some View {
+            let isFollowing = followManager.isFollowing(user.id)
+            let isLoading = followManager.isLoading(user.id)
+            
+            Button(action: {
+                Task {
+                    await followManager.toggleFollow(for: user.id)
+                }
+            }) {
+                HStack(spacing: 6) {
+                    if isLoading {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                            .tint(isFollowing ? .black : .white)
+                    } else {
+                        Image(systemName: isFollowing ? "checkmark" : "person.plus.fill")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    
+                    Text(isLoading ? "" : (isFollowing ? "Following" : "Follow"))
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+                .foregroundColor(isFollowing ? .black : .white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(isFollowing ? Color.white : Color.cyan)
+                )
+            }
+            .disabled(isLoading)
         }
     }
     

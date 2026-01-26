@@ -22,6 +22,9 @@ struct SettingsView: View {
     @State private var showingError = false
     @State private var errorMessage = ""
     
+    // ⭐ NEW: Haptic feedback setting
+    @State private var isHapticEnabled = UserDefaults.standard.bool(forKey: "hapticFeedbackEnabled") || true
+    
     // MARK: - Body
     
     var body: some View {
@@ -92,7 +95,31 @@ struct SettingsView: View {
                     accountInfoRow(title: "Tier", value: user.tier.displayName)
                 }
                 
-                signOutButton
+                Divider()
+                    .padding(.vertical, 8)
+                
+                // Sign Out Button - Full width, easy to tap
+                Button(action: { showingSignOutConfirmation = true }) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                            .font(.system(size: 16))
+                        
+                        Text("Sign Out")
+                            .font(.system(size: 16, weight: .medium))
+                        
+                        Spacer()
+                        
+                        if isSigningOut {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                                .tint(.white)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
+                    .foregroundColor(isSigningOut ? .gray : .red)
+                }
+                .disabled(isSigningOut)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 20)
@@ -148,6 +175,32 @@ struct SettingsView: View {
                 .padding(.top, 20)
             
             VStack(spacing: 12) {
+                // ⭐ NEW: Haptic Feedback Toggle
+                HStack(spacing: 16) {
+                    Image(systemName: "iphone.radiowaves.left.and.right")
+                        .font(.system(size: 18))
+                        .foregroundColor(.cyan)
+                        .frame(width: 24)
+                    
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Haptic Feedback")
+                            .font(.system(size: 16))
+                            .foregroundColor(.white)
+                        
+                        Text("Vibrations for reply notifications")
+                            .font(.system(size: 14))
+                            .foregroundColor(.gray)
+                    }
+                    
+                    Spacer()
+                    
+                    Toggle("", isOn: $isHapticEnabled)
+                        .onChange(of: isHapticEnabled) { _, newValue in
+                            UserDefaults.standard.set(newValue, forKey: "hapticFeedbackEnabled")
+                        }
+                }
+                .padding(.vertical, 8)
+                
                 settingsRow(
                     icon: "bell",
                     title: "Notifications",
@@ -266,29 +319,6 @@ struct SettingsView: View {
         .padding(.vertical, 8)
     }
     
-    private var signOutButton: some View {
-        Button(action: { showingSignOutConfirmation = true }) {
-            HStack {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 16))
-                
-                Text("Sign Out")
-                    .font(.system(size: 16, weight: .medium))
-                
-                Spacer()
-                
-                if isSigningOut {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                        .tint(.white)
-                }
-            }
-            .foregroundColor(isSigningOut ? .gray : .red)
-            .padding(.vertical, 12)
-        }
-        .disabled(isSigningOut)
-    }
-    
     private func settingsRow(
         icon: String,
         title: String,
@@ -318,8 +348,11 @@ struct SettingsView: View {
                     .font(.system(size: 14))
                     .foregroundColor(.gray)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)  // 🔧 FIXED: Fill width
             .padding(.vertical, 8)
+            .contentShape(Rectangle())  // 🔧 FIXED: Make entire area tappable
         }
+        .buttonStyle(PlainButtonStyle())  // 🔧 FIXED: Use plain style
     }
     
     // MARK: - Actions

@@ -21,7 +21,14 @@ import SwiftUI
 struct JustJoinedSection: View {
     
     let recentUsers: [RecentUser]
-    let onUserTap: (String) -> Void
+    
+    @State private var selectedUserID: String?  // 🔧 For profile navigation
+    @State private var showingProfile = false  // 🔧 For profile sheet
+    
+    // 🔧 Services for ProfileView
+    @StateObject private var authService = AuthService()
+    @StateObject private var userService = UserService()
+    @StateObject private var videoService = VideoService()
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -43,7 +50,13 @@ struct JustJoinedSection: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         ForEach(recentUsers) { user in
-                            UserAvatarButton(user: user, onTap: onUserTap)
+                            UserAvatarButton(
+                                user: user,
+                                onTap: {
+                                    selectedUserID = user.id  // 🔧 Set user ID
+                                    showingProfile = true      // 🔧 Show profile
+                                }
+                            )
                         }
                     }
                     .padding(.horizontal)
@@ -51,6 +64,16 @@ struct JustJoinedSection: View {
             }
         }
         .padding(.vertical, 8)
+        .sheet(isPresented: $showingProfile) {
+            if let userID = selectedUserID {
+                ProfileView(
+                    authService: authService,
+                    userService: userService,
+                    videoService: videoService,
+                    viewingUserID: userID  // 🔧 FIXED: Pass viewingUserID for user profile
+                )
+            }
+        }
     }
 }
 
@@ -59,10 +82,10 @@ struct JustJoinedSection: View {
 private struct UserAvatarButton: View {
     
     let user: RecentUser
-    let onTap: (String) -> Void
+    let onTap: () -> Void  // 🔧 Changed to no-parameter closure
     
     var body: some View {
-        Button(action: { onTap(user.id) }) {
+        Button(action: onTap) {
             ZStack(alignment: .bottomTrailing) {
                 
                 // Avatar Circle
@@ -141,10 +164,7 @@ private struct UserAvatarButton: View {
                     joinedAt: Date().addingTimeInterval(-10800),
                     isVerified: false
                 )
-            ],
-            onUserTap: { userID in
-                print("Tapped user: \(userID)")
-            }
+            ]
         )
     }
 }

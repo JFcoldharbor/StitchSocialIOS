@@ -46,9 +46,9 @@ class NotificationService: ObservableObject {
         // Configure for us-central1 region
         self.functions = Functions.functions(region: "us-central1")
         
-        print("📬 NOTIFICATION SERVICE: Initialized")
-        print("🔧 REGION: us-central1")
-        print("🔧 PREFIX: \(functionPrefix)")
+        print("ðŸ“¬ NOTIFICATION SERVICE: Initialized")
+        print("ðŸ”§ REGION: us-central1")
+        print("ðŸ”§ PREFIX: \(functionPrefix)")
     }
     
     // MARK: - Authenticated Function Calls
@@ -63,20 +63,20 @@ class NotificationService: ObservableObject {
         }
         
         let functionName = "\(functionPrefix)\(name)"
-        print("📞 CALLING: \(functionName)")
-        print("🔐 AUTH UID: \(user.uid)")
+        print("ðŸ“ž CALLING: \(functionName)")
+        print("ðŸ” AUTH UID: \(user.uid)")
         
         do {
-            // ✅ Use Firebase Callable Functions SDK (handles auth automatically)
+            // âœ… Use Firebase Callable Functions SDK (handles auth automatically)
             let callable = functions.httpsCallable(functionName)
             
             let result = try await callable.call(data)
             
-            print("✅ SUCCESS: \(functionName)")
+            print("âœ… SUCCESS: \(functionName)")
             return result.data
             
         } catch {
-            print("❌ ERROR: \(functionName) failed - \(error)")
+            print("âŒ ERROR: \(functionName) failed - \(error)")
             throw error
         }
     }
@@ -85,14 +85,14 @@ class NotificationService: ObservableObject {
     
     /// Send test push notification
     func sendTestPush() async throws {
-        print("🧪 TEST: Sending test push notification")
+        print("ðŸ§ª TEST: Sending test push notification")
         
         let result = try await callFunction(name: "sendTestPush")
         
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ TEST PUSH: Sent successfully")
+            print("âœ… TEST PUSH: Sent successfully")
         } else {
             throw NSError(domain: "NotificationService", code: 500, userInfo: [
                 NSLocalizedDescriptionKey: "Test push failed"
@@ -102,7 +102,7 @@ class NotificationService: ObservableObject {
     
     /// Check FCM token status
     func checkToken() async throws -> [String: Any] {
-        print("🔍 CHECK: Verifying FCM token")
+        print("ðŸ” CHECK: Verifying FCM token")
         
         let result = try await callFunction(name: "checkToken")
         
@@ -112,7 +112,7 @@ class NotificationService: ObservableObject {
             ])
         }
         
-        print("✅ TOKEN CHECK: \(tokenData)")
+        print("âœ… TOKEN CHECK: \(tokenData)")
         return tokenData
     }
     
@@ -125,7 +125,7 @@ class NotificationService: ObservableObject {
         engagementType: String,
         videoTitle: String
     ) async throws {
-        print("🔥 ENGAGEMENT: Sending \(engagementType) notification")
+        print("ðŸ”¥ ENGAGEMENT: Sending \(engagementType) notification")
         
         let data: [String: Any] = [
             "recipientID": recipientID,
@@ -139,7 +139,7 @@ class NotificationService: ObservableObject {
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ ENGAGEMENT: Notification sent")
+            print("âœ… ENGAGEMENT: Notification sent")
         }
     }
     
@@ -151,7 +151,7 @@ class NotificationService: ObservableObject {
         videoID: String,
         videoTitle: String
     ) async throws {
-        print("💬 REPLY: Sending reply notification")
+        print("ðŸ’¬ REPLY: Sending reply notification")
         
         let data: [String: Any] = [
             "recipientID": recipientID,
@@ -164,13 +164,13 @@ class NotificationService: ObservableObject {
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ REPLY: Notification sent")
+            print("âœ… REPLY: Notification sent")
         }
     }
     
     /// Send follow notification
     func sendFollowNotification(to recipientID: String) async throws {
-        print("👤 FOLLOW: Sending follow notification")
+        print("ðŸ‘¤ FOLLOW: Sending follow notification")
         
         let data: [String: Any] = [
             "recipientID": recipientID
@@ -181,7 +181,7 @@ class NotificationService: ObservableObject {
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ FOLLOW: Notification sent")
+            print("âœ… FOLLOW: Notification sent")
         }
     }
     
@@ -192,7 +192,7 @@ class NotificationService: ObservableObject {
         videoTitle: String,
         mentionContext: String = "video"
     ) async throws {
-        print("📌 MENTION: Sending mention notification")
+        print("ðŸ“Œ MENTION: Sending mention notification")
         
         let data: [String: Any] = [
             "recipientID": recipientID,
@@ -206,7 +206,7 @@ class NotificationService: ObservableObject {
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ MENTION: Notification sent")
+            print("âœ… MENTION: Notification sent")
         }
     }
     
@@ -220,11 +220,11 @@ class NotificationService: ObservableObject {
         parentCreatorID: String?,
         threadUserIDs: [String]
     ) async throws {
-        print("🧵 STITCH: Sending stitch notification")
-        print("   • Video: \(videoID)")
-        print("   • Original Creator: \(originalCreatorID)")
-        print("   • Parent Creator: \(parentCreatorID ?? "none")")
-        print("   • Thread Users: \(threadUserIDs.count)")
+        print("ðŸ§µ STITCH: Sending stitch notification")
+        print("   â€¢ Video: \(videoID)")
+        print("   â€¢ Original Creator: \(originalCreatorID)")
+        print("   â€¢ Parent Creator: \(parentCreatorID ?? "none")")
+        print("   â€¢ Thread Users: \(threadUserIDs.count)")
         
         let data: [String: Any] = [
             "videoID": videoID,
@@ -239,7 +239,7 @@ class NotificationService: ObservableObject {
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ STITCH: Notifications sent to \(threadUserIDs.count + 1) users")
+            print("âœ… STITCH: Notifications sent to \(threadUserIDs.count + 1) users")
         }
     }
     
@@ -254,12 +254,12 @@ class NotificationService: ObservableObject {
         followerIDs: [String],
         engagerIDs: [String]
     ) async throws {
-        print("🏆 MILESTONE: Sending milestone notification")
-        print("   • Milestone: \(milestone) hypes")
-        print("   • Video: \(videoID)")
-        print("   • Creator: \(creatorID)")
-        print("   • Followers: \(followerIDs.count)")
-        print("   • Engagers: \(engagerIDs.count)")
+        print("ðŸ† MILESTONE: Sending milestone notification")
+        print("   â€¢ Milestone: \(milestone) hypes")
+        print("   â€¢ Video: \(videoID)")
+        print("   â€¢ Creator: \(creatorID)")
+        print("   â€¢ Followers: \(followerIDs.count)")
+        print("   â€¢ Engagers: \(engagerIDs.count)")
         
         let data: [String: Any] = [
             "milestone": milestone,
@@ -276,7 +276,7 @@ class NotificationService: ObservableObject {
            let success = resultData["success"] as? Bool,
            success {
             let totalNotified = followerIDs.count + engagerIDs.count + 1 // +1 for creator
-            print("✅ MILESTONE: Notifications sent to \(totalNotified) users")
+            print("âœ… MILESTONE: Notifications sent to \(totalNotified) users")
         }
     }
     
@@ -290,7 +290,7 @@ class NotificationService: ObservableObject {
         videoTitle: String,
         followerIDs: [String]
     ) async throws {
-        print("🎬 NEW VIDEO: Notifying \(followerIDs.count) followers")
+        print("ðŸŽ¬ NEW VIDEO: Notifying \(followerIDs.count) followers")
         
         let data: [String: Any] = [
             "creatorID": creatorID,
@@ -305,7 +305,7 @@ class NotificationService: ObservableObject {
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool,
            success {
-            print("✅ NEW VIDEO: Notifications sent to \(followerIDs.count) followers")
+            print("âœ… NEW VIDEO: Notifications sent to \(followerIDs.count) followers")
         }
     }
     
@@ -317,7 +317,7 @@ class NotificationService: ObservableObject {
         notificationType: String,
         payload: [String: Any]
     ) async throws -> ReEngagementResult {
-        print("🔄 RE-ENGAGEMENT: Sending \(notificationType) to user \(userID)")
+        print("ðŸ”„ RE-ENGAGEMENT: Sending \(notificationType) to user \(userID)")
         
         let data: [String: Any] = [
             "userId": userID,
@@ -338,7 +338,7 @@ class NotificationService: ObservableObject {
             // Check if cooldown
             if let reason = resultData["reason"] as? String, reason == "cooldown" {
                 let hoursRemaining = resultData["hoursRemaining"] as? String ?? "unknown"
-                print("⏸️ RE-ENGAGEMENT: Cooldown active (\(hoursRemaining)h remaining)")
+                print("â¸ï¸ RE-ENGAGEMENT: Cooldown active (\(hoursRemaining)h remaining)")
                 return ReEngagementResult(
                     success: false,
                     notificationId: nil,
@@ -360,7 +360,7 @@ class NotificationService: ObservableObject {
         let notificationId = resultData["notificationId"] as? String
         let pushSent = resultData["pushSent"] as? Bool ?? false
         
-        print("✅ RE-ENGAGEMENT: Sent successfully - Push: \(pushSent)")
+        print("âœ… RE-ENGAGEMENT: Sent successfully - Push: \(pushSent)")
         
         return ReEngagementResult(
             success: true,
@@ -375,7 +375,7 @@ class NotificationService: ObservableObject {
     
     /// Resend read notifications as reminders (TikTok/Instagram style)
     func resendReadNotifications(limit: Int = 5) async throws -> ResendResult {
-        print("🔁 RESEND: Resending up to \(limit) read notifications")
+        print("ðŸ” RESEND: Resending up to \(limit) read notifications")
         
         guard let userID = Auth.auth().currentUser?.uid else {
             throw NSError(domain: "NotificationService", code: 401, userInfo: [
@@ -399,7 +399,7 @@ class NotificationService: ObservableObject {
         
         if !success {
             if let reason = resultData["reason"] as? String, reason == "no_token" {
-                print("⚠️ RESEND: No FCM token found")
+                print("âš ï¸ RESEND: No FCM token found")
                 return ResendResult(success: false, resent: 0, reason: .noToken)
             }
             
@@ -408,7 +408,7 @@ class NotificationService: ObservableObject {
         
         let resent = resultData["resent"] as? Int ?? 0
         
-        print("✅ RESEND: Successfully resent \(resent) notifications")
+        print("âœ… RESEND: Successfully resent \(resent) notifications")
         
         return ResendResult(success: true, resent: resent, reason: nil)
     }
@@ -421,7 +421,7 @@ class NotificationService: ObservableObject {
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> NotificationLoadResult {
         
-        print("📨 LOAD: Fetching \(limit) notifications for user \(userID)")
+        print("ðŸ“¨ LOAD: Fetching \(limit) notifications for user \(userID)")
         
         var query = db.collection(notificationsCollection)
             .whereField("recipientID", isEqualTo: userID)
@@ -437,6 +437,10 @@ class NotificationService: ObservableObject {
         let notifications = snapshot.documents.compactMap { doc -> StitchNotification? in
             let data = doc.data()
             
+            // Debug: Check raw payload type
+            let rawPayload = data["payload"]
+            print("🔍 PARSE: Raw payload type = \(type(of: rawPayload))")
+            
             return StitchNotification(
                 id: data["id"] as? String ?? doc.documentID,
                 recipientID: data["recipientID"] as? String ?? "",
@@ -444,7 +448,7 @@ class NotificationService: ObservableObject {
                 type: StitchNotificationType(rawValue: data["type"] as? String ?? "system") ?? .system,
                 title: data["title"] as? String ?? "",
                 message: data["message"] as? String ?? "",
-                payload: data["payload"] as? [String: String] ?? [:],
+                payload: data["payload"] as? [String: Any] ?? [:],  // ✅ FIXED: Changed from [String: String] to [String: Any]
                 isRead: data["isRead"] as? Bool ?? false,
                 createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
                 readAt: (data["readAt"] as? Timestamp)?.dateValue(),
@@ -454,7 +458,7 @@ class NotificationService: ObservableObject {
         
         let hasMore = snapshot.documents.count == limit
         
-        print("✅ LOAD: Loaded \(notifications.count) notifications, hasMore: \(hasMore)")
+        print("âœ… LOAD: Loaded \(notifications.count) notifications, hasMore: \(hasMore)")
         
         return NotificationLoadResult(
             notifications: notifications,
@@ -466,7 +470,7 @@ class NotificationService: ObservableObject {
     // MARK: - Mark as Read
     
     func markAsRead(_ notificationID: String) async throws {
-        print("✅ MARK READ: Notification \(notificationID)")
+        print("âœ… MARK READ: Notification \(notificationID)")
         
         try await db.collection(notificationsCollection)
             .document(notificationID)
@@ -477,7 +481,7 @@ class NotificationService: ObservableObject {
     }
     
     func markAllAsRead(for userID: String) async throws {
-        print("✅ MARK ALL READ: User \(userID)")
+        print("âœ… MARK ALL READ: User \(userID)")
         
         let snapshot = try await db.collection(notificationsCollection)
             .whereField("recipientID", isEqualTo: userID)
@@ -494,7 +498,7 @@ class NotificationService: ObservableObject {
         }
         
         try await batch.commit()
-        print("✅ MARK ALL READ: Updated \(snapshot.documents.count) notifications")
+        print("âœ… MARK ALL READ: Updated \(snapshot.documents.count) notifications")
     }
     
     // MARK: - Clear Notifications
@@ -507,7 +511,7 @@ class NotificationService: ObservableObject {
             ])
         }
         
-        print("🗑️ CLEAR ALL: Clearing notifications for user \(userID)")
+        print("ðŸ—‘ï¸ CLEAR ALL: Clearing notifications for user \(userID)")
         
         let data: [String: Any] = [
             "userId": userID
@@ -525,7 +529,7 @@ class NotificationService: ObservableObject {
         
         let deleted = resultData["deleted"] as? Int ?? 0
         
-        print("✅ CLEAR ALL: Deleted \(deleted) notifications")
+        print("âœ… CLEAR ALL: Deleted \(deleted) notifications")
         
         return deleted
     }
@@ -543,12 +547,12 @@ class NotificationService: ObservableObject {
                 guard let self = self else { return }
                 
                 if let error = error {
-                    print("❌ LISTENER: Error - \(error)")
+                    print("âŒ LISTENER: Error - \(error)")
                     return
                 }
                 
                 guard let snapshot = snapshot else {
-                    print("⚠️ LISTENER: No snapshot")
+                    print("âš ï¸ LISTENER: No snapshot")
                     return
                 }
                 
@@ -562,7 +566,7 @@ class NotificationService: ObservableObject {
                         type: StitchNotificationType(rawValue: data["type"] as? String ?? "system") ?? .system,
                         title: data["title"] as? String ?? "",
                         message: data["message"] as? String ?? "",
-                        payload: data["payload"] as? [String: String] ?? [:],
+                        payload: data["payload"] as? [String: Any] ?? [:],  // ✅ FIXED: Changed from [String: String] to [String: Any]
                         isRead: data["isRead"] as? Bool ?? false,
                         createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
                         readAt: (data["readAt"] as? Timestamp)?.dateValue(),
@@ -573,19 +577,19 @@ class NotificationService: ObservableObject {
                 onUpdate(notifications)
             }
         
-        print("👂 LISTENER: Started for user \(userID)")
+        print("ðŸ‘‚ LISTENER: Started for user \(userID)")
     }
     
     func stopListening() {
         notificationListener?.remove()
         notificationListener = nil
-        print("🛑 LISTENER: Stopped")
+        print("ðŸ›‘ LISTENER: Stopped")
     }
     
     // MARK: - Debug
     
     func debugConfiguration() {
-        print("🔍 DEBUG: Notification Service Configuration")
+        print("ðŸ” DEBUG: Notification Service Configuration")
         print("  - Database: \(Config.Firebase.databaseName)")
         print("  - Region: us-central1")
         print("  - Function Prefix: \(functionPrefix)")

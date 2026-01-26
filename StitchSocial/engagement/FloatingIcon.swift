@@ -1,10 +1,10 @@
 //
-//  FloatingIconEffect.swift
+//  FloatingIcon.swift
 //  StitchSocial
 //
 //  Layer 8: UI - TikTok Live Style Floating Icon Animation System
 //  Dependencies: SwiftUI, Foundation
-//  Features: Floating flames, snowflakes, and other icons with 3D depth effects
+//  Features: Floating flames, snowflakes, thumbnails, and other icons with 3D depth effects
 //
 
 import SwiftUI
@@ -96,18 +96,32 @@ struct FloatingIcon: View {
         switch iconType {
         case .hype:
             switch animationType {
-            case .founderExplosion: return "crown.fill"
-            case .tierBoost: return "star.fill"
-            case .milestone: return "bolt.fill"
-            case .standard: return "flame.fill"
+            case .founderExplosion:
+                return "crown.fill"
+            case .tierBoost:
+                return "star.fill"
+            case .milestone:
+                return "bolt.fill"
+            case .standard:
+                return "flame.fill"
+            case .threadNavigator:
+                return "film.stack"
             }
         case .cool:
             switch animationType {
-            case .founderExplosion: return "diamond.fill"
-            case .tierBoost: return "snowflake"
-            case .milestone: return "tornado"
-            case .standard: return "snowflake"
+            case .founderExplosion:
+                return "diamond.fill"
+            case .tierBoost:
+                return "snowflake"
+            case .milestone:
+                return "tornado"
+            case .standard:
+                return "snowflake"
+            case .threadNavigator:
+                return "film.stack"
             }
+        case .threadNavigator:
+            return "film.stack"
         }
     }
     
@@ -117,6 +131,7 @@ struct FloatingIcon: View {
         case .tierBoost: return 28
         case .milestone: return 24
         case .standard: return 22
+        case .threadNavigator: return 26
         }
     }
     
@@ -148,6 +163,12 @@ struct FloatingIcon: View {
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
+            case .threadNavigator:
+                return LinearGradient(
+                    colors: [.cyan, .blue, .purple],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             }
             
         case .cool:
@@ -176,18 +197,31 @@ struct FloatingIcon: View {
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
+            case .threadNavigator:
+                return LinearGradient(
+                    colors: [.cyan, .mint, .teal],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             }
+        case .threadNavigator:
+            return LinearGradient(
+                colors: [.cyan, .blue, .purple],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
         }
     }
     
     private func shadowGradient(layer: Int) -> LinearGradient {
-        // Create darker versions of the main gradient colors
         let baseColors: [Color]
         switch iconType {
         case .hype:
             baseColors = [.black.opacity(0.8), .black.opacity(0.6)]
         case .cool:
             baseColors = [.black.opacity(0.6), .blue.opacity(0.4)]
+        case .threadNavigator:
+            baseColors = [.black.opacity(0.7), .cyan.opacity(0.3)]
         }
         
         return LinearGradient(
@@ -220,6 +254,7 @@ struct FloatingIcon: View {
             case .tierBoost: return tierColors.first ?? .orange
             case .milestone: return .cyan
             case .standard: return .orange
+            case .threadNavigator: return .cyan
             }
         case .cool:
             switch animationType {
@@ -227,7 +262,10 @@ struct FloatingIcon: View {
             case .tierBoost: return .white
             case .milestone: return .blue
             case .standard: return .cyan
+            case .threadNavigator: return .mint
             }
+        case .threadNavigator:
+            return .cyan
         }
     }
     
@@ -235,6 +273,7 @@ struct FloatingIcon: View {
         switch iconType {
         case .hype: return .black.opacity(0.6)
         case .cool: return .blue.opacity(0.4)
+        case .threadNavigator: return .cyan.opacity(0.3)
         }
     }
     
@@ -252,67 +291,32 @@ struct FloatingIcon: View {
                 Capsule()
                     .fill(
                         LinearGradient(
-                            colors: tierColors,
+                            colors: [.black.opacity(0.7), .black.opacity(0.4)],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
                     )
-                    .overlay(
-                        Capsule()
-                            .stroke(Color.white.opacity(0.8), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(0.3), radius: 2, x: 1, y: 1)
             )
-            .offset(y: -20)
+            .offset(y: 12)
     }
     
     private var explosionEffect: some View {
         ZStack {
-            // Explosion particles with 3D depth
-            ForEach(0..<12, id: \.self) { index in
+            ForEach(0..<6, id: \.self) { index in
                 Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                iconType == .hype ? .yellow : .white,
-                                iconType == .hype ? .orange : .cyan,
-                                .clear
-                            ],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: 8
-                        )
-                    )
-                    .frame(width: 8, height: 8)
-                    .offset(
-                        x: cos(Double(index) * .pi / 6) * 30,
-                        y: sin(Double(index) * .pi / 6) * 30
-                    )
-                    .scaleEffect(isAnimating ? 3.0 : 0.1)
-                    .opacity(isAnimating ? 0.0 : 1.0)
-                    .shadow(color: glowColor, radius: 4, x: 0, y: 0)
+                    .fill(glowColor)
+                    .frame(width: 12, height: 12)
+                    .offset(x: cos(CGFloat(index) * 60 * .pi / 180) * 30,
+                           y: sin(CGFloat(index) * 60 * .pi / 180) * 30)
             }
-            
-            // Ring explosion
-            Circle()
-                .stroke(
-                    LinearGradient(
-                        colors: [glowColor, glowColor.opacity(0.5), .clear],
-                        startPoint: .center,
-                        endPoint: .trailing
-                    ),
-                    lineWidth: 3
-                )
-                .frame(width: 50, height: 50)
-                .scaleEffect(isAnimating ? 4.0 : 0.1)
-                .opacity(isAnimating ? 0.0 : 0.8)
         }
+        .scaleEffect(isAnimating ? 4.0 : 0.1)
+        .opacity(isAnimating ? 0.0 : 0.8)
     }
     
     // MARK: - Animation
     
     private func startAnimation() {
-        // Random horizontal drift with physics
         let horizontalDrift = CGFloat.random(in: -60...60)
         let verticalVariation = CGFloat.random(in: -20...20)
         let endPosition = CGPoint(
@@ -320,13 +324,11 @@ struct FloatingIcon: View {
             y: startPosition.y - floatDistance + verticalVariation
         )
         
-        // Main floating animation with easing
         withAnimation(.easeOut(duration: animationDuration)) {
             position = endPosition
             opacity = 0.0
         }
         
-        // Scale animation (pop in, then shrink out)
         withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
             scale = 1.3
         }
@@ -337,17 +339,14 @@ struct FloatingIcon: View {
             }
         }
         
-        // 3D rotation animation
         withAnimation(.linear(duration: animationDuration)) {
             rotation = iconType == .hype ? 360 : -360
         }
         
-        // Y-axis rotation for 3D flip effect
         withAnimation(.easeInOut(duration: 1.5).repeatCount(2, autoreverses: true)) {
             rotationY = 180
         }
         
-        // Special effects for explosions
         if animationType == .founderExplosion {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 withAnimation(.easeOut(duration: 1.2)) {
@@ -360,16 +359,18 @@ struct FloatingIcon: View {
 
 // MARK: - Icon Types
 enum FloatingIconType {
-    case hype    // Flames and fire-related icons
-    case cool    // Snowflakes and ice-related icons
+    case hype              // Flames and fire-related icons
+    case cool              // Snowflakes and ice-related icons
+    case threadNavigator   // Thread navigation indicator
 }
 
 // MARK: - Animation Types
 enum IconAnimationType {
-    case standard        // Normal engagement
-    case founderExplosion // Founder user special effect
-    case tierBoost       // High-tier user effect
-    case milestone       // Milestone reached effect
+    case standard           // Normal engagement
+    case founderExplosion   // Founder user special effect
+    case tierBoost          // High-tier user effect
+    case milestone          // Milestone reached effect
+    case threadNavigator    // Thread navigation
 }
 
 // MARK: - Floating Icon Manager
@@ -378,7 +379,6 @@ class FloatingIconManager: ObservableObject {
     private var cleanupTimer: Timer?
     
     init() {
-        // Clean up expired icons every 2 seconds
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
             self.cleanupExpiredIcons()
         }
@@ -408,7 +408,6 @@ class FloatingIconManager: ObservableObject {
             self.activeIcons.append(icon)
         }
         
-        // Auto-remove after animation completes
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
             self.removeIcon(icon)
         }
@@ -423,7 +422,6 @@ class FloatingIconManager: ObservableObject {
         userTier: UserTier
     ) {
         for i in 0..<count {
-            // Staggered spawning with position variation
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.08) {
                 let offsetPosition = CGPoint(
                     x: buttonPosition.x + CGFloat.random(in: -15...15),
@@ -447,7 +445,7 @@ class FloatingIconManager: ObservableObject {
         
         if isFirstFounderTap {
             animationType = .founderExplosion
-            count = 5 // Explosion of flames
+            count = 5
         } else if [.founder, .topCreator, .legendary].contains(userTier) {
             animationType = .tierBoost
             count = 3
@@ -481,7 +479,7 @@ class FloatingIconManager: ObservableObject {
         
         if isFirstFounderTap {
             animationType = .founderExplosion
-            count = 5 // Explosion of snowflakes
+            count = 5
         } else if [.founder, .topCreator, .legendary].contains(userTier) {
             animationType = .tierBoost
             count = 3
@@ -508,6 +506,16 @@ class FloatingIconManager: ObservableObject {
         }
     }
     
+    /// Spawn thread navigator indicator
+    func spawnThreadNavigator(from position: CGPoint, userTier: UserTier) {
+        spawnIcon(
+            from: position,
+            iconType: .threadNavigator,
+            animationType: .threadNavigator,
+            userTier: userTier
+        )
+    }
+    
     // MARK: - Private Methods
     
     private func removeIcon(_ icon: FloatingIcon) {
@@ -517,7 +525,6 @@ class FloatingIconManager: ObservableObject {
     }
     
     private func cleanupExpiredIcons() {
-        // Remove excess icons if too many accumulate
         if activeIcons.count > 75 {
             let toRemove = activeIcons.count - 75
             activeIcons.removeFirst(toRemove)
@@ -526,6 +533,7 @@ class FloatingIconManager: ObservableObject {
 }
 
 // MARK: - Floating Icon Overlay View
+
 struct FloatingIconOverlay: View {
     @ObservedObject var iconManager: FloatingIconManager
     
@@ -535,7 +543,7 @@ struct FloatingIconOverlay: View {
                 icon
             }
         }
-        .allowsHitTesting(false) // Don't block touches
+        .allowsHitTesting(false)
     }
 }
 

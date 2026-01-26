@@ -62,6 +62,9 @@ struct ContextualVideoOverlay: View {
     /// Actual reply count from ThreadData - overrides video.replyCount when provided
     let actualReplyCount: Int?
     
+    /// For carousel participant detection - determines if user can reply vs spinoff
+    let isConversationParticipant: Bool
+    
     /// Computed reply count - uses actualReplyCount if available, otherwise video.replyCount
     private var displayReplyCount: Int {
         actualReplyCount ?? video.replyCount
@@ -121,6 +124,7 @@ struct ContextualVideoOverlay: View {
         threadVideo: CoreVideoMetadata? = nil,
         isVisible: Bool = true,
         actualReplyCount: Int? = nil,
+        isConversationParticipant: Bool = false,  // NEW: Default to false (not in conversation)
         onAction: ((ContextualOverlayAction) -> Void)? = nil
     ) {
         self.video = video
@@ -131,6 +135,7 @@ struct ContextualVideoOverlay: View {
         self.threadVideo = threadVideo
         self.isVisible = isVisible
         self.actualReplyCount = actualReplyCount
+        self.isConversationParticipant = isConversationParticipant  // NEW: Initialize property
         self.onAction = onAction
     }
     
@@ -186,18 +191,15 @@ struct ContextualVideoOverlay: View {
             }
             HStack {
                 Spacer()
-                VStack(spacing: 16) {
-                    Spacer()
-                    if video.conversationDepth == 0 && displayReplyCount > 0 {
-                        SwipeForRepliesBanner(replyCount: displayReplyCount)
-                    }
+                VStack(spacing: 12) {
+                    // ⭐ REMOVED: Top Spacer() - moves share button down
                     ShareButton(
                         video: video,
                         creatorUsername: displayCreatorName,
                         threadID: video.threadID ?? video.id,
                         size: .medium
                     )
-                    Spacer()
+                    Spacer()  // Keep bottom spacer but much smaller due to reduced spacing
                 }
             }
             .padding(.trailing, 12)
@@ -220,18 +222,15 @@ struct ContextualVideoOverlay: View {
             .opacity(1.0)
             HStack {
                 Spacer()
-                VStack(spacing: 16) {
-                    Spacer()
-                    if video.conversationDepth == 0 && displayReplyCount > 0 {
-                        SwipeForRepliesBanner(replyCount: displayReplyCount)
-                    }
+                VStack(spacing: 12) {
+                    // ⭐ REMOVED: Top Spacer() - moves share button down
                     ShareButton(
                         video: video,
                         creatorUsername: displayCreatorName,
                         threadID: video.threadID ?? video.id,
                         size: .medium
                     )
-                    Spacer()
+                    Spacer()  // Keep bottom spacer but much smaller due to reduced spacing
                 }
             }
             .padding(.trailing, 12)
@@ -256,13 +255,38 @@ struct ContextualVideoOverlay: View {
     }
     
     private var canReply: Bool {
+        // Special handling for carousel context - participant-based logic
+        if context == .carousel {
+            // In carousel, can reply up to depth 19 (so reply creates depth 20 max)
+            guard video.conversationDepth < 19 else {
+                print("🚫 CAROUSEL: At max depth - show spinoff instead")
+                return false
+            }
+            
+            // PARTICIPANT CHECK: Only conversation participants can reply
+            // Third parties should see spinoff, not reply
+            if !isConversationParticipant {
+                print("🚫 CAROUSEL: Not a participant - show spinoff instead")
+                return false
+            }
+            
+            // Participant CAN reply, but NOT to their own video
+            if isUserVideo {
+                print("🚫 CAROUSEL: Own video - no self-stitch in conversations")
+                return false
+            }
+            
+            return true
+        }
+        
+        // Original logic for other contexts
         guard video.conversationDepth <= 1 else {
-            print("ðŸš« STITCH: Blocked - depth \(video.conversationDepth) > 1")
+            print("🚫 STITCH: Blocked - depth \(video.conversationDepth) > 1")
             return false
         }
         if isUserVideo {
             let allowed = allowsSelfReply
-            print("ðŸŽ¬ STITCH: Own video - context: \(context), allowsSelfReply: \(allowed)")
+            print("🎬 STITCH: Own video - context: \(context), allowsSelfReply: \(allowed)")
             return allowed
         }
         return true
@@ -276,19 +300,46 @@ struct ContextualVideoOverlay: View {
         case .fullscreen: return true
         case .discovery: return false
         case .profileOther: return false
+        case .carousel: return false  // Never allow self-reply in carousel conversations
         }
     }
     
     private var stitchButtonIcon: String {
-        isUserVideo ? "plus.circle" : "scissors"
+        if shouldShowSpinoff {
+            return "arrow.triangle.branch"
+        }
+        return isUserVideo ? "plus.circle" : "scissors"
     }
     
     private var stitchButtonLabel: String {
-        isUserVideo ? "Continue" : "Stitch"
+        if shouldShowSpinoff {
+            return "Spinoff"
+        }
+        return isUserVideo ? "Continue" : "Stitch"
     }
     
     private var stitchButtonRingColor: Color {
-        isUserVideo ? .green : .purple
+        if shouldShowSpinoff {
+            return .orange
+        }
+        return isUserVideo ? .green : .purple
+    }
+    
+    // NEW: Determine if we should show spinoff button
+    private var shouldShowSpinoff: Bool {
+        if context != .carousel {
+            return false
+        }
+        
+        // Show spinoff in carousel when:
+        // 1. At depth 19+ (max depth limit), OR
+        // 2. User is not a conversation participant (third party)
+        return video.conversationDepth >= 19 || !isConversationParticipant
+    }
+    
+    // NEW: Can show reply OR spinoff
+    private var canShowReplyOrSpinoff: Bool {
+        return canReply || shouldShowSpinoff
     }
     
     private var shouldShowMinimalDisplay: Bool {
@@ -453,7 +504,12 @@ struct ContextualVideoOverlay: View {
         }
         .fullScreenCover(isPresented: $showingProfileFullscreen) {
             let userIDToShow = selectedUserID ?? video.creatorID
-            CreatorProfileView(userID: userIDToShow)
+            ProfileView(
+                authService: authService,
+                userService: userService,
+                videoService: videoService,
+                viewingUserID: userIDToShow
+            )
                 .onAppear {
                     print("ðŸ“± FULLSCREEN: CreatorProfileView appeared for userID: \(userIDToShow)")
                     NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
@@ -697,11 +753,16 @@ struct ContextualVideoOverlay: View {
                 }
                 .frame(maxWidth: .infinity)
                 
-                if canReply {
+                if canShowReplyOrSpinoff {
                     VStack(spacing: 4) {
                         Button {
                             showingStitchRecording = true
-                            onAction?(.stitch)
+                            // Call appropriate action based on context
+                            if shouldShowSpinoff {
+                                onAction?(.spinOff)
+                            } else {
+                                onAction?(.stitch)
+                            }
                         } label: {
                             ZStack {
                                 Circle()
@@ -887,6 +948,7 @@ enum OverlayContext {
     case profileOther
     case thread
     case fullscreen
+    case carousel  // NEW: For carousel conversation view
 }
 
 enum ContextualOverlayAction {
@@ -899,6 +961,7 @@ enum ContextualOverlayAction {
     case share
     case reply
     case stitch
+    case spinOff  // NEW: For creating spinoff threads at max depth
     case more
     case profileManagement
     case profileSettings

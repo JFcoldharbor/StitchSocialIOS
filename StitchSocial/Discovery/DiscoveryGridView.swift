@@ -106,10 +106,42 @@ struct GridVideoThumbnail: View {
                         }
                 }
                 
-                // Top overlay with duration
+                // Top overlay with duration and reply badge
                 VStack {
                     HStack {
+                        // ⭐ NEW: Reply count badge (top-left)
+                        if video.replyCount > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "bubble.right.fill")
+                                    .font(.system(size: 10))
+                                
+                                Text("\(video.replyCount)")
+                                    .font(.caption2)
+                                    .fontWeight(.semibold)
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [.cyan.opacity(0.7), .blue.opacity(0.5)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                            )
+                            .shadow(
+                                color: .cyan.opacity(0.6),
+                                radius: 6,
+                                x: 0,
+                                y: 0
+                            )
+                        }
+                        
                         Spacer()
+                        
                         Text(formatDuration(video.duration))
                             .font(.caption2)
                             .fontWeight(.semibold)
@@ -120,7 +152,7 @@ struct GridVideoThumbnail: View {
                             .cornerRadius(4)
                     }
                     .padding(.top, 6)
-                    .padding(.trailing, 6)
+                    .padding(.horizontal, 6)
                     
                     Spacer()
                 }

@@ -47,9 +47,7 @@ struct VideoThumbnailView: View {
     var body: some View {
         ZStack {
             // Background
-            Rectangle()
-                .fill(Color.black.opacity(0.8))
-                .aspectRatio(9.0/16.0, contentMode: .fit)
+            Color.black.opacity(0.8)
             
             // Thumbnail content
             Group {
@@ -57,8 +55,7 @@ struct VideoThumbnailView: View {
                     // Cached thumbnail
                     Image(uiImage: cachedImage)
                         .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .clipped()
+                        .scaledToFill()
                 } else if isGeneratingThumbnail {
                     // Loading state
                     loadingView
@@ -85,6 +82,8 @@ struct VideoThumbnailView: View {
                 temperatureIndicator
             }
         }
+        .aspectRatio(9.0/16.0, contentMode: .fit)
+        .clipped()
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .onTapGesture {
             onTap()
@@ -100,7 +99,7 @@ struct VideoThumbnailView: View {
         AsyncImage(url: URL(string: video.videoURL)) { image in
             image
                 .resizable()
-                .aspectRatio(contentMode: .fill)
+                .scaledToFill()
         } placeholder: {
             Rectangle()
                 .fill(Color.gray.opacity(0.3))
@@ -110,7 +109,6 @@ struct VideoThumbnailView: View {
                         .foregroundColor(.gray)
                 )
         }
-        .aspectRatio(9.0/16.0, contentMode: .fit)
         .onAppear {
             // Start background thumbnail generation for better caching
             generateThumbnailIfNeeded()

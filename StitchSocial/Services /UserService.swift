@@ -666,6 +666,50 @@ extension Array {
     }
 }
 
+// MARK: - Backfill Auto-Follows
+
+extension UserService {
+    
+    /// Backfill auto-follows for existing users (call once on app startup)
+    func backfillDefaultFollows() async {
+        let defaultAccounts = [
+            "4ifwg1CxDGbZ9amfPOvl0lMR6982",  // James Fortune
+            "L9cfRdqpDMWA9tq12YBh3IkhnGh1"   // StitchSocial
+        ]
+        
+        print("🔄 BACKFILL: Starting auto-follow backfill for default accounts")
+        
+        do {
+            // Get all users from Firestore
+            let snapshot = try await db.collection(FirebaseSchema.Collections.users).getDocuments()
+            let userIDs = snapshot.documents.map { $0.documentID }
+            
+            print("🔄 BACKFILL: Found \(userIDs.count) users to process")
+            
+            for userID in userIDs {
+                for accountID in defaultAccounts {
+                    do {
+                        // Check if already following
+                        let isAlreadyFollowing = try await isFollowing(followerID: userID, followingID: accountID)
+                        
+                        if !isAlreadyFollowing && userID != accountID {
+                            try await followUser(followerID: userID, followingID: accountID)
+                            print("✅ BACKFILL: User \(userID) followed \(accountID)")
+                        }
+                    } catch {
+                        print("⚠️ BACKFILL: Error processing \(userID) -> \(accountID): \(error)")
+                    }
+                }
+            }
+            
+            print("✅ BACKFILL: Completed")
+            
+        } catch {
+            print("❌ BACKFILL: Failed: \(error)")
+        }
+    }
+}
+
 // MARK: - Extensions
 
 extension UserService {

@@ -13,11 +13,13 @@ import AVFoundation
 import AVKit
 import FirebaseAuth
 import Combine
+import CoreHaptics
 
 struct FullscreenVideoView: View {
     let video: CoreVideoMetadata
     let onDismiss: (() -> Void)?
     let overlayContext: OverlayContext
+    @EnvironmentObject var muteManager: MuteContextManager
     
     // MARK: - Initializers
     
@@ -41,6 +43,10 @@ struct FullscreenVideoView: View {
     @State private var isAnimating = false
     @State private var isDismissing = false
     
+    // ⭐ NEW: Haptic feedback for replies
+    @State private var hapticEngine: CHHapticEngine?
+    @State private var isPlayingHaptic = false
+    
     // Services
     @StateObject private var videoService = VideoService()
     
@@ -55,7 +61,14 @@ struct FullscreenVideoView: View {
     
     private var allVideos: [CoreVideoMetadata] {
         guard let thread = currentThread else { return [video] }
-        return [thread.parentVideo] + thread.childVideos
+        
+        // ⭐ NEW: Only show direct children (currentDepth + 1), not stepchildren
+        let currentDepth = video.conversationDepth
+        let directChildren = thread.childVideos.filter { child in
+            child.conversationDepth == currentDepth + 1
+        }
+        
+        return [thread.parentVideo] + directChildren
     }
     
     private var currentVideo: CoreVideoMetadata {
@@ -89,6 +102,7 @@ struct FullscreenVideoView: View {
         .onAppear {
             setupAudioSession()
             loadThreadData()
+            setupHapticEngine()  // ⭐ NEW: Setup haptic feedback
             
             // MEMORY: Mark initial video as protected
             preloadService.markAsCurrentlyPlaying(video.id)
@@ -96,6 +110,7 @@ struct FullscreenVideoView: View {
         }
         .onDisappear {
             cleanupAudioSession()
+            stopHapticFeedback()  // ⭐ NEW: Stop haptic feedback
             
             // MEMORY: Clear protection when leaving fullscreen
             preloadService.clearCurrentlyPlaying()
@@ -121,6 +136,12 @@ struct FullscreenVideoView: View {
         return ZStack {
             // Video players
             videoPlayersLayer(geometry: geometry)
+            
+            // ⭐ NEW: Navigation peeks (previous/next video thumbnails on edges)
+            VideoNavigationPeeks(
+                allVideos: allVideos,
+                currentVideoIndex: currentVideoIndex
+            )
             
             // UI Overlays
             overlayViews(geometry: geometry)
@@ -426,6 +447,55 @@ struct FullscreenVideoView: View {
         }
     }
     
+
+    // MARK: - Haptic Feedback
+    
+    private func setupHapticEngine() {
+        do {
+            hapticEngine = try CHHapticEngine()
+            try hapticEngine?.start()
+            
+            if !allVideos.isEmpty && allVideos.count > 1 {
+                triggerReplyHaptic()
+            }
+        } catch {
+            print("Haptic engine setup failed: \(error)")
+        }
+    }
+    
+    private func triggerReplyHaptic() {
+        guard let engine = hapticEngine else { return }
+        guard !isPlayingHaptic else { return }
+        
+        do {
+            var events = [CHHapticEvent]()
+            
+            let duration = currentVideo.duration
+            let vibration = CHHapticEvent(
+                eventType: .hapticContinuous,
+                parameters: [
+                    CHHapticEventParameter(parameterID: .hapticIntensity, value: 0.3),
+                    CHHapticEventParameter(parameterID: .hapticSharpness, value: 0.2)
+                ],
+                relativeTime: 0,
+                duration: TimeInterval(duration)
+            )
+            events.append(vibration)
+            
+            let pattern = try CHHapticPattern(events: events, parameters: [])
+            let player = try engine.makePlayer(with: pattern)
+            try player.start(atTime: 0)
+            
+            isPlayingHaptic = true
+        } catch {
+            print("Failed to play haptic: \(error)")
+        }
+    }
+    
+    private func stopHapticFeedback() {
+        isPlayingHaptic = false
+        try? hapticEngine?.stop(completionHandler: nil)
+    }
     // MARK: - State Views
     
     private var loadingView: some View {
@@ -482,6 +552,7 @@ struct FullscreenVideoView: View {
 struct VideoPlayerComponent: View {
     let video: CoreVideoMetadata
     let isActive: Bool
+    @EnvironmentObject var muteManager: MuteContextManager
     
     @State private var player: AVPlayer?
     @State private var playerItem: AVPlayerItem?
@@ -545,7 +616,7 @@ struct VideoPlayerComponent: View {
         .onChange(of: isActive) { _, newValue in
             if newValue {
                 // Became active - play
-                player?.isMuted = false
+                player?.isMuted = muteManager.isMuted
                 if player?.rate == 0 {
                     player?.play()
                 }
@@ -556,13 +627,17 @@ struct VideoPlayerComponent: View {
                 print("â¸ï¸ FULLSCREEN INACTIVE: \(video.id.prefix(8))")
             }
         }
+        .onChange(of: muteManager.isMuted) { _, newValue in
+            // Apply mute state when user toggles button
+            player?.isMuted = newValue
+        }
     }
     
     private func setupPlayer() {
         // MEMORY: Try to get player from preload cache first
         if let cachedPlayer = preloadService.getPlayer(for: video) {
             self.player = cachedPlayer
-            self.player?.isMuted = false // Unmute (preloaded muted)
+            self.player?.isMuted = muteManager.isMuted
             self.isLoading = false
             
             // SEAMLESS: Only start playing if not already playing

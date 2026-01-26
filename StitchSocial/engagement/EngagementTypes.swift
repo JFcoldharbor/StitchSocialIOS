@@ -6,6 +6,7 @@
 //  Dependencies: Foundation, EngagementConfig (Layer 1) ONLY
 //  Features: All engagement types defined, user-specific clout tracking for caps
 //  UPDATED: Added clout tracking per user for anti-spam system
+//  UPDATED: Added grace period support with side-switching
 //
 
 import Foundation
@@ -98,6 +99,14 @@ enum TapMilestone: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - 🆕 Engagement Side Enum
+
+/// Engagement side for grace period tracking
+enum EngagementSide {
+    case hype
+    case cool
+}
+
 // MARK: - VIDEO ENGAGEMENT STATE WITH USER-SPECIFIC CLOUT TRACKING
 
 /// Per-video per-user engagement state - INSTANT ENGAGEMENTS
@@ -113,6 +122,10 @@ struct VideoEngagementState: Codable {
     // Clout tracking for anti-spam
     var totalCloutGiven: Int = 0
     var engagementHistory: [EngagementRecord] = []
+    
+    // 🆕 GRACE PERIOD FIELDS
+    var firstEngagementAt: Date? = nil
+    let gracePeriodDuration: TimeInterval = 60.0  // 60 seconds
     
     init(videoID: String, userID: String, createdAt: Date = Date()) {
         self.videoID = videoID
@@ -181,6 +194,21 @@ struct VideoEngagementState: Codable {
     /// Check if state has expired (no activity for 24 hours)
     var isExpired: Bool {
         return timeSinceLastEngagement > 86400 // 24 hours
+    }
+    
+    // 🆕 GRACE PERIOD COMPUTED PROPERTIES
+    
+    /// Check if within grace period (60 seconds from first engagement)
+    var isWithinGracePeriod: Bool {
+        guard let firstEngagement = firstEngagementAt else { return true }
+        return Date().timeIntervalSince(firstEngagement) < gracePeriodDuration
+    }
+    
+    /// Get current engagement side (hype or cool)
+    var currentSide: EngagementSide? {
+        if hypeEngagements > 0 { return .hype }
+        if coolEngagements > 0 { return .cool }
+        return nil
     }
 }
 

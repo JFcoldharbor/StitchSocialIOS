@@ -1358,6 +1358,8 @@ struct ThreadComposer: View {
             return "Reply to \(info.creatorName)"
         case .continueThread(_, let info):
             return "Continuing \(info.title)"
+        case .spinOffFrom(_, _, let info):
+            return "Responding to \(info.creatorName)"
         }
     }
     
@@ -1402,6 +1404,8 @@ extension RecordingContext {
             return "Reply"
         case .continueThread:
             return "Continue Thread"
+        case .spinOffFrom:
+            return "Spin-off"
         }
     }
 }

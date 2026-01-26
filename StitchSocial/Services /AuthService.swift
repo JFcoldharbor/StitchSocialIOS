@@ -396,9 +396,7 @@ class AuthService: ObservableObject {
             throw StitchError.authenticationError("Failed to create user profile: \(error.localizedDescription)")
         }
         
-        if specialConfig == nil {
-            await autoFollowSpecialUsers(userID: user.uid)
-        }
+        await autoFollowDefaultAccounts(userID: user.uid)
         
         let basicUserInfo = createBasicUserInfo(from: userData, uid: user.uid)
         
@@ -553,19 +551,25 @@ extension AuthService {
         print("✅ AUTH SERVICE: FCM handled by FCMPushManager automatically")
     }
     
-    func getAuthStatus() -> String {
-        let user = currentUser?.username ?? "None"
-        let email = currentUserEmail ?? "None"
-        let special = isSpecialUser ? "Yes" : "No"
+    
+    // MARK: - Auto-Follow Default Accounts
+    
+    /// Auto-follow James Fortune and StitchSocial for new users
+    private func autoFollowDefaultAccounts(userID: String) async {
+        let userService = UserService()
         
-        return """
-        AUTH STATUS:
-        - State: \(authState.displayName)
-        - User: \(user)
-        - Email: \(email)
-        - Special: \(special)
-        - Authenticated: \(isAuthenticated)
-        - FCM: Automatic via FCMPushManager
-        """
+        let defaultAccounts = [
+            "4ifwg1CxDGbZ9amfPOvl0lMR6982",  // James Fortune
+            "L9cfRdqpDMWA9tq12YBh3IkhnGh1"   // StitchSocial
+        ]
+        
+        for accountID in defaultAccounts {
+            do {
+                try await userService.followUser(followerID: userID, followingID: accountID)
+                print("✅ AUTO-FOLLOW: User \(userID) followed \(accountID)")
+            } catch {
+                print("⚠️ AUTO-FOLLOW: Failed to follow \(accountID): \(error)")
+            }
+        }
     }
 }

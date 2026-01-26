@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import Network
 
 /// Lightweight cache for offline feed viewing
 class FeedCache {
@@ -17,6 +18,11 @@ class FeedCache {
     private let cacheTimestampKey = "cached_home_feed_timestamp"
     private let maxCachedThreads = 10 // Cache first 10 threads for offline
     private let cacheExpirationHours: Double = 24 // Cache valid for 24 hours
+    
+    // MARK: - In-Memory Cache (avoid repeated UserDefaults reads)
+    
+    private var memoryCache: [ThreadData]?
+    private var memoryCacheTimestamp: TimeInterval?
     
     private init() {}
     
@@ -32,7 +38,14 @@ class FeedCache {
             let encoder = JSONEncoder()
             let data = try encoder.encode(threadsToCache)
             UserDefaults.standard.set(data, forKey: cacheKey)
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: cacheTimestampKey)
+            
+            let now = Date().timeIntervalSince1970
+            UserDefaults.standard.set(now, forKey: cacheTimestampKey)
+            
+            // Update memory cache
+            memoryCache = threadsToCache
+            memoryCacheTimestamp = now
+            
             print("💾 FEED CACHE: Saved \(threadsToCache.count) threads for offline viewing")
         } catch {
             print("❌ FEED CACHE: Failed to save - \(error)")
@@ -42,21 +55,28 @@ class FeedCache {
     // MARK: - Load Cached Feed
     
     func loadCachedFeed() -> [ThreadData]? {
-        // Check if cache exists and is not expired
+        // Return from memory if valid
+        if let cached = memoryCache, let timestamp = memoryCacheTimestamp {
+            if !isCacheExpired(timestamp) {
+                return cached
+            }
+        }
+        
+        // Check timestamp first (cheap)
         guard let timestamp = UserDefaults.standard.object(forKey: cacheTimestampKey) as? TimeInterval else {
             print("📭 FEED CACHE: No cached feed found")
             return nil
         }
         
-        let cacheAge = Date().timeIntervalSince1970 - timestamp
-        let maxAge = cacheExpirationHours * 3600
-        
-        if cacheAge > maxAge {
+        // Check expiration
+        if isCacheExpired(timestamp) {
+            let cacheAge = Date().timeIntervalSince1970 - timestamp
             print("⏰ FEED CACHE: Cache expired (\(Int(cacheAge/3600))h old)")
             clearCache()
             return nil
         }
         
+        // Only decode if cache is valid
         guard let data = UserDefaults.standard.data(forKey: cacheKey) else {
             return nil
         }
@@ -64,6 +84,12 @@ class FeedCache {
         do {
             let decoder = JSONDecoder()
             let threads = try decoder.decode([ThreadData].self, from: data)
+            
+            // Update memory cache
+            memoryCache = threads
+            memoryCacheTimestamp = timestamp
+            
+            let cacheAge = Date().timeIntervalSince1970 - timestamp
             print("✅ FEED CACHE: Loaded \(threads.count) cached threads (age: \(Int(cacheAge/60))min)")
             return threads
         } catch {
@@ -73,17 +99,39 @@ class FeedCache {
         }
     }
     
-    // MARK: - Check Cache Status
+    // MARK: - Check Cache Status (OPTIMIZED)
     
     func hasCachedFeed() -> Bool {
-        return loadCachedFeed() != nil
+        // Check memory cache first
+        if let timestamp = memoryCacheTimestamp {
+            return !isCacheExpired(timestamp)
+        }
+        
+        // Check UserDefaults timestamp only (no decode)
+        guard let timestamp = UserDefaults.standard.object(forKey: cacheTimestampKey) as? TimeInterval else {
+            return false
+        }
+        
+        return !isCacheExpired(timestamp)
     }
     
     func cacheAge() -> TimeInterval? {
+        // Check memory cache first
+        if let timestamp = memoryCacheTimestamp {
+            return Date().timeIntervalSince1970 - timestamp
+        }
+        
         guard let timestamp = UserDefaults.standard.object(forKey: cacheTimestampKey) as? TimeInterval else {
             return nil
         }
         return Date().timeIntervalSince1970 - timestamp
+    }
+    
+    // MARK: - Helper
+    
+    private func isCacheExpired(_ timestamp: TimeInterval) -> Bool {
+        let cacheAge = Date().timeIntervalSince1970 - timestamp
+        return cacheAge > (cacheExpirationHours * 3600)
     }
     
     // MARK: - Clear Cache
@@ -91,13 +139,13 @@ class FeedCache {
     func clearCache() {
         UserDefaults.standard.removeObject(forKey: cacheKey)
         UserDefaults.standard.removeObject(forKey: cacheTimestampKey)
+        memoryCache = nil
+        memoryCacheTimestamp = nil
         print("🗑️ FEED CACHE: Cleared")
     }
 }
 
 // MARK: - Network Reachability Helper
-
-import Network
 
 class NetworkMonitor: ObservableObject {
     static let shared = NetworkMonitor()

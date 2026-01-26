@@ -36,7 +36,7 @@ class DiscoveryViewModel: ObservableObject {
         defer { isLoading = false }
         
         do {
-            print("🔍 DISCOVERY: Loading deep randomized content")
+            print("ðŸ” DISCOVERY: Loading deep randomized content")
             
             // Use deep randomized discovery
             let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 40)
@@ -47,7 +47,7 @@ class DiscoveryViewModel: ObservableObject {
                 let validVideos = loadedVideos.filter { !$0.id.isEmpty }
                 
                 if validVideos.count < loadedVideos.count {
-                    print("⚠️ DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
+                    print("âš ï¸ DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
                 }
                 
                 videos = validVideos
@@ -55,12 +55,12 @@ class DiscoveryViewModel: ObservableObject {
                 applyFilterAndShuffle()
                 errorMessage = nil
                 
-                print("✅ DISCOVERY: Loaded \(filteredVideos.count) randomized videos")
+                print("âœ… DISCOVERY: Loaded \(filteredVideos.count) randomized videos")
             }
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to load discovery content"
-                print("❌ DISCOVERY: Load failed: \(error)")
+                print("âŒ DISCOVERY: Load failed: \(error)")
             }
         }
     }
@@ -74,7 +74,7 @@ class DiscoveryViewModel: ObservableObject {
         defer { isLoading = false }
         
         do {
-            print("📥 DISCOVERY: Loading more content (appending to end)")
+            print("ðŸ“¥ DISCOVERY: Loading more content (appending to end)")
             
             // Load another batch
             let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 30)
@@ -88,10 +88,10 @@ class DiscoveryViewModel: ObservableObject {
                 videos.append(contentsOf: validVideos)
                 filteredVideos.append(contentsOf: validVideos)
                 
-                print("✅ DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
+                print("âœ… DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
             }
         } catch {
-            print("❌ DISCOVERY: Failed to load more: \(error)")
+            print("âŒ DISCOVERY: Failed to load more: \(error)")
         }
     }
     
@@ -110,7 +110,7 @@ class DiscoveryViewModel: ObservableObject {
         videos = videos.shuffled()
         applyFilterAndShuffle()
         
-        print("🎲 DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
+        print("ðŸŽ² DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
     }
     
     // MARK: - Category Filtering
@@ -154,13 +154,13 @@ class DiscoveryViewModel: ObservableObject {
                 videos = validVideos
                 applyFilterAndShuffle()
                 
-                print("📊 DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
+                print("ðŸ“Š DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
             }
             
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to load \(category.displayName) content"
-                print("❌ DISCOVERY: Category load failed: \(error)")
+                print("âŒ DISCOVERY: Category load failed: \(error)")
             }
         }
     }
@@ -288,6 +288,11 @@ struct DiscoveryView: View {
     @StateObject private var viewModel = DiscoveryViewModel()
     @EnvironmentObject private var authService: AuthService
     
+    // MARK: - Services for Profile Navigation
+    
+    private let userService = UserService()
+    private let videoService = VideoService()
+    
     // NEW: Observe announcement service to pause videos when announcement shows
     @ObservedObject private var announcementService = AnnouncementService.shared
     
@@ -296,8 +301,14 @@ struct DiscoveryView: View {
     @State private var currentSwipeIndex: Int = 0
     @State private var showingSearch = false
     
+    // MARK: - Profile Navigation State
+    
+    @State private var selectedUserForProfile: String?
+    @State private var showingProfileView = false
+    
     // FIXED: Use item-based presentation instead of boolean
     @State private var videoPresentation: DiscoveryVideoPresentation?
+    @EnvironmentObject var muteManager: MuteContextManager
     
     var body: some View {
         ZStack {
@@ -346,7 +357,7 @@ struct DiscoveryView: View {
                 video: presentation.video,
                 overlayContext: .fullscreen,
                 onDismiss: {
-                    print("📱 DISCOVERY: Dismissing fullscreen")
+                    print("ðŸ“± DISCOVERY: Dismissing fullscreen")
                     videoPresentation = nil
                 }
             )
@@ -354,9 +365,18 @@ struct DiscoveryView: View {
         // NEW: React to announcement state changes
         .onChange(of: announcementService.isShowingAnnouncement) { _, isShowing in
             if isShowing {
-                print("📢 DISCOVERY: Announcement showing - pausing videos")
+                print("ðŸ“¢ DISCOVERY: Announcement showing - pausing videos")
             } else {
-                print("📢 DISCOVERY: Announcement dismissed - can resume videos")
+                print("ðŸ“¢ DISCOVERY: Announcement dismissed - can resume videos")
+            }
+        }
+        .sheet(isPresented: $showingProfileView) {
+            if let userID = selectedUserForProfile {
+                ProfileView(
+                    authService: authService,
+                    userService: userService,
+                    videoService: videoService
+                )
             }
         }
     }
@@ -484,7 +504,10 @@ struct DiscoveryView: View {
                                 video: video
                             )
                         },
-                        onNavigateToProfile: { _ in },
+                        onNavigateToProfile: { userID in
+                            selectedUserForProfile = userID
+                            showingProfileView = true
+                        },
                         onNavigateToThread: { _ in }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

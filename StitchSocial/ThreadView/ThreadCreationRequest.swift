@@ -240,7 +240,7 @@ class ThreadService: ObservableObject {
     // MARK: - Initialization
     
     init() {
-        print("🧵 THREAD SERVICE: Initialized thread management with hierarchy validation")
+        print("ðŸ§µ THREAD SERVICE: Initialized thread management with hierarchy validation")
     }
     
     // MARK: - Thread Creation Operations
@@ -337,7 +337,7 @@ class ThreadService: ObservableObject {
             
             totalThreadsCreated += 1
             
-            print("✅ THREAD SERVICE: Thread created successfully - \(request.title)")
+            print("âœ… THREAD SERVICE: Thread created successfully - \(request.title)")
             
             return thread
             
@@ -346,7 +346,7 @@ class ThreadService: ObservableObject {
             let threadError = ThreadServiceError.creationFailed(error.localizedDescription)
             await recordFailure(threadError)
             
-            print("❌ THREAD SERVICE: Thread creation failed - \(error)")
+            print("âŒ THREAD SERVICE: Thread creation failed - \(error)")
             
             throw threadError
         }
@@ -385,15 +385,17 @@ class ThreadService: ObservableObject {
                 throw ThreadServiceError.maxRepliesExceeded(currentReplies)
             }
             
-            // Determine content type based on parent
+            // Determine content type based on parent depth
+            // depth 0 parent → creates child (depth 1)
+            // depth 1+ parent → creates stepchild (depth 2+)
+            // All replies deeper than depth 1 are "stepchildren" continuing the conversation
             let contentType: ContentType
-            switch parentVideo.conversationDepth {
-            case 0:
+            if parentVideo.conversationDepth == 0 {
                 contentType = .child
-            case 1:
+            } else {
+                // Depth 1 or higher - all become stepchildren
+                // The depth check at line 374 already validates against maxConversationDepth
                 contentType = .stepchild
-            default:
-                throw ThreadServiceError.maxDepthExceeded(newDepth)
             }
             
             let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
@@ -488,7 +490,7 @@ class ThreadService: ObservableObject {
             
             totalRepliesCreated += 1
             
-            print("✅ THREAD SERVICE: Reply created successfully - \(contentType.displayName)")
+            print("âœ… THREAD SERVICE: Reply created successfully - \(contentType.displayName)")
             
             return reply
             
@@ -504,7 +506,7 @@ class ThreadService: ObservableObject {
             
             await recordFailure(threadError)
             
-            print("❌ THREAD SERVICE: Reply creation failed - \(error)")
+            print("âŒ THREAD SERVICE: Reply creation failed - \(error)")
             
             throw threadError
         }
@@ -675,14 +677,14 @@ class ThreadService: ObservableObject {
             await setOperationState(loading: false)
             await recordSuccess(.threadUpdated, duration: Date().timeIntervalSince(startTime))
             
-            print("✅ THREAD SERVICE: Thread updated successfully - \(threadID)")
+            print("âœ… THREAD SERVICE: Thread updated successfully - \(threadID)")
             
         } catch {
             await setOperationState(loading: false)
             let threadError = ThreadServiceError.updateFailed(error.localizedDescription)
             await recordFailure(threadError)
             
-            print("❌ THREAD SERVICE: Thread update failed - \(error)")
+            print("âŒ THREAD SERVICE: Thread update failed - \(error)")
             
             throw threadError
         }
@@ -726,7 +728,7 @@ class ThreadService: ObservableObject {
             await setOperationState(loading: false)
             await recordSuccess(.threadDeleted, duration: Date().timeIntervalSince(startTime))
             
-            print("✅ THREAD SERVICE: Thread deleted successfully - \(threadID)")
+            print("âœ… THREAD SERVICE: Thread deleted successfully - \(threadID)")
             
         } catch {
             await setOperationState(loading: false)
@@ -740,7 +742,7 @@ class ThreadService: ObservableObject {
             
             await recordFailure(threadError)
             
-            print("❌ THREAD SERVICE: Thread deletion failed - \(error)")
+            print("âŒ THREAD SERVICE: Thread deletion failed - \(error)")
             
             throw threadError
         }
@@ -908,7 +910,7 @@ class ThreadService: ObservableObject {
     /// Print thread service status
     func printThreadStatus() {
         let stats = getThreadStats()
-        print("🧵 THREAD SERVICE STATUS:")
+        print("ðŸ§µ THREAD SERVICE STATUS:")
         print("  Threads Created: \(stats.totalThreadsCreated)")
         print("  Replies Created: \(stats.totalRepliesCreated)")
         print("  Success Rate: \(String(format: "%.1f%%", stats.successRate))")

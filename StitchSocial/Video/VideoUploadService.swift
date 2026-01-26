@@ -7,6 +7,7 @@
 //  🔧 UPDATED: Removed hard 100MB rejection - now auto-compresses
 //  🔧 UPDATED: Uses FastVideoCompressor as fallback
 //  🔧 UPDATED: Better error messages for file size issues
+//  🔧 UPDATED: Added spin-off support
 //
 
 import Foundation
@@ -363,6 +364,37 @@ class VideoUploadService: ObservableObject {
                     )
                 } catch {
                     print("⚠️ UPLOAD SERVICE: Failed to send thread notification - \(error)")
+                }
+            }
+            
+        case .spinOffFrom(let videoID, let threadID, _):
+            createdVideo = try await videoService.createSpinOffThread(
+                originalVideoID: videoID,
+                originalThreadID: threadID,
+                title: metadata.title,
+                description: metadata.description,
+                videoURL: uploadResult.videoURL,
+                thumbnailURL: uploadResult.thumbnailURL,
+                creatorID: metadata.creatorID,
+                creatorName: metadata.creatorName,
+                duration: uploadResult.duration,
+                fileSize: uploadResult.fileSize,
+                aspectRatio: uploadResult.aspectRatio
+            )
+            
+            // Notify original video creator about spin-off
+            Task {
+                do {
+                    let sourceVideo = try await videoService.getVideo(id: videoID)
+                    try await notificationService.sendStitchNotification(
+                        videoID: createdVideo.id,
+                        videoTitle: metadata.title,
+                        originalCreatorID: sourceVideo.creatorID,
+                        parentCreatorID: sourceVideo.creatorID,
+                        threadUserIDs: []
+                    )
+                } catch {
+                    print("⚠️ UPLOAD SERVICE: Failed to send spin-off notification - \(error)")
                 }
             }
         }

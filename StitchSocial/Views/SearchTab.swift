@@ -125,6 +125,9 @@ class SearchViewModel: ObservableObject {
 
 struct SearchView: View {
     @StateObject private var viewModel = SearchViewModel()
+    @StateObject private var authService = AuthService()
+    @StateObject private var userService = UserService()
+    @StateObject private var videoService = VideoService()
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -157,7 +160,11 @@ struct SearchView: View {
         }
         .sheet(isPresented: $viewModel.showingProfile) {
             if let user = viewModel.selectedUser {
-                CreatorProfileView(userID: user.id)
+                ProfileView(
+                    authService: authService,
+                    userService: userService,
+                    videoService: videoService
+                )
             }
         }
         .onAppear {

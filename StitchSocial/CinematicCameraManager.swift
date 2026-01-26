@@ -105,6 +105,24 @@ class CinematicCameraManager: NSObject, ObservableObject {
         setupMovieOutput()
         
         captureSession.commitConfiguration()
+        
+        // CRITICAL: Set orientation AFTER commit
+        setPortraitOrientation()
+    }
+    
+    private func setPortraitOrientation() {
+        guard let movieOutput = movieOutput else { return }
+        
+        if let connection = movieOutput.connection(with: .video) {
+            if connection.isVideoOrientationSupported {
+                connection.videoOrientation = .portrait
+                print("📱 CAMERA: Video orientation set to portrait (1080x1920)")
+            } else {
+                print("⚠️ CAMERA: Video orientation not supported")
+            }
+        } else {
+            print("⚠️ CAMERA: No video connection found")
+        }
     }
     
     private func setupVideoInput() {
@@ -169,6 +187,14 @@ class CinematicCameraManager: NSObject, ObservableObject {
         // Clean up existing file
         try? FileManager.default.removeItem(at: outputURL)
         
+        // Verify and enforce portrait orientation before recording
+        if let connection = movieOutput.connection(with: .video) {
+            if connection.isVideoOrientationSupported {
+                connection.videoOrientation = .portrait
+                print("📱 CAMERA: Recording with orientation: \(connection.videoOrientation.rawValue) (1=portrait)")
+            }
+        }
+        
         recordingCompletion = completion
         isRecording = true
         
@@ -229,6 +255,12 @@ class CinematicCameraManager: NSObject, ObservableObject {
             }
             
             self.captureSession.commitConfiguration()
+            
+            // Re-apply portrait orientation after camera switch
+            Task { @MainActor in
+                self.setPortraitOrientation()
+            }
+            
             print("📱 CAMERA: Switched to \(newPosition == .back ? "back" : "front")")
         }
     }
@@ -323,7 +355,20 @@ extension CinematicCameraManager: AVCaptureFileOutputRecordingDelegate {
                 print("❌ CAMERA: Recording failed - \(error)")
                 self.recordingCompletion?(nil)
             } else {
-                print("✅ CAMERA: Recording completed")
+                // Check actual video dimensions
+                let asset = AVAsset(url: outputFileURL)
+                if let track = asset.tracks(withMediaType: .video).first {
+                    let size = track.naturalSize
+                    let transform = track.preferredTransform
+                    print("✅ CAMERA: Recording completed")
+                    print("📐 CAMERA: Video size: \(size.width)x\(size.height)")
+                    print("📐 CAMERA: Transform: \(transform)")
+                    
+                    // Check if it's actually portrait
+                    let isPortrait = size.height > size.width
+                    print("📐 CAMERA: Is portrait: \(isPortrait) (expected: true)")
+                }
+                
                 self.recordingCompletion?(outputFileURL)
             }
             

@@ -231,11 +231,20 @@ class CachingService: ObservableObject {
     
     /// Find least recently used item by access time
     private func findLeastRecentlyUsed(in keys: [String]) -> String? {
-        return keys.min { key1, key2 in
-            let time1 = accessTimes[key1] ?? Date.distantPast
-            let time2 = accessTimes[key2] ?? Date.distantPast
-            return time1 < time2
+        guard !keys.isEmpty else { return nil }
+        
+        var lruKey = keys[0]
+        var lruTime = accessTimes[keys[0]] ?? Date.distantPast
+        
+        for key in keys.dropFirst() {
+            let time = accessTimes[key] ?? Date.distantPast
+            if time < lruTime {
+                lruKey = key
+                lruTime = time
+            }
         }
+        
+        return lruKey
     }
     
     // MARK: - Cache Statistics and Monitoring

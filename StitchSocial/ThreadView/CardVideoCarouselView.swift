@@ -3,8 +3,7 @@
 //  StitchSocial
 //
 //  Layer 8: Views - Card-based Video Carousel with Real Video Players
-//  Dependencies: VideoPlayerView, CoreVideoMetadata, InteractionType
-//  Features: Swipeable video cards, proper video playback, gesture controls
+//  REDESIGNED: Discovery-style cards matching ThreadView
 //
 
 import SwiftUI
@@ -16,54 +15,138 @@ struct CardVideoCarouselView: View {
     let videos: [CoreVideoMetadata]
     let parentVideo: CoreVideoMetadata?
     let startingIndex: Int
+    let currentUserID: String?
+    let directReplies: [CoreVideoMetadata]?
+    let onSelectReply: ((CoreVideoMetadata) -> Void)?
     
     // MARK: - State
     @State private var currentIndex: Int
-    @State private var isPlaying: Bool = true
+    @State private var isPlaying: Bool = false
     @State private var dragOffset: CGSize = .zero
+    @State private var hasAppeared = false
+    @State private var currentConversationPartner: String?
     
     // MARK: - Environment
     @Environment(\.dismiss) private var dismiss
     
-    // MARK: - Constants
-    private let cardWidth: CGFloat = 340
-    private let cardHeight: CGFloat = 500
+    // MARK: - Brand Colors
+    private let brandCyan = Color(red: 0.0, green: 0.85, blue: 0.95)
+    private let brandPurple = Color(red: 0.6, green: 0.4, blue: 0.95)
+    private let brandPink = Color(red: 0.95, green: 0.4, blue: 0.7)
+    private let brandCream = Color(red: 0.98, green: 0.97, blue: 0.96)
+    private let brandDark = Color(red: 0.1, green: 0.1, blue: 0.15)
     
-    init(videos: [CoreVideoMetadata], parentVideo: CoreVideoMetadata?, startingIndex: Int = 0) {
+    // MARK: - Computed Properties
+    
+    private var conversationParticipantIDs: Set<String> {
+        Set(videos.map { $0.creatorID })
+    }
+    
+    private var isConversationParticipant: Bool {
+        guard let userID = currentUserID else { return false }
+        return conversationParticipantIDs.contains(userID)
+    }
+    
+    init(
+        videos: [CoreVideoMetadata],
+        parentVideo: CoreVideoMetadata?,
+        startingIndex: Int = 0,
+        currentUserID: String? = nil,
+        directReplies: [CoreVideoMetadata]? = nil,
+        onSelectReply: ((CoreVideoMetadata) -> Void)? = nil
+    ) {
         self.videos = videos
         self.parentVideo = parentVideo
         self.startingIndex = startingIndex
+        self.currentUserID = currentUserID
+        self.directReplies = directReplies
+        self.onSelectReply = onSelectReply
         self._currentIndex = State(initialValue: startingIndex)
     }
     
     var body: some View {
-        ZStack {
-            // Background
-            Color.black.ignoresSafeArea()
-            
-            VStack(spacing: 0) {
-                // Header
-                carouselHeader
+        GeometryReader { geometry in
+            ZStack {
+                // Marble background (matching ThreadView)
+                marbleBackground(in: geometry)
                 
-                Spacer()
-                
-                // Main carousel
-                cardCarouselView
-                    .offset(dragOffset)
-                
-                Spacer()
-                
-                // Bottom controls
-                bottomControls
-                    .padding(.bottom, 40)
+                VStack(spacing: 0) {
+                    // Header
+                    carouselHeader
+                    
+                    Spacer()
+                    
+                    // Main carousel
+                    cardCarouselView(in: geometry)
+                        .offset(dragOffset)
+                    
+                    Spacer()
+                    
+                    // Bottom section
+                    if let replies = directReplies, !replies.isEmpty {
+                        ConversationNavigationBar(
+                            parentVideo: videos.first ?? parentVideo!,
+                            directReplies: replies,
+                            currentConversationPartner: currentConversationPartner,
+                            onSelectReply: { selectedReply in
+                                currentConversationPartner = selectedReply.creatorID
+                                onSelectReply?(selectedReply)
+                            }
+                        )
+                    } else {
+                        bottomControls
+                            .padding(.bottom, 40)
+                    }
+                }
             }
         }
+        .ignoresSafeArea()
         .gesture(dismissGesture)
         .onAppear {
-            print("🎬 CAROUSEL: Appeared with \(videos.count) videos")
+            hasAppeared = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.isPlaying = true
+            }
         }
         .onDisappear {
-            print("🎬 CAROUSEL: Disappeared")
+            isPlaying = false
+            hasAppeared = false
+        }
+    }
+    
+    // MARK: - Marble Background
+    
+    private func marbleBackground(in geometry: GeometryProxy) -> some View {
+        ZStack {
+            brandCream
+            
+            Circle()
+                .fill(brandCyan)
+                .frame(width: geometry.size.width * 1.2)
+                .blur(radius: 80)
+                .opacity(0.4)
+                .position(x: geometry.size.width * 0.2, y: geometry.size.height * 0.15)
+            
+            Circle()
+                .fill(brandPurple)
+                .frame(width: geometry.size.width * 1.0)
+                .blur(radius: 90)
+                .opacity(0.35)
+                .position(x: geometry.size.width * 0.85, y: geometry.size.height * 0.4)
+            
+            Circle()
+                .fill(brandPink)
+                .frame(width: geometry.size.width * 0.9)
+                .blur(radius: 70)
+                .opacity(0.3)
+                .position(x: geometry.size.width * 0.1, y: geometry.size.height * 0.75)
+            
+            RadialGradient(
+                colors: [Color.clear, Color.black.opacity(0.05)],
+                center: .center,
+                startRadius: geometry.size.width * 0.3,
+                endRadius: geometry.size.width
+            )
         }
     }
     
@@ -71,48 +154,76 @@ struct CardVideoCarouselView: View {
     
     private var carouselHeader: some View {
         VStack(spacing: 8) {
-            // Handle indicator for swipe-to-dismiss
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Color.white.opacity(0.3))
-                .frame(width: 40, height: 4)
-                .padding(.top, 20)
+            // Top bar with close button
+            HStack {
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(brandDark)
+                        .padding(12)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .shadow(color: Color.black.opacity(0.1), radius: 8)
+                        )
+                }
+                
+                Spacer()
+                
+                // Handle indicator
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(brandDark.opacity(0.3))
+                    .frame(width: 40, height: 4)
+                
+                Spacer()
+                
+                Color.clear.frame(width: 44, height: 44)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
             
             // Context information
             if let parent = parentVideo {
                 VStack(spacing: 4) {
                     Text("Replies to \(parent.creatorName)")
                         .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(.white)
+                        .foregroundColor(brandDark)
                     
                     Text("\(videos.count) replies")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white.opacity(0.7))
+                        .foregroundColor(brandDark.opacity(0.7))
                 }
-                .padding(.top, 16)
+                .padding(.top, 8)
             }
         }
     }
     
     // MARK: - Card Carousel
     
-    private var cardCarouselView: some View {
-        ZStack {
+    private func cardCarouselView(in geometry: GeometryProxy) -> some View {
+        let cardWidth: CGFloat = geometry.size.width * 0.58
+        let cardHeight: CGFloat = cardWidth * 1.4
+        
+        return ZStack {
             ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
-                VideoCard(
+                CarouselDiscoveryCard(
                     video: video,
                     isActive: index == currentIndex,
                     isPlaying: isPlaying && index == currentIndex,
-                    onTogglePlay: togglePlayback,
-                    onDoubleTap: { handleDoubleTap(video) }
+                    isConversationParticipant: isConversationParticipant,
+                    cardWidth: cardWidth,
+                    cardHeight: cardHeight,
+                    brandCyan: brandCyan,
+                    brandPurple: brandPurple
                 )
                 .scaleEffect(getCardScale(for: index))
-                .offset(x: getCardOffset(for: index), y: 0)
+                .offset(x: getCardOffset(for: index, cardWidth: cardWidth), y: 0)
                 .opacity(getCardOpacity(for: index))
                 .zIndex(getCardZIndex(for: index))
-                .animation(.spring(response: 0.5, dampingFraction: 0.7), value: currentIndex)
+                .animation(.spring(response: 0.35, dampingFraction: 0.75), value: currentIndex)
             }
         }
-        .frame(width: cardWidth, height: cardHeight)
+        .frame(height: cardHeight + 40)
         .gesture(horizontalSwipeGesture)
     }
     
@@ -120,21 +231,17 @@ struct CardVideoCarouselView: View {
     
     private var bottomControls: some View {
         VStack(spacing: 16) {
-            // Progress indicator
             progressIndicator
             
-            // Video counter
             Text("\(currentIndex + 1) of \(videos.count)")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.white.opacity(0.8))
+                .foregroundColor(brandDark.opacity(0.8))
             
-            // Action buttons
             actionButtons
             
-            // Dismiss hint
-            Text("Swipe down to close")
+            Text("Swipe up or down to close")
                 .font(.system(size: 12))
-                .foregroundColor(.white.opacity(0.5))
+                .foregroundColor(brandDark.opacity(0.5))
         }
     }
     
@@ -144,7 +251,7 @@ struct CardVideoCarouselView: View {
         HStack(spacing: 8) {
             ForEach(0..<videos.count, id: \.self) { index in
                 Circle()
-                    .fill(index == currentIndex ? Color.white : Color.white.opacity(0.3))
+                    .fill(index == currentIndex ? brandPurple : brandDark.opacity(0.3))
                     .frame(width: index == currentIndex ? 8 : 6, height: index == currentIndex ? 8 : 6)
                     .animation(.easeInOut(duration: 0.2), value: currentIndex)
             }
@@ -155,26 +262,23 @@ struct CardVideoCarouselView: View {
     
     private var actionButtons: some View {
         HStack(spacing: 32) {
-            // Previous button
             Button(action: previousVideo) {
                 Image(systemName: "chevron.left.circle.fill")
                     .font(.system(size: 32))
-                    .foregroundColor(currentIndex > 0 ? .white : .white.opacity(0.3))
+                    .foregroundColor(currentIndex > 0 ? brandDark.opacity(0.7) : brandDark.opacity(0.3))
             }
             .disabled(currentIndex <= 0)
             
-            // Play/pause button
             Button(action: togglePlayback) {
                 Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.system(size: 40))
-                    .foregroundColor(.white)
+                    .foregroundColor(brandPurple)
             }
             
-            // Next button
             Button(action: nextVideo) {
                 Image(systemName: "chevron.right.circle.fill")
                     .font(.system(size: 32))
-                    .foregroundColor(currentIndex < videos.count - 1 ? .white : .white.opacity(0.3))
+                    .foregroundColor(currentIndex < videos.count - 1 ? brandDark.opacity(0.7) : brandDark.opacity(0.3))
             }
             .disabled(currentIndex >= videos.count - 1)
         }
@@ -184,68 +288,79 @@ struct CardVideoCarouselView: View {
     
     private func togglePlayback() {
         isPlaying.toggle()
-        print("🎬 CAROUSEL: Playback toggled - Playing: \(isPlaying)")
     }
     
     private func previousVideo() {
         guard currentIndex > 0 else { return }
         currentIndex -= 1
-        print("🎬 CAROUSEL: Navigated to previous video (index: \(currentIndex))")
     }
     
     private func nextVideo() {
         guard currentIndex < videos.count - 1 else { return }
         currentIndex += 1
-        print("🎬 CAROUSEL: Navigated to next video (index: \(currentIndex))")
-    }
-    
-    private func handleDoubleTap(_ video: CoreVideoMetadata) {
-        print("🎬 CAROUSEL: Double tapped video: \(video.title)")
-        // TODO: Integrate with engagement system - handle hype/cool interactions
     }
     
     private func dismissCarousel() {
-        print("🎬 CAROUSEL: Dismissing carousel")
         dismiss()
     }
     
     // MARK: - Gestures
     
     private var dismissGesture: some Gesture {
-        DragGesture()
+        DragGesture(minimumDistance: 10)
             .onChanged { value in
-                if value.translation.height > 0 && abs(value.translation.height) > abs(value.translation.width) {
-                    dragOffset = value.translation
+                // Allow both up and down vertical drag
+                if abs(value.translation.height) > abs(value.translation.width) {
+                    let resistance: CGFloat = 0.6
+                    dragOffset = CGSize(width: 0, height: value.translation.height * resistance)
                 }
             }
             .onEnded { value in
-                if value.translation.height > 150 {
-                    dismissCarousel()
+                let threshold: CGFloat = 100
+                let velocityThreshold: CGFloat = 500
+                let velocity = value.predictedEndTranslation.height - value.translation.height
+                
+                // Dismiss on swipe down OR swipe up
+                if abs(value.translation.height) > threshold || abs(velocity) > velocityThreshold {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        dismissCarousel()
+                    }
                 } else {
-                    dragOffset = .zero
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                        dragOffset = .zero
+                    }
                 }
             }
     }
     
     private var horizontalSwipeGesture: some Gesture {
-        DragGesture()
+        DragGesture(minimumDistance: 10)
             .onChanged { value in
                 if abs(value.translation.width) > abs(value.translation.height) {
-                    dragOffset = CGSize(width: value.translation.width, height: 0)
+                    let resistance: CGFloat = 0.8
+                    dragOffset = CGSize(width: value.translation.width * resistance, height: 0)
                 }
             }
             .onEnded { value in
-                let threshold: CGFloat = 50
+                let threshold: CGFloat = 30
+                let velocityThreshold: CGFloat = 300
+                let velocity = value.predictedEndTranslation.width - value.translation.width
                 
-                if abs(value.translation.width) > threshold {
-                    if value.translation.width > 0 && currentIndex > 0 {
-                        previousVideo()
-                    } else if value.translation.width < 0 && currentIndex < videos.count - 1 {
-                        nextVideo()
+                if abs(value.translation.width) > threshold || abs(velocity) > velocityThreshold {
+                    if (value.translation.width > 0 || velocity > 0) && currentIndex > 0 {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            previousVideo()
+                        }
+                    } else if (value.translation.width < 0 || velocity < 0) && currentIndex < videos.count - 1 {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            nextVideo()
+                        }
                     }
                 }
                 
-                dragOffset = .zero
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    dragOffset = .zero
+                }
             }
     }
     
@@ -255,29 +370,22 @@ struct CardVideoCarouselView: View {
         let distance = abs(index - currentIndex)
         switch distance {
         case 0: return 1.0
-        case 1: return 0.85
-        default: return 0.7
+        case 1: return 0.88
+        default: return 0.75
         }
     }
     
-    private func getCardOffset(for index: Int) -> CGFloat {
+    private func getCardOffset(for index: Int, cardWidth: CGFloat) -> CGFloat {
         let diff = CGFloat(index - currentIndex)
-        let maxOffset: CGFloat = 80
-        
-        if abs(diff) <= 1 {
-            return diff * 60
-        } else {
-            return diff > 0 ? maxOffset : -maxOffset
-        }
+        return diff * (cardWidth * 0.4)
     }
     
     private func getCardOpacity(for index: Int) -> Double {
         let distance = abs(index - currentIndex)
         switch distance {
         case 0: return 1.0
-        case 1: return 0.8
-        case 2: return 0.6
-        default: return 0.4
+        case 1: return 0.85
+        default: return 0.5
         }
     }
     
@@ -286,137 +394,147 @@ struct CardVideoCarouselView: View {
     }
 }
 
-// MARK: - VideoCard Component (FIXED WITH REAL VIDEO PLAYER)
+// MARK: - Carousel Discovery Card (Matching ThreadView style)
 
-private struct VideoCard: View {
+private struct CarouselDiscoveryCard: View {
     let video: CoreVideoMetadata
     let isActive: Bool
     let isPlaying: Bool
-    let onTogglePlay: () -> Void
-    let onDoubleTap: () -> Void
+    let isConversationParticipant: Bool
+    let cardWidth: CGFloat
+    let cardHeight: CGFloat
+    let brandCyan: Color
+    let brandPurple: Color
+    
+    private let brandPink = Color(red: 0.95, green: 0.4, blue: 0.7)
     
     var body: some View {
-        RoundedRectangle(cornerRadius: 24)
-            .fill(Color.black)
-            .overlay(videoCardContent)
-            .frame(width: 340, height: 500)
-            .clipShape(RoundedRectangle(cornerRadius: 24))
-            .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
-            .onTapGesture {
-                if isActive {
-                    onTogglePlay()
-                }
-            }
-            .onTapGesture(count: 2) {
-                if isActive {
-                    onDoubleTap()
-                }
-            }
-    }
-    
-    private var videoCardContent: some View {
-        ZStack {
-            // REAL VIDEO PLAYER (FIXED)
+        ZStack(alignment: .bottom) {
             if isActive {
-                VideoPlayerView(
-                    video: video,
-                    isActive: isActive && isPlaying,
-                    onEngagement: { type in
-                        // Handle engagement through parent callback
-                        print("🎬 CARD: Engagement \(type) on video \(video.title)")
+                // Active card - show video player
+                ZStack(alignment: .bottom) {
+                    // Video player fills card
+                    VideoPlayerView(
+                        video: video,
+                        isActive: isActive && isPlaying,
+                        onEngagement: { _ in },
+                        overlayContext: .carousel,
+                        isConversationParticipant: isConversationParticipant
+                    )
+                    
+                    // Loading overlay with thumbnail
+                    if !isPlaying {
+                        ZStack {
+                            // Thumbnail background
+                            thumbnailLayer
+                            
+                            // Subtle loading indicator
+                            VStack(spacing: 12) {
+                                ProgressView()
+                                    .tint(.white)
+                                    .scaleEffect(1.2)
+                            }
+                        }
+                        .transition(.opacity)
                     }
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 24))
+                    
+                    // Bottom gradient + CreatorPill (only when not playing, since overlay handles it)
+                    if !isPlaying {
+                        bottomOverlay
+                    }
+                }
+                .animation(.easeOut(duration: 0.3), value: isPlaying)
             } else {
-                // Static preview for inactive cards
-                videoPreview
-            }
-            
-            // Overlay controls (only show when paused and active)
-            if isActive && !isPlaying {
-                playPauseOverlay
-            }
-            
-            // Video metadata overlay
-            videoMetadataOverlay
-        }
-    }
-    
-    // MARK: - Video Preview (for inactive cards)
-    
-    private var videoPreview: some View {
-        ZStack {
-            // Background color
-            Color.gray.opacity(0.2)
-            
-            // Thumbnail placeholder (could be enhanced with actual thumbnails)
-            VStack {
-                Spacer()
-                
-                Image(systemName: "play.rectangle.fill")
-                    .font(.system(size: 40))
-                    .foregroundColor(.white.opacity(0.6))
-                
-                Text(video.title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 16)
-                
-                Spacer()
+                // Inactive card - Discovery style preview
+                thumbnailLayer
+                bottomOverlay
             }
         }
-    }
-    
-    // MARK: - Play/Pause Overlay
-    
-    private var playPauseOverlay: some View {
-        Button(action: onTogglePlay) {
-            Image(systemName: "play.circle.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.white)
-                .background(
-                    Circle()
-                        .fill(Color.black.opacity(0.4))
-                        .frame(width: 80, height: 80)
+        .frame(width: cardWidth, height: cardHeight)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: isActive
+                            ? [brandCyan.opacity(0.6), brandPurple.opacity(0.6)]
+                            : [Color.white.opacity(0.3), Color.white.opacity(0.1)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: isActive ? 2 : 1
                 )
-        }
-        .transition(.scale.combined(with: .opacity))
+        )
+        .shadow(
+            color: isActive ? brandPurple.opacity(0.4) : Color.black.opacity(0.2),
+            radius: isActive ? 20 : 10,
+            y: 10
+        )
     }
     
-    // MARK: - Video Metadata Overlay
+    private var thumbnailLayer: some View {
+        ZStack {
+            // Gradient background fallback
+            LinearGradient(
+                colors: [brandPurple.opacity(0.4), brandCyan.opacity(0.3)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            
+            // Thumbnail
+            if !video.thumbnailURL.isEmpty, let url = URL(string: video.thumbnailURL) {
+                AsyncImage(url: url, transaction: Transaction(animation: nil)) { phase in
+                    if let image = phase.image {
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: cardWidth, height: cardHeight)
+                            .clipped()
+                    } else {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                }
+            } else {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 40))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+        }
+        .frame(width: cardWidth, height: cardHeight)
+    }
     
-    private var videoMetadataOverlay: some View {
+    private var bottomOverlay: some View {
         VStack {
             Spacer()
             
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(video.creatorName)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                    
-                    Text(video.title)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8))
-                        .lineLimit(2)
-                }
+            // Gradient
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.6), .black.opacity(0.8)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: cardHeight * 0.4)
+            
+            // Content overlay
+            VStack(alignment: .leading, spacing: 8) {
+                Text(video.title)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                    .shadow(color: .black.opacity(0.5), radius: 2)
                 
-                Spacer()
-                
-                // Engagement indicators (could be enhanced)
-                VStack(spacing: 8) {
-                    Image(systemName: "flame.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(.orange)
-                    
-                    Text("\(video.hypeCount)")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white)
-                }
+                CreatorPill(
+                    creator: video,
+                    isThread: false,
+                    colors: [brandCyan, brandPurple],
+                    displayName: video.creatorName,
+                    profileImageURL: nil,
+                    onTap: { }
+                )
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

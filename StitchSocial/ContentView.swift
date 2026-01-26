@@ -362,10 +362,12 @@ struct ContentView: View {
     }
     
     private func checkOnboardingStatus() {
-        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-        if !hasCompletedOnboarding && authService.currentUser != nil {
-            showingOnboarding = true
-        }
+        // BYPASSED: Onboarding disabled for now - will replace with spotlight tutorial
+        // let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+        // if !hasCompletedOnboarding && authService.currentUser != nil {
+        //     showingOnboarding = true
+        // }
+        showingOnboarding = false
     }
     
     private func completeOnboarding() {

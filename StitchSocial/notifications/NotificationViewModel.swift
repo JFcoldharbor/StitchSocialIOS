@@ -4,6 +4,7 @@
 //
 //  Layer 7: ViewModels - Notification Management
 //  UPDATED: Added senderID and payload to NotificationDisplayData for follow-back and video navigation
+//  UPDATED: Fixed payload type from [String: String] to [String: Any] for proper navigation data
 //
 
 import Foundation
@@ -201,8 +202,8 @@ class NotificationViewModel: ObservableObject {
                 message: notification.message,
                 notificationType: notification.type,
                 senderID: notification.senderID,
-                senderUsername: notification.payload["senderUsername"] ?? "Unknown",
-                payload: notification.payload,
+                senderUsername: (notification.payload["senderUsername"] as? String) ?? "Unknown",
+                payload: notification.payload,  // ✅ Now [String: Any]
                 isRead: notification.isRead,
                 createdAt: notification.createdAt
             )
@@ -246,7 +247,7 @@ struct NotificationDisplayData: Identifiable {
     let notificationType: StitchNotificationType
     let senderID: String
     let senderUsername: String
-    let payload: [String: String]
+    let payload: [String: Any]  // ✅ FIXED: Changed from [String: String] to [String: Any]
     let isRead: Bool
     let createdAt: Date
 }

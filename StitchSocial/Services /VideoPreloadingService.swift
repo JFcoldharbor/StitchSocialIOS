@@ -896,6 +896,39 @@ extension VideoPreloadingService {
         
         print("🎬 PRELOAD: Setup complete for Profile - video \(selectedIndex)")
     }
+    
+    /// Integration for thread/stitch navigation
+    func setupForThreadNavigation(
+        currentThread: ThreadData,
+        currentStitchIndex: Int,
+        upcomingThreads: [ThreadData]
+    ) async {
+        var videosToPreload: [CoreVideoMetadata] = []
+        
+        // Preload upcoming children in current thread (horizontal nav)
+        let upcomingChildren = currentThread.childVideos.dropFirst(currentStitchIndex).prefix(2)
+        videosToPreload.append(contentsOf: upcomingChildren)
+        
+        // Preload first child of next 2 threads (vertical nav prep)
+        for nextThread in upcomingThreads.prefix(2) {
+            if let firstChild = nextThread.childVideos.first {
+                videosToPreload.append(firstChild)
+            }
+        }
+        
+        // Preload first parent of next threads
+        for nextThread in upcomingThreads.prefix(2) {
+            videosToPreload.append(nextThread.parentVideo)
+        }
+        
+        await preloadVideos(
+            current: currentThread.parentVideo,
+            upcoming: videosToPreload,
+            priority: .normal
+        )
+        
+        print("🔄 PRELOAD: Thread navigation setup - thread children + next threads")
+    }
 }
 
 // MARK: - Supporting Types

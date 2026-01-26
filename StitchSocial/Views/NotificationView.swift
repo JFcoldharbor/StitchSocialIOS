@@ -5,6 +5,7 @@
 //  Complete notification view with auto-scrolling discovery
 //  UPDATED: Added sender profile pictures with navigation to NotificationRowView
 //  FIXED: Profile avatar on left, notification icon top-right, increased row height
+//  UPDATED: Fixed navigation to pass threadID and targetVideoID for proper video scrolling
 //
 
 import SwiftUI
@@ -43,6 +44,8 @@ struct NotificationView: View {
     
     @StateObject private var viewModel: NotificationViewModel
     @StateObject private var discoveryService = DiscoveryService()
+    @StateObject private var userService = UserService()
+    @StateObject private var videoService = VideoService()
     @ObservedObject var followManager = FollowManager.shared
     @EnvironmentObject private var authService: AuthService
     
@@ -66,9 +69,27 @@ struct NotificationView: View {
         var userID: String { id }
     }
     
+    /// Wrapper for video thread presentation to avoid race conditions
+    struct VideoThreadPresentation: Identifiable {
+        let id: String
+        let threadID: String
+        let targetVideoID: String?
+        
+        init(threadID: String, targetVideoID: String? = nil) {
+            self.id = threadID
+            self.threadID = threadID
+            self.targetVideoID = targetVideoID
+        }
+    }
+    @State private var videoThreadPresentation: VideoThreadPresentation?
+    
     @State private var profilePresentation: ProfilePresentation?
     @State private var selectedVideoID: String?
+    @State private var selectedThreadID: String?  // ðŸ†• ADDED
+    @State private var targetVideoID: String?      // ðŸ†• ADDED
     @State private var showingVideoThread = false
+    @State private var showingJustJoined = false
+    @State private var showingTopVideos = false
     
     // MARK: - Auto-scroll State
     
@@ -128,16 +149,25 @@ struct NotificationView: View {
         // FIXED: Use item-based sheet presentation to avoid race condition
         // The userID is guaranteed to be non-nil when the sheet presents
         .sheet(item: $profilePresentation) { presentation in
-            CreatorProfileView(userID: presentation.userID)
+            ProfileView(
+                authService: authService,
+                userService: userService,
+                videoService: videoService
+            )
         }
-        .sheet(isPresented: $showingVideoThread) {
-            if let videoID = selectedVideoID {
-                ThreadView(
-                    threadID: videoID,
-                    videoService: VideoService(),
-                    userService: UserService()
-                )
-            }
+        .fullScreenCover(item: $videoThreadPresentation) { presentation in
+            ThreadView(
+                threadID: presentation.threadID,
+                videoService: VideoService(),
+                userService: UserService(),
+                targetVideoID: presentation.targetVideoID
+            )
+        }
+        .sheet(isPresented: $showingJustJoined) {
+            JustJoinedView()
+        }
+        .sheet(isPresented: $showingTopVideos) {
+            TopVideosView()
         }
         .alert("Error", isPresented: $showingError) {
             Button("Retry") {
@@ -233,190 +263,208 @@ struct NotificationView: View {
     // MARK: - Discovery Section
     
     private var discoverySection: some View {
-        HStack(spacing: 16) {
+        VStack(spacing: 12) {
             justJoinedSection
             topVideosSection
         }
     }
     
     private var justJoinedSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Just Joined")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.white)
-                
-                Spacer()
-                
-                Text("New")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.green))
-            }
-            
-            if recentUsers.isEmpty {
-                Text("No new users yet")
-                    .font(.system(size: 12))
-                    .foregroundColor(.gray)
-                    .frame(height: 200)
-            } else {
-                AutoScrollAvatarStack(
-                    users: recentUsers,
-                    currentIndex: $currentAvatarIndex,
-                    onUserTap: { userID in
-                        profilePresentation = ProfilePresentation(id: userID)
+        Button(action: {
+            showingJustJoined = true
+        }) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Just Joined")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    HStack(spacing: 6) {
+                        Text("New")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(
+                                Capsule()
+                                    .fill(Color.green.opacity(0.8))
+                            )
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.gray)
                     }
-                )
+                }
+                
+                if recentUsers.isEmpty {
+                    emptyDiscoveryCard(message: "No new users")
+                } else {
+                    AutoScrollAvatarStack(
+                        users: recentUsers,
+                        currentIndex: $currentAvatarIndex,
+                        onUserTap: { userID in
+                            profilePresentation = ProfilePresentation(id: userID)
+                        }
+                    )
+                }
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+            )
         }
-        .frame(maxWidth: .infinity)
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white.opacity(0.05))
-        )
+        .buttonStyle(PlainButtonStyle())
     }
     
     private var topVideosSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Top Videos")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(.white)
-                
-                Spacer()
-                Text("7d")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.gray)
-            }
-            
-            if leaderboardVideos.isEmpty {
-                Text("No videos yet")
-                    .font(.system(size: 12))
-                    .foregroundColor(.gray)
-                    .frame(height: 200)
-            } else {
-                CompactLeaderboard(
-                    videos: Array(leaderboardVideos.prefix(5)),
-                    onVideoTap: { videoID in
-                        if let video = leaderboardVideos.first(where: { $0.id == videoID }) {
-                            profilePresentation = ProfilePresentation(id: video.creatorID)
-                        }
+        Button(action: {
+            showingTopVideos = true
+        }) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Top Videos")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    HStack(spacing: 6) {
+                        Image(systemName: "flame.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.orange)
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.gray)
                     }
-                )
+                }
+                
+                if leaderboardVideos.isEmpty {
+                    emptyDiscoveryCard(message: "No trending videos")
+                } else {
+                    CompactLeaderboard(
+                        videos: leaderboardVideos,
+                        onVideoTap: { videoID in
+                            videoThreadPresentation = VideoThreadPresentation(
+                                threadID: videoID,
+                                targetVideoID: videoID
+                            )
+                        }
+                    )
+                }
             }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+            )
         }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    private func emptyDiscoveryCard(message: String) -> some View {
+        VStack {
+            Text(message)
+                .font(.system(size: 13))
+                .foregroundColor(.gray)
+        }
+        .frame(height: 120)
         .frame(maxWidth: .infinity)
     }
     
     // MARK: - Content View
     
     private var contentView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Activity")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundColor(.white)
-                .padding(.horizontal, 20)
-            
-            Group {
-                if viewModel.isLoading && viewModel.allNotifications.isEmpty {
-                    loadingView
-                } else if viewModel.filteredNotifications.isEmpty {
-                    emptyStateView
-                } else {
-                    notificationList
-                }
+        VStack(spacing: 0) {
+            if viewModel.isLoading && viewModel.filteredNotifications.isEmpty {
+                loadingView
+            } else if viewModel.filteredNotifications.isEmpty {
+                emptyStateView
+            } else {
+                notificationsList
             }
         }
     }
     
-    // MARK: - Loading View
-    
     private var loadingView: some View {
         VStack(spacing: 16) {
             ProgressView()
-                .scaleEffect(1.5)
                 .tint(.purple)
+                .scaleEffect(1.2)
             
             Text("Loading notifications...")
                 .font(.system(size: 14))
                 .foregroundColor(.gray)
         }
-        .frame(height: 200)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 60)
     }
-    
-    // MARK: - Empty State View
     
     private var emptyStateView: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             Image(systemName: getEmptyStateIcon())
-                .font(.system(size: 50))
+                .font(.system(size: 60))
                 .foregroundColor(.gray.opacity(0.5))
             
-            Text("No notifications")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.white)
-            
             Text(getEmptyStateMessage())
-                .font(.system(size: 13))
+                .font(.system(size: 16))
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
-                .lineLimit(3)
+                .padding(.horizontal, 40)
         }
-        .frame(height: 200)
-        .padding(.horizontal, 40)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 80)
     }
     
-    // MARK: - Notification List
-    
-    private var notificationList: some View {
+    private var notificationsList: some View {
         LazyVStack(spacing: 12) {
-            notificationRows
+            ForEach(viewModel.filteredNotifications) { notification in
+                NotificationRowView(
+                    notification: notification,
+                    currentUserID: currentUserID,
+                    onTap: { await handleNotificationTap(notification) },
+                    onMarkAsRead: { await viewModel.markAsRead(notification.id) },
+                    onProfileTap: { userID in
+                        profilePresentation = ProfilePresentation(id: userID)
+                    }
+                )
+                .environmentObject(followManager)
+            }
             
             if viewModel.hasMoreNotifications {
-                loadMoreIndicator
+                Button {
+                    Task { await viewModel.loadMoreNotifications() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if viewModel.isLoading {
+                            ProgressView()
+                                .tint(.purple)
+                                .scaleEffect(0.8)
+                        }
+                        Text("Load More")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundColor(.purple)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
-            
-            Color.clear.frame(height: 100)
         }
         .padding(.horizontal, 20)
-    }
-    
-    private var notificationRows: some View {
-        ForEach(viewModel.filteredNotifications) { notification in
-            makeNotificationRow(for: notification)
-        }
-    }
-    
-    private var loadMoreIndicator: some View {
-        ProgressView()
-            .padding()
-            .onAppear {
-                Task { await viewModel.loadMoreNotifications() }
-            }
-    }
-    
-    private func makeNotificationRow(for notification: NotificationDisplayData) -> some View {
-        NotificationRowView(
-            notification: notification,
-            currentUserID: currentUserID,
-            onTap: { await handleNotificationTap(notification) },
-            onMarkAsRead: { await viewModel.markAsRead(notification.id) },
-            onProfileTap: { senderID in
-                profilePresentation = ProfilePresentation(id: senderID)
-            }
-        )
-        .environmentObject(followManager)
-        .task {
-            // Load follow state for this notification's sender
-            await followManager.loadFollowState(for: notification.senderID)
-        }
-        .transition(.asymmetric(
-            insertion: .move(edge: .trailing).combined(with: .opacity),
-            removal: .move(edge: .leading).combined(with: .opacity)
-        ))
+        .padding(.bottom, 20)
     }
     
     // MARK: - Auto-scroll Logic
@@ -520,6 +568,7 @@ struct NotificationView: View {
         await viewModel.refreshNotifications()
     }
     
+    // ðŸ†• UPDATED: Extract both threadID and targetVideoID from payload
     private func handleNotificationTap(_ notification: NotificationDisplayData) async {
         await viewModel.markAsRead(notification.id)
         
@@ -532,18 +581,25 @@ struct NotificationView: View {
         
         // For other notifications, try to navigate to video
         if let rawNotification = viewModel.allNotifications.first(where: { $0.id == notification.id }),
-           let videoID = rawNotification.payload["videoID"], !videoID.isEmpty {
-            selectedVideoID = videoID
-            showingVideoThread = true
-            print("ðŸ“± Navigation to video: \(videoID)")
+           let videoID = rawNotification.payload["videoID"] as? String, !videoID.isEmpty {
+            
+            // Extract threadID if available, otherwise use videoID as threadID
+            let threadID = (rawNotification.payload["threadID"] as? String) ?? videoID
+            
+            videoThreadPresentation = VideoThreadPresentation(
+                threadID: threadID,
+                targetVideoID: videoID
+            )
+            
+            
+            print("ðŸ“± Navigation to thread: \(threadID), target video: \(videoID)")
         } else {
-            print("ðŸ“± No videoID in notification payload for type: \(notification.notificationType.rawValue)")
-            print("ðŸ“± Payload contents: \(viewModel.allNotifications.first(where: { $0.id == notification.id })?.payload ?? [:])")
+            print("âš ï¸ No videoID in notification payload for type: \(notification.notificationType.rawValue)")
         }
     }
 }
 
-// MARK: - Notification Row Component (UPDATED with Profile Picture)
+// MARK: - Notification Row View
 
 struct NotificationRowView: View {
     let notification: NotificationDisplayData
@@ -587,7 +643,7 @@ struct NotificationRowView: View {
     
     private var profileAvatar: some View {
         Group {
-            if let profileImageURL = notification.payload["profileImageURL"],
+            if let profileImageURL = notification.payload["profileImageURL"] as? String,
                !profileImageURL.isEmpty {
                 AsyncThumbnailView.avatar(url: profileImageURL)
                     .frame(width: 40, height: 40)
@@ -730,7 +786,7 @@ struct AutoScrollAvatarStack: View {
     @Binding var currentIndex: Int
     let onUserTap: (String) -> Void
     
-    private let visibleCount = 3
+    private let visibleCount = 2  // Reduced from 3 to fit better
     
     private var visibleUsers: [RecentUser] {
         guard !users.isEmpty else { return [] }
@@ -744,12 +800,12 @@ struct AutoScrollAvatarStack: View {
     }
     
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             ForEach(Array(visibleUsers.enumerated()), id: \.element.id) { index, user in
                 userRow(for: user, at: index)
             }
         }
-        .frame(height: 200)
+        .frame(maxWidth: .infinity)
     }
     
     private func userRow(for user: RecentUser, at index: Int) -> some View {
@@ -759,8 +815,8 @@ struct AutoScrollAvatarStack: View {
                 userInfo(for: user)
                 Spacer()
             }
-            .opacity(index == 0 ? 1.0 : 0.5)
-            .scaleEffect(index == 0 ? 1.0 : 0.9)
+            .frame(height: 44)  // Fixed row height
+            .opacity(index == 0 ? 1.0 : 0.6)
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -777,6 +833,7 @@ struct AutoScrollAvatarStack: View {
                     .fill(Color.gray.opacity(0.3))
                     .overlay(
                         Image(systemName: "person.fill")
+                            .font(.system(size: 14))
                             .foregroundColor(.white.opacity(0.5))
                     )
             @unknown default:
@@ -784,14 +841,14 @@ struct AutoScrollAvatarStack: View {
                     .fill(Color.gray.opacity(0.3))
             }
         }
-        .frame(width: 40, height: 40)
+        .frame(width: 36, height: 36)
         .clipShape(Circle())
     }
     
     private func userInfo(for user: RecentUser) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(user.username)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.white)
                 .lineLimit(1)
             
@@ -799,6 +856,7 @@ struct AutoScrollAvatarStack: View {
                 .font(.system(size: 10))
                 .foregroundColor(.gray)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
     
     private func formatJoinedDate(_ date: Date) -> String {
@@ -822,12 +880,16 @@ struct CompactLeaderboard: View {
     let onVideoTap: (String) -> Void
     
     var body: some View {
-        VStack(spacing: 8) {
-            ForEach(Array(videos.enumerated()), id: \.element.id) { index, video in
-                videoRow(for: video, at: index)
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 8) {
+                ForEach(Array(videos.prefix(5).enumerated()), id: \.element.id) { index, video in
+                    videoRow(for: video, at: index)
+                }
             }
+            .padding(.vertical, 4)
         }
-        .frame(height: 200)
+        .frame(height: 180)
+        .frame(maxWidth: .infinity)
     }
     
     private func videoRow(for video: LeaderboardVideo, at index: Int) -> some View {
@@ -837,6 +899,7 @@ struct CompactLeaderboard: View {
                 videoInfo(for: video)
                 Spacer()
             }
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -845,16 +908,16 @@ struct CompactLeaderboard: View {
         ZStack {
             Circle()
                 .fill(rankColor(index))
-                .frame(width: 30, height: 30)
+                .frame(width: 28, height: 28)
             
             Text("#\(index + 1)")
-                .font(.system(size: 12, weight: .bold))
+                .font(.system(size: 11, weight: .bold))
                 .foregroundColor(.white)
         }
     }
     
     private func videoInfo(for video: LeaderboardVideo) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(video.creatorName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.white)
@@ -862,13 +925,14 @@ struct CompactLeaderboard: View {
             
             HStack(spacing: 4) {
                 Image(systemName: "flame.fill")
-                    .font(.system(size: 10))
+                    .font(.system(size: 9))
                     .foregroundColor(.orange)
-                Text("\(video.hypeCount)")
+                Text("\(formatCount(video.hypeCount))")
                     .font(.system(size: 11))
                     .foregroundColor(.gray)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
     
     private func rankColor(_ index: Int) -> Color {
@@ -878,5 +942,14 @@ struct CompactLeaderboard: View {
         case 2: return .orange
         default: return .purple.opacity(0.5)
         }
+    }
+    
+    private func formatCount(_ count: Int) -> String {
+        if count >= 1_000_000 {
+            return String(format: "%.1fM", Double(count) / 1_000_000)
+        } else if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000)
+        }
+        return "\(count)"
     }
 }

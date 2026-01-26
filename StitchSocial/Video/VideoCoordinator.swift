@@ -646,6 +646,7 @@ class VideoCoordinator: ObservableObject {
         case .stitchToThread: tags.append("stitch")
         case .replyToVideo: tags.append("reply")
         case .continueThread: tags.append("continuation")
+        case .spinOffFrom: tags.append("spinoff")
         }
         
         return Array(Set(tags)).prefix(5).map { $0 }
@@ -657,6 +658,7 @@ class VideoCoordinator: ObservableObject {
         case .stitchToThread(_, let info): return "Stitch to \(info.creatorName)"
         case .replyToVideo(_, let info): return "Reply to \(info.creatorName)"
         case .continueThread(_, let info): return "Continuing: \(info.title)"
+        case .spinOffFrom(_, _, let info): return "Responding to \(info.creatorName)"
         }
     }
     
@@ -666,6 +668,7 @@ class VideoCoordinator: ObservableObject {
         case .stitchToThread(_, let info): return "Stitching to thread by \(info.creatorName)"
         case .replyToVideo(_, let info): return "Replying to video by \(info.creatorName)"
         case .continueThread(_, let info): return "Continuing thread: \(info.title)"
+        case .spinOffFrom(_, _, let info): return "Spin-off responding to \(info.creatorName)"
         }
     }
     
@@ -675,6 +678,7 @@ class VideoCoordinator: ObservableObject {
         case .stitchToThread: return ["stitch"]
         case .replyToVideo: return ["reply"]
         case .continueThread: return ["continuation"]
+        case .spinOffFrom: return ["spinoff", "response"]
         }
     }
 }

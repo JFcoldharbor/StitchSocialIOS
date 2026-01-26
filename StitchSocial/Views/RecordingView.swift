@@ -35,6 +35,7 @@ struct RecordingView: View {
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isProcessingSelectedVideo = false
     @State private var navigationPath: [RecordingNavigationDestination] = []
+    @State private var isTorchOn = false  // Flashlight state
     
     let onVideoCreated: (CoreVideoMetadata) -> Void
     let onCancel: () -> Void
@@ -138,7 +139,7 @@ struct RecordingView: View {
     
     private var topBar: some View {
         HStack {
-            // Exit Button
+            // Exit Button (Left)
             Button {
                 handleExit()
             } label: {
@@ -159,19 +160,47 @@ struct RecordingView: View {
             
             Spacer()
             
-            // Context Badge (Center)
-            contextBadge
-            
-            Spacer()
-            
-            // Recording Indicator (Right)
-            if controller.currentPhase.isRecording {
-                recordingIndicator
-            } else {
-                // Placeholder to maintain balance
-                Rectangle()
-                    .fill(Color.clear)
-                    .frame(width: 60, height: 32)
+            // Right side: Stacked Flip and Flashlight buttons
+            VStack(spacing: 8) {
+                // Flip Button
+                Button {
+                    Task {
+                        await controller.cameraManager.switchCamera()
+                    }
+                } label: {
+                    Image(systemName: "camera.rotate.fill")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(.white)
+                        .frame(width: 40, height: 40)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                }
+                .disabled(controller.currentPhase.isRecording)
+                
+                // Flashlight Button
+                Button {
+                    isTorchOn.toggle()
+                    // TODO: Implement actual torch toggle when camera manager supports it
+                    // Task { await controller.cameraManager.toggleTorch() }
+                } label: {
+                    Image(systemName: isTorchOn ? "flashlight.on.fill" : "flashlight.off.fill")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(.white)
+                        .frame(width: 40, height: 40)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                }
+                .disabled(controller.currentPhase.isRecording)
             }
         }
         .padding(.horizontal, 20)
@@ -245,67 +274,131 @@ struct RecordingView: View {
     // MARK: - Main Controls
     
     private func mainControls(_ geometry: GeometryProxy) -> some View {
-        HStack(spacing: 0) {
-            // Gallery Button
-            PhotosPicker(selection: $selectedPhotoItem, matching: .videos) {
-                VStack(spacing: 6) {
-                    Image(systemName: "photo.fill")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.white)
-                    
-                    Text("Gallery")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .frame(width: 60, height: 60)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.ultraThinMaterial)
-                )
+        VStack(spacing: 12) {
+            // Duration display
+            if !controller.segments.isEmpty || controller.currentPhase.isRecording {
+                durationDisplay
             }
-            .disabled(controller.currentPhase.isRecording || isProcessingSelectedVideo)
             
-            Spacer()
-            
-            // Recording Button
-            CinematicRecordingButton(
-                isRecording: Binding(
-                    get: { controller.currentPhase.isRecording },
-                    set: { _ in }
-                ),
-                videoCoordinator: .constant(nil),
-                onButtonTap: {
-                    handleRecordingButtonTap()
+            HStack(spacing: 40) {
+                // LEFT BUTTON - Dynamic (Gallery or Delete)
+                if controller.segments.isEmpty {
+                    // IDLE STATE: Show Gallery
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .videos) {
+                        Image(systemName: "photo.fill")
+                            .font(.system(size: 24, weight: .medium))
+                            .foregroundColor(.white)
+                            .frame(width: 50, height: 50)
+                            .background(
+                                Circle()
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(
+                                        Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    )
+                            )
+                    }
+                    .disabled(controller.currentPhase.isRecording || isProcessingSelectedVideo)
+                    .transition(.scale.combined(with: .opacity))
+                } else {
+                    // RECORDING STATE: Show Delete
+                    Button(action: {
+                        controller.deleteNewestSegment()
+                    }) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 24, weight: .medium))
+                            .foregroundColor(.white)
+                            .frame(width: 50, height: 50)
+                            .background(
+                                Circle()
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(
+                                        Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    )
+                            )
+                    }
+                    .disabled(!controller.canDelete)
+                    .opacity(controller.canDelete ? 1.0 : 0.3)
+                    .transition(.scale.combined(with: .opacity))
                 }
-            )
-            
-            Spacer()
-            
-            // Camera Flip Button
-            Button {
-                Task {
-                    await controller.cameraManager.switchCamera()
-                }
-            } label: {
-                VStack(spacing: 6) {
-                    Image(systemName: "camera.rotate.fill")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.white)
-                    
-                    Text("Flip")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .frame(width: 60, height: 60)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.ultraThinMaterial)
+                
+                Spacer()
+                
+                // CENTER: Record Button (Always Present)
+                CinematicRecordingButton(
+                    isRecording: Binding(
+                        get: { controller.currentPhase.isRecording },
+                        set: { _ in }
+                    ),
+                    totalDuration: controller.totalDuration + controller.currentSegmentDuration,
+                    tierLimit: controller.userTierLimit,
+                    onPressStart: {
+                        controller.startSegment()
+                    },
+                    onPressEnd: {
+                        controller.stopSegment()
+                    }
                 )
+                
+                Spacer()
+                
+                // RIGHT BUTTON - Dynamic (Empty or Finished)
+                if !controller.segments.isEmpty {
+                    // RECORDING STATE: Show Finished
+                    Button(action: {
+                        Task {
+                            await controller.finishRecording()
+                        }
+                    }) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 24, weight: .medium))
+                            .foregroundColor(.white)
+                            .frame(width: 50, height: 50)
+                            .background(
+                                Circle()
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(
+                                        Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                    )
+                            )
+                    }
+                    .disabled(!controller.canFinish)
+                    .opacity(controller.canFinish ? 1.0 : 0.3)
+                    .transition(.scale.combined(with: .opacity))
+                } else {
+                    // Empty spacer to maintain layout
+                    Color.clear
+                        .frame(width: 50, height: 50)
+                }
             }
-            .disabled(controller.currentPhase.isRecording || isProcessingSelectedVideo)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: controller.segments.count)
+            .padding(.horizontal, 40)
+            .padding(.bottom, max(40, geometry.safeAreaInsets.bottom + 20))
         }
-        .padding(.horizontal, 40)
-        .padding(.bottom, max(40, geometry.safeAreaInsets.bottom + 20))
+    }
+    
+    // MARK: - Duration Display
+    
+    private var durationDisplay: some View {
+        let currentDuration = controller.totalDuration + controller.currentSegmentDuration
+        let progress = controller.userTierLimit > 0 ? currentDuration / controller.userTierLimit : 0
+        
+        return Text(formatDuration(currentDuration) + " / " + formatDuration(controller.userTierLimit))
+            .font(.system(size: 18, weight: .bold, design: .monospaced))
+            .foregroundColor(progress >= 0.9 ? .red : (progress >= 0.8 ? .yellow : .white))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(
+                Capsule()
+                    .fill(Color.black.opacity(0.5))
+            )
+    }
+    
+    // MARK: - Helper Methods
+    
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let minutes = Int(duration) / 60
+        let seconds = Int(duration) % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
     
     // MARK: - UI Components
@@ -350,7 +443,7 @@ struct RecordingView: View {
     private func handleExit() {
         // Stop recording first if active
         if controller.currentPhase.isRecording {
-            controller.stopRecording()
+            controller.stopSegment()
         }
         
         // Use controller's method to stop timer
@@ -363,20 +456,13 @@ struct RecordingView: View {
             // Restore audio session before dismissal
             await restorePlaybackAudioSession()
             
-            // Clear references
+            // Clear segments and references
+            controller.segments.removeAll()
             controller.recordedVideoURL = nil
             controller.aiAnalysisResult = nil
             
             // Dismiss
             onCancel()
-        }
-    }
-    
-    private func handleRecordingButtonTap() {
-        if controller.currentPhase == .ready {
-            controller.startRecording()
-        } else if controller.currentPhase == .recording {
-            controller.stopRecording()
         }
     }
     
@@ -433,6 +519,8 @@ struct RecordingView: View {
             return "Reply"
         case .continueThread:
             return "Continue"
+        case .spinOffFrom:
+            return "Spin-off"
         }
     }
     
@@ -446,6 +534,8 @@ struct RecordingView: View {
             return .orange
         case .continueThread:
             return .purple
+        case .spinOffFrom:
+            return .orange
         }
     }
     
