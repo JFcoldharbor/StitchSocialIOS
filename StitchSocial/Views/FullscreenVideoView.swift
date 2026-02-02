@@ -561,6 +561,7 @@ struct VideoPlayerComponent: View {
     @State private var hasTrackedView = false
     @State private var killObserver: NSObjectProtocol?
     @State private var cancellables = Set<AnyCancellable>()
+    @State private var lastTapTime: Date = Date.distantPast  // Debounce rapid taps
     
     // MARK: - Memory Management (NEW)
     
@@ -576,11 +577,24 @@ struct VideoPlayerComponent: View {
             } else if isLoading {
                 loadingState
             } else {
-                CustomVideoPlayerView(player: player)
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .background(Color.black)
-                    .clipped()
-                    .edgesIgnoringSafeArea(.all)
+                ZStack {
+                    CustomVideoPlayerView(player: player)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .background(Color.black)
+                        .clipped()
+                        .edgesIgnoringSafeArea(.all)
+                    
+                    // Invisible tap zone to toggle mute
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            // Debounce: ignore taps within 0.3 seconds
+                            let timeSinceLastTap = Date().timeIntervalSince(lastTapTime)
+                            guard timeSinceLastTap > 0.3 else { return }
+                            lastTapTime = Date()
+                            muteManager.toggle()
+                        }
+                }
             }
         }
         .onAppear {

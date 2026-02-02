@@ -47,6 +47,7 @@ struct HomeFeedView: View {
     @State private var isLoadingMore: Bool = false
     @State private var lastAutoLoadIndex: Int = -999
     @State private var hasRecycledOnce: Bool = false
+    @State private var lastTapTime: Date = Date.distantPast  // Debounce rapid taps
     
     // MARK: - Gesture State
     
@@ -266,6 +267,17 @@ struct HomeFeedView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .id(currentStitchIndex)  // Force rebuild when swiping to different stitch
+                
+                // Invisible tap zone to toggle mute
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        // Debounce: ignore taps within 0.3 seconds
+                        let timeSinceLastTap = Date().timeIntervalSince(lastTapTime)
+                        guard timeSinceLastTap > 0.3 else { return }
+                        lastTapTime = Date()
+                        muteManager.toggle()
+                    }
             }
         )
     }

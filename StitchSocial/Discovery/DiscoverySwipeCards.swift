@@ -20,7 +20,8 @@ struct DiscoverySwipeCards: View {
     let onNavigateToProfile: (String) -> Void
     let onNavigateToThread: (String) -> Void
     
-    // MARK: - State
+    // MARK: - Environment
+    @EnvironmentObject var muteManager: MuteContextManager
     @State private var dragOffset = CGSize.zero
     @State private var dragRotation: Double = 0
     @State private var isSwipeInProgress = false
@@ -243,6 +244,9 @@ struct DiscoveryCard: View {
     let shouldAutoPlay: Bool
     let onVideoLoop: (String) -> Void
     
+    // Environment
+    @EnvironmentObject var muteManager: MuteContextManager
+    
     // Use shared preloading service
     private var preloadingService: VideoPreloadingService {
         VideoPreloadingService.shared
@@ -290,7 +294,7 @@ struct DiscoveryCard: View {
                     cardOverlay
                 }
                 
-                // Tap target
+                // Tap target - handled by parent for fullscreen navigation
                 Color.clear
                     .contentShape(Rectangle())
             }
@@ -310,7 +314,7 @@ struct DiscoveryCard: View {
         .onChange(of: shouldAutoPlay) { _, isTop in
             if isTop {
                 // Became top card - play
-                player?.isMuted = false
+                player?.isMuted = muteManager.isMuted  // Use global mute state
                 player?.play()
                 setupLoopObserver()
                 loadCreatorProfile()
@@ -320,6 +324,12 @@ struct DiscoveryCard: View {
                 player?.pause()
                 removeLoopObserver()
                 print("⏸️ CARD NO LONGER TOP: \(video.id.prefix(8))")
+            }
+        }
+        .onChange(of: muteManager.isMuted) { _, isMuted in
+            // Update player mute state when global mute state changes
+            if let player = player {
+                player.isMuted = isMuted
             }
         }
     }
@@ -435,7 +445,7 @@ struct DiscoveryCard: View {
             self.player = poolPlayer
             
             if shouldAutoPlay {
-                poolPlayer.isMuted = false
+                poolPlayer.isMuted = muteManager.isMuted  // Use global mute state
                 if poolPlayer.rate == 0 {
                     poolPlayer.play()
                 }
@@ -459,7 +469,7 @@ struct DiscoveryCard: View {
                     self.player = poolPlayer
                     
                     if shouldAutoPlay {
-                        poolPlayer.isMuted = false
+                        poolPlayer.isMuted = muteManager.isMuted  // Use global mute state
                         poolPlayer.play()
                         setupLoopObserver()
                     } else {

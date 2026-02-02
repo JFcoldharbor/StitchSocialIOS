@@ -33,6 +33,7 @@ struct ProfileView: View {
     @State private var showingFollowersList = false
     @State private var showingSettings = false
     @State private var showingEditProfile = false
+    @State private var showingAdOpportunities = false
     
     // MARK: - Video Player State
     
@@ -168,6 +169,13 @@ struct ProfileView: View {
         }
         .sheet(isPresented: $showingEditProfile) {
             editProfileSheet
+        }
+        // Ad Opportunities Sheet
+        .sheet(isPresented: $showingAdOpportunities) {
+            if let user = viewModel.currentUser {
+                AdOpportunitiesView(user: user)
+                    .preferredColorScheme(.dark)
+            }
         }
         // FIXED: Use item-based fullScreenCover to avoid race condition
         .fullScreenCover(item: $videoPresentation) { presentation in
@@ -636,6 +644,26 @@ struct ProfileView: View {
                         .frame(height: 32)
                         .background(Color.gray.opacity(0.8))
                         .cornerRadius(8)
+                }
+                
+                // Ad Opportunities Button (Influencer+ only)
+                if AdRevenueShare.canAccessAds(tier: user.tier) {
+                    Button(action: { showingAdOpportunities = true }) {
+                        ZStack {
+                            Image(systemName: "dollarsign.circle.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                        .frame(width: 32, height: 32)
+                        .background(
+                            LinearGradient(
+                                colors: [.green, .green.opacity(0.7)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .cornerRadius(8)
+                    }
                 }
                 
                 Button(action: { showingSettings = true }) {

@@ -30,6 +30,8 @@ class MuteContextManager: ObservableObject {
     private var audioSession: AVAudioSession
     private var callObserver: CXCallObserver
     private var volumeObserver: NSObjectProtocol?
+    private var lastToggleTime: Date = Date.distantPast  // Debounce rapid toggles
+    private var lastVolumeButtonTime: Date = Date.distantPast  // Debounce volume button presses
     
     private init() {
         self.audioSession = AVAudioSession.sharedInstance()
@@ -96,6 +98,10 @@ class MuteContextManager: ObservableObject {
     }
     
     private func handleVolumeButtonPress() {
+        // Debounce: ignore volume button presses within 1 second
+        let timeSinceLastPress = Date().timeIntervalSince(lastVolumeButtonTime)
+        guard timeSinceLastPress > 1.0 else { return }
+        
         // Get current volume level
         let volume = audioSession.outputVolume
         
@@ -103,6 +109,7 @@ class MuteContextManager: ObservableObject {
         if volume > 0.7 {
             // Only unmute (volume UP unmutes only)
             if isMuted && !isOnCall {
+                lastVolumeButtonTime = Date()
                 DispatchQueue.main.async {
                     print("🔊 MUTE: Volume UP pressed - unmuting")
                     self.isMuted = false
@@ -129,6 +136,15 @@ class MuteContextManager: ObservableObject {
     }
     
     func toggle() {
+        // Debounce: ignore toggles within 0.3 seconds of last toggle
+        let timeSinceLastToggle = Date().timeIntervalSince(lastToggleTime)
+        guard timeSinceLastToggle > 0.3 else {
+            print("🔊 MUTE: Toggle ignored (debounce active)")
+            return
+        }
+        
+        lastToggleTime = Date()
+        
         if isMuted && !isOnCall {
             unmute()
         } else if !isMuted {
