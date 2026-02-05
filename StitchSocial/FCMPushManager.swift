@@ -141,8 +141,8 @@ final class FCMPushManager: NSObject, ObservableObject {
     /// Store FCM token in Firebase
     private func storeFCMToken(token: String, userID: String) async {
         do {
-            // Store in userTokens collection
-            try await db.collection("userTokens").document(userID).setData([
+            // Store in user_tokens collection (matches Cloud Function)
+            try await db.collection("user_tokens").document(userID).setData([
                 "fcmToken": token,
                 "updatedAt": FieldValue.serverTimestamp(),
                 "platform": "ios",
@@ -243,7 +243,7 @@ final class FCMPushManager: NSObject, ObservableObject {
     /// Get FCM token for user from Firestore
     private func getFCMToken(for userID: String) async -> String? {
         do {
-            let doc = try await db.collection("userTokens").document(userID).getDocument()
+            let doc = try await db.collection("user_tokens").document(userID).getDocument()
             
             guard doc.exists, let data = doc.data() else {
                 print("📱 FCM: No token document found for user \(userID)")
@@ -309,7 +309,7 @@ final class FCMPushManager: NSObject, ObservableObject {
     private func handleUserSignedOut() async {
         if let userID = currentUserID {
             do {
-                try await db.collection("userTokens").document(userID).updateData([
+                try await db.collection("user_tokens").document(userID).updateData([
                     "isActive": false,
                     "deactivatedAt": FieldValue.serverTimestamp()
                 ])

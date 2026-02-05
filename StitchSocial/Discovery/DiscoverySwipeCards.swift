@@ -19,6 +19,7 @@ struct DiscoverySwipeCards: View {
     let onVideoTap: (CoreVideoMetadata) -> Void
     let onNavigateToProfile: (String) -> Void
     let onNavigateToThread: (String) -> Void
+    var isFullscreenActive: Bool = false
     
     // MARK: - Environment
     @EnvironmentObject var muteManager: MuteContextManager
@@ -104,7 +105,8 @@ struct DiscoverySwipeCards: View {
     // MARK: - Drag Handling - LEFT/RIGHT NAVIGATION
     
     private func handleDragChanged(value: DragGesture.Value) {
-        dragOffset = value.translation
+        // Horizontal only - ignore vertical component
+        dragOffset = CGSize(width: value.translation.width, height: 0)
         dragRotation = Double(value.translation.width / 20)
     }
     
@@ -147,28 +149,9 @@ struct DiscoverySwipeCards: View {
                 }
             }
         } else {
-            let totalTranslation = sqrt(pow(translation.width, 2) + pow(translation.height, 2))
-            let totalVelocity = sqrt(pow(velocity.width, 2) + pow(velocity.height, 2))
-            
-            if totalTranslation > swipeThreshold || totalVelocity > 500 {
-                isSwipeInProgress = true
-                
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                    dragOffset = CGSize(
-                        width: translation.width * 3,
-                        height: translation.height * 3
-                    )
-                }
-                
-                // FIXED: Delay index change until AFTER animation
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    nextCard()
-                    isSwipeInProgress = false
-                }
-            } else {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                    resetCardPosition()
-                }
+            // Non-horizontal swipe - snap back
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                resetCardPosition()
             }
         }
     }
@@ -189,11 +172,11 @@ struct DiscoverySwipeCards: View {
     }
     
     private func autoAdvanceToNext() {
-        guard !isSwipeInProgress else { return }
+        guard !isSwipeInProgress && !isFullscreenActive else { return }
         isSwipeInProgress = true
         
         withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
-            dragOffset = CGSize(width: 0, height: -1000)
+            dragOffset = CGSize(width: -UIScreen.main.bounds.width, height: 0)
         }
         
         // FIXED: Delay index change until AFTER animation

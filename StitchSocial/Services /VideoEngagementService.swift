@@ -39,7 +39,7 @@ class VideoEngagementService: ObservableObject {
         self.userService = userService
         self.notificationService = notificationService ?? NotificationService()
         
-        print("🎯 VIDEO ENGAGEMENT SERVICE: Initialized with milestone tracking + notifications")
+        print("ðŸŽ¯ VIDEO ENGAGEMENT SERVICE: Initialized with milestone tracking + notifications")
     }
     
     // MARK: - Progressive Tapping System
@@ -52,7 +52,7 @@ class VideoEngagementService: ObservableObject {
         userTier: UserTier
     ) async throws -> ProgressiveTapResult {
         
-        print("🎯 ENGAGEMENT SERVICE: Processing \(engagementType.rawValue) tap for video \(videoID)")
+        print("ðŸŽ¯ ENGAGEMENT SERVICE: Processing \(engagementType.rawValue) tap for video \(videoID)")
         
         // Get current tap progress
         let currentProgress = try await getTapProgress(videoID: videoID, userID: userID, type: engagementType)
@@ -86,7 +86,7 @@ class VideoEngagementService: ObservableObject {
             // Reset tap progress for next engagement
             try await resetTapProgress(videoID: videoID, userID: userID, type: engagementType)
             
-            print("✅ ENGAGEMENT SERVICE: \(engagementType.rawValue) engagement completed!")
+            print("âœ… ENGAGEMENT SERVICE: \(engagementType.rawValue) engagement completed!")
             
             return ProgressiveTapResult(
                 isComplete: true,
@@ -100,7 +100,7 @@ class VideoEngagementService: ObservableObject {
             
         } else {
             // Still tapping...
-            print("🔄 ENGAGEMENT SERVICE: \(engagementType.rawValue) progress: \(newTapCount)/\(requiredTaps)")
+            print("ðŸ”„ ENGAGEMENT SERVICE: \(engagementType.rawValue) progress: \(newTapCount)/\(requiredTaps)")
             
             return ProgressiveTapResult(
                 isComplete: false,
@@ -190,11 +190,10 @@ class VideoEngagementService: ObservableObject {
         // Check if hitting a milestone
         let milestone = FirebaseSchema.ValidationRules.checkMilestoneReached(hypeCount: newHypeCount)
         
-        // Update video with new counts + milestone tracking
+        // Update shards + milestone tracking
         try await updateVideoWithMilestone(
             videoID: videoID,
-            newHypeCount: newHypeCount,
-            newCoolCount: newCoolCount,
+            engagementType: type,
             isFirstHype: isFirstHype,
             isFirstCool: isFirstCool,
             milestone: milestone
@@ -224,7 +223,7 @@ class VideoEngagementService: ObservableObject {
             newHypeCount: newHypeCount
         )
         
-        print("✅ ENGAGEMENT SERVICE: Completed \(type.rawValue) for \(videoID)")
+        print("âœ… ENGAGEMENT SERVICE: Completed \(type.rawValue) for \(videoID)")
         return (newHypeCount, newCoolCount, cloutAwarded)
     }
     
@@ -233,16 +232,21 @@ class VideoEngagementService: ObservableObject {
     /// Update video with milestone flags
     private func updateVideoWithMilestone(
         videoID: String,
-        newHypeCount: Int,
-        newCoolCount: Int,
+        engagementType: InteractionType,
         isFirstHype: Bool,
         isFirstCool: Bool,
         milestone: Int?
     ) async throws {
         
+        // 1. Write count increment to shard (scalable)
+        if engagementType == .hype {
+            try await videoService.incrementHypeShard(videoID: videoID, amount: 1)
+        } else {
+            try await videoService.incrementCoolShard(videoID: videoID, amount: 1)
+        }
+        
+        // 2. Write milestone flags to video doc (infrequent, no contention)
         var updateData: [String: Any] = [
-            FirebaseSchema.VideoDocument.hypeCount: newHypeCount,
-            FirebaseSchema.VideoDocument.coolCount: newCoolCount,
             FirebaseSchema.VideoDocument.lastEngagementAt: Timestamp(),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp()
         ]
@@ -250,12 +254,12 @@ class VideoEngagementService: ObservableObject {
         // Track first engagements
         if isFirstHype {
             updateData[FirebaseSchema.VideoDocument.firstHypeReceived] = true
-            print("🔥 MILESTONE: First hype received on video \(videoID)")
+            print("MILESTONE: First hype received on video \(videoID)")
         }
         
         if isFirstCool {
             updateData[FirebaseSchema.VideoDocument.firstCoolReceived] = true
-            print("❄️ MILESTONE: First cool received on video \(videoID)")
+            print("MILESTONE: First cool received on video \(videoID)")
         }
         
         // Track milestone achievements
@@ -264,19 +268,19 @@ class VideoEngagementService: ObservableObject {
             case 10:
                 updateData[FirebaseSchema.VideoDocument.milestone10Reached] = true
                 updateData[FirebaseSchema.VideoDocument.milestone10ReachedAt] = Timestamp()
-                print("🔥 MILESTONE: Video \(videoID) reached 10 hypes (Heating Up)")
+                print("MILESTONE: Video \(videoID) reached 10 hypes (Heating Up)")
             case 400:
                 updateData[FirebaseSchema.VideoDocument.milestone400Reached] = true
                 updateData[FirebaseSchema.VideoDocument.milestone400ReachedAt] = Timestamp()
-                print("👀 MILESTONE: Video \(videoID) reached 400 hypes (Must See)")
+                print("MILESTONE: Video \(videoID) reached 400 hypes (Must See)")
             case 1000:
                 updateData[FirebaseSchema.VideoDocument.milestone1000Reached] = true
                 updateData[FirebaseSchema.VideoDocument.milestone1000ReachedAt] = Timestamp()
-                print("🌶️ MILESTONE: Video \(videoID) reached 1000 hypes (Hot)")
+                print("MILESTONE: Video \(videoID) reached 1000 hypes (Hot)")
             case 15000:
                 updateData[FirebaseSchema.VideoDocument.milestone15000Reached] = true
                 updateData[FirebaseSchema.VideoDocument.milestone15000ReachedAt] = Timestamp()
-                print("🚀 MILESTONE: Video \(videoID) reached 15000 hypes (Viral)")
+                print("MILESTONE: Video \(videoID) reached 15000 hypes (Viral)")
             default:
                 break
             }
@@ -318,23 +322,23 @@ class VideoEngagementService: ObservableObject {
             // Send engagement notification (hype or cool)
             do {
                 if engagementType == .hype {
-                    // ✅ FIXED: Added videoID parameter
+                    // âœ… FIXED: Added videoID parameter
                     try await notificationService.sendEngagementNotification(
                         to: creatorID,
-                        videoID: videoID,              // ✅ ADDED
+                        videoID: videoID,              // âœ… ADDED
                         engagementType: "hype",
                         videoTitle: videoTitle
                     )
-                    print("✅ NOTIFICATION: Hype sent to creator \(creatorID)")
+                    print("âœ… NOTIFICATION: Hype sent to creator \(creatorID)")
                 } else {
-                    // ✅ FIXED: Added videoID parameter
+                    // âœ… FIXED: Added videoID parameter
                     try await notificationService.sendEngagementNotification(
                         to: creatorID,
-                        videoID: videoID,              // ✅ ADDED
+                        videoID: videoID,              // âœ… ADDED
                         engagementType: "cool",
                         videoTitle: videoTitle
                     )
-                    print("✅ NOTIFICATION: Cool sent to creator \(creatorID)")
+                    print("âœ… NOTIFICATION: Cool sent to creator \(creatorID)")
                 }
                 
                 // Update cooldown timestamp
@@ -344,10 +348,10 @@ class VideoEngagementService: ObservableObject {
                 )
                 
             } catch {
-                print("⚠️ NOTIFICATION: Failed to send engagement - \(error)")
+                print("âš ï¸ NOTIFICATION: Failed to send engagement - \(error)")
             }
         } else {
-            print("⏱️ NOTIFICATION: Cooldown active, skipping")
+            print("â±ï¸ NOTIFICATION: Cooldown active, skipping")
         }
         
         // 2. MILESTONE NOTIFICATIONS (always send regardless of cooldown)
@@ -385,7 +389,7 @@ class VideoEngagementService: ObservableObject {
             return true // No previous notification, allow
             
         } catch {
-            print("⚠️ COOLDOWN CHECK: Failed - \(error)")
+            print("âš ï¸ COOLDOWN CHECK: Failed - \(error)")
             return true // Default to allowing notification
         }
     }
@@ -407,10 +411,10 @@ class VideoEngagementService: ObservableObject {
                     "updatedAt": Timestamp()
                 ])
             
-            print("⏱️ COOLDOWN: Updated for \(cooldownKey)")
+            print("â±ï¸ COOLDOWN: Updated for \(cooldownKey)")
             
         } catch {
-            print("⚠️ COOLDOWN UPDATE: Failed - \(error)")
+            print("âš ï¸ COOLDOWN UPDATE: Failed - \(error)")
         }
     }
     
@@ -431,12 +435,12 @@ class VideoEngagementService: ObservableObject {
             if milestone == 1000 {
                 // Hot milestone - notify creator + all followers
                 followerIDs = try await getCreatorFollowers(creatorID: creatorID)
-                print("🌶️ MILESTONE: Notifying creator + \(followerIDs.count) followers")
+                print("ðŸŒ¶ï¸ MILESTONE: Notifying creator + \(followerIDs.count) followers")
                 
             } else if milestone == 15000 {
                 // Viral milestone - notify creator + all engagers
                 engagerIDs = try await getAllEngagers(videoID: videoID)
-                print("🚀 MILESTONE: Notifying creator + \(engagerIDs.count) engagers")
+                print("ðŸš€ MILESTONE: Notifying creator + \(engagerIDs.count) engagers")
             }
             
             // Send milestone notification
@@ -449,10 +453,10 @@ class VideoEngagementService: ObservableObject {
                 engagerIDs: engagerIDs
             )
             
-            print("✅ MILESTONE NOTIFICATION: Sent for \(milestone) hypes")
+            print("âœ… MILESTONE NOTIFICATION: Sent for \(milestone) hypes")
             
         } catch {
-            print("⚠️ MILESTONE NOTIFICATION: Failed - \(error)")
+            print("âš ï¸ MILESTONE NOTIFICATION: Failed - \(error)")
         }
     }
     

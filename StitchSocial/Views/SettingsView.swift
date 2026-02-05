@@ -1,11 +1,8 @@
 //
-//  SettingsView.swift - UPDATED WITH REFERRAL INTEGRATION
+//  SettingsView.swift
 //  StitchSocial
 //
-//  Layer 8: Views - Settings Interface with Referral System
-//  Dependencies: AuthService (Layer 4), ReferralButton (Layer 8), Config (Layer 1)
-//  Features: Account management, referral system, sign-out, app info
-//  FIXED: Improved sign-out flow - let auth state drive navigation instead of manual dismiss
+//  Full-page settings with wallet, subscriptions, ads, and account management
 //
 
 import SwiftUI
@@ -13,53 +10,110 @@ import SwiftUI
 struct SettingsView: View {
     
     // MARK: - Dependencies
+    
     @EnvironmentObject private var authService: AuthService
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var coinService = HypeCoinService.shared
+    @ObservedObject private var subscriptionService = SubscriptionService.shared
     
     // MARK: - State
+    
     @State private var showingSignOutConfirmation = false
     @State private var isSigningOut = false
     @State private var showingError = false
     @State private var errorMessage = ""
     
-    // ⭐ NEW: Haptic feedback setting
-    @State private var isHapticEnabled = UserDefaults.standard.bool(forKey: "hapticFeedbackEnabled") || true
+    // Navigation States
+    @State private var showingManageAccount = false
+    @State private var showingWallet = false
+    @State private var showingMySubscriptions = false
+    @State private var showingMySubscribers = false
+    @State private var showingAdOpportunities = false
+    @State private var showingCashOut = false
+    @State private var showingSubscriptionSettings = false
+    
+    // Preferences
+    @State private var isHapticEnabled = UserDefaults.standard.bool(forKey: "hapticFeedbackEnabled")
+    @State private var isNotificationsEnabled = UserDefaults.standard.bool(forKey: "notificationsEnabled")
+    
+    // MARK: - Computed Properties
+    
+    private var currentUser: BasicUserInfo? {
+        authService.currentUser
+    }
+    
+    private var isCreator: Bool {
+        guard let user = currentUser else { return false }
+        return AdRevenueShare.canAccessAds(tier: user.tier)
+    }
+    
+    private var coinBalance: Int {
+        coinService.balance?.availableCoins ?? 0
+    }
     
     // MARK: - Body
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                accountSection
-                Divider().background(Color.gray.opacity(0.3))
-                
-                // 🆕 NEW: Social Section with Referral Button
-                socialSection
-                Divider().background(Color.gray.opacity(0.3))
-                
-                preferencesSection
-                Divider().background(Color.gray.opacity(0.3))
-                supportSection
-                Divider().background(Color.gray.opacity(0.3))
-                aboutSection
-                Spacer()
+        NavigationStack {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 24) {
+                    // Profile Header
+                    profileHeader
+                        .padding(.top, 8)
+                    
+                    // Wallet Section
+                    walletSection
+                    
+                    // Creator Section (Influencer+)
+                    if isCreator {
+                        creatorSection
+                    }
+                    
+                    // Subscriptions Section
+                    subscriptionsSection
+                    
+                    // Social Section
+                    socialSection
+                    
+                    // Preferences Section
+                    preferencesSection
+                    
+                    // Support Section
+                    supportSection
+                    
+                    // About Section
+                    aboutSection
+                    
+                    // Sign Out
+                    signOutButton
+                        .padding(.top, 8)
+                    
+                    // Bottom Spacing
+                    Spacer(minLength: 40)
+                }
+                .padding(.horizontal, 16)
             }
-            .background(Color.black.ignoresSafeArea())
+            .background(Color.black)
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") { dismiss() }
-                        .foregroundColor(.cyan)
+            .navigationBarBackButtonHidden(true)
+            .navigationBarItems(
+                leading: Button(action: { dismiss() }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("Back")
+                    }
+                    .foregroundColor(.cyan)
                 }
-            }
+            )
         }
-        // FIXED: Listen for auth state changes to auto-dismiss on sign-out
-        .onChange(of: authService.authState) { oldState, newState in
+        .preferredColorScheme(.dark)
+        .task {
+            await loadData()
+        }
+        .onChange(of: authService.authState) { _, newState in
             if newState == .unauthenticated {
-                // Auth state changed to unauthenticated, dismiss settings
-                // ContentView will automatically show LoginView
-                print("🔐 SETTINGS: Auth state changed to unauthenticated, dismissing")
                 dismiss()
             }
         }
@@ -76,312 +130,425 @@ struct SettingsView: View {
         } message: {
             Text(errorMessage)
         }
-    }
-    
-    // MARK: - Account Section
-    
-    private var accountSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Account")
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-            
-            VStack(spacing: 12) {
-                if let user = authService.currentUser {
-                    accountInfoRow(title: "Display Name", value: user.displayName)
-                    accountInfoRow(title: "Username", value: "@\(user.username)")
-                    accountInfoRow(title: "Tier", value: user.tier.displayName)
+        // Full Screen Covers
+        .fullScreenCover(isPresented: $showingManageAccount) {
+            if let user = currentUser {
+                AccountWebView.account(userID: user.id) {
+                    Task { try? await HypeCoinService.shared.syncBalance(userID: user.id) }
                 }
-                
-                Divider()
-                    .padding(.vertical, 8)
-                
-                // Sign Out Button - Full width, easy to tap
-                Button(action: { showingSignOutConfirmation = true }) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                            .font(.system(size: 16))
-                        
-                        Text("Sign Out")
-                            .font(.system(size: 16, weight: .medium))
-                        
-                        Spacer()
-                        
-                        if isSigningOut {
-                            ProgressView()
-                                .scaleEffect(0.8)
-                                .tint(.white)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 12)
-                    .foregroundColor(isSigningOut ? .gray : .red)
-                }
-                .disabled(isSigningOut)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 20)
+        }
+        .fullScreenCover(isPresented: $showingWallet) {
+            if let user = currentUser {
+                WalletView(userID: user.id, userTier: user.tier)
+            }
+        }
+        .fullScreenCover(isPresented: $showingMySubscriptions) {
+            if let user = currentUser {
+                MySubscriptionsView(userID: user.id)
+            }
+        }
+        .fullScreenCover(isPresented: $showingAdOpportunities) {
+            if let user = currentUser {
+                AdOpportunitiesView(user: user)
+            }
+        }
+        .sheet(isPresented: $showingCashOut) {
+            if let user = currentUser {
+                CashOutSheet(
+                    userID: user.id,
+                    userTier: user.tier,
+                    availableCoins: coinBalance
+                )
+            }
         }
     }
     
-    // 🆕 NEW: Social Section with Referral Integration
-    private var socialSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Social")
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
+    // MARK: - Profile Header
+    
+    private var profileHeader: some View {
+        VStack(spacing: 16) {
+            if let user = currentUser {
+                // Avatar
+                AsyncImage(url: URL(string: user.profileImageURL ?? "")) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .overlay(
+                            Image(systemName: "person.fill")
+                                .font(.system(size: 30))
+                                .foregroundColor(.gray)
+                        )
+                }
+                .frame(width: 80, height: 80)
+                .clipShape(Circle())
+                
+                // Name & Username
+                VStack(spacing: 4) {
+                    Text(user.displayName)
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                    
+                    Text("@\(user.username)")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                }
+                
+                // Tier Badge
+                HStack(spacing: 6) {
+                    Image(systemName: "star.fill")
+                        .font(.caption)
+                    Text(user.tier.displayName)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                }
+                .foregroundColor(.yellow)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.yellow.opacity(0.15))
+                .cornerRadius(12)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(16)
+    }
+    
+    // MARK: - Wallet Section
+    
+    private var walletSection: some View {
+        SettingsSection(title: "WALLET", icon: "creditcard.fill", iconColor: .yellow) {
+            // Coin Balance Card
+            Button(action: { showingWallet = true }) {
+                HStack(spacing: 16) {
+                    ZStack {
+                        Circle()
+                            .fill(LinearGradient(
+                                colors: [.yellow, .orange],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ))
+                            .frame(width: 44, height: 44)
+                        
+                        Text("🔥")
+                            .font(.system(size: 20))
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Hype Coins")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        
+                        Text("\(coinBalance) coins")
+                            .font(.subheadline)
+                            .foregroundColor(.yellow)
+                    }
+                    
+                    Spacer()
+                    
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+                .padding()
+                .background(Color.gray.opacity(0.15))
+                .cornerRadius(12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
             
-            VStack(spacing: 12) {
-                // 🎯 MAIN FEATURE: Referral Button Integration
-                if let currentUser = authService.currentUser {
-                    ReferralButton(userID: currentUser.id)
-                        .padding(.horizontal, 4) // Small adjustment for visual alignment
-                }
-                
-                // Additional social settings can go here
-                settingsRow(
-                    icon: "person.2.fill",
-                    title: "Friend Suggestions",
-                    subtitle: "Discover people you might know"
+            // Manage Account (Web)
+            SettingsRow(
+                icon: "globe",
+                title: "Manage Account",
+                subtitle: "Profile, billing & security",
+                iconColor: .cyan
+            ) {
+                showingManageAccount = true
+            }
+            
+            // Cash Out (Creators only)
+            if isCreator {
+                SettingsRow(
+                    icon: "banknote",
+                    title: "Cash Out",
+                    subtitle: "Withdraw your earnings",
+                    iconColor: .green
                 ) {
-                    // Future: Navigate to friend suggestions
-                }
-                
-                settingsRow(
-                    icon: "heart.fill",
-                    title: "Engagement Settings",
-                    subtitle: "Customize hype and interaction preferences"
-                ) {
-                    // Future: Navigate to engagement settings
+                    showingCashOut = true
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 20)
+        }
+    }
+    
+    // MARK: - Creator Section
+    
+    private var creatorSection: some View {
+        SettingsSection(title: "CREATOR", icon: "star.circle.fill", iconColor: .purple) {
+            // Ad Opportunities
+            SettingsRow(
+                icon: "dollarsign.circle.fill",
+                title: "Ad Opportunities",
+                subtitle: "Brand partnerships",
+                iconColor: .green
+            ) {
+                showingAdOpportunities = true
+            }
+            
+            // My Subscribers
+            SettingsRow(
+                icon: "person.2.fill",
+                title: "My Subscribers",
+                subtitle: "People subscribed to you",
+                iconColor: .pink
+            ) {
+                showingMySubscribers = true
+            }
+            
+            // Subscription Settings
+            SettingsRow(
+                icon: "gearshape.fill",
+                title: "Subscription Settings",
+                subtitle: "Set prices & tiers",
+                iconColor: .orange
+            ) {
+                showingSubscriptionSettings = true
+            }
+            
+            // Revenue Share Info
+            if let user = currentUser {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Sub Revenue")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        
+                        Text("\(Int(SubscriptionRevenueShare.creatorShare(for: user.tier) * 100))%")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.green)
+                    }
+                    
+                    Spacer()
+                    
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("Ad Revenue")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        
+                        Text("\(Int(AdRevenueShare.creatorShare(for: user.tier) * 100))%")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.cyan)
+                    }
+                }
+                .padding()
+                .background(Color.gray.opacity(0.1))
+                .cornerRadius(12)
+            }
+        }
+    }
+    
+    // MARK: - Subscriptions Section
+    
+    private var subscriptionsSection: some View {
+        SettingsSection(title: "SUBSCRIPTIONS", icon: "heart.fill", iconColor: .pink) {
+            SettingsRow(
+                icon: "star.fill",
+                title: "My Subscriptions",
+                subtitle: "Creators you support",
+                iconColor: .yellow
+            ) {
+                showingMySubscriptions = true
+            }
+        }
+    }
+    
+    // MARK: - Social Section
+    
+    private var socialSection: some View {
+        SettingsSection(title: "SOCIAL", icon: "person.2.fill", iconColor: .blue) {
+            if let user = currentUser {
+                ReferralButton(userID: user.id)
+            }
+            
+            SettingsRow(
+                icon: "person.badge.plus",
+                title: "Friend Suggestions",
+                subtitle: "Discover people",
+                iconColor: .cyan
+            ) {
+                // Navigate to friend suggestions
+            }
+            
+            SettingsRow(
+                icon: "link",
+                title: "Connected Accounts",
+                subtitle: "Link social media",
+                iconColor: .purple
+            ) {
+                // Navigate to connected accounts
+            }
         }
     }
     
     // MARK: - Preferences Section
     
     private var preferencesSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Preferences")
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-            
-            VStack(spacing: 12) {
-                // ⭐ NEW: Haptic Feedback Toggle
-                HStack(spacing: 16) {
-                    Image(systemName: "iphone.radiowaves.left.and.right")
-                        .font(.system(size: 18))
-                        .foregroundColor(.cyan)
-                        .frame(width: 24)
-                    
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Haptic Feedback")
-                            .font(.system(size: 16))
-                            .foregroundColor(.white)
-                        
-                        Text("Vibrations for reply notifications")
-                            .font(.system(size: 14))
-                            .foregroundColor(.gray)
-                    }
-                    
-                    Spacer()
-                    
-                    Toggle("", isOn: $isHapticEnabled)
-                        .onChange(of: isHapticEnabled) { _, newValue in
-                            UserDefaults.standard.set(newValue, forKey: "hapticFeedbackEnabled")
-                        }
-                }
-                .padding(.vertical, 8)
-                
-                settingsRow(
-                    icon: "bell",
-                    title: "Notifications",
-                    subtitle: "Push notifications and alerts"
-                ) {
-                    // Future: Navigate to notification settings
-                }
-                
-                settingsRow(
-                    icon: "eye",
-                    title: "Privacy",
-                    subtitle: "Account visibility and data"
-                ) {
-                    // Future: Navigate to privacy settings
-                }
+        SettingsSection(title: "PREFERENCES", icon: "slider.horizontal.3", iconColor: .gray) {
+            // Haptic Feedback Toggle
+            SettingsToggleRow(
+                icon: "iphone.radiowaves.left.and.right",
+                title: "Haptic Feedback",
+                subtitle: "Vibrations",
+                iconColor: .cyan,
+                isOn: $isHapticEnabled
+            ) { newValue in
+                UserDefaults.standard.set(newValue, forKey: "hapticFeedbackEnabled")
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 20)
+            
+            // Notifications Toggle
+            SettingsToggleRow(
+                icon: "bell.fill",
+                title: "Notifications",
+                subtitle: "Push alerts",
+                iconColor: .red,
+                isOn: $isNotificationsEnabled
+            ) { newValue in
+                UserDefaults.standard.set(newValue, forKey: "notificationsEnabled")
+            }
+            
+            SettingsRow(
+                icon: "eye.fill",
+                title: "Privacy",
+                subtitle: "Account visibility",
+                iconColor: .blue
+            ) {
+                // Navigate to privacy settings
+            }
         }
     }
     
     // MARK: - Support Section
     
     private var supportSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Support")
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-            
-            VStack(spacing: 12) {
-                settingsRow(
-                    icon: "questionmark.circle",
-                    title: "Help & Support",
-                    subtitle: "Get help with your account"
-                ) {
-                    // Future: Open support
-                }
-                
-                settingsRow(
-                    icon: "doc.text",
-                    title: "Privacy Policy",
-                    subtitle: "How we handle your data"
-                ) {
-                    // Future: Open privacy policy
-                }
-                
-                settingsRow(
-                    icon: "doc.text",
-                    title: "Terms of Service",
-                    subtitle: "Terms and conditions"
-                ) {
-                    // Future: Open terms
-                }
+        SettingsSection(title: "SUPPORT", icon: "questionmark.circle.fill", iconColor: .blue) {
+            SettingsRow(
+                icon: "questionmark.circle",
+                title: "Help & Support",
+                subtitle: "Get help",
+                iconColor: .blue
+            ) {
+                // Open support
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 20)
+            
+            SettingsRow(
+                icon: "doc.text",
+                title: "Privacy Policy",
+                subtitle: "How we use data",
+                iconColor: .gray
+            ) {
+                // Open privacy policy
+            }
+            
+            SettingsRow(
+                icon: "doc.text",
+                title: "Terms of Service",
+                subtitle: "Terms & conditions",
+                iconColor: .gray
+            ) {
+                // Open terms
+            }
         }
     }
     
     // MARK: - About Section
     
     private var aboutSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("About")
-                .font(.headline)
-                .foregroundColor(.white)
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-            
-            VStack(spacing: 12) {
-                HStack {
-                    Text("Version")
-                        .font(.system(size: 16))
-                        .foregroundColor(.gray)
-                    
-                    Spacer()
-                    
-                    Text(appVersion)
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                }
-                
-                HStack {
-                    Text("Build")
-                        .font(.system(size: 16))
-                        .foregroundColor(.gray)
-                    
-                    Spacer()
-                    
-                    Text(buildNumber)
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                }
+        SettingsSection(title: "ABOUT", icon: "info.circle.fill", iconColor: .gray) {
+            HStack {
+                Text("Version")
+                    .foregroundColor(.gray)
+                Spacer()
+                Text(appVersion)
+                    .foregroundColor(.white)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 20)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(12)
+            
+            HStack {
+                Text("Build")
+                    .foregroundColor(.gray)
+                Spacer()
+                Text(buildNumber)
+                    .foregroundColor(.white)
+            }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(12)
         }
     }
     
-    // MARK: - Helper Views
+    // MARK: - Sign Out Button
     
-    private func accountInfoRow(title: String, value: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 16))
-                .foregroundColor(.gray)
-            
-            Spacer()
-            
-            Text(value)
-                .font(.system(size: 16))
-                .foregroundColor(.white)
-        }
-        .padding(.vertical, 8)
-    }
-    
-    private func settingsRow(
-        icon: String,
-        title: String,
-        subtitle: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: icon)
+    private var signOutButton: some View {
+        Button(action: { showingSignOutConfirmation = true }) {
+            HStack {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
                     .font(.system(size: 18))
-                    .foregroundColor(.cyan)
-                    .frame(width: 24)
                 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 16))
-                        .foregroundColor(.white)
-                    
-                    Text(subtitle)
-                        .font(.system(size: 14))
-                        .foregroundColor(.gray)
-                }
+                Text("Sign Out")
+                    .font(.system(size: 16, weight: .medium))
                 
                 Spacer()
                 
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14))
-                    .foregroundColor(.gray)
+                if isSigningOut {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                        .tint(.white)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)  // 🔧 FIXED: Fill width
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())  // 🔧 FIXED: Make entire area tappable
+            .foregroundColor(.red)
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(Color.red.opacity(0.15))
+            .cornerRadius(12)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(PlainButtonStyle())  // 🔧 FIXED: Use plain style
+        .buttonStyle(PlainButtonStyle())
+        .disabled(isSigningOut)
     }
     
     // MARK: - Actions
     
+    private func loadData() async {
+        guard let user = currentUser else { return }
+        
+        do {
+            _ = try await HypeCoinService.shared.fetchBalance(userID: user.id)
+            _ = try await SubscriptionService.shared.fetchMySubscriptions(userID: user.id)
+        } catch {
+            print("⚠️ SETTINGS: Failed to load data - \(error.localizedDescription)")
+        }
+    }
+    
     private func performSignOut() async {
         isSigningOut = true
         
-        print("🔐 SETTINGS: Starting sign-out process")
-        
         do {
             try await authService.signOut()
-            
-            // FIXED: Don't manually dismiss here
-            // The .onChange(of: authService.authState) will handle dismissal
-            // when authState changes to .unauthenticated
-            // This ensures proper cleanup and state synchronization
-            
-            print("✅ SETTINGS: Sign-out successful, waiting for auth state change")
-            
-            // Note: isSigningOut doesn't need to be reset because the view will be dismissed
-            // and deallocated once auth state changes
-            
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to sign out: \(error.localizedDescription)"
                 showingError = true
                 isSigningOut = false
             }
-            print("❌ SETTINGS: Sign-out failed: \(error.localizedDescription)")
         }
     }
     
@@ -393,6 +560,123 @@ struct SettingsView: View {
     
     private var buildNumber: String {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    }
+}
+
+// MARK: - Settings Section Container
+
+struct SettingsSection<Content: View>: View {
+    let title: String
+    let icon: String
+    let iconColor: Color
+    @ViewBuilder let content: Content
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(iconColor)
+                
+                Text(title)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.gray)
+                    .tracking(1)
+            }
+            .padding(.leading, 4)
+            
+            // Content
+            VStack(spacing: 8) {
+                content
+            }
+        }
+    }
+}
+
+// MARK: - Settings Row
+
+struct SettingsRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let iconColor: Color
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.system(size: 18))
+                    .foregroundColor(iconColor)
+                    .frame(width: 28)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 16))
+                        .foregroundColor(.white)
+                    
+                    Text(subtitle)
+                        .font(.system(size: 13))
+                        .foregroundColor(.gray)
+                }
+                
+                Spacer()
+                
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13))
+                    .foregroundColor(.gray)
+            }
+            .padding(.vertical, 14)
+            .padding(.horizontal, 16)
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+// MARK: - Settings Toggle Row
+
+struct SettingsToggleRow: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let iconColor: Color
+    @Binding var isOn: Bool
+    var onChange: ((Bool) -> Void)? = nil
+    
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundColor(iconColor)
+                .frame(width: 28)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 16))
+                    .foregroundColor(.white)
+                
+                Text(subtitle)
+                    .font(.system(size: 13))
+                    .foregroundColor(.gray)
+            }
+            
+            Spacer()
+            
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .tint(.cyan)
+                .onChange(of: isOn) { _, newValue in
+                    onChange?(newValue)
+                }
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(12)
     }
 }
 

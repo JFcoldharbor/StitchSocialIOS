@@ -609,7 +609,7 @@ struct ProfileView: View {
                 }
                 showingFollowersList = true
             }) {
-                statItem(title: "Stitchers", value: "\(viewModel.followersList.count)")
+                statItem(title: "Stitchers", value: "\(viewModel.totalFollowersCount)")
             }
             .buttonStyle(PlainButtonStyle())
             
@@ -851,36 +851,16 @@ struct ProfileView: View {
     // MARK: - Sheet Views
     
     private var stitchersSheet: some View {
-        NavigationView {
-            ProfileStitchersListView(
-                followersList: viewModel.followersList,
-                followingList: viewModel.followingList,
-                isLoadingFollowers: viewModel.isLoadingFollowers,
-                isLoadingFollowing: viewModel.isLoadingFollowing,
-                authService: authService,
-                userService: userService,
-                videoService: videoService
-            )
-            .navigationTitle("Stitchers")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: { showingFollowersList = false }) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.caption)
-                            Text("Back")
-                                .font(.caption)
-                        }
-                        .foregroundColor(.cyan)
-                    }
-                }
-            }
-        }
-        .onAppear {
-            Task {
-                await viewModel.loadFollowers()
-                await viewModel.loadFollowing()
+        Group {
+            if let user = viewModel.currentUser {
+                StitchersListView(
+                    profileUserID: user.id,
+                    profileUsername: user.username,
+                    isOwnProfile: viewModel.isOwnProfile,
+                    authService: authService,
+                    userService: userService,
+                    videoService: videoService
+                )
             }
         }
     }
@@ -929,7 +909,7 @@ struct ProfileView: View {
     
     private func generateContextualBio(for user: BasicUserInfo) -> String? {
         let videoCount = viewModel.userVideos.count
-        let followerCount = viewModel.followersList.count
+        let followerCount = viewModel.totalFollowersCount
         let clout = user.clout
         
         var bioComponents: [String] = []
@@ -1013,7 +993,7 @@ struct ProfileView: View {
         let cloutBonus = min(10.0, Double(user.clout) / cloutBaseline * 10.0)
         
         let followerThreshold = Double(OptimizationConfig.Performance.maxBackgroundTasks)
-        let socialBonus = min(8.0, Double(viewModel.followersList.count) / followerThreshold * 8.0)
+        let socialBonus = min(8.0, Double(viewModel.totalFollowersCount) / followerThreshold * 8.0)
         
         let verificationBonus: Double = user.isVerified ? 5.0 : 0.0
         
@@ -1234,229 +1214,6 @@ extension UserTier {
 // MARK: - Supporting Views
 
 extension ProfileView {
-    struct ProfileStitchersListView: View {
-        let followersList: [BasicUserInfo]
-        let followingList: [BasicUserInfo]
-        let isLoadingFollowers: Bool
-        let isLoadingFollowing: Bool
-        let authService: AuthService
-        let userService: UserService
-        let videoService: VideoService
-        
-        @State private var selectedTab = 0
-        @ObservedObject private var followManager = FollowManager.shared
-        
-        var body: some View {
-            VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    Button(action: { selectedTab = 0 }) {
-                        VStack(spacing: 8) {
-                            HStack(spacing: 4) {
-                                Text("Followers")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(selectedTab == 0 ? .white : .gray)
-                                
-                                Text("(\(followersList.count))")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.gray)
-                            }
-                            
-                            Rectangle()
-                                .fill(selectedTab == 0 ? Color.cyan : Color.clear)
-                                .frame(height: 2)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    
-                    Button(action: { selectedTab = 1 }) {
-                        VStack(spacing: 8) {
-                            HStack(spacing: 4) {
-                                Text("Following")
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundColor(selectedTab == 1 ? .white : .gray)
-                                
-                                Text("(\(followingList.count))")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(.gray)
-                            }
-                            
-                            Rectangle()
-                                .fill(selectedTab == 1 ? Color.cyan : Color.clear)
-                                .frame(height: 2)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .background(Color.black)
-                .padding(.top, 10)
-                
-                Divider()
-                    .background(Color.gray.opacity(0.3))
-                
-                ZStack {
-                    Color.black.ignoresSafeArea()
-                    
-                    if selectedTab == 0 {
-                        if isLoadingFollowers {
-                            ProgressView()
-                                .tint(.white)
-                        } else if followersList.isEmpty {
-                            VStack {
-                                Text("No Followers")
-                                    .foregroundColor(.white)
-                            }
-                        } else {
-                            ScrollView {
-                                LazyVStack {
-                                    ForEach(followersList, id: \.id) { user in
-                                        ProfileUserRowView(
-                                            user: user,
-                                            authService: authService,
-                                            userService: userService,
-                                            videoService: videoService
-                                        )
-                                    }
-                                }
-                                .padding()
-                            }
-                        }
-                    } else {
-                        if isLoadingFollowing {
-                            ProgressView()
-                                .tint(.white)
-                        } else if followingList.isEmpty {
-                            VStack {
-                                Text("Not Following Anyone")
-                                    .foregroundColor(.white)
-                            }
-                        } else {
-                            ScrollView {
-                                LazyVStack {
-                                    ForEach(followingList, id: \.id) { user in
-                                        ProfileUserRowView(
-                                            user: user,
-                                            authService: authService,
-                                            userService: userService,
-                                            videoService: videoService
-                                        )
-                                    }
-                                }
-                                .padding()
-                            }
-                        }
-                    }
-                }
-            }
-            .onAppear {
-                // Batch load follow states for all users
-                Task {
-                    let allUserIDs = (followersList + followingList).map { $0.id }
-                    await followManager.loadFollowStates(for: allUserIDs)
-                }
-            }
-        }
-    }
-    
-    struct ProfileUserRowView: View {
-        let user: BasicUserInfo
-        let authService: AuthService
-        let userService: UserService
-        let videoService: VideoService
-        @State private var showingProfile = false
-        @ObservedObject private var followManager = FollowManager.shared
-        
-        private var isCurrentUser: Bool {
-            user.id == authService.currentUserID
-        }
-        
-        var body: some View {
-            HStack {
-                Button(action: { showingProfile = true }) {
-                    AsyncThumbnailView.avatar(url: user.profileImageURL ?? "")
-                        .frame(width: 50, height: 50)
-                        .clipShape(Circle())
-                        .overlay(
-                            Circle()
-                                .stroke(Color.gray.opacity(0.3), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(PlainButtonStyle())
-                
-                Button(action: { showingProfile = true }) {
-                    VStack(alignment: .leading) {
-                        Text(user.displayName)
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        
-                        Text("@\(user.username)")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                    }
-                }
-                .buttonStyle(PlainButtonStyle())
-                
-                Spacer()
-                
-                // Don't show follow button for current user
-                if !isCurrentUser {
-                    followButton
-                }
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .onAppear {
-                Task {
-                    await followManager.loadFollowState(for: user.id)
-                }
-            }
-            .sheet(isPresented: $showingProfile) {
-                ProfileView(
-                    authService: authService,
-                    userService: userService,
-                    videoService: videoService,
-                    viewingUserID: user.id
-                )
-                    .navigationBarHidden(true)
-            }
-        }
-        
-        @ViewBuilder
-        private var followButton: some View {
-            let isFollowing = followManager.isFollowing(user.id)
-            let isLoading = followManager.isLoading(user.id)
-            
-            Button(action: {
-                Task {
-                    await followManager.toggleFollow(for: user.id)
-                }
-            }) {
-                HStack(spacing: 6) {
-                    if isLoading {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .tint(isFollowing ? .black : .white)
-                    } else {
-                        Image(systemName: isFollowing ? "checkmark" : "person.plus.fill")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                    
-                    Text(isLoading ? "" : (isFollowing ? "Following" : "Follow"))
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                }
-                .foregroundColor(isFollowing ? .black : .white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(isFollowing ? Color.white : Color.cyan)
-                )
-            }
-            .disabled(isLoading)
-        }
-    }
-    
     struct ScrollOffsetPreferenceKey: PreferenceKey {
         static var defaultValue: CGFloat = 0
         static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {

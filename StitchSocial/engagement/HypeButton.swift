@@ -331,6 +331,8 @@ struct ProgressiveHypeButton: View {
     
     /// Handle tap interaction with floating flame spawning
     private func handleTap() {
+        print("🔴 HYPE TAP FIRED - videoID: \(videoID), disabled: \(isDisabled), selfBlock: \(shouldBlockSelfEngagement), cloutCap: \(hasHitCloutCap), engCap: \(hasHitEngagementCap), creatorID: \(creatorID), currentUserID: \(currentUserID), tier: \(userTier)")
+        
         // NEW: Check self-engagement first
         if shouldBlockSelfEngagement {
             showError("You can't hype your own content")

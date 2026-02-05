@@ -332,6 +332,8 @@ struct ProgressiveCoolButton: View {
     
     /// Handle tap interaction with floating snowflake spawning
     private func handleTap() {
+        print("🔵 COOL TAP FIRED - videoID: \(videoID), disabled: \(isDisabled), selfBlock: \(shouldBlockSelfEngagement), engCap: \(hasHitEngagementCap), creatorID: \(creatorID), currentUserID: \(currentUserID), tier: \(userTier)")
+        
         // NEW: Check self-engagement first
         if shouldBlockSelfEngagement {
             showError("You can't cool your own content")

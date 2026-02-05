@@ -36,7 +36,7 @@ class DiscoveryViewModel: ObservableObject {
         defer { isLoading = false }
         
         do {
-            print("ðŸ” DISCOVERY: Loading deep randomized content")
+            print("Ã°Å¸â€Â DISCOVERY: Loading deep randomized content")
             
             // Use deep randomized discovery
             let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 40)
@@ -47,7 +47,7 @@ class DiscoveryViewModel: ObservableObject {
                 let validVideos = loadedVideos.filter { !$0.id.isEmpty }
                 
                 if validVideos.count < loadedVideos.count {
-                    print("âš ï¸ DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
+                    print("Ã¢Å¡Â Ã¯Â¸Â DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
                 }
                 
                 videos = validVideos
@@ -55,12 +55,12 @@ class DiscoveryViewModel: ObservableObject {
                 applyFilterAndShuffle()
                 errorMessage = nil
                 
-                print("âœ… DISCOVERY: Loaded \(filteredVideos.count) randomized videos")
+                print("Ã¢Å“â€¦ DISCOVERY: Loaded \(filteredVideos.count) randomized videos")
             }
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to load discovery content"
-                print("âŒ DISCOVERY: Load failed: \(error)")
+                print("Ã¢ÂÅ’ DISCOVERY: Load failed: \(error)")
             }
         }
     }
@@ -74,7 +74,7 @@ class DiscoveryViewModel: ObservableObject {
         defer { isLoading = false }
         
         do {
-            print("ðŸ“¥ DISCOVERY: Loading more content (appending to end)")
+            print("Ã°Å¸â€œÂ¥ DISCOVERY: Loading more content (appending to end)")
             
             // Load another batch
             let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 30)
@@ -88,10 +88,10 @@ class DiscoveryViewModel: ObservableObject {
                 videos.append(contentsOf: validVideos)
                 filteredVideos.append(contentsOf: validVideos)
                 
-                print("âœ… DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
+                print("Ã¢Å“â€¦ DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
             }
         } catch {
-            print("âŒ DISCOVERY: Failed to load more: \(error)")
+            print("Ã¢ÂÅ’ DISCOVERY: Failed to load more: \(error)")
         }
     }
     
@@ -110,7 +110,7 @@ class DiscoveryViewModel: ObservableObject {
         videos = videos.shuffled()
         applyFilterAndShuffle()
         
-        print("ðŸŽ² DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
+        print("Ã°Å¸Å½Â² DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
     }
     
     // MARK: - Category Filtering
@@ -154,13 +154,13 @@ class DiscoveryViewModel: ObservableObject {
                 videos = validVideos
                 applyFilterAndShuffle()
                 
-                print("ðŸ“Š DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
+                print("Ã°Å¸â€œÅ  DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
             }
             
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to load \(category.displayName) content"
-                print("âŒ DISCOVERY: Category load failed: \(error)")
+                print("Ã¢ÂÅ’ DISCOVERY: Category load failed: \(error)")
             }
         }
     }
@@ -357,7 +357,7 @@ struct DiscoveryView: View {
                 video: presentation.video,
                 overlayContext: .fullscreen,
                 onDismiss: {
-                    print("ðŸ“± DISCOVERY: Dismissing fullscreen")
+                    print("Ã°Å¸â€œÂ± DISCOVERY: Dismissing fullscreen")
                     videoPresentation = nil
                 }
             )
@@ -365,9 +365,9 @@ struct DiscoveryView: View {
         // NEW: React to announcement state changes
         .onChange(of: announcementService.isShowingAnnouncement) { _, isShowing in
             if isShowing {
-                print("ðŸ“¢ DISCOVERY: Announcement showing - pausing videos")
+                print("Ã°Å¸â€œÂ¢ DISCOVERY: Announcement showing - pausing videos")
             } else {
-                print("ðŸ“¢ DISCOVERY: Announcement dismissed - can resume videos")
+                print("Ã°Å¸â€œÂ¢ DISCOVERY: Announcement dismissed - can resume videos")
             }
         }
         .sheet(isPresented: $showingProfileView) {
@@ -508,7 +508,8 @@ struct DiscoveryView: View {
                             selectedUserForProfile = userID
                             showingProfileView = true
                         },
-                        onNavigateToThread: { _ in }
+                        onNavigateToThread: { _ in },
+                        isFullscreenActive: videoPresentation != nil
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .onChange(of: currentSwipeIndex) { _, newValue in

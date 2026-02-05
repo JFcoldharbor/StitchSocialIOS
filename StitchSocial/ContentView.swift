@@ -10,6 +10,8 @@
 
 import SwiftUI
 import FirebaseAuth
+import FirebaseMessaging
+import FirebaseFirestore
 
 struct ContentView: View {
     
@@ -65,7 +67,26 @@ struct ContentView: View {
                 showingRecording = false
                 currentUserInfo = nil
             } else if newState == .authenticated, let currentUser = authService.currentUser {
-                // NEW: Check for announcements when user becomes authenticated
+                // Store FCM token now that we have a valid user ID
+                Task {
+                    if let token = Messaging.messaging().fcmToken {
+                        let db = Firestore.firestore(database: Config.Firebase.databaseName)
+                        do {
+                            try await db.collection("user_tokens").document(currentUser.id).setData([
+                                "fcmToken": token,
+                                "updatedAt": FieldValue.serverTimestamp(),
+                                "platform": "ios",
+                                "isActive": true
+                            ], merge: true)
+                            print("📱 FCM: Token stored for user: \(currentUser.id)")
+                        } catch {
+                            print("📱 FCM: Failed to store token: \(error)")
+                        }
+                    } else {
+                        print("📱 FCM: No token available yet at auth time")
+                    }
+                }
+                // Check for announcements when user becomes authenticated
                 Task {
                     await checkForAnnouncements(userId: currentUser.id)
                 }

@@ -150,7 +150,15 @@ class AdService: ObservableObject {
     
     // MARK: - Get Ad for Thread
     
-    func getAdForThread(threadID: String, creatorID: String) async throws -> AdPartnership? {
+    /// Returns ad partnership for thread, or nil if viewer is subscribed
+    func getAdForThread(threadID: String, creatorID: String, viewerID: String) async throws -> AdPartnership? {
+        // Check if viewer is subscribed to creator - subscribers skip ads
+        let isSubscribed = try await checkSubscriptionStatus(viewerID: viewerID, creatorID: creatorID)
+        if isSubscribed {
+            print("💎 AD: Viewer is subscribed - skipping ad")
+            return nil
+        }
+        
         // Get active partnership for this creator
         let snapshot = try await db.collection(Collections.partnerships)
             .whereField("creatorID", isEqualTo: creatorID)
@@ -164,6 +172,17 @@ class AdService: ObservableObject {
         }
         
         return partnership
+    }
+    
+    // MARK: - Check Subscription Status
+    
+    private func checkSubscriptionStatus(viewerID: String, creatorID: String) async throws -> Bool {
+        // Skip check if viewer is the creator
+        if viewerID == creatorID { return false }
+        
+        let subscriptionService = SubscriptionService.shared
+        let result = try await subscriptionService.checkSubscription(subscriberID: viewerID, creatorID: creatorID)
+        return result.hasNoAds
     }
     
     // MARK: - Record Ad Impression

@@ -10,6 +10,13 @@
 import SwiftUI
 import FirebaseAuth
 
+// MARK: - User Presentation for Item-Based Sheet
+
+struct UserPresentation: Identifiable {
+    let id: String
+}
+
+
 enum SearchTab: String, CaseIterable {
     case all = "all"
     case users = "users"
@@ -33,9 +40,37 @@ class SearchViewModel: ObservableObject {
     @Published var selectedTab: SearchTab = .all
     @Published var hasSearched = false
     @Published var selectedUser: BasicUserInfo?
-    @Published var showingProfile = false
     @Published var suggestedUsers: [BasicUserInfo] = []
     @Published var isLoadingSuggestions = false
+    @AppStorage("recentUserIDs") private var recentUserIDsData = ""
+    @Published var recentUsers: [BasicUserInfo] = []
+    
+    var recentUserIDs: [String] {
+        recentUserIDsData.split(separator: "|").map(String.init).reversed()
+    }
+    
+    func addRecentUser(_ user: BasicUserInfo) {
+        var ids = recentUserIDs
+        ids.removeAll { $0 == user.id }
+        ids.insert(user.id, at: 0)
+        recentUserIDsData = ids.prefix(10).joined(separator: "|")
+        loadRecentUsers()
+    }
+    
+    func clearRecentSearches() {
+        recentUserIDsData = ""
+        recentUsers = []
+    }
+    
+    func loadRecentUsers() {
+        recentUsers = suggestedUsers.filter { user in
+            recentUserIDs.contains(user.id)
+        }.sorted { id1, id2 in
+            guard let idx1 = recentUserIDs.firstIndex(of: id1.id),
+                  let idx2 = recentUserIDs.firstIndex(of: id2.id) else { return false }
+            return idx1 < idx2
+        }
+    }
     
     // FIXED: Use shared FollowManager instance
     let followManager = FollowManager.shared
@@ -97,6 +132,7 @@ class SearchViewModel: ObservableObject {
             await MainActor.run {
                 suggestedUsers = users
                 isLoadingSuggestions = false
+                loadRecentUsers()
             }
             
             // Load follow states for suggested users
@@ -111,11 +147,7 @@ class SearchViewModel: ObservableObject {
         }
     }
     
-    func showProfile(for user: BasicUserInfo) {
-        selectedUser = user
-        showingProfile = true
-    }
-    
+
     func clearResults() {
         userResults = []
         videoResults = []
@@ -158,14 +190,16 @@ struct SearchView: View {
                 }
             }
         }
-        .sheet(isPresented: $viewModel.showingProfile) {
-            if let user = viewModel.selectedUser {
-                ProfileView(
-                    authService: authService,
-                    userService: userService,
-                    videoService: videoService
-                )
-            }
+        .sheet(item: Binding(
+            get: { viewModel.selectedUser.map { UserPresentation(id: $0.id) } },
+            set: { _ in viewModel.selectedUser = nil }
+        )) { presentation in
+            ProfileView(
+                authService: authService,
+                userService: userService,
+                videoService: videoService,
+                viewingUserID: presentation.id
+            )
         }
         .onAppear {
             // Load follow states on appear
@@ -284,7 +318,8 @@ struct SearchView: View {
                 user: user,
                 followManager: viewModel.followManager,
                 onTap: {
-                    viewModel.showProfile(for: user)
+                    viewModel.addRecentUser(user)
+                    viewModel.selectedUser = user
                 }
             )
         }
@@ -343,6 +378,47 @@ struct SearchView: View {
                 .padding(.top, 40)
                 .padding(.horizontal, 40)
                 
+                
+                // Recent Users section
+                if !viewModel.recentUsers.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.gray)
+                            
+                            Text("Recently Viewed")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.white)
+                            
+                            Spacer()
+                            
+                            Button {
+                                viewModel.clearRecentSearches()
+                            } label: {
+                                Text("Clear")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        
+                        LazyVStack(spacing: 8) {
+                            ForEach(viewModel.recentUsers.prefix(5), id: \.id) { user in
+                                ModernUserRow(
+                                    user: user,
+                                    followManager: viewModel.followManager,
+                                    onTap: {
+                                        viewModel.addRecentUser(user)
+                                        viewModel.selectedUser = user
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                
                 // People You May Know section
                 if !viewModel.suggestedUsers.isEmpty {
                     VStack(alignment: .leading, spacing: 16) {
@@ -367,7 +443,8 @@ struct SearchView: View {
                                     user: user,
                                     followManager: viewModel.followManager,
                                     onTap: {
-                                        viewModel.showProfile(for: user)
+                                        viewModel.addRecentUser(user)
+                                        viewModel.selectedUser = user
                                     }
                                 )
                             }
@@ -674,9 +751,3 @@ struct VideoSearchCardView: View {
     }
 }
 
-// MARK: - Preview
-
-#Preview {
-    SearchView()
-        .preferredColorScheme(.dark)
-}

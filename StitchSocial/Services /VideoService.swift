@@ -125,13 +125,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
         // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -139,10 +139,10 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("Ã¢Å“â€¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("Ã¢ÂÅ’ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
@@ -150,7 +150,7 @@ class VideoService: ObservableObject {
         
         // Determine video orientation for logging
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-        print("ðŸ“ VIDEO SERVICE: Creating \(orientation.displayName) video with aspect ratio \(String(format: "%.3f", aspectRatio))")
+        print("Ã°Å¸â€œÂ VIDEO SERVICE: Creating \(orientation.displayName) video with aspect ratio \(String(format: "%.3f", aspectRatio))")
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -184,7 +184,7 @@ class VideoService: ObservableObject {
             
             // Content metadata - FIXED: Use actual aspect ratio
             FirebaseSchema.VideoDocument.duration: duration,
-            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // âœ… NOW DYNAMIC
+            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // Ã¢Å“â€¦ NOW DYNAMIC
             FirebaseSchema.VideoDocument.fileSize: fileSize,
             FirebaseSchema.VideoDocument.qualityScore: 50,
             
@@ -200,7 +200,7 @@ class VideoService: ObservableObject {
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("âœ… VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
+        print("Ã¢Å“â€¦ VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
         return video
     }
     
@@ -228,13 +228,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("⚠️ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
         // FIX: If creatorName is empty, fetch username
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("⚠️ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -242,17 +242,17 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("✅ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("❌ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
         let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
         
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-        print("📹 VIDEO SERVICE: Creating spin-off \(orientation.displayName) video referencing \(originalVideoID)")
+        print("ðŸ“¹ VIDEO SERVICE: Creating spin-off \(orientation.displayName) video referencing \(originalVideoID)")
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -311,7 +311,7 @@ class VideoService: ObservableObject {
         ])
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("✅ VIDEO SERVICE: Created spin-off thread \(videoID) by @\(finalCreatorName) from original \(originalVideoID)")
+        print("âœ… VIDEO SERVICE: Created spin-off thread \(videoID) by @\(finalCreatorName) from original \(originalVideoID)")
         return video
     }
     
@@ -339,13 +339,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
         // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -353,10 +353,10 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("Ã¢Å“â€¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("Ã¢ÂÅ’ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
@@ -374,7 +374,7 @@ class VideoService: ObservableObject {
         
         // Determine video orientation for logging
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-        print("ðŸ“ VIDEO SERVICE: Creating \(orientation.displayName) reply with aspect ratio \(String(format: "%.3f", aspectRatio))")
+        print("Ã°Å¸â€œÂ VIDEO SERVICE: Creating \(orientation.displayName) reply with aspect ratio \(String(format: "%.3f", aspectRatio))")
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -409,7 +409,7 @@ class VideoService: ObservableObject {
             
             // Content metadata - FIXED: Use actual aspect ratio
             FirebaseSchema.VideoDocument.duration: duration,
-            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // âœ… NOW DYNAMIC
+            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // Ã¢Å“â€¦ NOW DYNAMIC
             FirebaseSchema.VideoDocument.fileSize: fileSize,
             FirebaseSchema.VideoDocument.qualityScore: 50,
             
@@ -437,9 +437,9 @@ class VideoService: ObservableObject {
         }
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("âœ… VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
+        print("Ã¢Å“â€¦ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
         
-        // 🔔 NOTIFY PARENT CREATOR OF NEW REPLY
+        // ðŸ”” NOTIFY PARENT CREATOR OF NEW REPLY
         let parentCreatorID = parentData[FirebaseSchema.VideoDocument.creatorID] as? String
         if let parentCreatorID = parentCreatorID, parentCreatorID != validatedCreatorID {
             Task {
@@ -450,9 +450,9 @@ class VideoService: ObservableObject {
                         videoID: videoID,
                         videoTitle: title
                     )
-                    print("✅ REPLY NOTIFICATION: Sent to parent creator \(parentCreatorID)")
+                    print("âœ… REPLY NOTIFICATION: Sent to parent creator \(parentCreatorID)")
                 } catch {
-                    print("⚠️ REPLY NOTIFICATION: Failed - \(error)")
+                    print("âš ï¸ REPLY NOTIFICATION: Failed - \(error)")
                 }
             }
         }
@@ -609,7 +609,7 @@ class VideoService: ObservableObject {
     
     /// Get all videos belonging to a collection, sorted by segment number
     func getVideosByCollection(collectionID: String) async throws -> [CoreVideoMetadata] {
-        print("ðŸ“š VIDEO SERVICE: Fetching videos for collection \(collectionID)")
+        print("Ã°Å¸â€œÅ¡ VIDEO SERVICE: Fetching videos for collection \(collectionID)")
         
         let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
             .whereField("collectionID", isEqualTo: collectionID)
@@ -620,7 +620,7 @@ class VideoService: ObservableObject {
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
-        print("ðŸ“š VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
+        print("Ã°Å¸â€œÅ¡ VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
         return videos
     }
     
@@ -629,7 +629,7 @@ class VideoService: ObservableObject {
     func getTimestampedReplies(videoID: String? = nil, segmentID: String? = nil) async throws -> [CoreVideoMetadata] {
         let targetID = videoID ?? segmentID ?? ""
         guard !targetID.isEmpty else {
-            print("âš ï¸ VIDEO SERVICE: No videoID or segmentID provided for timestamped replies")
+            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: No videoID or segmentID provided for timestamped replies")
             return []
         }
         
@@ -643,7 +643,7 @@ class VideoService: ObservableObject {
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
-        print("ðŸ“š VIDEO SERVICE: Loaded \(replies.count) timestamped replies for \(targetID)")
+        print("Ã°Å¸â€œÅ¡ VIDEO SERVICE: Loaded \(replies.count) timestamped replies for \(targetID)")
         return replies
     }
     
@@ -745,6 +745,208 @@ class VideoService: ObservableObject {
         )
     }
     
+    // MARK: - Distributed Counter Sharding (Scalable Writes)
+    
+    /// Increment hype shard for a video (random shard selection)
+    /// Writes to: videos/{videoID}/hype_shards/{shardIndex}
+    func incrementHypeShard(videoID: String, amount: Int = 1) async throws {
+        let shardIndex = Int.random(in: 0..<FirebaseSchema.Collections.shardCount)
+        let shardRef = db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .collection(FirebaseSchema.Collections.hypeShards)
+            .document("\(shardIndex)")
+        
+        try await shardRef.setData([
+            "count": FieldValue.increment(Int64(amount)),
+            "updatedAt": Timestamp()
+        ], merge: true)
+        
+        // Dual-write: also update video doc for instant UI feedback
+        try await db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .updateData([
+                FirebaseSchema.VideoDocument.hypeCount: FieldValue.increment(Int64(amount)),
+                FirebaseSchema.VideoDocument.updatedAt: Timestamp()
+            ])
+        
+        try await markVideoShardActive(videoID: videoID)
+        
+        print("🔥 SHARD: +\(amount) hype → shard \(shardIndex) + video doc for \(videoID)")
+    }
+    
+    /// Increment cool shard for a video (random shard selection)
+    /// Writes to: videos/{videoID}/cool_shards/{shardIndex}
+    func incrementCoolShard(videoID: String, amount: Int = 1) async throws {
+        let shardIndex = Int.random(in: 0..<FirebaseSchema.Collections.shardCount)
+        let shardRef = db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .collection(FirebaseSchema.Collections.coolShards)
+            .document("\(shardIndex)")
+        
+        try await shardRef.setData([
+            "count": FieldValue.increment(Int64(amount)),
+            "updatedAt": Timestamp()
+        ], merge: true)
+        
+        // Dual-write: also update video doc for instant UI feedback
+        try await db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .updateData([
+                FirebaseSchema.VideoDocument.coolCount: FieldValue.increment(Int64(amount)),
+                FirebaseSchema.VideoDocument.updatedAt: Timestamp()
+            ])
+        
+        try await markVideoShardActive(videoID: videoID)
+        
+        print("❄️ SHARD: +\(amount) cool → shard \(shardIndex) + video doc for \(videoID)")
+    }
+    
+    /// Decrement hype shard (for grace period switches/removal)
+    /// SAFE: Reads current totals first to prevent negative counts
+    func decrementHypeShard(videoID: String, amount: Int) async throws {
+        // Read current totals to cap decrement
+        let currentShardTotal = try await getShardedHypeCount(videoID: videoID)
+        let videoDoc = try await db.collection(FirebaseSchema.Collections.videos).document(videoID).getDocument()
+        let currentVideoCount = videoDoc.data()?[FirebaseSchema.VideoDocument.hypeCount] as? Int ?? 0
+        
+        // Cap at the minimum of both sources - never go below 0
+        let safeAmount = min(amount, max(0, min(currentShardTotal, currentVideoCount)))
+        
+        guard safeAmount > 0 else {
+            print("🔥 SHARD: Skip hype decrement - totals: shard=\(currentShardTotal), doc=\(currentVideoCount), requested=-\(amount)")
+            return
+        }
+        
+        let shardRef = db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .collection(FirebaseSchema.Collections.hypeShards)
+            .document("0")
+        
+        try await shardRef.setData([
+            "count": FieldValue.increment(Int64(-safeAmount)),
+            "updatedAt": Timestamp()
+        ], merge: true)
+        
+        // Dual-write: also update video doc for instant UI feedback (SAFE)
+        try await db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .updateData([
+                FirebaseSchema.VideoDocument.hypeCount: FieldValue.increment(Int64(-safeAmount)),
+                FirebaseSchema.VideoDocument.updatedAt: Timestamp()
+            ])
+        
+        try await markVideoShardActive(videoID: videoID)
+        
+        if safeAmount < amount {
+            print("🔥 SHARD: -\(safeAmount) hype → shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
+        } else {
+            print("🔥 SHARD: -\(safeAmount) hype → shard 0 + video doc for \(videoID)")
+        }
+    }
+    
+    /// Decrement cool shard (for grace period switches/removal)
+    /// SAFE: Reads current totals first to prevent negative counts
+    func decrementCoolShard(videoID: String, amount: Int) async throws {
+        // Read current totals to cap decrement
+        let currentShardTotal = try await getShardedCoolCount(videoID: videoID)
+        let videoDoc = try await db.collection(FirebaseSchema.Collections.videos).document(videoID).getDocument()
+        let currentVideoCount = videoDoc.data()?[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
+        
+        // Cap at the minimum of both sources - never go below 0
+        let safeAmount = min(amount, max(0, min(currentShardTotal, currentVideoCount)))
+        
+        guard safeAmount > 0 else {
+            print("❄️ SHARD: Skip cool decrement - totals: shard=\(currentShardTotal), doc=\(currentVideoCount), requested=-\(amount)")
+            return
+        }
+        
+        let shardRef = db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .collection(FirebaseSchema.Collections.coolShards)
+            .document("0")
+        
+        try await shardRef.setData([
+            "count": FieldValue.increment(Int64(-safeAmount)),
+            "updatedAt": Timestamp()
+        ], merge: true)
+        
+        // Dual-write: also update video doc for instant UI feedback (SAFE)
+        try await db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .updateData([
+                FirebaseSchema.VideoDocument.coolCount: FieldValue.increment(Int64(-safeAmount)),
+                FirebaseSchema.VideoDocument.updatedAt: Timestamp()
+            ])
+        
+        try await markVideoShardActive(videoID: videoID)
+        
+        if safeAmount < amount {
+            print("❄️ SHARD: -\(safeAmount) cool → shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
+        } else {
+            print("❄️ SHARD: -\(safeAmount) cool → shard 0 + video doc for \(videoID)")
+        }
+    }
+    
+    /// Read total hype count by summing all shards (for real-time display)
+    func getShardedHypeCount(videoID: String) async throws -> Int {
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .collection(FirebaseSchema.Collections.hypeShards)
+            .getDocuments()
+        
+        let total = snapshot.documents.reduce(0) { sum, doc in
+            sum + (doc.data()["count"] as? Int ?? 0)
+        }
+        
+        return max(0, total)
+    }
+    
+    /// Read total cool count by summing all shards (for real-time display)
+    func getShardedCoolCount(videoID: String) async throws -> Int {
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .collection(FirebaseSchema.Collections.coolShards)
+            .getDocuments()
+        
+        let total = snapshot.documents.reduce(0) { sum, doc in
+            sum + (doc.data()["count"] as? Int ?? 0)
+        }
+        
+        return max(0, total)
+    }
+    
+    /// Mark a video as having recent shard activity (for Cloud Function aggregation)
+    private func markVideoShardActive(videoID: String) async throws {
+        try await db.collection("active_shards").document(videoID).setData([
+            "videoID": videoID,
+            "lastShardWrite": Timestamp(),
+            "needsAggregation": true
+        ], merge: true)
+    }
+    
+    /// Update only non-count fields on video doc (temperature, timestamps)
+    func updateVideoMetadata(
+        videoID: String,
+        temperature: String? = nil,
+        lastEngagementAt: Date? = nil
+    ) async throws {
+        var updateData: [String: Any] = [
+            FirebaseSchema.VideoDocument.updatedAt: Timestamp()
+        ]
+        
+        if let temperature = temperature {
+            updateData[FirebaseSchema.VideoDocument.temperature] = temperature
+        }
+        
+        if let lastEngagement = lastEngagementAt {
+            updateData[FirebaseSchema.VideoDocument.lastEngagementAt] = Timestamp(date: lastEngagement)
+        }
+        
+        try await db.collection(FirebaseSchema.Collections.videos)
+            .document(videoID)
+            .updateData(updateData)
+    }
+    
     // MARK: - Update Operations
     
     /// Update video engagement counts (simple update only, no logic)
@@ -782,7 +984,7 @@ class VideoService: ObservableObject {
                 FirebaseSchema.VideoDocument.updatedAt: Timestamp()
             ])
         
-        print("ðŸ·ï¸ VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
+        print("Ã°Å¸ÂÂ·Ã¯Â¸Â VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
     }
     
     /// Record user interaction (views and shares only)

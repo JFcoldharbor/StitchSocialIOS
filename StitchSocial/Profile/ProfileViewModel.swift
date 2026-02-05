@@ -48,6 +48,8 @@ class ProfileViewModel: ObservableObject {
     @Published var hasMoreFollowing = true
     @Published var isLoadingMoreFollowers = false
     @Published var isLoadingMoreFollowing = false
+    @Published var totalFollowersCount = 0
+    @Published var totalFollowingCount = 0
     private var allFollowerIDs: [String] = []
     private var allFollowingIDs: [String] = []
     private var loadedFollowerCount = 0
@@ -97,6 +99,9 @@ class ProfileViewModel: ObservableObject {
         self.videoService = videoService
         self.viewingUserID = viewingUserID
         self.animationController = ProfileAnimationController()
+        
+        // 🔧 DEBUG: Confirm viewingUserID is received in init
+        print("🔧 PROFILEVIEWMODEL INIT: viewingUserID = \(viewingUserID ?? "nil")")
         
         // Setup NotificationCenter observers for profile refresh
         setupNotificationObservers()
@@ -162,16 +167,18 @@ class ProfileViewModel: ObservableObject {
     
     /// Load profile instantly with placeholder, then enhance with real data
     func loadProfile() async {
-        // Determine which user to load
+        // ✅ FIXED: Determine which user to load - viewingUserID takes priority
         let userIDToLoad: String
         if let viewingUserID = viewingUserID {
             userIDToLoad = viewingUserID
+            print("🔍 PROFILE: Loading OTHER user profile - \(userIDToLoad)")
         } else {
             guard let currentUserID = authService.currentUserID else {
                 errorMessage = "Authentication required"
                 return
             }
             userIDToLoad = currentUserID
+            print("👤 PROFILE: Loading OWN user profile - \(currentUserID)")
         }
         
         print("PROFILE: Starting instant load for user \(userIDToLoad)")
@@ -180,7 +187,7 @@ class ProfileViewModel: ObservableObject {
         if let cached = getCachedProfile(userID: userIDToLoad) {
             currentUser = cached
             isShowingPlaceholder = false
-            print("PROFILE CACHE HIT: Instant display")
+            print("PROFILE CACHE HIT: Instant display for \(userIDToLoad)")
             
             // Load enhancements in background
             Task {
@@ -274,7 +281,7 @@ class ProfileViewModel: ObservableObject {
     
     /// Load profile enhancements in background (videos, social data)
     private func loadEnhancementsInBackground(userID: String) async {
-        print("PROFILE ENHANCEMENTS: Loading additional data...")
+        print("PROFILE ENHANCEMENTS: Loading additional data for \(userID)...")
         
         // Load all enhancements concurrently
         await withTaskGroup(of: Void.self) { group in
@@ -284,9 +291,9 @@ class ProfileViewModel: ObservableObject {
                 await self.loadPinnedVideos(userID: userID)
             }
             
-            // Load user videos with pagination
+            // ✅ FIXED: Pass userID to ensure we load correct user's videos
             group.addTask {
-                await self.loadUserVideosLazily()
+                await self.loadUserVideosLazily(userID: userID)
             }
             
             // Load social connections
@@ -304,7 +311,7 @@ class ProfileViewModel: ObservableObject {
             }
         }
         
-        print("PROFILE ENHANCEMENTS: Background loading complete")
+        print("PROFILE ENHANCEMENTS: Background loading complete for \(userID)")
     }
     
     // MARK: - Pinned Videos Methods (NEW)
@@ -501,8 +508,15 @@ class ProfileViewModel: ObservableObject {
     // MARK: - Video Loading with Pagination (UPDATED)
     
     /// Load user videos with performance optimization and pagination
-    private func loadUserVideosLazily() async {
-        guard let user = currentUser else { return }
+    private func loadUserVideosLazily(userID: String? = nil) async {
+        // ✅ FIXED: Use passed userID or fall back to currentUser
+        let targetUserID = userID ?? currentUser?.id
+        guard let targetUserID = targetUserID else {
+            print("PROFILE VIDEOS ERROR: No user ID available")
+            return
+        }
+        
+        print("PROFILE VIDEOS: Loading videos for user \(targetUserID)")
         
         await MainActor.run {
             self.isLoadingVideos = true
@@ -515,7 +529,7 @@ class ProfileViewModel: ObservableObject {
             
             // Load user videos directly from Firestore with initial limit
             let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
-                .whereField(FirebaseSchema.VideoDocument.creatorID, isEqualTo: user.id)
+                .whereField(FirebaseSchema.VideoDocument.creatorID, isEqualTo: targetUserID)
                 .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
                 .limit(to: initialVideoLimit)
                 .getDocuments()
@@ -538,7 +552,7 @@ class ProfileViewModel: ObservableObject {
                 self.isLoadingVideos = false
             }
             
-            print("PROFILE VIDEOS: Loaded \(filteredVideos.count) videos (hasMore: \(hasMore))")
+            print("PROFILE VIDEOS: Loaded \(filteredVideos.count) videos for \(targetUserID) (hasMore: \(hasMore))")
             
         } catch {
             await MainActor.run {
@@ -650,6 +664,7 @@ class ProfileViewModel: ObservableObject {
             
             await MainActor.run {
                 self.allFollowingIDs = followingIDs
+                self.totalFollowingCount = followingIDs.count
                 self.loadedFollowingCount = 0
             }
             
@@ -720,6 +735,7 @@ class ProfileViewModel: ObservableObject {
             
             await MainActor.run {
                 self.allFollowerIDs = followerIDs
+                self.totalFollowersCount = followerIDs.count
                 self.loadedFollowerCount = 0
             }
             

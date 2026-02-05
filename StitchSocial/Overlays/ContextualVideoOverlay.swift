@@ -343,11 +343,11 @@ struct ContextualVideoOverlay: View {
     }
     
     private var shouldShowMinimalDisplay: Bool {
-        return context == .discovery
+        return context == .discovery || context == .carousel
     }
     
     private var shouldShowFullDisplay: Bool {
-        return context != .discovery
+        return context != .discovery && context != .carousel
     }
     
     private var currentUserIsSpecial: Bool {

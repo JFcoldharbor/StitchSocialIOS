@@ -10,6 +10,8 @@ import FirebaseCore
 import FirebaseAuth
 import UserNotifications
 import FirebaseMessaging
+import FirebaseFirestore
+import FirebaseFunctions
 
 @main
 struct StitchSocialApp: App {
@@ -32,6 +34,22 @@ struct StitchSocialApp: App {
                         .allowsHitTesting(false)
                 )
                 .onAppear {
+                    // 🧪 DEBUG: Connect to Firebase Emulators for local testing
+                    #if DEBUG
+                    if ProcessInfo.processInfo.environment["USE_FIREBASE_EMULATORS"] == "1" {
+                        let settings = Firestore.firestore(database: "stitchfin").settings
+                        settings.host = "localhost:8080"
+                        settings.isSSLEnabled = false
+                        settings.cacheSettings = MemoryCacheSettings()
+                        Firestore.firestore(database: "stitchfin").settings = settings
+                        
+                        Functions.functions().useEmulator(withHost: "localhost", port: 5001)
+                        Auth.auth().useEmulator(withHost: "localhost", port: 9099)
+                        
+                        print("🧪 EMULATOR MODE: Firestore=8080, Functions=5001, Auth=9099")
+                    }
+                    #endif
+                    
                     // Initialize memory management
                     initializeMemoryManagement()
                     

@@ -90,6 +90,17 @@ struct CardVideoCarouselView: View {
                             currentConversationPartner: currentConversationPartner,
                             onSelectReply: { selectedReply in
                                 currentConversationPartner = selectedReply.creatorID
+                                // Navigate carousel to the selected reply
+                                if let matchIndex = videos.firstIndex(where: { $0.id == selectedReply.id }) {
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                                        currentIndex = matchIndex
+                                    }
+                                    // Re-trigger playback
+                                    isPlaying = false
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        isPlaying = true
+                                    }
+                                }
                                 onSelectReply?(selectedReply)
                             }
                         )
@@ -201,7 +212,7 @@ struct CardVideoCarouselView: View {
     // MARK: - Card Carousel
     
     private func cardCarouselView(in geometry: GeometryProxy) -> some View {
-        let cardWidth: CGFloat = geometry.size.width * 0.58
+        let cardWidth: CGFloat = geometry.size.width * 0.72
         let cardHeight: CGFloat = cardWidth * 1.4
         
         return ZStack {
@@ -293,11 +304,21 @@ struct CardVideoCarouselView: View {
     private func previousVideo() {
         guard currentIndex > 0 else { return }
         currentIndex -= 1
+        restartPlayback()
     }
     
     private func nextVideo() {
         guard currentIndex < videos.count - 1 else { return }
         currentIndex += 1
+        restartPlayback()
+    }
+    
+    /// Toggle isPlaying off/on to force the new card to start playback
+    private func restartPlayback() {
+        isPlaying = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            isPlaying = true
+        }
     }
     
     private func dismissCarousel() {
