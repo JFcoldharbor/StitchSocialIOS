@@ -60,6 +60,12 @@ extension Notification.Name {
     static let pushNotificationReceived = Notification.Name("com.stitchsocial.pushNotificationReceived")
     static let pushNotificationTapped = Notification.Name("com.stitchsocial.pushNotificationTapped")
     
+    // MARK: - Push Notification Deep Link Relay (ContentView → NotificationView)
+    
+    static let pushNotificationNavigateToVideo = Notification.Name("com.stitchsocial.pushNotificationNavigateToVideo")
+    static let pushNotificationNavigateToProfile = Notification.Name("com.stitchsocial.pushNotificationNavigateToProfile")
+    static let pushNotificationNavigateToThread = Notification.Name("com.stitchsocial.pushNotificationNavigateToThread")
+    
     // MARK: - Collection Notifications
     
     static let segmentUploadCompleted = Notification.Name("com.stitchsocial.segmentUploadCompleted")

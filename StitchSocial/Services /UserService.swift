@@ -563,15 +563,54 @@ class UserService: ObservableObject {
         print("💰 USER SERVICE: Awarding \(amount) clout to user \(userID)")
         
         do {
-            // Use existing updateClout method with positive amount
             try await updateClout(userID: userID, cloutChange: amount)
-            
-            // Log successful clout award
             print("✅ USER SERVICE: Successfully awarded \(amount) clout to user \(userID)")
+            
+            // Check for tier advancement
+            await checkAndAdvanceTier(userID: userID)
             
         } catch {
             print("❌ USER SERVICE: Failed to award clout to user \(userID): \(error.localizedDescription)")
             throw StitchError.processingError("Failed to award clout: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Check if user qualifies for a higher tier and update if so
+    private func checkAndAdvanceTier(userID: String) async {
+        do {
+            let userRef = db.collection(FirebaseSchema.Collections.users).document(userID)
+            let userDoc = try await userRef.getDocument()
+            guard let data = userDoc.data() else { return }
+            
+            let currentClout = data[FirebaseSchema.UserDocument.clout] as? Int ?? 0
+            let currentTierRaw = data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie"
+            let currentTier = UserTier(rawValue: currentTierRaw) ?? .rookie
+            
+            // Don't change founder/co-founder tiers
+            guard !currentTier.isFounderTier else { return }
+            
+            let correctTier: UserTier = {
+                switch currentClout {
+                case 500_000...: return .topCreator
+                case 100_000...: return .legendary
+                case 50_000...: return .partner
+                case 20_000...: return .elite
+                case 15_000...: return .ambassador
+                case 10_000...: return .influencer
+                case 5_000...: return .veteran
+                case 1_000...: return .rising
+                default: return .rookie
+                }
+            }()
+            if correctTier != currentTier && UserProgressionCalculator.isHigherTier(correctTier, than: currentTier) {
+                try await userRef.updateData([
+                    FirebaseSchema.UserDocument.tier: correctTier.rawValue,
+                    FirebaseSchema.UserDocument.updatedAt: Timestamp()
+                ])
+                print("🎉 USER SERVICE: Tier advanced for \(userID): \(currentTier.displayName) -> \(correctTier.displayName) (clout: \(currentClout))")
+            }
+        } catch {
+            print("⚠️ USER SERVICE: Tier check failed (non-fatal): \(error.localizedDescription)")
         }
     }
     

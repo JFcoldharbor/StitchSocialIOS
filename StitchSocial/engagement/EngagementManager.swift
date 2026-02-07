@@ -26,10 +26,16 @@ class EngagementManager: ObservableObject {
     
     // MARK: - Published State
     
-    @Published var userHypeRating: Double = 25.0
     @Published var isProcessingEngagement = false
     @Published var engagementStates: [String: VideoEngagementState] = [:]
     @Published var lastEngagementTime: [String: Date] = [:]
+    
+    // MARK: - Hype Rating (delegate to HypeRatingService)
+    
+    var userHypeRating: Double {
+        get { HypeRatingService.shared.currentRating }
+        set { /* managed by HypeRatingService */ }
+    }
     
     // MARK: - Configuration
     
@@ -159,7 +165,7 @@ class EngagementManager: ObservableObject {
         
         // Check hype rating
         let cost = EngagementCalculator.calculateHypeRatingCost(tier: userTier)
-        guard EngagementCalculator.canAffordEngagement(currentHypeRating: userHypeRating, cost: cost) else {
+        guard HypeRatingService.shared.canAfford(cost) else {
             throw StitchError.validationError("Insufficient hype rating")
         }
         
@@ -167,7 +173,7 @@ class EngagementManager: ObservableObject {
         state.addHypeEngagement()
         
         // Deduct hype rating
-        userHypeRating = EngagementCalculator.applyHypeRatingCost(currentRating: userHypeRating, cost: cost)
+        HypeRatingService.shared.deductRating(cost)
         
         // Calculate rewards
         let visualHypeIncrement = EngagementConfig.getVisualHypeMultiplier(for: userTier)
@@ -255,6 +261,12 @@ class EngagementManager: ObservableObject {
                 } catch {
                     print("âš ï¸ HYPE NOTIFICATION: Failed - \(error.localizedDescription)")
                 }
+                
+                // Award hype rating regen to creator for receiving hype
+                await HypeRatingService.shared.queueEngagementRegen(
+                    source: .receivedHype,
+                    amount: HypeRegenSource.receivedHype.baseRegenAmount
+                )
             }
         }
         
@@ -602,6 +614,19 @@ class EngagementManager: ObservableObject {
         if !keysToRemove.isEmpty {
             print("ðŸ§¹ Cleared \(keysToRemove.count) old states")
         }
+    }
+    
+    // MARK: - Passive Discovery Signals
+    
+    /// Check if a creator is suppressed/blocked in discovery for this user
+    /// Following a creator overrides this — home feed is unaffected.
+    func isCreatorSuppressedInDiscovery(_ creatorID: String) -> Bool {
+        return !DiscoveryEngagementTracker.shared.shouldShowCreator(creatorID)
+    }
+    
+    /// Get discovery weight multiplier for ranking
+    func discoveryWeightForCreator(_ creatorID: String) -> Double {
+        return DiscoveryEngagementTracker.shared.discoveryWeight(for: creatorID)
     }
 }
 

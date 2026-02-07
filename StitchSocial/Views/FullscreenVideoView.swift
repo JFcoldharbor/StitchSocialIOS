@@ -560,12 +560,11 @@ struct VideoPlayerComponent: View {
     @State private var hasError = false
     @State private var hasTrackedView = false
     @State private var killObserver: NSObjectProtocol?
+    @State private var loopObserver: NSObjectProtocol?
     @State private var cancellables = Set<AnyCancellable>()
-    @State private var lastTapTime: Date = Date.distantPast  // Debounce rapid taps
+    @State private var lastTapTime: Date = Date.distantPast
+    @State private var currentVideoID: String? = nil
     
-    // MARK: - Memory Management (NEW)
-    
-    /// Check memory pressure before creating players
     private var preloadService: VideoPreloadingService {
         VideoPreloadingService.shared
     }
@@ -584,11 +583,9 @@ struct VideoPlayerComponent: View {
                         .clipped()
                         .edgesIgnoringSafeArea(.all)
                     
-                    // Invisible tap zone to toggle mute
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            // Debounce: ignore taps within 0.3 seconds
                             let timeSinceLastTap = Date().timeIntervalSince(lastTapTime)
                             guard timeSinceLastTap > 0.3 else { return }
                             lastTapTime = Date()
@@ -598,79 +595,63 @@ struct VideoPlayerComponent: View {
             }
         }
         .onAppear {
-            setupPlayer()
-            
-            if isActive, !hasTrackedView, let userID = Auth.auth().currentUser?.uid {
-                hasTrackedView = true
-                
-                Task {
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
-                    
-                    if isActive {
-                        let videoService = VideoService()
-                        try? await videoService.trackVideoView(
-                            videoID: video.id,
-                            userID: userID,
-                            watchTime: 5.0
-                        )
-                        print("ðŸ“Š VIEW: Tracked \(video.id.prefix(8))")
-                    }
-                }
-            }
+            bindVideo()
         }
         .onDisappear {
-            // Cleanup when view disappears
-            player?.pause()
-            if let observer = killObserver {
-                NotificationCenter.default.removeObserver(observer)
-                killObserver = nil
-            }
-            print("ðŸ§¹ FULLSCREEN: Cleanup \(video.id.prefix(8))")
+            cleanupPlayer()
+        }
+        .onChange(of: video.id) { oldID, newID in
+            // Video prop changed (stitch swipe or feed scroll) — rebind player
+            guard newID != currentVideoID else { return }
+            cleanupPlayer()
+            bindVideo()
         }
         .onChange(of: isActive) { _, newValue in
             if newValue {
-                // Became active - play
                 player?.isMuted = muteManager.isMuted
                 if player?.rate == 0 {
                     player?.play()
                 }
-                print("â–¶ï¸ FULLSCREEN ACTIVE: \(video.id.prefix(8))")
             } else {
-                // No longer active - MUST PAUSE to prevent audio overlap
                 player?.pause()
-                print("â¸ï¸ FULLSCREEN INACTIVE: \(video.id.prefix(8))")
             }
         }
         .onChange(of: muteManager.isMuted) { _, newValue in
-            // Apply mute state when user toggles button
             player?.isMuted = newValue
         }
     }
     
-    private func setupPlayer() {
-        // MEMORY: Try to get player from preload cache first
+    // MARK: - Video Binding
+    
+    private func bindVideo() {
+        currentVideoID = video.id
+        hasTrackedView = false
+        hasError = false
+        isLoading = true
+        
+        if isActive {
+            preloadService.markAsCurrentlyPlaying(video.id)
+        }
+        
+        // Try preload cache first
         if let cachedPlayer = preloadService.getPlayer(for: video) {
             self.player = cachedPlayer
             self.player?.isMuted = muteManager.isMuted
             self.isLoading = false
             
-            // SEAMLESS: Only start playing if not already playing
-            // This preserves continuity from Discovery cards
             if isActive && cachedPlayer.rate == 0 {
+                cachedPlayer.seek(to: .zero)
                 cachedPlayer.play()
-                print("â–¶ï¸ STARTING PLAY: \(video.id.prefix(8))")
-            } else if cachedPlayer.rate > 0 {
-                print("â–¶ï¸ CONTINUING PLAY: \(video.id.prefix(8)) (already playing)")
             }
             
-            print("ðŸŽ¬ COMPONENT: Using cached player for \(video.id.prefix(8))")
+            setupLoopObserver()
+            setupKillObserver()
+            trackViewIfNeeded()
             return
         }
         
-        // MEMORY: Check if we should create new player under pressure
+        // Memory pressure check
         if preloadService.memoryPressureLevel >= .critical && !isActive {
-            print("âš ï¸ COMPONENT: Skipping player creation - memory critical")
-            // Show thumbnail instead - let loading state handle it
             return
         }
         
@@ -684,18 +665,8 @@ struct VideoPlayerComponent: View {
         playerItem = AVPlayerItem(asset: asset)
         player = AVPlayer(playerItem: playerItem)
         
+        setupLoopObserver()
         setupKillObserver()
-        
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime,
-            object: playerItem,
-            queue: .main
-        ) { _ in
-            self.player?.seek(to: .zero)
-            if self.isActive {
-                self.player?.play()
-            }
-        }
         
         playerItem?.publisher(for: \.status)
             .receive(on: DispatchQueue.main)
@@ -704,6 +675,7 @@ struct VideoPlayerComponent: View {
                 case .readyToPlay:
                     self.isLoading = false
                     if self.isActive {
+                        self.player?.isMuted = self.muteManager.isMuted
                         self.player?.play()
                     }
                 case .failed:
@@ -716,9 +688,33 @@ struct VideoPlayerComponent: View {
                 }
             }
             .store(in: &cancellables)
+        
+        trackViewIfNeeded()
+    }
+    
+    // MARK: - Observers
+    
+    private func setupLoopObserver() {
+        if let observer = loopObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        guard let item = player?.currentItem ?? playerItem else { return }
+        loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            self.player?.seek(to: .zero)
+            if self.isActive {
+                self.player?.play()
+            }
+        }
     }
     
     private func setupKillObserver() {
+        if let observer = killObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
         killObserver = NotificationCenter.default.addObserver(
             forName: .killAllVideoPlayers,
             object: nil,
@@ -727,6 +723,8 @@ struct VideoPlayerComponent: View {
             self.player?.pause()
         }
     }
+    
+    // MARK: - Cleanup
     
     private func cleanupPlayer() {
         player?.pause()
@@ -738,8 +736,28 @@ struct VideoPlayerComponent: View {
             NotificationCenter.default.removeObserver(observer)
             killObserver = nil
         }
-        NotificationCenter.default.removeObserver(self)
+        if let observer = loopObserver {
+            NotificationCenter.default.removeObserver(observer)
+            loopObserver = nil
+        }
     }
+    
+    // MARK: - View Tracking
+    
+    private func trackViewIfNeeded() {
+        guard !hasTrackedView, isActive, let userID = Auth.auth().currentUser?.uid else { return }
+        hasTrackedView = true
+        let trackedVideoID = video.id
+        
+        Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard currentVideoID == trackedVideoID else { return }
+            let videoService = VideoService()
+            try? await videoService.trackVideoView(videoID: trackedVideoID, userID: userID, watchTime: 5.0)
+        }
+    }
+    
+    // MARK: - States
     
     private var loadingState: some View {
         ZStack {

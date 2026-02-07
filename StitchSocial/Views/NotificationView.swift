@@ -85,8 +85,8 @@ struct NotificationView: View {
     
     @State private var profilePresentation: ProfilePresentation?
     @State private var selectedVideoID: String?
-    @State private var selectedThreadID: String?  // ðŸ†• ADDED
-    @State private var targetVideoID: String?      // ðŸ†• ADDED
+    @State private var selectedThreadID: String?  // Ã°Å¸â€ â€¢ ADDED
+    @State private var targetVideoID: String?      // Ã°Å¸â€ â€¢ ADDED
     @State private var showingVideoThread = false
     @State private var showingJustJoined = false
     @State private var showingTopVideos = false
@@ -152,7 +152,8 @@ struct NotificationView: View {
             ProfileView(
                 authService: authService,
                 userService: userService,
-                videoService: videoService
+                videoService: videoService,
+                viewingUserID: presentation.id
             )
         }
         .fullScreenCover(item: $videoThreadPresentation) { presentation in
@@ -532,7 +533,7 @@ struct NotificationView: View {
         let senderIDs = viewModel.filteredNotifications.map { $0.senderID }
         if !senderIDs.isEmpty {
             await followManager.loadFollowStates(for: senderIDs)
-            print("âœ… NOTIFICATION VIEW: Loaded follow states for \(senderIDs.count) senders")
+            print("Ã¢Å“â€¦ NOTIFICATION VIEW: Loaded follow states for \(senderIDs.count) senders")
         }
     }
     
@@ -548,11 +549,11 @@ struct NotificationView: View {
             await MainActor.run {
                 recentUsers = users
                 leaderboardVideos = videos
-                print("âœ… DISCOVERY: Loaded \(users.count) users, \(videos.count) videos")
+                print("Ã¢Å“â€¦ DISCOVERY: Loaded \(users.count) users, \(videos.count) videos")
             }
             
         } catch {
-            print("âŒ DISCOVERY: Failed to load - \(error)")
+            print("Ã¢ÂÅ’ DISCOVERY: Failed to load - \(error)")
         }
         
         isLoadingDiscovery = false
@@ -568,14 +569,14 @@ struct NotificationView: View {
         await viewModel.refreshNotifications()
     }
     
-    // ðŸ†• UPDATED: Extract both threadID and targetVideoID from payload
+    // Ã°Å¸â€ â€¢ UPDATED: Extract both threadID and targetVideoID from payload
     private func handleNotificationTap(_ notification: NotificationDisplayData) async {
         await viewModel.markAsRead(notification.id)
         
         // For follow notifications, navigate to the sender's profile instead
         if notification.notificationType == .follow {
             profilePresentation = ProfilePresentation(id: notification.senderID)
-            print("ðŸ“± Navigation to profile: \(notification.senderID)")
+            print("Ã°Å¸â€œÂ± Navigation to profile: \(notification.senderID)")
             return
         }
         
@@ -592,9 +593,9 @@ struct NotificationView: View {
             )
             
             
-            print("ðŸ“± Navigation to thread: \(threadID), target video: \(videoID)")
+            print("Ã°Å¸â€œÂ± Navigation to thread: \(threadID), target video: \(videoID)")
         } else {
-            print("âš ï¸ No videoID in notification payload for type: \(notification.notificationType.rawValue)")
+            print("Ã¢Å¡Â Ã¯Â¸Â No videoID in notification payload for type: \(notification.notificationType.rawValue)")
         }
     }
 }
@@ -649,7 +650,7 @@ struct NotificationRowView: View {
                     .frame(width: 40, height: 40)
                     .clipShape(Circle())
                     .onAppear {
-                        print("ðŸ–¼ï¸ PROFILE IMAGE: Loading from URL - \(profileImageURL)")
+                        print("Ã°Å¸â€“Â¼Ã¯Â¸Â PROFILE IMAGE: Loading from URL - \(profileImageURL)")
                     }
             } else {
                 Circle()
@@ -661,9 +662,9 @@ struct NotificationRowView: View {
                             .foregroundColor(.white.opacity(0.5))
                     )
                     .onAppear {
-                        print("âš ï¸ PROFILE IMAGE: Missing in payload - \(notification.payload)")
-                        print("âš ï¸ Notification ID: \(notification.id)")
-                        print("âš ï¸ Sender ID: \(notification.senderID)")
+                        print("Ã¢Å¡Â Ã¯Â¸Â PROFILE IMAGE: Missing in payload - \(notification.payload)")
+                        print("Ã¢Å¡Â Ã¯Â¸Â Notification ID: \(notification.id)")
+                        print("Ã¢Å¡Â Ã¯Â¸Â Sender ID: \(notification.senderID)")
                     }
             }
         }

@@ -65,7 +65,9 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         // Spin-off support
         spinOffFromVideoID: String? = nil,
         spinOffFromThreadID: String? = nil,
-        spinOffCount: Int = 0
+        spinOffCount: Int = 0,
+        recordingSource: String = "unknown",
+        hashtags: [String] = []
     ) {
         self.id = id
         self.title = title
@@ -105,6 +107,8 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         self.spinOffFromVideoID = spinOffFromVideoID
         self.spinOffFromThreadID = spinOffFromThreadID
         self.spinOffCount = spinOffCount
+        self.recordingSource = recordingSource
+        self.hashtags = hashtags
     }
     
     // MARK: - Thread/Parent-Child-Stepchild Logic
@@ -152,6 +156,12 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     var spinOffFromVideoID: String?   // The video this thread is a spin-off from
     var spinOffFromThreadID: String?  // The root thread this spin-off came from
     var spinOffCount: Int             // How many spin-offs reference THIS video
+    
+    // MARK: - Content Authenticity
+    var recordingSource: String       // "inApp", "cameraRoll", "unknown"
+    
+    // MARK: - Hashtags
+    var hashtags: [String]            // Extracted hashtags from description
     
     /// True if this thread is a spin-off from another video
     var isSpinOff: Bool {
@@ -222,7 +232,8 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
             segmentNumber: segmentNumber,
             segmentTitle: segmentTitle ?? finalTitle,
             isCollectionSegment: true,
-            replyTimestamp: nil
+            replyTimestamp: nil,
+            hashtags: []
         )
     }
     
@@ -331,13 +342,13 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     /// Temperature emoji representation
     var temperatureEmoji: String {
         switch temperature.lowercased() {
-        case "fire", "blazing": return "Ã°Å¸â€Â¥"
-        case "hot": return "Ã°Å¸Å’Â¶Ã¯Â¸Â"
-        case "warm": return "Ã¢Ëœâ‚¬Ã¯Â¸Â"
-        case "neutral": return "Ã°Å¸ËœÂ"
-        case "cool": return "Ã¢Ââ€žÃ¯Â¸Â"
-        case "cold", "frozen": return "Ã°Å¸Â§Å "
-        default: return "Ã°Å¸â€œÅ "
+        case "fire", "blazing": return "ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â¥"
+        case "hot": return "ÃƒÂ°Ã…Â¸Ã…â€™Ã‚Â¶ÃƒÂ¯Ã‚Â¸Ã‚Â"
+        case "warm": return "ÃƒÂ¢Ã‹Å“Ã¢â€šÂ¬ÃƒÂ¯Ã‚Â¸Ã‚Â"
+        case "neutral": return "ÃƒÂ°Ã…Â¸Ã‹Å“Ã‚Â"
+        case "cool": return "ÃƒÂ¢Ã‚ÂÃ¢â‚¬Å¾ÃƒÂ¯Ã‚Â¸Ã‚Â"
+        case "cold", "frozen": return "ÃƒÂ°Ã…Â¸Ã‚Â§Ã…Â "
+        default: return "ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â "
         }
     }
     
@@ -367,7 +378,8 @@ extension CoreVideoMetadata {
         creatorID: String,
         creatorName: String,
         duration: TimeInterval,
-        fileSize: Int64
+        fileSize: Int64,
+        hashtags: [String] = []
     ) -> CoreVideoMetadata {
         return CoreVideoMetadata(
             id: id,
@@ -397,7 +409,8 @@ extension CoreVideoMetadata {
             fileSize: fileSize,
             discoverabilityScore: 0.5,
             isPromoted: false,
-            lastEngagementAt: nil
+            lastEngagementAt: nil,
+            hashtags: hashtags
         )
     }
     
@@ -412,7 +425,8 @@ extension CoreVideoMetadata {
         creatorID: String,
         creatorName: String,
         duration: TimeInterval,
-        fileSize: Int64
+        fileSize: Int64,
+        hashtags: [String] = []
     ) -> CoreVideoMetadata {
         return CoreVideoMetadata(
             id: UUID().uuidString,
@@ -442,7 +456,8 @@ extension CoreVideoMetadata {
             fileSize: fileSize,
             discoverabilityScore: 0.5,
             isPromoted: false,
-            lastEngagementAt: nil
+            lastEngagementAt: nil,
+            hashtags: hashtags
         )
     }
     
@@ -458,7 +473,8 @@ extension CoreVideoMetadata {
         creatorID: String,
         creatorName: String,
         duration: TimeInterval,
-        fileSize: Int64
+        fileSize: Int64,
+        hashtags: [String] = []
     ) -> CoreVideoMetadata {
         return CoreVideoMetadata(
             id: UUID().uuidString,
@@ -488,7 +504,8 @@ extension CoreVideoMetadata {
             fileSize: fileSize,
             discoverabilityScore: 0.5,
             isPromoted: false,
-            lastEngagementAt: nil
+            lastEngagementAt: nil,
+            hashtags: hashtags
         )
     }
     
@@ -505,7 +522,8 @@ extension CoreVideoMetadata {
         creatorName: String,
         duration: TimeInterval,
         fileSize: Int64,
-        aspectRatio: Double = 9.0/16.0
+        aspectRatio: Double = 9.0/16.0,
+        hashtags: [String] = []
     ) -> CoreVideoMetadata {
         let newID = UUID().uuidString
         return CoreVideoMetadata(
@@ -539,7 +557,9 @@ extension CoreVideoMetadata {
             lastEngagementAt: nil,
             spinOffFromVideoID: sourceVideoID,
             spinOffFromThreadID: sourceThreadID,
-            spinOffCount: 0
+            spinOffCount: 0,
+            recordingSource: "inApp",
+            hashtags: hashtags
         )
     }
 }
@@ -602,7 +622,9 @@ extension CoreVideoMetadata {
             lastEngagementAt: Date(),
             spinOffFromVideoID: spinOffFromVideoID,
             spinOffFromThreadID: spinOffFromThreadID,
-            spinOffCount: spinOffCount
+            spinOffCount: spinOffCount,
+            recordingSource: recordingSource,
+            hashtags: hashtags
         )
     }
     
@@ -644,7 +666,9 @@ extension CoreVideoMetadata {
             lastEngagementAt: lastEngagementAt,
             spinOffFromVideoID: spinOffFromVideoID,
             spinOffFromThreadID: spinOffFromThreadID,
-            spinOffCount: spinOffCount
+            spinOffCount: spinOffCount,
+            recordingSource: recordingSource,
+            hashtags: hashtags
         )
     }
 }

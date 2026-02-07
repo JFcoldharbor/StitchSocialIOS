@@ -176,7 +176,9 @@ class VideoCoordinator: ObservableObject {
         preCompressedURL: URL? = nil,
         manualTitle: String? = nil,
         manualDescription: String? = nil,
-        taggedUserIDs: [String] = []
+        taggedUserIDs: [String] = [],
+        recordingSource: String = "unknown",
+        hashtags: [String] = []
     ) async throws -> CoreVideoMetadata {
         
         guard !isProcessing else {
@@ -234,7 +236,9 @@ class VideoCoordinator: ObservableObject {
                 userID: userID,
                 manualTitle: manualTitle,
                 manualDescription: manualDescription,
-                taggedUserIDs: taggedUserIDs
+                taggedUserIDs: taggedUserIDs,
+                recordingSource: recordingSource,
+                hashtags: hashtags
             )
             
             // PHASE 4: NOTIFICATIONS
@@ -484,7 +488,9 @@ class VideoCoordinator: ObservableObject {
         userID: String,
         manualTitle: String?,
         manualDescription: String?,
-        taggedUserIDs: [String]
+        taggedUserIDs: [String],
+        recordingSource: String,
+        hashtags: [String]
     ) async throws -> CoreVideoMetadata {
         
         currentPhase = .integrating
@@ -516,7 +522,9 @@ class VideoCoordinator: ObservableObject {
             videoService: videoService,
             userService: userService,
             notificationService: notificationService,
-            taggedUserIDs: taggedUserIDs
+            taggedUserIDs: taggedUserIDs,
+            recordingSource: recordingSource,
+            hashtags: hashtags
         )
         
         await updateProgress(1.0)

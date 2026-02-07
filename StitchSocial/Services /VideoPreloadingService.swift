@@ -37,10 +37,10 @@ class VideoPreloadingService: ObservableObject {
     private(set) var currentlyPlayingVideoID: String?
     
     /// Default pool size
-    private let defaultPoolSize = 8
+    private let defaultPoolSize = 12
     
     /// Current max pool size (reduced under memory pressure)
-    private var currentMaxPoolSize = 8
+    private var currentMaxPoolSize = 12
     
     /// Whether we're in reduced memory mode
     private(set) var isInReducedMode = false
@@ -49,7 +49,7 @@ class VideoPreloadingService: ObservableObject {
     
     private var maxPoolSize: Int { currentMaxPoolSize }
     private let preloadDistance = 3
-    private let maxConcurrentPreloads = 2
+    private let maxConcurrentPreloads = 3
     
     // MARK: - Published State
     
@@ -311,13 +311,25 @@ class VideoPreloadingService: ObservableObject {
         await processNextInQueue()
     }
     
+    /// Set of video IDs protected from eviction (currently playing + adjacent)
+    private var protectedVideoIDs: Set<String> = []
+    
     // MARK: - Currently Playing Tracking
     
     /// Call when a video starts playing - protects it from memory cleanup
     func markAsCurrentlyPlaying(_ videoID: String) {
         currentlyPlayingVideoID = videoID
+        protectedVideoIDs.insert(videoID)
         updateAccessOrder(for: videoID)
         print("🎬 PRELOAD: Marked \(videoID.prefix(8)) as currently playing (protected)")
+    }
+    
+    /// Protect specific video IDs from eviction (e.g. adjacent videos)
+    func protectVideos(_ videoIDs: [String]) {
+        protectedVideoIDs = Set(videoIDs)
+        if let current = currentlyPlayingVideoID {
+            protectedVideoIDs.insert(current)
+        }
     }
     
     /// Call when playback stops
@@ -326,6 +338,7 @@ class VideoPreloadingService: ObservableObject {
             print("🎬 PRELOAD: Cleared currently playing: \(videoID.prefix(8))")
         }
         currentlyPlayingVideoID = nil
+        protectedVideoIDs.removeAll()
     }
     
     // MARK: - Multidirectional Navigation Support
@@ -338,30 +351,47 @@ class VideoPreloadingService: ObservableObject {
         currentThreadIndex: Int
     ) async {
         
-        var videosToPreload: [CoreVideoMetadata] = []
-        
-        // 1. Current thread videos (for vertical swiping)
         let threadVideos = [currentThread.parentVideo] + currentThread.childVideos
-        videosToPreload.append(contentsOf: threadVideos)
         
-        // 2. Adjacent thread parent videos (for horizontal swiping)
-        // Skip if memory pressure is high
-        if memoryPressureLevel < .elevated {
-            let adjacentIndices = [currentThreadIndex - 1, currentThreadIndex + 1]
-                .filter { $0 >= 0 && $0 < allThreads.count }
-            
-            for index in adjacentIndices {
-                videosToPreload.append(allThreads[index].parentVideo)
+        // Protect current + adjacent videos from eviction
+        var protectIDs: [String] = []
+        let adjacentRange = max(0, currentVideoIndex - 1)...min(threadVideos.count - 1, currentVideoIndex + 1)
+        for i in adjacentRange {
+            protectIDs.append(threadVideos[i].id)
+        }
+        // Also protect adjacent thread parents
+        for offset in [-1, 1] {
+            let idx = currentThreadIndex + offset
+            if idx >= 0 && idx < allThreads.count {
+                protectIDs.append(allThreads[idx].parentVideo.id)
+            }
+        }
+        protectVideos(protectIDs)
+        
+        // 1. Preload current video first (high priority)
+        if currentVideoIndex < threadVideos.count {
+            await preloadVideo(threadVideos[currentVideoIndex], priority: .high)
+        }
+        
+        // 2. Preload adjacent in current thread (prev + next stitch only)
+        for offset in [-1, 1] {
+            let idx = currentVideoIndex + offset
+            if idx >= 0 && idx < threadVideos.count {
+                await preloadVideo(threadVideos[idx], priority: .normal)
             }
         }
         
-        // Preload with appropriate priorities
-        for (index, video) in videosToPreload.enumerated() {
-            let priority: PreloadPriority = index == currentVideoIndex ? .high : .normal
-            await preloadVideo(video, priority: priority)
+        // 3. Adjacent thread parents (for vertical swiping) — only if no pressure
+        if memoryPressureLevel < .elevated {
+            for offset in [-1, 1] {
+                let idx = currentThreadIndex + offset
+                if idx >= 0 && idx < allThreads.count {
+                    await preloadVideo(allThreads[idx].parentVideo, priority: .low)
+                }
+            }
         }
         
-        print("🎬 PRELOAD: Horizontal setup complete - \(videosToPreload.count) videos")
+        print("🎬 PRELOAD: Horizontal setup complete - protected \(protectIDs.count) videos")
     }
     
     /// Smart preloading for vertical stitch navigation
@@ -372,15 +402,19 @@ class VideoPreloadingService: ObservableObject {
         
         let allVideos = [thread.parentVideo] + thread.childVideos
         
-        // Preload current and adjacent videos
-        // Reduce range under memory pressure
+        // Protect current + adjacent
+        var protectIDs: [String] = []
         let range = memoryPressureLevel >= .elevated ? 0...0 : -1...1
-        
         let preloadIndices = range.compactMap { offset -> Int? in
             let index = currentVideoIndex + offset
             return (index >= 0 && index < allVideos.count) ? index : nil
         }
+        for idx in preloadIndices {
+            protectIDs.append(allVideos[idx].id)
+        }
+        protectVideos(protectIDs)
         
+        // Preload current first, then adjacent
         for index in preloadIndices {
             let priority: PreloadPriority = index == currentVideoIndex ? .high : .normal
             await preloadVideo(allVideos[index], priority: priority)
@@ -520,9 +554,15 @@ class VideoPreloadingService: ObservableObject {
         }
     }
     
-    /// Evict the least recently used player (that isn't currently playing)
+    /// Evict the least recently used player (that isn't protected)
     private func evictOldestPlayer() {
-        // Find oldest player that isn't currently playing
+        for videoID in accessOrder {
+            if !protectedVideoIDs.contains(videoID) && playerPool[videoID] != nil {
+                clearPlayer(for: videoID)
+                return
+            }
+        }
+        // If all are protected, evict oldest non-current as last resort
         for videoID in accessOrder {
             if videoID != currentlyPlayingVideoID && playerPool[videoID] != nil {
                 clearPlayer(for: videoID)
@@ -588,27 +628,14 @@ class VideoPreloadingService: ObservableObject {
         print("🧹 PRELOAD: Cleared preloaded players, kept current")
     }
     
-    /// Emergency: Keep only currently playing
+    /// Emergency: Keep only currently playing and protected
     func clearAllExceptCurrent() {
-        guard let currentID = currentlyPlayingVideoID,
-              let currentPlayer = playerPool[currentID] else {
-            clearAllPlayers()
-            return
-        }
+        let keepIDs = protectedVideoIDs.union(currentlyPlayingVideoID.map { [$0] } ?? [])
         
-        // Save current
-        let savedPlayer = currentPlayer
-        let savedObserver = playerObservers[currentID]
-        
-        // Clear everything
-        for videoID in Array(playerPool.keys) where videoID != currentID {
-            clearPlayer(for: videoID)
-        }
-        
-        // Restore current (in case it got cleared)
-        playerPool[currentID] = savedPlayer
-        if let observer = savedObserver {
-            playerObservers[currentID] = observer
+        for videoID in Array(playerPool.keys) {
+            if !keepIDs.contains(videoID) {
+                clearPlayer(for: videoID)
+            }
         }
         
         print("🧹 PRELOAD: Emergency cleanup - kept only current player")
@@ -668,7 +695,8 @@ class VideoPreloadingService: ObservableObject {
         let player = AVPlayer(playerItem: playerItem)
         
         // Configure player for optimal performance
-        player.automaticallyWaitsToMinimizeStalling = false
+        player.automaticallyWaitsToMinimizeStalling = true
+        playerItem.preferredForwardBufferDuration = 10.0
         player.isMuted = false
         
         // Setup looping for seamless playback
@@ -740,7 +768,8 @@ class VideoPreloadingService: ObservableObject {
         let player = AVPlayer(playerItem: playerItem)
         
         // Configure player for preloading
-        player.automaticallyWaitsToMinimizeStalling = false
+        player.automaticallyWaitsToMinimizeStalling = true
+        playerItem.preferredForwardBufferDuration = 10.0
         player.isMuted = true
         
         // Setup looping
@@ -780,33 +809,44 @@ class VideoPreloadingService: ObservableObject {
         }
     }
     
-    /// PHASE 1 FIX: Returns success/failure status
+    /// PHASE 1 FIX: Returns success/failure status — checks for buffered data not just status
     private func monitorPreloadProgress(player: AVPlayer, videoID: String) async -> Bool {
         guard let playerItem = player.currentItem else { return false }
         
         var attempts = 0
-        while playerItem.status != .readyToPlay && attempts < 50 {
+        let maxAttempts = 80  // 8 seconds max
+        
+        while attempts < maxAttempts {
             // Check for failure
             if playerItem.status == .failed {
                 print("❌ PRELOAD: Player failed for \(videoID.prefix(8))")
-                preloadProgress[videoID] = 0.0
                 return false
+            }
+            
+            // Success: ready to play AND has at least 1s buffered
+            if playerItem.status == .readyToPlay {
+                let buffered = playerItem.loadedTimeRanges.first?.timeRangeValue.duration.seconds ?? 0
+                if buffered >= 1.0 {
+                    preloadProgress[videoID] = 1.0
+                    print("✅ PRELOAD: Ready with \(String(format: "%.1f", buffered))s buffered after \(attempts) polls")
+                    return true
+                }
             }
             
             try? await Task.sleep(nanoseconds: 100_000_000)
             attempts += 1
-            preloadProgress[videoID] = Double(attempts) / 50.0
+            preloadProgress[videoID] = min(0.9, Double(attempts) / Double(maxAttempts))
         }
         
+        // If status is readyToPlay but buffer is thin, still accept it
         if playerItem.status == .readyToPlay {
             preloadProgress[videoID] = 1.0
-            print("✅ PRELOAD: Ready after \(attempts) attempts (\(String(format: "%.1f", Double(attempts) * 0.1))s)")
+            print("⚠️ PRELOAD: Ready but thin buffer for \(videoID.prefix(8))")
             return true
-        } else {
-            print("❌ PRELOAD: Timeout after \(attempts) attempts (5.0s)")
-            preloadProgress[videoID] = 0.0
-            return false
         }
+        
+        print("❌ PRELOAD: Timeout for \(videoID.prefix(8))")
+        return false
     }
     
     private func managePoolSize() {

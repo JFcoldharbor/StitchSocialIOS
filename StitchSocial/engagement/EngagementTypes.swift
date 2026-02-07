@@ -230,18 +230,7 @@ enum EngagementInteractionType: String, Codable {
 
 // MARK: - HELPER STRUCTURES
 
-/// Current user hype rating information
-struct HypeRatingState: Codable {
-    var percent: Double
-    var points: Double
-    var lastUpdate: Date
-    
-    init(percent: Double = 25.0) {
-        self.percent = percent
-        self.points = (percent / 100.0) * 15000.0
-        self.lastUpdate = Date()
-    }
-}
+// NOTE: HypeRatingState is defined in HypeRatingService.swift (with full regen support)
 
 /// Engagement interaction record for Firebase
 struct EngagementInteraction: Codable {

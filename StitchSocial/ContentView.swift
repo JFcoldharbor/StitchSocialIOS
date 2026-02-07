@@ -60,7 +60,7 @@ struct ContentView: View {
             initializeApp()
         }
         .onChange(of: authService.authState) { oldState, newState in
-            print("🔐 CONTENTVIEW: Auth state changed from \(oldState) to \(newState)")
+            print("ðŸ” CONTENTVIEW: Auth state changed from \(oldState) to \(newState)")
             if newState == .unauthenticated {
                 selectedTab = .discovery
                 showingOnboarding = false
@@ -78,12 +78,12 @@ struct ContentView: View {
                                 "platform": "ios",
                                 "isActive": true
                             ], merge: true)
-                            print("📱 FCM: Token stored for user: \(currentUser.id)")
+                            print("ðŸ“± FCM: Token stored for user: \(currentUser.id)")
                         } catch {
-                            print("📱 FCM: Failed to store token: \(error)")
+                            print("ðŸ“± FCM: Failed to store token: \(error)")
                         }
                     } else {
-                        print("📱 FCM: No token available yet at auth time")
+                        print("ðŸ“± FCM: No token available yet at auth time")
                     }
                 }
                 // Check for announcements when user becomes authenticated
@@ -220,10 +220,50 @@ struct ContentView: View {
             #endif
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        // MARK: - Push Notification Deep Link Handlers
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToVideo)) { notification in
+            if let videoID = notification.userInfo?["videoID"] as? String {
+                selectedTab = .notifications
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NotificationCenter.default.post(
+                        name: .pushNotificationNavigateToVideo,
+                        object: nil,
+                        userInfo: ["videoID": videoID]
+                    )
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToProfile)) { notification in
+            if let userID = notification.userInfo?["userID"] as? String {
+                selectedTab = .notifications
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NotificationCenter.default.post(
+                        name: .pushNotificationNavigateToProfile,
+                        object: nil,
+                        userInfo: ["userID": userID]
+                    )
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToThread)) { notification in
+            if let threadID = notification.userInfo?["threadID"] as? String {
+                selectedTab = .notifications
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NotificationCenter.default.post(
+                        name: .pushNotificationNavigateToThread,
+                        object: nil,
+                        userInfo: ["threadID": threadID]
+                    )
+                }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToNotifications)) { _ in
+            selectedTab = .notifications
+        }
         #if DEBUG
         .onShake {
             showMemoryDebug.toggle()
-            print("🧠 DEBUG: Memory overlay \(showMemoryDebug ? "shown" : "hidden")")
+            print("ðŸ§  DEBUG: Memory overlay \(showMemoryDebug ? "shown" : "hidden")")
         }
         #endif
     }
@@ -238,7 +278,7 @@ struct ContentView: View {
             AnnouncementOverlayView(
                 announcement: announcement,
                 onComplete: {
-                    print("📢 ANNOUNCEMENT: User completed viewing")
+                    print("ðŸ“¢ ANNOUNCEMENT: User completed viewing")
                     Task {
                         guard let userId = authService.currentUser?.id else { return }
                         // Mark as completed so it won't show again
@@ -247,7 +287,7 @@ struct ContentView: View {
                             announcementId: announcement.id,
                             watchedSeconds: announcement.minimumWatchSeconds
                         )
-                        print("📢 ANNOUNCEMENT: Marked as completed")
+                        print("ðŸ“¢ ANNOUNCEMENT: Marked as completed")
                     }
                 },
                 onDismiss: {
@@ -257,7 +297,7 @@ struct ContentView: View {
                             userId: userId,
                             announcementId: announcement.id
                         )
-                        print("📢 ANNOUNCEMENT: User dismissed")
+                        print("ðŸ“¢ ANNOUNCEMENT: User dismissed")
                     }
                 }
             )
@@ -301,6 +341,7 @@ struct ContentView: View {
                 // NEW: Check for announcements after auth is confirmed
                 if let currentUser = authService.currentUser {
                     await checkForAnnouncements(userId: currentUser.id)
+                    await HypeRatingService.shared.loadRating()
                 }
                 
                 await MainActor.run {
@@ -319,7 +360,7 @@ struct ContentView: View {
         do {
             // FIXED: Use getUser which returns BasicUserInfo
             guard let userInfo = try await userService.getUser(id: userId) else {
-                print("⚠️ ANNOUNCEMENTS: Could not load user info")
+                print("âš ï¸ ANNOUNCEMENTS: Could not load user info")
                 return
             }
             currentUserInfo = userInfo
@@ -337,10 +378,10 @@ struct ContentView: View {
             )
             
             let pendingCount = AnnouncementService.shared.pendingAnnouncements.count
-            print("📢 ANNOUNCEMENTS: Checked for user \(userId), \(pendingCount) pending")
+            print("ðŸ“¢ ANNOUNCEMENTS: Checked for user \(userId), \(pendingCount) pending")
             
         } catch {
-            print("⚠️ ANNOUNCEMENTS: Failed to check - \(error.localizedDescription)")
+            print("âš ï¸ ANNOUNCEMENTS: Failed to check - \(error.localizedDescription)")
         }
     }
     
@@ -462,7 +503,7 @@ struct MemoryDebugOverlay: View {
             }
             
             if let currentID = preloadService.currentlyPlayingVideoID {
-                Text("▶ \(currentID.prefix(6))...")
+                Text("â–¶ \(currentID.prefix(6))...")
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(.green)
             }
@@ -486,9 +527,9 @@ struct MemoryDebugOverlay: View {
     private var pressureText: String {
         switch preloadService.memoryPressureLevel {
         case .normal: return "MEM OK"
-        case .elevated: return "MEM ⚠️"
-        case .critical: return "MEM 🔶"
-        case .emergency: return "MEM 🔴"
+        case .elevated: return "MEM âš ï¸"
+        case .critical: return "MEM ðŸ”¶"
+        case .emergency: return "MEM ðŸ”´"
         }
     }
 }

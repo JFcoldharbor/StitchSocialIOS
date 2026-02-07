@@ -9,6 +9,7 @@
 
 import SwiftUI
 import FirebaseAuth
+import FirebaseFirestore
 
 // MARK: - User Presentation for Item-Based Sheet
 
@@ -44,6 +45,14 @@ class SearchViewModel: ObservableObject {
     @Published var isLoadingSuggestions = false
     @AppStorage("recentUserIDs") private var recentUserIDsData = ""
     @Published var recentUsers: [BasicUserInfo] = []
+    
+    // MARK: - Hashtag State
+    @Published var trendingHashtags: [TrendingHashtag] = []
+    @Published var isLoadingHashtags = false
+    @Published var selectedHashtag: TrendingHashtag?
+    @Published var hashtagVideos: [CoreVideoMetadata] = []
+    
+    private let hashtagService = HashtagService()
     
     var recentUserIDs: [String] {
         recentUserIDsData.split(separator: "|").map(String.init).reversed()
@@ -81,7 +90,36 @@ class SearchViewModel: ObservableObject {
     init() {
         Task {
             await loadSuggestedUsers()
+            await loadTrendingHashtags()
         }
+    }
+    
+    // MARK: - Hashtag Methods
+    
+    func loadTrendingHashtags() async {
+        isLoadingHashtags = true
+        await hashtagService.loadTrendingHashtags(limit: 15)
+        trendingHashtags = hashtagService.trendingHashtags
+        isLoadingHashtags = false
+    }
+    
+    func selectHashtag(_ hashtag: TrendingHashtag) async {
+        selectedHashtag = hashtag
+        isSearching = true
+        
+        do {
+            let result = try await hashtagService.getVideosForHashtag(hashtag.tag, limit: 30)
+            hashtagVideos = result.videos
+        } catch {
+            print("❌ SEARCH: Failed to load hashtag videos: \(error)")
+        }
+        
+        isSearching = false
+    }
+    
+    func clearHashtagSelection() {
+        selectedHashtag = nil
+        hashtagVideos = []
     }
     
     func performSearch() {
@@ -114,7 +152,7 @@ class SearchViewModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.isSearching = false
-                    print("❌ SEARCH: Search failed: \(error)")
+                    print("âŒ SEARCH: Search failed: \(error)")
                 }
             }
         }
@@ -137,13 +175,13 @@ class SearchViewModel: ObservableObject {
             
             // Load follow states for suggested users
             await followManager.loadFollowStatesForUsers(users)
-            print("✅ SEARCH: Loaded \(users.count) personalized suggestions")
+            print("âœ… SEARCH: Loaded \(users.count) personalized suggestions")
             
         } catch {
             await MainActor.run {
                 isLoadingSuggestions = false
             }
-            print("❌ SEARCH: Failed to load suggestions: \(error)")
+            print("âŒ SEARCH: Failed to load suggestions: \(error)")
         }
     }
     
@@ -155,12 +193,22 @@ class SearchViewModel: ObservableObject {
     }
 }
 
+// MARK: - Hashtag Presentation for Navigation
+
+struct HashtagPresentation: Identifiable {
+    let id: String
+    let hashtag: TrendingHashtag
+}
+
 struct SearchView: View {
     @StateObject private var viewModel = SearchViewModel()
     @StateObject private var authService = AuthService()
     @StateObject private var userService = UserService()
     @StateObject private var videoService = VideoService()
     @Environment(\.dismiss) private var dismiss
+    
+    // Hashtag navigation state
+    @State private var selectedHashtagPresentation: HashtagPresentation?
     
     var body: some View {
         ZStack {
@@ -173,9 +221,38 @@ struct SearchView: View {
             .ignoresSafeArea()
             
             VStack(spacing: 0) {
+                // Header with close button
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(10)
+                            .background(Color.white.opacity(0.1))
+                            .clipShape(Circle())
+                    }
+                    
+                    Spacer()
+                    
+                    Text("Search")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white)
+                    
+                    Spacer()
+                    
+                    // Invisible spacer for balance
+                    Color.clear
+                        .frame(width: 37, height: 37)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+                
                 // Modern search bar
                 searchBar
-                    .padding(.top, 8)
+                    .padding(.top, 4)
                 
                 // Tab selector
                 if viewModel.hasSearched {
@@ -200,6 +277,9 @@ struct SearchView: View {
                 videoService: videoService,
                 viewingUserID: presentation.id
             )
+        }
+        .sheet(item: $selectedHashtagPresentation) { presentation in
+            HashtagView(initialHashtag: presentation.hashtag)
         }
         .onAppear {
             // Load follow states on appear
@@ -416,6 +496,52 @@ struct SearchView: View {
                             }
                         }
                     }
+                    .padding(.top, 8)
+                }
+                
+                // MARK: - Trending Hashtags Section
+                if !viewModel.trendingHashtags.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            HStack(spacing: 8) {
+                                Image(systemName: "number")
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundColor(.pink)
+                                
+                                Text("Trending Hashtags")
+                                    .font(.system(size: 20, weight: .bold))
+                                    .foregroundColor(.white)
+                            }
+                            
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        
+                        // Horizontal scrolling hashtag chips
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(viewModel.trendingHashtags) { hashtag in
+                                    TrendingHashtagChip(hashtag: hashtag) {
+                                        selectedHashtagPresentation = HashtagPresentation(
+                                            id: hashtag.id,
+                                            hashtag: hashtag
+                                        )
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                        }
+                    }
+                    .padding(.top, 8)
+                } else if viewModel.isLoadingHashtags {
+                    HStack {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .pink))
+                        Text("Loading hashtags...")
+                            .font(.system(size: 13))
+                            .foregroundColor(.gray)
+                    }
+                    .padding(.horizontal, 16)
                     .padding(.top, 8)
                 }
                 
@@ -751,3 +877,456 @@ struct VideoSearchCardView: View {
     }
 }
 
+// MARK: - Trending Hashtag Chip
+
+struct TrendingHashtagChip: View {
+    let hashtag: TrendingHashtag
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 6) {
+                // Velocity indicator
+                Text(hashtag.velocityTier.emoji)
+                    .font(.system(size: 14))
+                
+                // Hashtag name
+                Text(hashtag.displayTag)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                
+                // Video count
+                Text("\(hashtag.videoCount)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.gray)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                LinearGradient(
+                    colors: gradientColors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .cornerRadius(20)
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(borderColor.opacity(0.5), lineWidth: 1)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    private var gradientColors: [Color] {
+        switch hashtag.velocityTier {
+        case .blazing: return [Color.orange.opacity(0.3), Color.red.opacity(0.2)]
+        case .hot: return [Color.pink.opacity(0.3), Color.orange.opacity(0.2)]
+        case .rising: return [Color.purple.opacity(0.3), Color.pink.opacity(0.2)]
+        case .steady: return [Color.gray.opacity(0.2), Color.gray.opacity(0.15)]
+        }
+    }
+    
+    private var borderColor: Color {
+        switch hashtag.velocityTier {
+        case .blazing: return .orange
+        case .hot: return .pink
+        case .rising: return .purple
+        case .steady: return .gray
+        }
+    }
+}
+
+// MARK: - HashtagView
+
+struct HashtagView: View {
+    let initialHashtag: TrendingHashtag
+    
+    @StateObject private var viewModel = HashtagViewModel()
+    @Environment(\.dismiss) private var dismiss
+    
+    // Video presentation state
+    @State private var selectedVideo: CoreVideoMetadata?
+    
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                // Dark gradient background
+                LinearGradient(
+                    colors: [Color.black, Color(white: 0.08)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+                
+                VStack(spacing: 0) {
+                    // Search bar for hashtags
+                    hashtagSearchBar
+                    
+                    // Trending hashtags horizontal scroll
+                    if !viewModel.trendingHashtags.isEmpty {
+                        trendingHashtagsRow
+                    }
+                    
+                    // Current hashtag header
+                    if let current = viewModel.currentHashtag {
+                        currentHashtagHeader(current)
+                    }
+                    
+                    // Videos grid
+                    if viewModel.isLoading && viewModel.videos.isEmpty {
+                        loadingView
+                    } else if viewModel.videos.isEmpty {
+                        emptyView
+                    } else {
+                        videosGrid
+                    }
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+                }
+                
+                ToolbarItem(placement: .principal) {
+                    Text("Hashtags")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.white)
+                }
+            }
+            .toolbarBackground(Color.black.opacity(0.9), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+        }
+        .task {
+            await viewModel.initialize(with: initialHashtag)
+        }
+        .fullScreenCover(item: $selectedVideo) { video in
+            FullscreenVideoView(
+                video: video,
+                overlayContext: .fullscreen,
+                onDismiss: {
+                    selectedVideo = nil
+                }
+            )
+        }
+    }
+    
+    // MARK: - Search Bar
+    
+    private var hashtagSearchBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "number")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(.pink)
+            
+            TextField("Search hashtags...", text: $viewModel.searchText)
+                .font(.system(size: 16))
+                .foregroundColor(.white)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+                .onChange(of: viewModel.searchText) { _, newValue in
+                    viewModel.filterHashtags(query: newValue)
+                }
+            
+            if !viewModel.searchText.isEmpty {
+                Button {
+                    viewModel.searchText = ""
+                    viewModel.filterHashtags(query: "")
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.08))
+        .cornerRadius(12)
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+    }
+    
+    // MARK: - Trending Row
+    
+    private var trendingHashtagsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(viewModel.filteredHashtags) { hashtag in
+                    HashtagPill(
+                        hashtag: hashtag,
+                        isSelected: viewModel.currentHashtag?.id == hashtag.id
+                    ) {
+                        Task {
+                            await viewModel.selectHashtag(hashtag)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.vertical, 12)
+    }
+    
+    // MARK: - Current Hashtag Header
+    
+    private func currentHashtagHeader(_ hashtag: TrendingHashtag) -> some View {
+        HStack(spacing: 12) {
+            Text(hashtag.velocityTier.emoji)
+                .font(.system(size: 24))
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text(hashtag.displayTag)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundColor(.white)
+                
+                Text("\(hashtag.videoCount) videos • \(hashtag.recentVideoCount) today")
+                    .font(.system(size: 13))
+                    .foregroundColor(.gray)
+            }
+            
+            Spacer()
+            
+            // Velocity badge
+            Text(hashtag.velocityTier.displayName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(velocityColor(hashtag.velocityTier))
+                .cornerRadius(12)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.05))
+    }
+    
+    private func velocityColor(_ tier: HashtagVelocityTier) -> Color {
+        switch tier {
+        case .blazing: return .orange
+        case .hot: return .pink
+        case .rising: return .purple
+        case .steady: return .gray
+        }
+    }
+    
+    // MARK: - Videos Grid
+    
+    private var videosGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 2),
+                GridItem(.flexible(), spacing: 2),
+                GridItem(.flexible(), spacing: 2)
+            ], spacing: 2) {
+                ForEach(viewModel.videos) { video in
+                    VideoThumbnailView(
+                        video: video,
+                        showEngagementBadge: true
+                    ) {
+                        selectedVideo = video
+                    }
+                }
+            }
+            .padding(.top, 2)
+            
+            // Load more trigger
+            if viewModel.hasMore {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .pink))
+                    .padding()
+                    .onAppear {
+                        Task {
+                            await viewModel.loadMoreVideos()
+                        }
+                    }
+            }
+        }
+    }
+    
+    // MARK: - States
+    
+    private var loadingView: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .pink))
+                .scaleEffect(1.2)
+            
+            Text("Loading videos...")
+                .font(.system(size: 14))
+                .foregroundColor(.gray)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var emptyView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "number.square")
+                .font(.system(size: 48))
+                .foregroundColor(.gray.opacity(0.5))
+            
+            Text("No videos found")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundColor(.white)
+            
+            if let hashtag = viewModel.currentHashtag {
+                Text("No videos with \(hashtag.displayTag) yet")
+                    .font(.system(size: 14))
+                    .foregroundColor(.gray)
+            }
+            
+            // Debug: Show backfill button for admins
+            #if DEBUG
+            Button {
+                Task {
+                    await viewModel.runBackfill()
+                }
+            } label: {
+                Text("Run Hashtag Backfill")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.yellow)
+                    .cornerRadius(8)
+            }
+            .padding(.top, 8)
+            #endif
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - HashtagViewModel
+
+@MainActor
+class HashtagViewModel: ObservableObject {
+    @Published var currentHashtag: TrendingHashtag?
+    @Published var videos: [CoreVideoMetadata] = []
+    @Published var trendingHashtags: [TrendingHashtag] = []
+    @Published var filteredHashtags: [TrendingHashtag] = []
+    @Published var isLoading = false
+    @Published var searchText = ""
+    @Published var hasMore = false
+    
+    private let hashtagService = HashtagService()
+    private var lastDocument: DocumentSnapshot?
+    
+    func initialize(with hashtag: TrendingHashtag) async {
+        // Load trending hashtags
+        await hashtagService.loadTrendingHashtags(limit: 20)
+        trendingHashtags = hashtagService.trendingHashtags
+        filteredHashtags = trendingHashtags
+        
+        // If initial hashtag not in trending, add it
+        if !trendingHashtags.contains(where: { $0.id == hashtag.id }) {
+            trendingHashtags.insert(hashtag, at: 0)
+            filteredHashtags = trendingHashtags
+        }
+        
+        // Load videos for initial hashtag
+        await selectHashtag(hashtag)
+    }
+    
+    func selectHashtag(_ hashtag: TrendingHashtag) async {
+        currentHashtag = hashtag
+        videos = []
+        lastDocument = nil
+        isLoading = true
+        
+        do {
+            let result = try await hashtagService.getVideosForHashtag(hashtag.tag, limit: 30)
+            videos = result.videos
+            lastDocument = result.lastDoc
+            hasMore = result.hasMore
+        } catch {
+            print("❌ HASHTAG VIEW: Failed to load videos: \(error)")
+        }
+        
+        isLoading = false
+    }
+    
+    func loadMoreVideos() async {
+        guard let current = currentHashtag, hasMore, !isLoading else { return }
+        isLoading = true
+        
+        do {
+            let result = try await hashtagService.getVideosForHashtag(
+                current.tag,
+                limit: 30,
+                lastDocument: lastDocument
+            )
+            videos.append(contentsOf: result.videos)
+            lastDocument = result.lastDoc
+            hasMore = result.hasMore
+        } catch {
+            print("❌ HASHTAG VIEW: Failed to load more: \(error)")
+        }
+        
+        isLoading = false
+    }
+    
+    func filterHashtags(query: String) {
+        if query.isEmpty {
+            filteredHashtags = trendingHashtags
+        } else {
+            let q = query.lowercased().replacingOccurrences(of: "#", with: "")
+            filteredHashtags = trendingHashtags.filter { $0.tag.contains(q) }
+        }
+    }
+    
+    // MARK: - Debug: Backfill
+    
+    func runBackfill() async {
+        print("🏷️ BACKFILL: Starting from HashtagView...")
+        let result = await hashtagService.backfillAllHashtags()
+        print("🏷️ BACKFILL: Complete! Updated: \(result.updated), Failed: \(result.failed)")
+        
+        // Reload trending after backfill
+        await hashtagService.loadTrendingHashtags(limit: 20)
+        trendingHashtags = hashtagService.trendingHashtags
+        filteredHashtags = trendingHashtags
+        
+        // Reload current hashtag videos
+        if let current = currentHashtag {
+            await selectHashtag(current)
+        }
+    }
+}
+
+// MARK: - Hashtag Pill (for horizontal scroll)
+
+struct HashtagPill: View {
+    let hashtag: TrendingHashtag
+    let isSelected: Bool
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 4) {
+                Text(hashtag.velocityTier.emoji)
+                    .font(.system(size: 12))
+                
+                Text(hashtag.displayTag)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(isSelected ? .black : .white)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.pink : Color.white.opacity(0.1))
+            .cornerRadius(16)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(isSelected ? Color.clear : Color.white.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}

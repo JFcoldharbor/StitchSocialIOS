@@ -4,10 +4,10 @@
 //
 //  Layer 4: Core Services - Video Upload Management
 //
-//  🔧 UPDATED: Removed hard 100MB rejection - now auto-compresses
-//  🔧 UPDATED: Uses FastVideoCompressor as fallback
-//  🔧 UPDATED: Better error messages for file size issues
-//  🔧 UPDATED: Added spin-off support
+//  Ã°Å¸â€Â§ UPDATED: Removed hard 100MB rejection - now auto-compresses
+//  Ã°Å¸â€Â§ UPDATED: Uses FastVideoCompressor as fallback
+//  Ã°Å¸â€Â§ UPDATED: Better error messages for file size issues
+//  Ã°Å¸â€Â§ UPDATED: Added spin-off support
 //
 
 import Foundation
@@ -51,7 +51,7 @@ class VideoUploadService: ObservableObject {
     // MARK: - Public Interface
     
     /// Uploads video with metadata to Firebase
-    /// 🔧 UPDATED: Now auto-compresses if file exceeds 100MB limit
+    /// Ã°Å¸â€Â§ UPDATED: Now auto-compresses if file exceeds 100MB limit
     func uploadVideo(
         videoURL: URL,
         metadata: VideoUploadMetadata,
@@ -129,8 +129,8 @@ class VideoUploadService: ObservableObject {
             )
             
             let orientation = VideoOrientation.from(aspectRatio: technicalMetadata.aspectRatio)
-            print("✅ UPLOAD SERVICE: Video uploaded successfully - \(metadata.title)")
-            print("📐 UPLOAD SERVICE: \(orientation.displayName) video (aspect ratio: \(String(format: "%.3f", technicalMetadata.aspectRatio)))")
+            print("Ã¢Å“â€¦ UPLOAD SERVICE: Video uploaded successfully - \(metadata.title)")
+            print("Ã°Å¸â€œÂ UPLOAD SERVICE: \(orientation.displayName) video (aspect ratio: \(String(format: "%.3f", technicalMetadata.aspectRatio)))")
             
             return result
             
@@ -148,27 +148,27 @@ class VideoUploadService: ObservableObject {
                 error: error
             )
             
-            print("❌ UPLOAD SERVICE: Upload failed - \(error.localizedDescription)")
+            print("Ã¢ÂÅ’ UPLOAD SERVICE: Upload failed - \(error.localizedDescription)")
             throw error
         }
     }
     
-    // MARK: - 🆕 NEW: Smart Size Check with Auto-Compression
+    // MARK: - Ã°Å¸â€ â€¢ NEW: Smart Size Check with Auto-Compression
     
     /// Ensures video is under upload size limit, compressing if necessary
     private func ensureUploadableSize(videoURL: URL) async throws -> URL {
         let fileSize = try getFileSize(videoURL)
         
-        print("📦 UPLOAD: File size is \(formatFileSize(fileSize))")
+        print("Ã°Å¸â€œÂ¦ UPLOAD: File size is \(formatFileSize(fileSize))")
         
         // If under limit, use as-is
         if fileSize <= Self.maxUploadSize {
-            print("✅ UPLOAD: File is within size limit")
+            print("Ã¢Å“â€¦ UPLOAD: File is within size limit")
             return videoURL
         }
         
         // Need to compress
-        print("⚠️ UPLOAD: File exceeds \(formatFileSize(Self.maxUploadSize)), compressing...")
+        print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD: File exceeds \(formatFileSize(Self.maxUploadSize)), compressing...")
         await updateProgress(0.05, task: "Compressing large video...")
         
         let compressor = FastVideoCompressor.shared
@@ -186,7 +186,7 @@ class VideoUploadService: ObservableObject {
                 }
             )
             
-            print("✅ UPLOAD: Compressed \(formatFileSize(fileSize)) → \(formatFileSize(result.compressedSize))")
+            print("Ã¢Å“â€¦ UPLOAD: Compressed \(formatFileSize(fileSize)) Ã¢â€ â€™ \(formatFileSize(result.compressedSize))")
             
             // Verify it's now under limit
             if result.compressedSize <= Self.maxUploadSize {
@@ -235,7 +235,9 @@ class VideoUploadService: ObservableObject {
         videoService: VideoService,
         userService: UserService,
         notificationService: NotificationService,
-        taggedUserIDs: [String] = []
+        taggedUserIDs: [String] = [],
+        recordingSource: String = "unknown",
+        hashtags: [String] = []
     ) async throws -> CoreVideoMetadata {
         
         await updateProgress(0.95, task: "Creating video document...")
@@ -243,7 +245,7 @@ class VideoUploadService: ObservableObject {
         let createdVideo: CoreVideoMetadata
         
         let orientation = VideoOrientation.from(aspectRatio: uploadResult.aspectRatio)
-        print("📐 UPLOAD SERVICE: Creating \(orientation.displayName) video document")
+        print("Ã°Å¸â€œÂ UPLOAD SERVICE: Creating \(orientation.displayName) video document")
         
         switch recordingContext {
         case .newThread:
@@ -256,7 +258,9 @@ class VideoUploadService: ObservableObject {
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize,
-                aspectRatio: uploadResult.aspectRatio
+                aspectRatio: uploadResult.aspectRatio,
+                recordingSource: recordingSource,
+                hashtags: hashtags
             )
             
             // Notify followers
@@ -271,10 +275,10 @@ class VideoUploadService: ObservableObject {
                             videoTitle: createdVideo.title,
                             followerIDs: followerIDs
                         )
-                        print("✅ UPLOAD SERVICE: Notified \(followerIDs.count) followers")
+                        print("Ã¢Å“â€¦ UPLOAD SERVICE: Notified \(followerIDs.count) followers")
                     }
                 } catch {
-                    print("⚠️ UPLOAD SERVICE: Failed to notify followers - \(error)")
+                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to notify followers - \(error)")
                 }
             }
             
@@ -289,7 +293,9 @@ class VideoUploadService: ObservableObject {
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize,
-                aspectRatio: uploadResult.aspectRatio
+                aspectRatio: uploadResult.aspectRatio,
+                recordingSource: recordingSource,
+                hashtags: hashtags
             )
             
             // Stitch notification
@@ -303,8 +309,16 @@ class VideoUploadService: ObservableObject {
                         parentCreatorID: nil,
                         threadUserIDs: []
                     )
+                    
+                    // Award hype rating regen to original creator for receiving a stitch
+                    if threadVideo.creatorID != metadata.creatorID {
+                        await HypeRatingService.shared.queueEngagementRegen(
+                            source: .receivedStitch,
+                            amount: HypeRegenSource.receivedStitch.baseRegenAmount
+                        )
+                    }
                 } catch {
-                    print("⚠️ UPLOAD SERVICE: Failed to send stitch notification - \(error)")
+                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to send stitch notification - \(error)")
                 }
             }
             
@@ -319,7 +333,9 @@ class VideoUploadService: ObservableObject {
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize,
-                aspectRatio: uploadResult.aspectRatio
+                aspectRatio: uploadResult.aspectRatio,
+                recordingSource: recordingSource,
+                hashtags: hashtags
             )
             
             // Reply notification
@@ -333,8 +349,16 @@ class VideoUploadService: ObservableObject {
                         parentCreatorID: parentVideo.creatorID,
                         threadUserIDs: []
                     )
+                    
+                    // Award hype rating regen to parent creator for receiving a reply
+                    if parentVideo.creatorID != metadata.creatorID {
+                        await HypeRatingService.shared.queueEngagementRegen(
+                            source: .receivedReply,
+                            amount: HypeRegenSource.receivedReply.baseRegenAmount
+                        )
+                    }
                 } catch {
-                    print("⚠️ UPLOAD SERVICE: Failed to send reply notification - \(error)")
+                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to send reply notification - \(error)")
                 }
             }
             
@@ -349,7 +373,9 @@ class VideoUploadService: ObservableObject {
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize,
-                aspectRatio: uploadResult.aspectRatio
+                aspectRatio: uploadResult.aspectRatio,
+                recordingSource: recordingSource,
+                hashtags: hashtags
             )
             
             Task {
@@ -363,7 +389,7 @@ class VideoUploadService: ObservableObject {
                         threadUserIDs: []
                     )
                 } catch {
-                    print("⚠️ UPLOAD SERVICE: Failed to send thread notification - \(error)")
+                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to send thread notification - \(error)")
                 }
             }
             
@@ -379,7 +405,9 @@ class VideoUploadService: ObservableObject {
                 creatorName: metadata.creatorName,
                 duration: uploadResult.duration,
                 fileSize: uploadResult.fileSize,
-                aspectRatio: uploadResult.aspectRatio
+                aspectRatio: uploadResult.aspectRatio,
+                recordingSource: recordingSource,
+                hashtags: hashtags
             )
             
             // Notify original video creator about spin-off
@@ -394,7 +422,7 @@ class VideoUploadService: ObservableObject {
                         threadUserIDs: []
                     )
                 } catch {
-                    print("⚠️ UPLOAD SERVICE: Failed to send spin-off notification - \(error)")
+                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to send spin-off notification - \(error)")
                 }
             }
         }
@@ -405,7 +433,7 @@ class VideoUploadService: ObservableObject {
                 videoID: createdVideo.id,
                 taggedUserIDs: taggedUserIDs
             )
-            print("📌 UPLOAD SERVICE: Saved \(taggedUserIDs.count) tagged users")
+            print("Ã°Å¸â€œÅ’ UPLOAD SERVICE: Saved \(taggedUserIDs.count) tagged users")
             
             for taggedUserID in taggedUserIDs {
                 guard taggedUserID != metadata.creatorID else { continue }
@@ -422,7 +450,24 @@ class VideoUploadService: ObservableObject {
         }
         
         await updateProgress(1.0, task: "Video created successfully!")
-        print("✅ UPLOAD SERVICE: Video document created - \(createdVideo.id)")
+        print("Ã¢Å“â€¦ UPLOAD SERVICE: Video document created - \(createdVideo.id)")
+        
+        // MARK: - Hype Rating Regen for posting
+        Task {
+            let isInApp = recordingSource.lowercased() == "in_app" || recordingSource.lowercased() == "in-app"
+            switch recordingContext {
+            case .newThread:
+                HypeRatingService.shared.didPostOriginalContent(isInApp: isInApp)
+            case .stitchToThread:
+                HypeRatingService.shared.didStitchContent()
+            case .replyToVideo:
+                HypeRatingService.shared.didReplyToContent()
+            case .continueThread:
+                HypeRatingService.shared.didStitchContent()
+            case .spinOffFrom:
+                HypeRatingService.shared.didPostOriginalContent(isInApp: isInApp)
+            }
+        }
         
         return createdVideo
     }
@@ -546,7 +591,7 @@ class VideoUploadService: ObservableObject {
             }
             
             let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-            print("📐 METADATA: \(orientation.displayName) - \(Int(width))x\(Int(height))")
+            print("Ã°Å¸â€œÂ METADATA: \(orientation.displayName) - \(Int(width))x\(Int(height))")
         }
         
         return TechnicalMetadata(

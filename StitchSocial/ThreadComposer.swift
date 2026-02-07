@@ -25,6 +25,7 @@ struct ThreadComposer: View {
     let recordedVideoURL: URL
     let recordingContext: RecordingContext
     let aiResult: VideoAnalysisResult?
+    let recordingSource: String  // "inApp" or "cameraRoll"
     let onVideoCreated: (CoreVideoMetadata) -> Void
     let onCancel: () -> Void
     
@@ -164,10 +165,10 @@ struct ThreadComposer: View {
         capturedUserEmail = firebaseEmail
         capturedUserId = firebaseUID
         
-        print("📢 THREAD COMPOSER: Captured auth state")
-        print("📢 THREAD COMPOSER: Email = '\(capturedUserEmail)'")
-        print("📢 THREAD COMPOSER: UID = '\(capturedUserId)'")
-        print("📢 THREAD COMPOSER: Can create announcement = \(canCreateAnnouncement)")
+        print("ðŸ“¢ THREAD COMPOSER: Captured auth state")
+        print("ðŸ“¢ THREAD COMPOSER: Email = '\(capturedUserEmail)'")
+        print("ðŸ“¢ THREAD COMPOSER: UID = '\(capturedUserId)'")
+        print("ðŸ“¢ THREAD COMPOSER: Can create announcement = \(canCreateAnnouncement)")
     }
     
     // MARK: - Main Content
@@ -554,9 +555,9 @@ struct ThreadComposer: View {
             // Debug: Show why admin section isn't visible
             EmptyView()
                 .onAppear {
-                    print("📢 THREAD COMPOSER: Admin section NOT showing")
-                    print("📢 THREAD COMPOSER: capturedUserEmail = '\(capturedUserEmail)'")
-                    print("📢 THREAD COMPOSER: canCreateAnnouncement = \(canCreateAnnouncement)")
+                    print("ðŸ“¢ THREAD COMPOSER: Admin section NOT showing")
+                    print("ðŸ“¢ THREAD COMPOSER: capturedUserEmail = '\(capturedUserEmail)'")
+                    print("ðŸ“¢ THREAD COMPOSER: canCreateAnnouncement = \(canCreateAnnouncement)")
                 }
         }
     }
@@ -1068,10 +1069,10 @@ struct ThreadComposer: View {
         let emailToUse = capturedUserEmail.isEmpty ? (Auth.auth().currentUser?.email ?? "") : capturedUserEmail
         let shouldCreateAnnouncement = isAnnouncement && AnnouncementVideoHelper.canCreateAnnouncement(email: emailToUse)
         
-        print("🎬 CREATION: Starting - pausing video player")
-        print("📢 CREATION: isAnnouncement = \(isAnnouncement)")
-        print("📢 CREATION: emailToUse = '\(emailToUse)'")
-        print("📢 CREATION: shouldCreateAnnouncement = \(shouldCreateAnnouncement)")
+        print("ðŸŽ¬ CREATION: Starting - pausing video player")
+        print("ðŸ“¢ CREATION: isAnnouncement = \(isAnnouncement)")
+        print("ðŸ“¢ CREATION: emailToUse = '\(emailToUse)'")
+        print("ðŸ“¢ CREATION: shouldCreateAnnouncement = \(shouldCreateAnnouncement)")
         
         sharedPlayer?.pause()
         isPlaying = false
@@ -1082,18 +1083,21 @@ struct ThreadComposer: View {
                 let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
                 let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
                 
-                print("✏️ MANUAL CONTENT: Passing to VideoCoordinator")
-                print("✏️ TITLE: '\(trimmedTitle)'")
-                print("✏️ DESCRIPTION: '\(trimmedDescription)'")
-                print("🏷️ TAGGED USERS: \(taggedUserIDs.count) users")
-                print("📢 IS ANNOUNCEMENT: \(isAnnouncement)")
+                
+                // Extract hashtags from description
+                let hashtags = HashtagService.extractHashtags(from: trimmedDescription)
+                print("âœï¸ MANUAL CONTENT: Passing to VideoCoordinator")
+                print("âœï¸ TITLE: '\(trimmedTitle)'")
+                print("âœï¸ DESCRIPTION: '\(trimmedDescription)'")
+                print("ðŸ·ï¸ TAGGED USERS: \(taggedUserIDs.count) users")
+                print("ðŸ“¢ IS ANNOUNCEMENT: \(isAnnouncement)")
                 
                 let authService = AuthService()
                 let currentUserID = authService.currentUser?.id ?? Auth.auth().currentUser?.uid ?? "unknown"
                 let currentUserTier = authService.currentUser?.tier ?? .rookie
                 
-                print("🔑 AUTH: User ID = '\(currentUserID)'")
-                print("🔑 AUTH: User Tier = '\(currentUserTier.rawValue)'")
+                print("ðŸ”‘ AUTH: User ID = '\(currentUserID)'")
+                print("ðŸ”‘ AUTH: User Tier = '\(currentUserTier.rawValue)'")
                 
                 let createdVideo = try await videoCoordinator.processVideoCreation(
                     recordedVideoURL: recordedVideoURL,
@@ -1102,24 +1106,26 @@ struct ThreadComposer: View {
                     userTier: currentUserTier,
                     manualTitle: trimmedTitle.isEmpty ? nil : trimmedTitle,
                     manualDescription: trimmedDescription.isEmpty ? nil : trimmedDescription,
-                    taggedUserIDs: taggedUserIDs
+                    taggedUserIDs: taggedUserIDs,
+                    recordingSource: recordingSource,
+                    hashtags: hashtags
                 )
                 
                 // FIXED: Use the email we captured, create announcement
                 if shouldCreateAnnouncement {
-                    print("📢 ANNOUNCEMENT: About to create announcement...")
+                    print("ðŸ“¢ ANNOUNCEMENT: About to create announcement...")
                     await createAnnouncementForVideo(createdVideo, creatorEmail: emailToUse)
                 } else {
-                    print("📢 ANNOUNCEMENT: Skipping - shouldCreateAnnouncement=\(shouldCreateAnnouncement)")
+                    print("ðŸ“¢ ANNOUNCEMENT: Skipping - shouldCreateAnnouncement=\(shouldCreateAnnouncement)")
                 }
                 
                 await MainActor.run {
-                    print("✅ THREAD CREATION: Success!")
-                    print("✅ FINAL TITLE: '\(createdVideo.title)'")
-                    print("✅ FINAL DESCRIPTION: '\(createdVideo.description)'")
-                    print("✅ TAGGED USERS: \(createdVideo.taggedUserIDs.count)")
+                    print("âœ… THREAD CREATION: Success!")
+                    print("âœ… FINAL TITLE: '\(createdVideo.title)'")
+                    print("âœ… FINAL DESCRIPTION: '\(createdVideo.description)'")
+                    print("âœ… TAGGED USERS: \(createdVideo.taggedUserIDs.count)")
                     if shouldCreateAnnouncement {
-                        print("📢 ANNOUNCEMENT: Creation attempted")
+                        print("ðŸ“¢ ANNOUNCEMENT: Creation attempted")
                     }
                     isCreating = false
                     onVideoCreated(createdVideo)
@@ -1130,7 +1136,7 @@ struct ThreadComposer: View {
                     isCreating = false
                     errorMessage = "Failed to create thread: \(error.localizedDescription)"
                     showError = true
-                    print("❌ THREAD CREATION: Failed - \(error.localizedDescription)")
+                    print("âŒ THREAD CREATION: Failed - \(error.localizedDescription)")
                     
                     isPlaying = true
                     sharedPlayer?.play()
@@ -1142,13 +1148,13 @@ struct ThreadComposer: View {
     // MARK: - Create Announcement (UPDATED: Now passes all scheduling parameters)
     
     private func createAnnouncementForVideo(_ video: CoreVideoMetadata, creatorEmail: String) async {
-        print("📢 CREATE ANNOUNCEMENT: Starting...")
-        print("📢 CREATE ANNOUNCEMENT: videoId = \(video.id)")
-        print("📢 CREATE ANNOUNCEMENT: creatorEmail = '\(creatorEmail)'")
-        print("📢 CREATE ANNOUNCEMENT: title = '\(video.title)'")
-        print("📢 CREATE ANNOUNCEMENT: startDate = \(announcementStartDate)")
-        print("📢 CREATE ANNOUNCEMENT: endDate = \(String(describing: hasEndDate ? announcementEndDate : nil))")
-        print("📢 CREATE ANNOUNCEMENT: repeatMode = \(repeatMode.rawValue)")
+        print("ðŸ“¢ CREATE ANNOUNCEMENT: Starting...")
+        print("ðŸ“¢ CREATE ANNOUNCEMENT: videoId = \(video.id)")
+        print("ðŸ“¢ CREATE ANNOUNCEMENT: creatorEmail = '\(creatorEmail)'")
+        print("ðŸ“¢ CREATE ANNOUNCEMENT: title = '\(video.title)'")
+        print("ðŸ“¢ CREATE ANNOUNCEMENT: startDate = \(announcementStartDate)")
+        print("ðŸ“¢ CREATE ANNOUNCEMENT: endDate = \(String(describing: hasEndDate ? announcementEndDate : nil))")
+        print("ðŸ“¢ CREATE ANNOUNCEMENT: repeatMode = \(repeatMode.rawValue)")
         
         do {
             let announcement = try await AnnouncementService.shared.createAnnouncement(
@@ -1170,26 +1176,26 @@ struct ThreadComposer: View {
                 minHoursBetweenShows: minHoursBetweenShows,
                 maxTotalShows: maxTotalShows
             )
-            print("📢 ANNOUNCEMENT CREATED: \(announcement.id)")
-            print("📢 PRIORITY: \(announcementPriority.displayName)")
-            print("📢 TYPE: \(announcementType.displayName)")
-            print("📢 MIN WATCH: \(minimumWatchSeconds)s")
-            print("📢 START: \(announcement.startDate)")
-            print("📢 END: \(String(describing: announcement.endDate))")
-            print("📢 REPEAT MODE: \(announcement.repeatMode.rawValue)")
-            print("📢 MAX DAILY: \(announcement.maxDailyShows)")
-            print("📢 MIN HOURS BETWEEN: \(announcement.minHoursBetweenShows)")
-            print("📢 MAX TOTAL: \(String(describing: announcement.maxTotalShows))")
+            print("ðŸ“¢ ANNOUNCEMENT CREATED: \(announcement.id)")
+            print("ðŸ“¢ PRIORITY: \(announcementPriority.displayName)")
+            print("ðŸ“¢ TYPE: \(announcementType.displayName)")
+            print("ðŸ“¢ MIN WATCH: \(minimumWatchSeconds)s")
+            print("ðŸ“¢ START: \(announcement.startDate)")
+            print("ðŸ“¢ END: \(String(describing: announcement.endDate))")
+            print("ðŸ“¢ REPEAT MODE: \(announcement.repeatMode.rawValue)")
+            print("ðŸ“¢ MAX DAILY: \(announcement.maxDailyShows)")
+            print("ðŸ“¢ MIN HOURS BETWEEN: \(announcement.minHoursBetweenShows)")
+            print("ðŸ“¢ MAX TOTAL: \(String(describing: announcement.maxTotalShows))")
         } catch {
-            print("⚠️ ANNOUNCEMENT CREATION FAILED: \(error)")
-            print("⚠️ ERROR DETAILS: \(error.localizedDescription)")
+            print("âš ï¸ ANNOUNCEMENT CREATION FAILED: \(error)")
+            print("âš ï¸ ERROR DETAILS: \(error.localizedDescription)")
         }
     }
     
     // MARK: - Video Player Setup
     
     private func setupSharedVideoPlayer() {
-        print("🎬 SETUP: Creating shared video player")
+        print("ðŸŽ¬ SETUP: Creating shared video player")
         let player = AVPlayer(url: recordedVideoURL)
         
         player.isMuted = false
@@ -1203,7 +1209,7 @@ struct ThreadComposer: View {
             isPlaying = true
         } else {
             isPlaying = false
-            print("🎬 SETUP: Player ready but paused - waiting for AI analysis")
+            print("ðŸŽ¬ SETUP: Player ready but paused - waiting for AI analysis")
         }
         
         NotificationCenter.default.addObserver(
@@ -1247,7 +1253,7 @@ struct ThreadComposer: View {
             do {
                 let tracks = try await asset.loadTracks(withMediaType: .video)
                 guard let videoTrack = tracks.first else {
-                    print("⚠️ ASPECT RATIO: No video track found, using default 9:16")
+                    print("âš ï¸ ASPECT RATIO: No video track found, using default 9:16")
                     return
                 }
                 
@@ -1265,10 +1271,10 @@ struct ThreadComposer: View {
                     self.isLandscapeVideo = self.videoAspectRatio > 1.0
                     
                     let orientation = self.videoAspectRatio > 1.0 ? "Landscape" : (self.videoAspectRatio < 0.9 ? "Portrait" : "Square")
-                    print("📐 ASPECT RATIO: \(orientation) - \(String(format: "%.2f", self.videoAspectRatio))")
+                    print("ðŸ“ ASPECT RATIO: \(orientation) - \(String(format: "%.2f", self.videoAspectRatio))")
                 }
             } catch {
-                print("⚠️ ASPECT RATIO: Failed to detect - \(error.localizedDescription)")
+                print("âš ï¸ ASPECT RATIO: Failed to detect - \(error.localizedDescription)")
             }
         }
     }
@@ -1284,7 +1290,7 @@ struct ThreadComposer: View {
         
         Task {
             do {
-                print("🤖 AI ANALYSIS: Starting...")
+                print("ðŸ¤– AI ANALYSIS: Starting...")
                 
                 let authService = AuthService()
                 let result = try await AIVideoAnalyzer().analyzeVideo(
@@ -1300,13 +1306,13 @@ struct ThreadComposer: View {
                         title = result.title
                         description = result.description
                         hashtags = Array(result.hashtags.prefix(maxHashtags))
-                        print("✅ THREAD COMPOSER: AI analysis successful - '\(result.title)'")
+                        print("âœ… THREAD COMPOSER: AI analysis successful - '\(result.title)'")
                     } else {
                         setupInitialContent()
-                        print("⚠️ THREAD COMPOSER: AI analysis failed - using defaults")
+                        print("âš ï¸ THREAD COMPOSER: AI analysis failed - using defaults")
                     }
                     
-                    print("🎬 AI ANALYSIS: Complete - resuming video player")
+                    print("ðŸŽ¬ AI ANALYSIS: Complete - resuming video player")
                     isPlaying = true
                     sharedPlayer?.play()
                 }
@@ -1315,9 +1321,9 @@ struct ThreadComposer: View {
                     isAnalyzing = false
                     hasAnalyzed = true
                     setupInitialContent()
-                    print("❌ THREAD COMPOSER: AI analysis error - \(error.localizedDescription)")
+                    print("âŒ THREAD COMPOSER: AI analysis error - \(error.localizedDescription)")
                     
-                    print("🎬 AI ANALYSIS: Error - resuming video player")
+                    print("ðŸŽ¬ AI ANALYSIS: Error - resuming video player")
                     isPlaying = true
                     sharedPlayer?.play()
                 }
@@ -1326,7 +1332,7 @@ struct ThreadComposer: View {
     }
     
     private func skipAIAnalysis() {
-        print("⏭️ THREAD COMPOSER: AI analysis skipped by user")
+        print("â­ï¸ THREAD COMPOSER: AI analysis skipped by user")
         isAnalyzing = false
         hasAnalyzed = true
         setupInitialContent()
@@ -1417,6 +1423,7 @@ extension RecordingContext {
         recordedVideoURL: URL(string: "file://test.mp4")!,
         recordingContext: .newThread,
         aiResult: nil,
+        recordingSource: "inApp",
         onVideoCreated: { _ in },
         onCancel: { }
     )

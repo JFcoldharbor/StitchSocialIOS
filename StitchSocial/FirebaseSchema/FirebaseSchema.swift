@@ -29,11 +29,11 @@ struct FirebaseSchema {
     /// Validate database configuration
     static func validateDatabaseConfig() -> Bool {
         guard !databaseName.isEmpty else {
-            print("Ã¢ÂÅ’ FIREBASE SCHEMA: Database name is empty")
+            print("ÃƒÂ¢Ã‚ÂÃ…â€™ FIREBASE SCHEMA: Database name is empty")
             return false
         }
         
-        print("Ã¢Å“â€¦ FIREBASE SCHEMA: Configured for database: \(databaseName)")
+        print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ FIREBASE SCHEMA: Configured for database: \(databaseName)")
         return true
     }
     
@@ -62,6 +62,15 @@ struct FirebaseSchema {
         static let collectionDrafts = "collectionDrafts"
         static let collectionProgress = "collectionProgress"
         
+        // MARK: - Discovery Engagement Preferences
+        /// Sub-collection under users/{userID}/ for passive discovery algorithm signals
+        static let discoveryPreferences = "discoveryPreferences"
+        
+        // MARK: - Hype Rating State
+        /// Sub-collection under users/{userID}/ for hype rating regeneration state
+        /// Single document "state" tracks current rating, passive regen, daily caps
+        static let hypeRating = "hypeRating"
+        
         // MARK: - Distributed Counter Sub-Collections
         /// Sub-collections under videos/{videoID}/ for scalable writes
         static let hypeShards = "hype_shards"
@@ -87,9 +96,9 @@ struct FirebaseSchema {
             let invalidCollections = collections.filter { $0.isEmpty }
             
             if invalidCollections.isEmpty {
-                print("Ã¢Å“â€¦ FIREBASE SCHEMA: All \(collections.count) collections validated for \(databaseName)")
+                print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ FIREBASE SCHEMA: All \(collections.count) collections validated for \(databaseName)")
             } else {
-                print("Ã¢ÂÅ’ FIREBASE SCHEMA: Invalid collections found: \(invalidCollections)")
+                print("ÃƒÂ¢Ã‚ÂÃ…â€™ FIREBASE SCHEMA: Invalid collections found: \(invalidCollections)")
             }
             
             return invalidCollections
@@ -137,10 +146,10 @@ struct FirebaseSchema {
         // MILESTONE TRACKING FIELDS
         static let firstHypeReceived = "firstHypeReceived"           // Has received first hype
         static let firstCoolReceived = "firstCoolReceived"           // Has received first cool
-        static let milestone10Reached = "milestone10Reached"         // Ã°Å¸â€Â¥ Heating Up
-        static let milestone400Reached = "milestone400Reached"       // Ã°Å¸â€˜â‚¬ Must See
-        static let milestone1000Reached = "milestone1000Reached"     // Ã°Å¸Å’Â¶Ã¯Â¸Â Hot
-        static let milestone15000Reached = "milestone15000Reached"   // Ã°Å¸Å¡â‚¬ Viral
+        static let milestone10Reached = "milestone10Reached"         // ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â¥ Heating Up
+        static let milestone400Reached = "milestone400Reached"       // ÃƒÂ°Ã…Â¸Ã¢â‚¬ËœÃ¢â€šÂ¬ Must See
+        static let milestone1000Reached = "milestone1000Reached"     // ÃƒÂ°Ã…Â¸Ã…â€™Ã‚Â¶ÃƒÂ¯Ã‚Â¸Ã‚Â Hot
+        static let milestone15000Reached = "milestone15000Reached"   // ÃƒÂ°Ã…Â¸Ã…Â¡Ã¢â€šÂ¬ Viral
         static let milestone10ReachedAt = "milestone10ReachedAt"     // Timestamp
         static let milestone400ReachedAt = "milestone400ReachedAt"   // Timestamp
         static let milestone1000ReachedAt = "milestone1000ReachedAt" // Timestamp
@@ -155,6 +164,12 @@ struct FirebaseSchema {
         static let qualityScore = "qualityScore"
         static let discoverabilityScore = "discoverabilityScore"
         static let isPromoted = "isPromoted"
+        
+        // Content authenticity
+        static let recordingSource = "recordingSource"  // "inApp", "cameraRoll", "unknown"
+        
+        // Hashtags
+        static let hashtags = "hashtags"  // [String] - extracted hashtags from description
         
         // Internal fields
         static let isInternalAccount = "isInternalAccount"
@@ -823,10 +838,10 @@ struct FirebaseSchema {
         static let notificationExpirationDays = 30
         
         // MILESTONE THRESHOLDS
-        static let milestoneHeatingUp = 10       // Ã°Å¸â€Â¥ Heating Up
-        static let milestoneMustSee = 400        // Ã°Å¸â€˜â‚¬ Must See
-        static let milestoneHot = 1000           // Ã°Å¸Å’Â¶Ã¯Â¸Â Hot
-        static let milestoneViral = 15000        // Ã°Å¸Å¡â‚¬ Viral
+        static let milestoneHeatingUp = 10       // ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â¥ Heating Up
+        static let milestoneMustSee = 400        // ÃƒÂ°Ã…Â¸Ã¢â‚¬ËœÃ¢â€šÂ¬ Must See
+        static let milestoneHot = 1000           // ÃƒÂ°Ã…Â¸Ã…â€™Ã‚Â¶ÃƒÂ¯Ã‚Â¸Ã‚Â Hot
+        static let milestoneViral = 15000        // ÃƒÂ°Ã…Â¸Ã…Â¡Ã¢â€šÂ¬ Viral
         
         // REFERRAL VALIDATION
         static let referralCodeLength = 8
@@ -1308,7 +1323,7 @@ struct FirebaseSchema {
     
     /// Initialize stitchfin database schema with referral system and collections
     static func initializeSchema() -> Bool {
-        print("Ã°Å¸â€Â§ FIREBASE SCHEMA: Initializing stitchfin database schema with referral system and collections...")
+        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ FIREBASE SCHEMA: Initializing stitchfin database schema with referral system and collections...")
         
         let databaseValid = validateDatabaseConfig()
         let collectionsValid = Collections.validateCollections().isEmpty
@@ -1317,16 +1332,16 @@ struct FirebaseSchema {
         let collectionsSchemaValid = validateCollectionsSchema()
         
         if databaseValid && collectionsValid && referralSchemaValid && milestoneSchemaValid && collectionsSchemaValid {
-            print("Ã¢Å“â€¦ FIREBASE SCHEMA: stitchfin database schema initialized successfully")
-            print("Ã°Å¸â€œÅ  FIREBASE SCHEMA: Collections: \(Collections.validateCollections().count)")
-            print("Ã°Å¸â€Â FIREBASE SCHEMA: Indexes: \(RequiredIndexes.generateIndexCommands().count)")
-            print("Ã°Å¸â€â€” FIREBASE SCHEMA: Referral system integrated")
-            print("Ã°Å¸ÂÂ·Ã¯Â¸Â FIREBASE SCHEMA: User tagging system integrated")
-            print("Ã°Å¸Å½Â¯ FIREBASE SCHEMA: Milestone tracking system integrated")
-            print("Ã°Å¸â€œÅ¡ FIREBASE SCHEMA: Collections feature integrated")
+            print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ FIREBASE SCHEMA: stitchfin database schema initialized successfully")
+            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â  FIREBASE SCHEMA: Collections: \(Collections.validateCollections().count)")
+            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â FIREBASE SCHEMA: Indexes: \(RequiredIndexes.generateIndexCommands().count)")
+            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ¢â‚¬â€ FIREBASE SCHEMA: Referral system integrated")
+            print("ÃƒÂ°Ã…Â¸Ã‚ÂÃ‚Â·ÃƒÂ¯Ã‚Â¸Ã‚Â FIREBASE SCHEMA: User tagging system integrated")
+            print("ÃƒÂ°Ã…Â¸Ã…Â½Ã‚Â¯ FIREBASE SCHEMA: Milestone tracking system integrated")
+            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â¡ FIREBASE SCHEMA: Collections feature integrated")
             return true
         } else {
-            print("Ã¢ÂÅ’ FIREBASE SCHEMA: stitchfin database schema initialization failed")
+            print("ÃƒÂ¢Ã‚ÂÃ…â€™ FIREBASE SCHEMA: stitchfin database schema initialization failed")
             return false
         }
     }
@@ -1348,7 +1363,7 @@ struct FirebaseSchema {
             ReferralDocument.cloutAwarded
         ]
         
-        print("Ã¢Å“â€¦ REFERRAL SCHEMA: \(requiredUserFields.count) user fields + \(requiredReferralFields.count) referral fields")
+        print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ REFERRAL SCHEMA: \(requiredUserFields.count) user fields + \(requiredReferralFields.count) referral fields")
         return true
     }
     
@@ -1363,7 +1378,7 @@ struct FirebaseSchema {
             VideoDocument.milestone15000Reached
         ]
         
-        print("Ã¢Å“â€¦ MILESTONE SCHEMA: \(requiredMilestoneFields.count) milestone tracking fields")
+        print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ MILESTONE SCHEMA: \(requiredMilestoneFields.count) milestone tracking fields")
         return true
     }
     
@@ -1398,7 +1413,7 @@ struct FirebaseSchema {
             CollectionProgressDocument.currentSegmentIndex
         ]
         
-        print("Ã¢Å“â€¦ COLLECTIONS SCHEMA: \(requiredVideoFields.count) video fields + \(requiredCollectionFields.count) collection fields + \(requiredDraftFields.count) draft fields + \(requiredProgressFields.count) progress fields")
+        print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ COLLECTIONS SCHEMA: \(requiredVideoFields.count) video fields + \(requiredCollectionFields.count) collection fields + \(requiredDraftFields.count) draft fields + \(requiredProgressFields.count) progress fields")
         return true
     }
 }

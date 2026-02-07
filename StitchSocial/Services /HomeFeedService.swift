@@ -7,6 +7,11 @@
 //  Features: Deep time-based discovery, seen-video exclusion, session resume
 //  UPDATED: Added view history tracking, deduplication, follower rotation
 //
+//  NOTE: HomeFeedService shows content from FOLLOWED creators only.
+//  Following a creator overrides ALL discovery cool-down signals.
+//  Discovery suppression/blocking (via DiscoveryEngagementTracker) does NOT
+//  affect the home feed — if you follow someone, their content always shows here.
+//
 
 import Foundation
 import FirebaseFirestore

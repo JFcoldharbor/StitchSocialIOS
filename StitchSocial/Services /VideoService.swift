@@ -113,7 +113,9 @@ class VideoService: ObservableObject {
         creatorName: String,
         duration: TimeInterval,
         fileSize: Int64,
-        aspectRatio: Double = 9.0/16.0  // NEW: Default to portrait but accept actual value
+        aspectRatio: Double = 9.0/16.0,
+        recordingSource: String = "unknown",
+        hashtags: [String] = []
     ) async throws -> CoreVideoMetadata {
         
         // CRITICAL: Validate creatorID is Firebase Auth UID
@@ -125,13 +127,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
         // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -139,10 +141,10 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("Ã¢Å“â€¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("Ã¢ÂÅ’ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("ÃƒÂ¢Ã‚ÂÃ…â€™ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
@@ -150,7 +152,7 @@ class VideoService: ObservableObject {
         
         // Determine video orientation for logging
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-        print("Ã°Å¸â€œÂ VIDEO SERVICE: Creating \(orientation.displayName) video with aspect ratio \(String(format: "%.3f", aspectRatio))")
+        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â VIDEO SERVICE: Creating \(orientation.displayName) video with aspect ratio \(String(format: "%.3f", aspectRatio))")
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -184,7 +186,7 @@ class VideoService: ObservableObject {
             
             // Content metadata - FIXED: Use actual aspect ratio
             FirebaseSchema.VideoDocument.duration: duration,
-            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // Ã¢Å“â€¦ NOW DYNAMIC
+            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ NOW DYNAMIC
             FirebaseSchema.VideoDocument.fileSize: fileSize,
             FirebaseSchema.VideoDocument.qualityScore: 50,
             
@@ -194,13 +196,19 @@ class VideoService: ObservableObject {
             // Status
             FirebaseSchema.VideoDocument.isDeleted: false,
             FirebaseSchema.VideoDocument.discoverabilityScore: 0.5,
-            FirebaseSchema.VideoDocument.isPromoted: false
+            FirebaseSchema.VideoDocument.isPromoted: false,
+            
+            // Content authenticity
+            FirebaseSchema.VideoDocument.recordingSource: recordingSource,
+            
+            // Hashtags
+            FirebaseSchema.VideoDocument.hashtags: hashtags
         ]
         
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("Ã¢Å“â€¦ VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
+        print("✅ VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
         return video
     }
     
@@ -217,7 +225,9 @@ class VideoService: ObservableObject {
         creatorName: String,
         duration: TimeInterval,
         fileSize: Int64,
-        aspectRatio: Double = 9.0/16.0
+        aspectRatio: Double = 9.0/16.0,
+        recordingSource: String = "unknown",
+        hashtags: [String] = []
     ) async throws -> CoreVideoMetadata {
         
         // CRITICAL: Validate creatorID is Firebase Auth UID
@@ -228,13 +238,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("âš ï¸ VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
         // FIX: If creatorName is empty, fetch username
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("âš ï¸ VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -242,17 +252,17 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("âœ… VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("Ã¢Å“â€¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("âŒ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("Ã¢ÂÅ’ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
         let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
         
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-        print("ðŸ“¹ VIDEO SERVICE: Creating spin-off \(orientation.displayName) video referencing \(originalVideoID)")
+        print("Ã°Å¸â€œÂ¹ VIDEO SERVICE: Creating spin-off \(orientation.displayName) video referencing \(originalVideoID)")
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -299,7 +309,13 @@ class VideoService: ObservableObject {
             // Status
             FirebaseSchema.VideoDocument.isDeleted: false,
             FirebaseSchema.VideoDocument.discoverabilityScore: 0.5,
-            FirebaseSchema.VideoDocument.isPromoted: false
+            FirebaseSchema.VideoDocument.isPromoted: false,
+            
+            // Content authenticity
+            FirebaseSchema.VideoDocument.recordingSource: recordingSource,
+            
+            // Hashtags
+            FirebaseSchema.VideoDocument.hashtags: hashtags
         ]
         
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
@@ -311,7 +327,7 @@ class VideoService: ObservableObject {
         ])
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("âœ… VIDEO SERVICE: Created spin-off thread \(videoID) by @\(finalCreatorName) from original \(originalVideoID)")
+        print("Ã¢Å“â€¦ VIDEO SERVICE: Created spin-off thread \(videoID) by @\(finalCreatorName) from original \(originalVideoID)")
         return video
     }
     
@@ -327,7 +343,9 @@ class VideoService: ObservableObject {
         creatorName: String,
         duration: TimeInterval,
         fileSize: Int64,
-        aspectRatio: Double = 9.0/16.0  // NEW: Default to portrait but accept actual value
+        aspectRatio: Double = 9.0/16.0,
+        recordingSource: String = "unknown",
+        hashtags: [String] = []
     ) async throws -> CoreVideoMetadata {
         
         // CRITICAL: Validate creatorID is Firebase Auth UID
@@ -339,13 +357,13 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
-            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
         // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
-            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -353,10 +371,10 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
-                print("Ã¢Å“â€¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
             } else {
                 finalCreatorName = "unknown_user"
-                print("Ã¢ÂÅ’ VIDEO SERVICE: Could not fetch username, using fallback")
+                print("ÃƒÂ¢Ã‚ÂÃ…â€™ VIDEO SERVICE: Could not fetch username, using fallback")
             }
         }
         
@@ -374,7 +392,7 @@ class VideoService: ObservableObject {
         
         // Determine video orientation for logging
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-        print("Ã°Å¸â€œÂ VIDEO SERVICE: Creating \(orientation.displayName) reply with aspect ratio \(String(format: "%.3f", aspectRatio))")
+        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â VIDEO SERVICE: Creating \(orientation.displayName) reply with aspect ratio \(String(format: "%.3f", aspectRatio))")
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -409,7 +427,7 @@ class VideoService: ObservableObject {
             
             // Content metadata - FIXED: Use actual aspect ratio
             FirebaseSchema.VideoDocument.duration: duration,
-            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // Ã¢Å“â€¦ NOW DYNAMIC
+            FirebaseSchema.VideoDocument.aspectRatio: aspectRatio,  // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ NOW DYNAMIC
             FirebaseSchema.VideoDocument.fileSize: fileSize,
             FirebaseSchema.VideoDocument.qualityScore: 50,
             
@@ -419,7 +437,13 @@ class VideoService: ObservableObject {
             // Status
             FirebaseSchema.VideoDocument.isDeleted: false,
             FirebaseSchema.VideoDocument.discoverabilityScore: 0.5,
-            FirebaseSchema.VideoDocument.isPromoted: false
+            FirebaseSchema.VideoDocument.isPromoted: false,
+            
+            // Content authenticity
+            FirebaseSchema.VideoDocument.recordingSource: recordingSource,
+            
+            // Hashtags
+            FirebaseSchema.VideoDocument.hashtags: hashtags
         ]
         
         // Create child video and update parent reply count
@@ -437,9 +461,9 @@ class VideoService: ObservableObject {
         }
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
-        print("Ã¢Å“â€¦ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
+        print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
         
-        // ðŸ”” NOTIFY PARENT CREATOR OF NEW REPLY
+        // Ã°Å¸â€â€ NOTIFY PARENT CREATOR OF NEW REPLY
         let parentCreatorID = parentData[FirebaseSchema.VideoDocument.creatorID] as? String
         if let parentCreatorID = parentCreatorID, parentCreatorID != validatedCreatorID {
             Task {
@@ -450,9 +474,9 @@ class VideoService: ObservableObject {
                         videoID: videoID,
                         videoTitle: title
                     )
-                    print("âœ… REPLY NOTIFICATION: Sent to parent creator \(parentCreatorID)")
+                    print("Ã¢Å“â€¦ REPLY NOTIFICATION: Sent to parent creator \(parentCreatorID)")
                 } catch {
-                    print("âš ï¸ REPLY NOTIFICATION: Failed - \(error)")
+                    print("Ã¢Å¡Â Ã¯Â¸Â REPLY NOTIFICATION: Failed - \(error)")
                 }
             }
         }
@@ -609,7 +633,7 @@ class VideoService: ObservableObject {
     
     /// Get all videos belonging to a collection, sorted by segment number
     func getVideosByCollection(collectionID: String) async throws -> [CoreVideoMetadata] {
-        print("Ã°Å¸â€œÅ¡ VIDEO SERVICE: Fetching videos for collection \(collectionID)")
+        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â¡ VIDEO SERVICE: Fetching videos for collection \(collectionID)")
         
         let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
             .whereField("collectionID", isEqualTo: collectionID)
@@ -620,7 +644,7 @@ class VideoService: ObservableObject {
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
-        print("Ã°Å¸â€œÅ¡ VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
+        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â¡ VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
         return videos
     }
     
@@ -629,7 +653,7 @@ class VideoService: ObservableObject {
     func getTimestampedReplies(videoID: String? = nil, segmentID: String? = nil) async throws -> [CoreVideoMetadata] {
         let targetID = videoID ?? segmentID ?? ""
         guard !targetID.isEmpty else {
-            print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: No videoID or segmentID provided for timestamped replies")
+            print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: No videoID or segmentID provided for timestamped replies")
             return []
         }
         
@@ -643,7 +667,7 @@ class VideoService: ObservableObject {
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
-        print("Ã°Å¸â€œÅ¡ VIDEO SERVICE: Loaded \(replies.count) timestamped replies for \(targetID)")
+        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â¡ VIDEO SERVICE: Loaded \(replies.count) timestamped replies for \(targetID)")
         return replies
     }
     
@@ -771,7 +795,7 @@ class VideoService: ObservableObject {
         
         try await markVideoShardActive(videoID: videoID)
         
-        print("🔥 SHARD: +\(amount) hype → shard \(shardIndex) + video doc for \(videoID)")
+        print("ðŸ”¥ SHARD: +\(amount) hype â†’ shard \(shardIndex) + video doc for \(videoID)")
     }
     
     /// Increment cool shard for a video (random shard selection)
@@ -798,7 +822,7 @@ class VideoService: ObservableObject {
         
         try await markVideoShardActive(videoID: videoID)
         
-        print("❄️ SHARD: +\(amount) cool → shard \(shardIndex) + video doc for \(videoID)")
+        print("â„ï¸ SHARD: +\(amount) cool â†’ shard \(shardIndex) + video doc for \(videoID)")
     }
     
     /// Decrement hype shard (for grace period switches/removal)
@@ -813,7 +837,7 @@ class VideoService: ObservableObject {
         let safeAmount = min(amount, max(0, min(currentShardTotal, currentVideoCount)))
         
         guard safeAmount > 0 else {
-            print("🔥 SHARD: Skip hype decrement - totals: shard=\(currentShardTotal), doc=\(currentVideoCount), requested=-\(amount)")
+            print("ðŸ”¥ SHARD: Skip hype decrement - totals: shard=\(currentShardTotal), doc=\(currentVideoCount), requested=-\(amount)")
             return
         }
         
@@ -838,9 +862,9 @@ class VideoService: ObservableObject {
         try await markVideoShardActive(videoID: videoID)
         
         if safeAmount < amount {
-            print("🔥 SHARD: -\(safeAmount) hype → shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
+            print("ðŸ”¥ SHARD: -\(safeAmount) hype â†’ shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
         } else {
-            print("🔥 SHARD: -\(safeAmount) hype → shard 0 + video doc for \(videoID)")
+            print("ðŸ”¥ SHARD: -\(safeAmount) hype â†’ shard 0 + video doc for \(videoID)")
         }
     }
     
@@ -856,7 +880,7 @@ class VideoService: ObservableObject {
         let safeAmount = min(amount, max(0, min(currentShardTotal, currentVideoCount)))
         
         guard safeAmount > 0 else {
-            print("❄️ SHARD: Skip cool decrement - totals: shard=\(currentShardTotal), doc=\(currentVideoCount), requested=-\(amount)")
+            print("â„ï¸ SHARD: Skip cool decrement - totals: shard=\(currentShardTotal), doc=\(currentVideoCount), requested=-\(amount)")
             return
         }
         
@@ -881,9 +905,9 @@ class VideoService: ObservableObject {
         try await markVideoShardActive(videoID: videoID)
         
         if safeAmount < amount {
-            print("❄️ SHARD: -\(safeAmount) cool → shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
+            print("â„ï¸ SHARD: -\(safeAmount) cool â†’ shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
         } else {
-            print("❄️ SHARD: -\(safeAmount) cool → shard 0 + video doc for \(videoID)")
+            print("â„ï¸ SHARD: -\(safeAmount) cool â†’ shard 0 + video doc for \(videoID)")
         }
     }
     
@@ -984,7 +1008,7 @@ class VideoService: ObservableObject {
                 FirebaseSchema.VideoDocument.updatedAt: Timestamp()
             ])
         
-        print("Ã°Å¸ÂÂ·Ã¯Â¸Â VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
+        print("ÃƒÂ°Ã…Â¸Ã‚ÂÃ‚Â·ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
     }
     
     /// Record user interaction (views and shares only)
@@ -1315,6 +1339,8 @@ class VideoService: ObservableObject {
         let isPromoted = data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false
         let lastEngagementAt = (data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp)?.dateValue()
         let taggedUserIDs = data[FirebaseSchema.VideoDocument.taggedUserIDs] as? [String] ?? []
+        let recordingSource = data[FirebaseSchema.VideoDocument.recordingSource] as? String ?? "unknown"
+        let hashtags = data[FirebaseSchema.VideoDocument.hashtags] as? [String] ?? []
         
         // Collection fields
         let collectionID = data["collectionID"] as? String
@@ -1356,7 +1382,9 @@ class VideoService: ObservableObject {
             segmentNumber: segmentNumber,
             segmentTitle: segmentTitle,
             isCollectionSegment: isCollectionSegment,
-            replyTimestamp: replyTimestamp
+            replyTimestamp: replyTimestamp,
+            recordingSource: recordingSource,
+            hashtags: hashtags
         )
     }
     

@@ -222,15 +222,33 @@ class DiscoveryService: ObservableObject {
         
         let sevenDaysAgo = Date().addingTimeInterval(-7 * 24 * 60 * 60)
         
-        let query = db.collection(FirebaseSchema.Collections.videos)
+        // Simple query - fetch recent videos, sort by discoverabilityScore in memory
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
-            .whereField(FirebaseSchema.VideoDocument.createdAt, isGreaterThanOrEqualTo: Timestamp(date: sevenDaysAgo))
-            .order(by: FirebaseSchema.VideoDocument.createdAt)
-            .order(by: FirebaseSchema.VideoDocument.hypeCount, descending: true)
-            .limit(to: limit)
+            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
+            .limit(to: limit * 3)  // Fetch more to filter/sort in memory
+            .getDocuments()
         
-        let snapshot = try await query.getDocuments()
-        return snapshot.documents.compactMap { createThreadFromDocument($0) }
+        var threads: [ThreadData] = []
+        
+        for doc in snapshot.documents {
+            guard let data = doc.data() as? [String: Any],
+                  let createdAt = (data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue(),
+                  createdAt >= sevenDaysAgo else {
+                continue
+            }
+            
+            if let thread = createThreadFromDocument(doc) {
+                threads.append(thread)
+            }
+        }
+        
+        // Sort by discoverabilityScore (highest first) - true trending content
+        // discoverabilityScore factors in: quality, temperature, recency, velocity, recording source
+        let sorted = threads.sorted { $0.parentVideo.discoverabilityScore > $1.parentVideo.discoverabilityScore }
+        
+        print("🔥 TRENDING: Returning \(min(limit, sorted.count)) videos sorted by discoverabilityScore")
+        return Array(sorted.prefix(limit))
     }
     
     func getPopularDiscovery(limit: Int = 40) async throws -> [ThreadData] {
@@ -252,14 +270,33 @@ class DiscoveryService: ObservableObject {
         
         let twentyFourHoursAgo = Date().addingTimeInterval(-24 * 60 * 60)
         
-        let query = db.collection(FirebaseSchema.Collections.videos)
+        // Simple query - fetch by createdAt, filter in memory
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
-            .whereField(FirebaseSchema.VideoDocument.createdAt, isGreaterThanOrEqualTo: Timestamp(date: twentyFourHoursAgo))
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-            .limit(to: limit)
+            .limit(to: limit * 2)
+            .getDocuments()
         
-        let snapshot = try await query.getDocuments()
-        return snapshot.documents.compactMap { createThreadFromDocument($0) }.shuffled()
+        var threads: [ThreadData] = []
+        
+        for doc in snapshot.documents {
+            guard let data = doc.data() as? [String: Any],
+                  let createdAt = (data[FirebaseSchema.VideoDocument.createdAt] as? Timestamp)?.dateValue(),
+                  createdAt >= twentyFourHoursAgo else {
+                continue
+            }
+            
+            if let thread = createThreadFromDocument(doc) {
+                threads.append(thread)
+            }
+            
+            if threads.count >= limit {
+                break
+            }
+        }
+        
+        print("🕐 RECENT: Returning \(threads.count) videos from last 24h")
+        return threads.shuffled()
     }
     
     func getDiscoveryParentThreadsOnly(limit: Int = 40, lastDocument: DocumentSnapshot? = nil) async throws -> (threads: [ThreadData], lastDocument: DocumentSnapshot?, hasMore: Bool) {

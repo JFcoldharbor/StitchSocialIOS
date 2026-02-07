@@ -18,6 +18,7 @@ struct VideoReviewView: View {
     @StateObject private var draftManager = LocalDraftManager.shared
     @StateObject private var exportService = VideoExportService.shared
     
+    @EnvironmentObject private var authService: AuthService
     @Environment(\.dismiss) private var dismiss
     
     let onContinueToThread: (VideoEditState) -> Void
@@ -377,6 +378,22 @@ struct VideoReviewView: View {
     }
     
     private func proceedToThread() async {
+        // CRITICAL: Validate trimmed duration against user's tier limit
+        let videoService = VideoService()
+        let userTier = authService.currentUser?.tier ?? .rookie
+        let maxDuration = videoService.getMaxRecordingDuration(for: userTier)
+        
+        if editState.state.trimmedDuration > maxDuration {
+            let maxFormatted = maxDuration >= 60
+                ? String(format: "%d:%02d", Int(maxDuration) / 60, Int(maxDuration) % 60)
+                : "\(Int(maxDuration))s"
+            let currentFormatted = String(format: "%d:%02d", Int(editState.state.trimmedDuration) / 60, Int(editState.state.trimmedDuration) % 60)
+            
+            exportService.exportError = "Video is \(currentFormatted) but your max is \(maxFormatted). Use the trim tool to shorten it."
+            showingExportError = true
+            return
+        }
+        
         // If edits were made, start processing
         if editState.state.hasEdits && !editState.state.isProcessingComplete {
             editState.startProcessing()

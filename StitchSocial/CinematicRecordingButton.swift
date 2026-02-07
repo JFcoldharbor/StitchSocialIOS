@@ -14,15 +14,16 @@ struct CinematicRecordingButton: View {
     let tierLimit: TimeInterval
     let onPressStart: () -> Void
     let onPressEnd: () -> Void
+    var compactMode: Bool = false
     
     // Animation states
     @State private var pulseAnimation = false
     @State private var scaleAnimation = false
     @State private var isPressing = false
     
-    // Button size
-    private let buttonSize: CGFloat = 80
-    private let ringWidth: CGFloat = 6
+    // Adaptive button size
+    private var buttonSize: CGFloat { compactMode ? 66 : 80 }
+    private var ringWidth: CGFloat { compactMode ? 5 : 6 }
     
     // Progress calculation
     private var progress: Double {
@@ -102,24 +103,24 @@ struct CinematicRecordingButton: View {
                 // Recording state: white square
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Color.white)
-                    .frame(width: 24, height: 24)
+                    .frame(width: compactMode ? 20 : 24, height: compactMode ? 20 : 24)
                     .opacity(pulseAnimation ? 0.7 : 1.0)
                     .shadow(color: .white.opacity(0.8), radius: 2.8)
                     .shadow(color: StitchColors.primary.opacity(0.6), radius: 5.5)
             } else if progress >= 1.0 {
                 // Tier limit reached: Disabled state
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 28))
+                    .font(.system(size: compactMode ? 24 : 28))
                     .foregroundColor(.white.opacity(0.5))
             } else {
                 // Idle/Paused state: record circle
                 Circle()
-                    .stroke(Color.white, lineWidth: 3)
-                    .frame(width: 28, height: 28)
+                    .stroke(Color.white, lineWidth: compactMode ? 2.5 : 3)
+                    .frame(width: compactMode ? 23 : 28, height: compactMode ? 23 : 28)
                     .overlay(
                         Circle()
                             .fill(StitchColors.recordingActive.opacity(0.8))
-                            .frame(width: 18, height: 18)
+                            .frame(width: compactMode ? 14 : 18, height: compactMode ? 14 : 18)
                     )
                     .shadow(color: .white.opacity(0.8), radius: 2.8)
                     .shadow(color: StitchColors.primary.opacity(0.6), radius: 5.5)

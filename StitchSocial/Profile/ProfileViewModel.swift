@@ -21,6 +21,7 @@ class ProfileViewModel: ObservableObject {
     let authService: AuthService
     private let userService: UserService
     private let videoService: VideoService
+    private let notificationService = NotificationService()
     private let viewingUserID: String?  // NEW: For viewing other users' profiles
     
     // MARK: - Profile State
@@ -949,6 +950,14 @@ class ProfileViewModel: ObservableObject {
                 try await userService.followUser(followerID: currentUserID, followingID: user.id)
                 isFollowing = true
                 print("PROFILE: Followed user \(user.username)")
+                
+                // Send follow notification via Cloud Function
+                do {
+                    try await notificationService.sendFollowNotification(to: user.id)
+                    print("PROFILE: Follow notification sent to \(user.username)")
+                } catch {
+                    print("PROFILE: Follow notification failed (non-fatal) - \(error)")
+                }
             }
         } catch {
             errorMessage = "Failed to update follow status: \(error.localizedDescription)"

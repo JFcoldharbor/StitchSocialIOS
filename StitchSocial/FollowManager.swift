@@ -34,7 +34,7 @@ class FollowManager: ObservableObject {
     // MARK: - Dependencies
     
     private let userService = UserService()
-    private let notificationService: NotificationService?
+    private let notificationService = NotificationService()
     
     // MARK: - Completion Callbacks
     
@@ -46,9 +46,8 @@ class FollowManager: ObservableObject {
     
     // MARK: - Initialization
     
-    private init(notificationService: NotificationService? = nil) {
-        self.notificationService = notificationService ?? NotificationService()
-        print("🔗 FOLLOW MANAGER: Singleton initialized with auto-follow protection + notifications")
+    private init() {
+        print("ðŸ”— FOLLOW MANAGER: Singleton initialized with auto-follow protection + notifications")
     }
     
     // MARK: - Public Interface
@@ -56,18 +55,18 @@ class FollowManager: ObservableObject {
     /// Toggle follow state for a user with optimistic UI updates, error handling, and unfollow protection
     func toggleFollow(for userID: String) async {
         guard let currentUserID = Auth.auth().currentUser?.uid else {
-            print("❌ FOLLOW MANAGER: No current user ID")
+            print("âŒ FOLLOW MANAGER: No current user ID")
             return
         }
         
         guard currentUserID != userID else {
-            print("❌ FOLLOW MANAGER: Cannot follow yourself")
+            print("âŒ FOLLOW MANAGER: Cannot follow yourself")
             return
         }
         
         // Prevent duplicate requests
         guard !loadingStates.contains(userID) else {
-            print("⏳ FOLLOW MANAGER: Already processing request for \(userID)")
+            print("â³ FOLLOW MANAGER: Already processing request for \(userID)")
             return
         }
         
@@ -78,14 +77,14 @@ class FollowManager: ObservableObject {
         let wasFollowing = followingStates[userID] ?? false
         let newFollowingState = !wasFollowing
         
-        print("🔗 FOLLOW MANAGER: Toggle follow for \(userID)")
-        print("   Current state: \(wasFollowing) → New state: \(newFollowingState)")
+        print("ðŸ”— FOLLOW MANAGER: Toggle follow for \(userID)")
+        print("   Current state: \(wasFollowing) â†’ New state: \(newFollowingState)")
         
         // CHECK FOR UNFOLLOW PROTECTION (James Fortune only)
         if wasFollowing && !newFollowingState {
             let isProtected = await isProtectedFromUnfollow(userID)
             if isProtected {
-                print("🔒 FOLLOW MANAGER: Cannot unfollow protected account \(userID)")
+                print("ðŸ”’ FOLLOW MANAGER: Cannot unfollow protected account \(userID)")
                 lastError = "This official account cannot be unfollowed"
                 loadingStates.remove(userID)
                 
@@ -103,28 +102,25 @@ class FollowManager: ObservableObject {
         // Haptic feedback for better UX
         triggerHapticFeedback()
         
-        print("🔗 FOLLOW MANAGER: Optimistic state set to: \(newFollowingState)")
+        print("ðŸ”— FOLLOW MANAGER: Optimistic state set to: \(newFollowingState)")
         
         do {
             // Perform the actual follow/unfollow operation
             if newFollowingState {
                 try await userService.followUser(followerID: currentUserID, followingID: userID)
-                print("✅ FOLLOW MANAGER: Successfully followed user \(userID)")
+                print("âœ… FOLLOW MANAGER: Successfully followed user \(userID)")
                 
                 // SEND FOLLOW NOTIFICATION
-                Task {
-                    do {
-                        try await notificationService?.sendFollowNotification(to: userID)
-                        print("✅ FOLLOW MANAGER: Follow notification sent to \(userID)")
-                    } catch {
-                        print("⚠️ FOLLOW MANAGER: Failed to send follow notification: \(error)")
-                        // Don't fail the follow operation if notification fails
-                    }
+                do {
+                    try await notificationService.sendFollowNotification(to: userID)
+                    print("FOLLOW MANAGER: Follow notification sent to \(userID)")
+                } catch {
+                    print("FOLLOW MANAGER: Failed to send follow notification: \(error)")
                 }
                 
             } else {
                 try await userService.unfollowUser(followerID: currentUserID, followingID: userID)
-                print("✅ FOLLOW MANAGER: Successfully unfollowed user \(userID)")
+                print("âœ… FOLLOW MANAGER: Successfully unfollowed user \(userID)")
                 // No notification on unfollow
             }
             
@@ -137,17 +133,17 @@ class FollowManager: ObservableObject {
             // CRITICAL FIX: Immediately refresh follow state to ensure UI consistency
             await refreshFollowState(for: userID)
             
-            print("✅ FOLLOW MANAGER: Follow state updated - \(userID) is now \(newFollowingState ? "FOLLOWED" : "UNFOLLOWED")")
-            print("📢 FOLLOW MANAGER: Broadcasted follow state change for \(userID)")
+            print("âœ… FOLLOW MANAGER: Follow state updated - \(userID) is now \(newFollowingState ? "FOLLOWED" : "UNFOLLOWED")")
+            print("ðŸ“¢ FOLLOW MANAGER: Broadcasted follow state change for \(userID)")
             
             // REFRESH FOLLOWER COUNTS AFTER SUCCESSFUL FOLLOW/UNFOLLOW
             Task {
                 do {
                     try await userService.refreshFollowerCounts(userID: currentUserID)
                     try await userService.refreshFollowerCounts(userID: userID)
-                    print("✅ FOLLOW MANAGER: Refreshed follower counts after follow action")
+                    print("âœ… FOLLOW MANAGER: Refreshed follower counts after follow action")
                 } catch {
-                    print("⚠️ FOLLOW MANAGER: Failed to refresh counts: \(error)")
+                    print("âš ï¸ FOLLOW MANAGER: Failed to refresh counts: \(error)")
                 }
             }
             
@@ -162,7 +158,7 @@ class FollowManager: ObservableObject {
             let errorMessage = "Failed to \(newFollowingState ? "follow" : "unfollow") user: \(error.localizedDescription)"
             lastError = errorMessage
             
-            print("❌ FOLLOW MANAGER: \(errorMessage)")
+            print("âŒ FOLLOW MANAGER: \(errorMessage)")
             
             // Notify error callback
             onFollowError?(userID, error)
@@ -175,7 +171,7 @@ class FollowManager: ObservableObject {
         loadingStates.remove(userID)
         objectWillChange.send()
         
-        print("🏁 FOLLOW MANAGER: Toggle complete for \(userID). Final state: \(followingStates[userID] ?? false)")
+        print("ðŸ FOLLOW MANAGER: Toggle complete for \(userID). Final state: \(followingStates[userID] ?? false)")
     }
     
     // MARK: - Unfollow Protection for Special Users
@@ -183,22 +179,22 @@ class FollowManager: ObservableObject {
     /// Check if user is protected from unfollowing (James Fortune only)
     private func isProtectedFromUnfollow(_ userID: String) async -> Bool {
         do {
-            print("🔒 FOLLOW MANAGER: Checking unfollow protection for user \(userID)")
+            print("ðŸ”’ FOLLOW MANAGER: Checking unfollow protection for user \(userID)")
             
             // Get user email to check against protected accounts
             let userEmail = try await userService.getUserEmail(userID: userID)
             let isProtected = SpecialUsersConfig.isProtectedFromUnfollow(userEmail ?? "")
             
             if isProtected {
-                print("🔒 FOLLOW MANAGER: User \(userID) (\(userEmail ?? "unknown")) IS PROTECTED from unfollowing")
+                print("ðŸ”’ FOLLOW MANAGER: User \(userID) (\(userEmail ?? "unknown")) IS PROTECTED from unfollowing")
             } else {
-                print("✅ FOLLOW MANAGER: User \(userID) (\(userEmail ?? "unknown")) can be unfollowed")
+                print("âœ… FOLLOW MANAGER: User \(userID) (\(userEmail ?? "unknown")) can be unfollowed")
             }
             
             return isProtected
             
         } catch {
-            print("⚠️ FOLLOW MANAGER: Could not check protection status for \(userID): \(error)")
+            print("âš ï¸ FOLLOW MANAGER: Could not check protection status for \(userID): \(error)")
             // If we can't check, allow the unfollow (fail open)
             return false
         }
@@ -229,12 +225,12 @@ class FollowManager: ObservableObject {
             let isFollowing = try await userService.isFollowing(followerID: currentUserID, followingID: userID)
             await MainActor.run {
                 followingStates[userID] = isFollowing
-                print("🔗 FOLLOW MANAGER: Loaded follow state for \(userID): \(isFollowing)")
+                print("ðŸ”— FOLLOW MANAGER: Loaded follow state for \(userID): \(isFollowing)")
             }
         } catch {
             await MainActor.run {
                 followingStates[userID] = false
-                print("❌ FOLLOW MANAGER: Failed to load follow state for \(userID): \(error)")
+                print("âŒ FOLLOW MANAGER: Failed to load follow state for \(userID): \(error)")
             }
         }
     }
@@ -243,7 +239,7 @@ class FollowManager: ObservableObject {
     func loadFollowStates(for userIDs: [String]) async {
         guard let currentUserID = Auth.auth().currentUser?.uid else { return }
         
-        print("🔄 FOLLOW MANAGER: Loading follow states for \(userIDs.count) users from Firebase...")
+        print("ðŸ”„ FOLLOW MANAGER: Loading follow states for \(userIDs.count) users from Firebase...")
         
         await withTaskGroup(of: Void.self) { group in
             for userID in userIDs {
@@ -252,19 +248,19 @@ class FollowManager: ObservableObject {
                         let isFollowing = try await self.userService.isFollowing(followerID: currentUserID, followingID: userID)
                         await MainActor.run {
                             self.followingStates[userID] = isFollowing
-                            print("🔗 FOLLOW MANAGER: User \(userID) - Following: \(isFollowing)")
+                            print("ðŸ”— FOLLOW MANAGER: User \(userID) - Following: \(isFollowing)")
                         }
                     } catch {
                         await MainActor.run {
                             self.followingStates[userID] = false
-                            print("❌ FOLLOW MANAGER: Failed to load state for \(userID): \(error)")
+                            print("âŒ FOLLOW MANAGER: Failed to load state for \(userID): \(error)")
                         }
                     }
                 }
             }
         }
         
-        print("✅ FOLLOW MANAGER: Finished loading follow states for \(userIDs.count) users")
+        print("âœ… FOLLOW MANAGER: Finished loading follow states for \(userIDs.count) users")
         
         // Force UI refresh after loading states
         await MainActor.run {
@@ -282,13 +278,13 @@ class FollowManager: ObservableObject {
         followingStates.removeAll()
         loadingStates.removeAll()
         lastError = nil
-        print("🔗 FOLLOW MANAGER: Cache cleared")
+        print("ðŸ”— FOLLOW MANAGER: Cache cleared")
     }
     
     /// Update follow state manually (useful for external updates)
     func updateFollowState(for userID: String, isFollowing: Bool) {
         followingStates[userID] = isFollowing
-        print("🔗 FOLLOW MANAGER: Manually updated follow state for \(userID): \(isFollowing)")
+        print("ðŸ”— FOLLOW MANAGER: Manually updated follow state for \(userID): \(isFollowing)")
     }
     
     // MARK: - Batch Operations
@@ -308,10 +304,10 @@ class FollowManager: ObservableObject {
     
     /// Refresh follow states for multiple users (batch refresh)
     func refreshFollowStates(for userIDs: [String]) async {
-        print("🔄 FOLLOW MANAGER: Refreshing follow states for \(userIDs.count) users")
+        print("ðŸ”„ FOLLOW MANAGER: Refreshing follow states for \(userIDs.count) users")
         
         guard let currentUserID = Auth.auth().currentUser?.uid else {
-            print("❌ FOLLOW MANAGER: No current user for refresh")
+            print("âŒ FOLLOW MANAGER: No current user for refresh")
             return
         }
         
@@ -324,20 +320,20 @@ class FollowManager: ObservableObject {
                 for userID in userIDs {
                     let isFollowing = following.contains(userID)
                     followingStates[userID] = isFollowing
-                    print("🔄 FOLLOW MANAGER: Updated state for \(userID): \(isFollowing)")
+                    print("ðŸ”„ FOLLOW MANAGER: Updated state for \(userID): \(isFollowing)")
                 }
             }
             
-            print("✅ FOLLOW MANAGER: Refreshed follow states for \(userIDs.count) users")
+            print("âœ… FOLLOW MANAGER: Refreshed follow states for \(userIDs.count) users")
             
         } catch {
-            print("⚠️ FOLLOW MANAGER: Failed to refresh follow states: \(error)")
+            print("âš ï¸ FOLLOW MANAGER: Failed to refresh follow states: \(error)")
         }
     }
     
     /// Force refresh all cached follow states
     func refreshAllFollowStates() async {
-        print("🔄 FOLLOW MANAGER: Refreshing ALL cached follow states")
+        print("ðŸ”„ FOLLOW MANAGER: Refreshing ALL cached follow states")
         
         let userIDsToRefresh = Array(followingStates.keys)
         await refreshFollowStates(for: userIDsToRefresh)
@@ -417,7 +413,7 @@ extension FollowManager {
     
     /// Print current state for debugging
     func debugPrintState() {
-        print("🔗 FOLLOW MANAGER DEBUG:")
+        print("ðŸ”— FOLLOW MANAGER DEBUG:")
         print("   Following states: \(followingStates)")
         print("   Loading states: \(loadingStates)")
         print("   Total following: \(totalFollowing)")
@@ -427,9 +423,9 @@ extension FollowManager {
     
     /// Test follow manager functionality
     func helloWorldTest() {
-        print("🔗 FOLLOW MANAGER: Hello World - Ready for complete follow management!")
-        print("🔗 Features: Follow/Unfollow, Optimistic UI, James Fortune protection, Batch operations, Notifications")
-        print("🔗 Status: UserService integration, NotificationService integration, Haptic feedback, Error handling, State management")
+        print("ðŸ”— FOLLOW MANAGER: Hello World - Ready for complete follow management!")
+        print("ðŸ”— Features: Follow/Unfollow, Optimistic UI, James Fortune protection, Batch operations, Notifications")
+        print("ðŸ”— Status: UserService integration, NotificationService integration, Haptic feedback, Error handling, State management")
     }
 }
 
@@ -437,4 +433,4 @@ extension FollowManager {
 
 extension Notification.Name {
     static let followStateChanged = Notification.Name("followStateChanged")
-}
+} 

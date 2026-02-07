@@ -36,6 +36,10 @@ struct RecordingView: View {
     @State private var isProcessingSelectedVideo = false
     @State private var navigationPath: [RecordingNavigationDestination] = []
     @State private var isTorchOn = false  // Flashlight state
+    @State private var currentRecordingSource: String = "inApp"  // Tracks if video is live or from camera roll
+    @State private var currentZoomFactor: CGFloat = 1.0
+    @State private var lastZoomFactor: CGFloat = 1.0
+    @State private var dragStartY: CGFloat = 0
     
     let onVideoCreated: (CoreVideoMetadata) -> Void
     let onCancel: () -> Void
@@ -90,6 +94,7 @@ struct RecordingView: View {
                         recordedVideoURL: editState.finalVideoURL,
                         recordingContext: controller.recordingContext,
                         aiResult: controller.aiAnalysisResult,
+                        recordingSource: currentRecordingSource,
                         onVideoCreated: onVideoCreated,
                         onCancel: onCancel
                     )
@@ -114,30 +119,46 @@ struct RecordingView: View {
     
     private var cameraInterface: some View {
         GeometryReader { geometry in
+            let isCompact = geometry.size.height < 700
+            
             ZStack {
-                // Camera preview
+                // Camera preview with slide-to-zoom (drag up = zoom in, drag down = zoom out)
                 SimpleCameraPreview(controller: controller)
                     .clipped()
+                    .gesture(
+                        DragGesture(minimumDistance: 10)
+                            .onChanged { value in
+                                // Negative translation = dragging up = zoom in
+                                let dragDelta = -value.translation.height / 200
+                                let newZoom = lastZoomFactor + dragDelta
+                                currentZoomFactor = min(max(newZoom, 1.0), 5.0)
+                                controller.setZoomFactor(currentZoomFactor)
+                            }
+                            .onEnded { _ in
+                                lastZoomFactor = currentZoomFactor
+                            }
+                    )
                 
-                // Top Bar
+                // Top Bar - use safeAreaInsets from geometry but ensure minimum offset for notch
                 VStack {
-                    topBar
-                        .padding(.top, geometry.safeAreaInsets.top + 10)
+                    topBar(isCompact: isCompact)
+                        .padding(.top, max(geometry.safeAreaInsets.top, 50) + 4)
                     Spacer()
                 }
                 
                 // Main Controls (Bottom)
                 VStack {
                     Spacer()
-                    mainControls(geometry)
+                    mainControls(geometry, isCompact: isCompact)
                 }
             }
+            .ignoresSafeArea()
         }
     }
     
     // MARK: - Top Bar with Exit Button
     
-    private var topBar: some View {
+    private func topBar(isCompact: Bool) -> some View {
         HStack {
             // Exit Button (Left)
             Button {
@@ -159,49 +180,6 @@ struct RecordingView: View {
             .opacity(controller.currentPhase.isRecording ? 0.5 : 1.0)
             
             Spacer()
-            
-            // Right side: Stacked Flip and Flashlight buttons
-            VStack(spacing: 8) {
-                // Flip Button
-                Button {
-                    Task {
-                        await controller.cameraManager.switchCamera()
-                    }
-                } label: {
-                    Image(systemName: "camera.rotate.fill")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.white)
-                        .frame(width: 40, height: 40)
-                        .background(
-                            Circle()
-                                .fill(.ultraThinMaterial)
-                                .overlay(
-                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
-                                )
-                        )
-                }
-                .disabled(controller.currentPhase.isRecording)
-                
-                // Flashlight Button
-                Button {
-                    isTorchOn.toggle()
-                    // TODO: Implement actual torch toggle when camera manager supports it
-                    // Task { await controller.cameraManager.toggleTorch() }
-                } label: {
-                    Image(systemName: isTorchOn ? "flashlight.on.fill" : "flashlight.off.fill")
-                        .font(.system(size: 20, weight: .medium))
-                        .foregroundColor(.white)
-                        .frame(width: 40, height: 40)
-                        .background(
-                            Circle()
-                                .fill(.ultraThinMaterial)
-                                .overlay(
-                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
-                                )
-                        )
-                }
-                .disabled(controller.currentPhase.isRecording)
-            }
         }
         .padding(.horizontal, 20)
     }
@@ -273,22 +251,66 @@ struct RecordingView: View {
     
     // MARK: - Main Controls
     
-    private func mainControls(_ geometry: GeometryProxy) -> some View {
-        VStack(spacing: 12) {
+    private func mainControls(_ geometry: GeometryProxy, isCompact: Bool) -> some View {
+        let sideBtnSize: CGFloat = isCompact ? 42 : 50
+        let sideBtnIcon: CGFloat = isCompact ? 20 : 24
+        
+        return VStack(spacing: isCompact ? 8 : 12) {
             // Duration display
             if !controller.segments.isEmpty || controller.currentPhase.isRecording {
                 durationDisplay
             }
             
-            HStack(spacing: 40) {
+            // Flip + Flashlight row (above record button)
+            HStack(spacing: 20) {
+                Button {
+                    Task {
+                        await controller.cameraManager.switchCamera()
+                    }
+                } label: {
+                    Image(systemName: "camera.rotate.fill")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(.white)
+                        .frame(width: 40, height: 40)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                }
+                .disabled(controller.currentPhase.isRecording)
+                .opacity(controller.currentPhase.isRecording ? 0.5 : 1.0)
+                
+                Button {
+                    isTorchOn.toggle()
+                } label: {
+                    Image(systemName: isTorchOn ? "flashlight.on.fill" : "flashlight.off.fill")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(.white)
+                        .frame(width: 40, height: 40)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                }
+                .disabled(controller.currentPhase.isRecording)
+                .opacity(controller.currentPhase.isRecording ? 0.5 : 1.0)
+            }
+            
+            HStack(spacing: isCompact ? 28 : 40) {
                 // LEFT BUTTON - Dynamic (Gallery or Delete)
                 if controller.segments.isEmpty {
                     // IDLE STATE: Show Gallery
                     PhotosPicker(selection: $selectedPhotoItem, matching: .videos) {
                         Image(systemName: "photo.fill")
-                            .font(.system(size: 24, weight: .medium))
+                            .font(.system(size: sideBtnIcon, weight: .medium))
                             .foregroundColor(.white)
-                            .frame(width: 50, height: 50)
+                            .frame(width: sideBtnSize, height: sideBtnSize)
                             .background(
                                 Circle()
                                     .fill(.ultraThinMaterial)
@@ -305,9 +327,9 @@ struct RecordingView: View {
                         controller.deleteNewestSegment()
                     }) {
                         Image(systemName: "arrow.uturn.backward")
-                            .font(.system(size: 24, weight: .medium))
+                            .font(.system(size: sideBtnIcon, weight: .medium))
                             .foregroundColor(.white)
-                            .frame(width: 50, height: 50)
+                            .frame(width: sideBtnSize, height: sideBtnSize)
                             .background(
                                 Circle()
                                     .fill(.ultraThinMaterial)
@@ -332,14 +354,16 @@ struct RecordingView: View {
                     totalDuration: controller.totalDuration + controller.currentSegmentDuration,
                     tierLimit: controller.userTierLimit,
                     onPressStart: {
+                        currentRecordingSource = "inApp"
                         controller.startSegment()
                     },
                     onPressEnd: {
                         controller.stopSegment()
-                    }
+                    },
+                    compactMode: isCompact
                 )
                 
-                Spacer()
+                Spacer().frame(maxWidth: 24)
                 
                 // RIGHT BUTTON - Dynamic (Empty or Finished)
                 if !controller.segments.isEmpty {
@@ -350,9 +374,9 @@ struct RecordingView: View {
                         }
                     }) {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 24, weight: .medium))
+                            .font(.system(size: sideBtnIcon, weight: .medium))
                             .foregroundColor(.white)
-                            .frame(width: 50, height: 50)
+                            .frame(width: sideBtnSize, height: sideBtnSize)
                             .background(
                                 Circle()
                                     .fill(.ultraThinMaterial)
@@ -367,12 +391,12 @@ struct RecordingView: View {
                 } else {
                     // Empty spacer to maintain layout
                     Color.clear
-                        .frame(width: 50, height: 50)
+                        .frame(width: sideBtnSize, height: sideBtnSize)
                 }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: controller.segments.count)
-            .padding(.horizontal, 40)
-            .padding(.bottom, max(40, geometry.safeAreaInsets.bottom + 20))
+            .padding(.horizontal, isCompact ? 24 : 40)
+            .padding(.bottom, max(isCompact ? 24 : 40, geometry.safeAreaInsets.bottom + (isCompact ? 12 : 20)))
         }
     }
     
@@ -472,6 +496,7 @@ struct RecordingView: View {
         guard let selectedItem = selectedPhotoItem else { return }
         
         isProcessingSelectedVideo = true
+        currentRecordingSource = "cameraRoll"  // Mark as camera roll upload
         
         selectedItem.loadTransferable(type: Data.self) { result in
             DispatchQueue.main.async {

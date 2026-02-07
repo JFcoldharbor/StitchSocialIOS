@@ -40,6 +40,7 @@ struct HomeFeedView: View {
     @State private var threadChildrenLoaded: Bool = false
     // MARK: - Environment
     @EnvironmentObject var muteManager: MuteContextManager
+    @EnvironmentObject var authService: AuthService
     @State private var suggestedUsers: [BasicUserInfo] = []
     
     // MARK: - Pagination
@@ -96,7 +97,7 @@ struct HomeFeedView: View {
         .sheet(isPresented: $showingProfileView) {
             if let userID = selectedUserForProfile {
                 ProfileView(
-                    authService: AuthService(),
+                    authService: authService,
                     userService: userService,
                     videoService: videoService
                 )
@@ -116,7 +117,7 @@ struct HomeFeedView: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .offset(y: yOffset)
                     .zIndex(itemIndex == currentItemIndex ? 1 : 0)
-                    .id(item.id)
+                    // REMOVED: .id(item.id) — was destroying/recreating views on swipe
             }
         }
         .gesture(
@@ -249,10 +250,15 @@ struct HomeFeedView: View {
     
     // MARK: - Horizontal Stitch View
     
+    // IMPORTANT: VideoPlayerComponent MUST handle .onChange(of: video.id) internally
+    // to rebind its player when the video prop changes, since we removed .id(currentStitchIndex).
+    // If VideoPlayerComponent doesn't have this, add the same bindVideo/unbindCurrent pattern
+    // used in DiscoveryCard to VideoPlayerComponent's body.
+    
     private func horizontalStitchView(thread: ThreadData, allVideos: [CoreVideoMetadata], geometry: GeometryProxy, isCurrentItem: Bool) -> some View {
-        // Only render the CURRENT stitch video
-        // When currentStitchIndex changes, this view updates and new video renders
-        // Single player that gets recycled = clean playback
+        // Render current stitch video
+        // VideoPlayerComponent handles video.id changes internally via .onChange
+        // NO .id() modifier — prevents destroying/recreating player on stitch swipe
         
         guard currentStitchIndex < allVideos.count else { return AnyView(Color.black) }
         
@@ -266,13 +272,12 @@ struct HomeFeedView: View {
                     isActive: isCurrentStitch
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .id(currentStitchIndex)  // Force rebuild when swiping to different stitch
+                // REMOVED: .id(currentStitchIndex) — was destroying player on every stitch swipe
                 
                 // Invisible tap zone to toggle mute
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        // Debounce: ignore taps within 0.3 seconds
                         let timeSinceLastTap = Date().timeIntervalSince(lastTapTime)
                         guard timeSinceLastTap > 0.3 else { return }
                         lastTapTime = Date()

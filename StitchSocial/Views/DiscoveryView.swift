@@ -24,8 +24,15 @@ class DiscoveryViewModel: ObservableObject {
     @Published var currentCategory: DiscoveryCategory = .all
     @Published var errorMessage: String?
     
+    // MARK: - Hashtag State
+    @Published var trendingHashtags: [TrendingHashtag] = []
+    @Published var isLoadingHashtags = false
+    @Published var selectedHashtag: TrendingHashtag?
+    @Published var hashtagVideos: [CoreVideoMetadata] = []
+    
     // Services
     private let discoveryService = DiscoveryService()
+    private let hashtagService = HashtagService()
     
     // MARK: - Load Initial Content with Deep Randomization
     
@@ -36,7 +43,7 @@ class DiscoveryViewModel: ObservableObject {
         defer { isLoading = false }
         
         do {
-            print("Ã°Å¸â€Â DISCOVERY: Loading deep randomized content")
+            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â DISCOVERY: Loading deep randomized content")
             
             // Use deep randomized discovery
             let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 40)
@@ -47,7 +54,7 @@ class DiscoveryViewModel: ObservableObject {
                 let validVideos = loadedVideos.filter { !$0.id.isEmpty }
                 
                 if validVideos.count < loadedVideos.count {
-                    print("Ã¢Å¡Â Ã¯Â¸Â DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
+                    print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
                 }
                 
                 videos = validVideos
@@ -55,14 +62,44 @@ class DiscoveryViewModel: ObservableObject {
                 applyFilterAndShuffle()
                 errorMessage = nil
                 
-                print("Ã¢Å“â€¦ DISCOVERY: Loaded \(filteredVideos.count) randomized videos")
+                print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ DISCOVERY: Loaded \(filteredVideos.count) randomized videos")
             }
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to load discovery content"
-                print("Ã¢ÂÅ’ DISCOVERY: Load failed: \(error)")
+                print("ÃƒÂ¢Ã‚ÂÃ…â€™ DISCOVERY: Load failed: \(error)")
             }
         }
+    }
+    
+    // MARK: - Load Trending Hashtags
+    
+    func loadTrendingHashtags() async {
+        isLoadingHashtags = true
+        await hashtagService.loadTrendingHashtags(limit: 10)
+        trendingHashtags = hashtagService.trendingHashtags
+        isLoadingHashtags = false
+    }
+    
+    func selectHashtag(_ hashtag: TrendingHashtag) async {
+        selectedHashtag = hashtag
+        isLoading = true
+        
+        do {
+            let result = try await hashtagService.getVideosForHashtag(hashtag.tag, limit: 40)
+            hashtagVideos = result.videos
+            filteredVideos = result.videos
+        } catch {
+            print("❌ DISCOVERY: Failed to load hashtag videos: \(error)")
+        }
+        
+        isLoading = false
+    }
+    
+    func clearHashtagFilter() {
+        selectedHashtag = nil
+        hashtagVideos = []
+        applyFilterAndShuffle()
     }
     
     // MARK: - Load More (APPEND to end, NO reshuffle)
@@ -74,7 +111,7 @@ class DiscoveryViewModel: ObservableObject {
         defer { isLoading = false }
         
         do {
-            print("Ã°Å¸â€œÂ¥ DISCOVERY: Loading more content (appending to end)")
+            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¥ DISCOVERY: Loading more content (appending to end)")
             
             // Load another batch
             let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 30)
@@ -88,10 +125,10 @@ class DiscoveryViewModel: ObservableObject {
                 videos.append(contentsOf: validVideos)
                 filteredVideos.append(contentsOf: validVideos)
                 
-                print("Ã¢Å“â€¦ DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
+                print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
             }
         } catch {
-            print("Ã¢ÂÅ’ DISCOVERY: Failed to load more: \(error)")
+            print("ÃƒÂ¢Ã‚ÂÃ…â€™ DISCOVERY: Failed to load more: \(error)")
         }
     }
     
@@ -110,7 +147,7 @@ class DiscoveryViewModel: ObservableObject {
         videos = videos.shuffled()
         applyFilterAndShuffle()
         
-        print("Ã°Å¸Å½Â² DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
+        print("ÃƒÂ°Ã…Â¸Ã…Â½Ã‚Â² DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
     }
     
     // MARK: - Category Filtering
@@ -154,13 +191,13 @@ class DiscoveryViewModel: ObservableObject {
                 videos = validVideos
                 applyFilterAndShuffle()
                 
-                print("Ã°Å¸â€œÅ  DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
+                print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â  DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
             }
             
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to load \(category.displayName) content"
-                print("Ã¢ÂÅ’ DISCOVERY: Category load failed: \(error)")
+                print("ÃƒÂ¢Ã‚ÂÃ…â€™ DISCOVERY: Category load failed: \(error)")
             }
         }
     }
@@ -168,7 +205,9 @@ class DiscoveryViewModel: ObservableObject {
     // MARK: - Filtering and Shuffling
     
     private func applyFilterAndShuffle() {
-        filteredVideos = diversifyShuffle(videos: videos)
+        let blockedIDs = DiscoveryEngagementTracker.shared.blockedCreatorIDs()
+        let allowedVideos = blockedIDs.isEmpty ? videos : videos.filter { !blockedIDs.contains($0.creatorID) }
+        filteredVideos = diversifyShuffle(videos: allowedVideos)
     }
     
     /// Shuffle with maximum creator variety
@@ -281,6 +320,13 @@ struct DiscoveryVideoPresentation: Identifiable, Equatable {
     }
 }
 
+// MARK: - Hashtag Presentation Wrapper
+
+struct DiscoveryHashtagPresentation: Identifiable {
+    let id: String
+    let hashtag: TrendingHashtag
+}
+
 // MARK: - Enhanced DiscoveryView
 
 struct DiscoveryView: View {
@@ -310,6 +356,9 @@ struct DiscoveryView: View {
     @State private var videoPresentation: DiscoveryVideoPresentation?
     @EnvironmentObject var muteManager: MuteContextManager
     
+    // Hashtag navigation
+    @State private var selectedHashtagPresentation: DiscoveryHashtagPresentation?
+    
     var body: some View {
         ZStack {
             // Background Gradient
@@ -332,6 +381,16 @@ struct DiscoveryView: View {
                 // Category Selector
                 categorySelector
                 
+                // Trending Hashtags (show when Trending category selected)
+                if selectedCategory == .trending {
+                    trendingHashtagsSection
+                }
+                
+                // Active hashtag filter indicator
+                if let hashtag = viewModel.selectedHashtag {
+                    hashtagFilterBar(hashtag)
+                }
+                
                 // Content
                 if viewModel.isLoading && viewModel.videos.isEmpty {
                     loadingView
@@ -343,12 +402,18 @@ struct DiscoveryView: View {
             }
         }
         .task {
+            await DiscoveryEngagementTracker.shared.loadPreferences()
+            
             if viewModel.filteredVideos.isEmpty {
                 await viewModel.loadInitialContent()
             }
+            await viewModel.loadTrendingHashtags()
         }
-        .sheet(isPresented: $showingSearch) {
+        .fullScreenCover(isPresented: $showingSearch) {
             SearchView()
+        }
+        .sheet(item: $selectedHashtagPresentation) { presentation in
+            HashtagView(initialHashtag: presentation.hashtag)
         }
         // FIXED: Use item-based fullScreenCover to prevent video stopping
         // Use .fullscreen context to get FULL overlay (not minimal .discovery overlay)
@@ -357,7 +422,7 @@ struct DiscoveryView: View {
                 video: presentation.video,
                 overlayContext: .fullscreen,
                 onDismiss: {
-                    print("Ã°Å¸â€œÂ± DISCOVERY: Dismissing fullscreen")
+                    print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â± DISCOVERY: Dismissing fullscreen")
                     videoPresentation = nil
                 }
             )
@@ -365,9 +430,9 @@ struct DiscoveryView: View {
         // NEW: React to announcement state changes
         .onChange(of: announcementService.isShowingAnnouncement) { _, isShowing in
             if isShowing {
-                print("Ã°Å¸â€œÂ¢ DISCOVERY: Announcement showing - pausing videos")
+                print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¢ DISCOVERY: Announcement showing - pausing videos")
             } else {
-                print("Ã°Å¸â€œÂ¢ DISCOVERY: Announcement dismissed - can resume videos")
+                print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¢ DISCOVERY: Announcement dismissed - can resume videos")
             }
         }
         .sheet(isPresented: $showingProfileView) {
@@ -481,6 +546,76 @@ struct DiscoveryView: View {
         .padding(.vertical, 12)
     }
     
+    // MARK: - Trending Hashtags Section
+    
+    private var trendingHashtagsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if viewModel.isLoadingHashtags {
+                HStack {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .pink))
+                    Text("Loading trends...")
+                        .font(.system(size: 13))
+                        .foregroundColor(.gray)
+                }
+                .padding(.horizontal, 20)
+            } else if !viewModel.trendingHashtags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(viewModel.trendingHashtags) { hashtag in
+                            DiscoveryHashtagChip(
+                                hashtag: hashtag,
+                                isSelected: false
+                            ) {
+                                selectedHashtagPresentation = DiscoveryHashtagPresentation(
+                                    id: hashtag.id,
+                                    hashtag: hashtag
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+            }
+        }
+        .padding(.vertical, 8)
+        .background(Color.black.opacity(0.3))
+    }
+    
+    private func hashtagFilterBar(_ hashtag: TrendingHashtag) -> some View {
+        HStack {
+            Button {
+                selectedHashtagPresentation = DiscoveryHashtagPresentation(
+                    id: hashtag.id,
+                    hashtag: hashtag
+                )
+            } label: {
+                HStack {
+                    Text(hashtag.velocityTier.emoji)
+                    Text("Viewing \(hashtag.displayTag)")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white)
+                    
+                    Text("• \(viewModel.hashtagVideos.count) videos")
+                        .font(.system(size: 13))
+                        .foregroundColor(.gray)
+                }
+            }
+            
+            Spacer()
+            
+            Button {
+                viewModel.clearHashtagFilter()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.gray)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(Color.pink.opacity(0.15))
+    }
+    
     // MARK: - Content View
     
     @ViewBuilder
@@ -509,7 +644,7 @@ struct DiscoveryView: View {
                             showingProfileView = true
                         },
                         onNavigateToThread: { _ in },
-                        isFullscreenActive: videoPresentation != nil
+                        isFullscreenActive: videoPresentation != nil || showingSearch || selectedHashtagPresentation != nil
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .onChange(of: currentSwipeIndex) { _, newValue in
@@ -652,6 +787,48 @@ struct DiscoveryView: View {
             .fontWeight(.semibold)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Discovery Hashtag Chip
+
+struct DiscoveryHashtagChip: View {
+    let hashtag: TrendingHashtag
+    let isSelected: Bool
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 5) {
+                Text(hashtag.velocityTier.emoji)
+                    .font(.system(size: 12))
+                
+                Text(hashtag.displayTag)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(isSelected ? .black : .white)
+                
+                Text("\(hashtag.videoCount)")
+                    .font(.system(size: 11))
+                    .foregroundColor(isSelected ? .black.opacity(0.7) : .gray)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                isSelected
+                    ? AnyShapeStyle(Color.pink)
+                    : AnyShapeStyle(LinearGradient(
+                        colors: [Color.white.opacity(0.15), Color.white.opacity(0.05)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ))
+            )
+            .cornerRadius(16)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(isSelected ? Color.pink : Color.white.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 }
 
