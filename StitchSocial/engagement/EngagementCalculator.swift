@@ -4,8 +4,8 @@
 //
 //  Layer 5: Business Logic - Pure Engagement Calculation Functions
 //  Dependencies: EngagementConfig, EngagementTypes (Layer 1-2) ONLY
-//  Features: Progressive tapping logic, milestone detection, NEW hybrid clout calculations
-//  UPDATED: Decoupled visual hypes from clout, tier-based caps, diminishing returns, anti-spam
+//  Features: Progressive tapping logic, milestone detection, hybrid clout calculations
+//  UPDATED: Long press burst system - regular tap vs burst calculations split
 //
 
 import Foundation
@@ -22,17 +22,11 @@ struct EngagementCalculator {
     
     /// Calculate progressive tap requirement for specific engagement number
     static func calculateProgressiveTaps(engagementNumber: Int) -> Int {
-        // Engagements 1-4 are instant (1 tap)
         if engagementNumber <= EngagementConfig.instantEngagementThreshold {
             return 1
         }
-        
-        // Progressive tapping starts at 5th engagement
-        // 5th = 2 taps, 6th = 4 taps, 7th = 8 taps, 8th = 16 taps, etc.
         let progressiveIndex = engagementNumber - EngagementConfig.instantEngagementThreshold - 1
         let requirement = EngagementConfig.firstProgressiveTaps * Int(pow(2.0, Double(progressiveIndex)))
-        
-        // Cap at maximum to prevent infinite progression
         return min(requirement, EngagementConfig.maxTapRequirement)
     }
     
@@ -62,26 +56,30 @@ struct EngagementCalculator {
         return current >= required
     }
     
-    // MARK: - NEW: Hybrid Clout Calculation System
+    // MARK: - 🆕 Burst-Aware Clout Calculation System
     
-    /// Calculate clout award for completed engagement (NEW SYSTEM)
+    /// Calculate clout award for completed engagement
+    /// Regular tap = reduced base clout. Burst (long press) = full tier clout.
     static func calculateCloutReward(
         giverTier: UserTier,
         tapNumber: Int,
         isFirstEngagement: Bool,
-        currentCloutFromThisUser: Int
+        currentCloutFromThisUser: Int,
+        isBurst: Bool = false
     ) -> Int {
         return EngagementConfig.calculateClout(
             tier: giverTier,
             tapNumber: tapNumber,
             isFirstEngagement: isFirstEngagement,
-            currentCloutFromUser: currentCloutFromThisUser
+            currentCloutFromUser: currentCloutFromThisUser,
+            isBurst: isBurst
         )
     }
     
-    /// Calculate visual hype increment (decoupled from clout)
-    static func calculateVisualHypeIncrement(giverTier: UserTier) -> Int {
-        return EngagementConfig.getVisualHypeMultiplier(for: giverTier)
+    /// Calculate visual hype increment (burst-aware)
+    /// Regular tap = +1 for all tiers. Burst = full tier multiplier.
+    static func calculateVisualHypeIncrement(giverTier: UserTier, isBurst: Bool = false) -> Int {
+        return EngagementConfig.getVisualHypeMultiplier(for: giverTier, isBurst: isBurst)
     }
     
     /// Check if user can give more clout to this video
@@ -109,9 +107,9 @@ struct EngagementCalculator {
     
     // MARK: - Hype Rating Calculations
     
-    /// Calculate hype rating cost for specific user tier
-    static func calculateHypeRatingCost(tier: UserTier) -> Double {
-        return EngagementConfig.getHypeCost(for: tier)
+    /// Calculate hype rating cost for specific user tier (burst costs more)
+    static func calculateHypeRatingCost(tier: UserTier, isBurst: Bool = false) -> Double {
+        return EngagementConfig.getHypeCost(for: tier, isBurst: isBurst)
     }
     
     /// Check if user can afford engagement based on hype rating
@@ -141,10 +139,10 @@ struct EngagementCalculator {
         isHypeEngagement: Bool,
         tapNumber: Int,
         isFirstEngagement: Bool,
-        currentCloutFromThisUser: Int
+        currentCloutFromThisUser: Int,
+        isBurst: Bool = false
     ) -> EngagementResult {
         
-        // All engagements complete instantly
         let visualHypeIncrement: Int
         let visualCoolIncrement: Int
         let cloutAwarded: Int
@@ -152,29 +150,33 @@ struct EngagementCalculator {
         let message: String
         
         if isHypeEngagement {
-            // Calculate visual hype increment (tier-based, every tap)
-            visualHypeIncrement = calculateVisualHypeIncrement(giverTier: userTier)
+            // Calculate visual hype increment (regular = +1, burst = tier multiplier)
+            visualHypeIncrement = calculateVisualHypeIncrement(giverTier: userTier, isBurst: isBurst)
             visualCoolIncrement = 0
             
-            // Calculate clout with new system (decoupled from visual hypes)
+            // Calculate clout (regular = reduced, burst = full)
             cloutAwarded = calculateCloutReward(
                 giverTier: userTier,
                 tapNumber: tapNumber,
                 isFirstEngagement: isFirstEngagement,
-                currentCloutFromThisUser: currentCloutFromThisUser
+                currentCloutFromThisUser: currentCloutFromThisUser,
+                isBurst: isBurst
             )
             
             // Determine animation type
-            if isFirstEngagement && EngagementConfig.hasFirstTapBonus(tier: userTier) {
-                animationType = .founderExplosion  // Premium tier first tap
-                message = "Premium boost: +\(visualHypeIncrement) hypes!"
+            if isBurst && isFirstEngagement && EngagementConfig.hasFirstTapBonus(tier: userTier) {
+                animationType = .founderExplosion  // Premium tier first burst
+                message = "Premium burst: +\(visualHypeIncrement) hypes!"
+            } else if isBurst && EngagementConfig.isBurstEligible(tier: userTier) {
+                animationType = .burstEngagement  // Burst engagement
+                message = "Burst: +\(visualHypeIncrement) hypes!"
             } else {
                 animationType = .standardHype
                 message = "Hype added!"
             }
             
         } else {
-            // Cool engagement
+            // Cool engagement (no burst variant)
             visualHypeIncrement = 0
             visualCoolIncrement = 1
             cloutAwarded = calculateCoolPenalty()
@@ -190,7 +192,7 @@ struct EngagementCalculator {
             cloutAwarded: cloutAwarded,
             newHypeCount: newHypeCount,
             newCoolCount: newCoolCount,
-            isFounderFirstTap: isFirstEngagement && userTier == .founder,
+            isFounderFirstTap: isFirstEngagement && userTier == .founder && isBurst,
             visualHypeIncrement: visualHypeIncrement,
             visualCoolIncrement: visualCoolIncrement,
             animationType: animationType,
@@ -224,10 +226,10 @@ struct EngagementCalculator {
         currentTaps: Int,
         requiredTaps: Int,
         hypeRating: Double,
-        userTier: UserTier
+        userTier: UserTier,
+        isBurst: Bool = false
     ) -> (isValid: Bool, error: String?) {
         
-        // Check tap counts
         if currentTaps < 0 {
             return (false, "Current taps cannot be negative")
         }
@@ -240,13 +242,11 @@ struct EngagementCalculator {
             return (false, "Current taps cannot exceed required taps")
         }
         
-        // Check hype rating
         if hypeRating < 0 || hypeRating > 100 {
             return (false, "Hype rating must be between 0 and 100")
         }
         
-        // Check if user can afford engagement
-        let cost = calculateHypeRatingCost(tier: userTier)
+        let cost = calculateHypeRatingCost(tier: userTier, isBurst: isBurst)
         if !canAffordEngagement(currentHypeRating: hypeRating, cost: cost) {
             return (false, "Insufficient hype rating for engagement")
         }
@@ -262,23 +262,19 @@ struct EngagementCalculator {
         currentVideoTotalClout: Int
     ) -> (isValid: Bool, adjustedClout: Int, reason: String?) {
         
-        // Check per-user-per-video cap
         let maxPerUser = EngagementConfig.getMaxCloutPerUserPerVideo(for: giverTier)
         if currentCloutFromUser >= maxPerUser {
             return (false, 0, "User has reached max clout for this video (\(maxPerUser))")
         }
         
-        // Check if proposed clout would exceed user cap
         let remainingUserAllowance = maxPerUser - currentCloutFromUser
         var adjustedClout = min(proposedClout, remainingUserAllowance)
         
-        // Check per-video total cap
         let maxPerVideo = EngagementConfig.maxTotalCloutPerVideo
         if currentVideoTotalClout >= maxPerVideo {
             return (false, 0, "Video has reached max total clout (\(maxPerVideo))")
         }
         
-        // Check if proposed clout would exceed video cap
         let remainingVideoAllowance = maxPerVideo - currentVideoTotalClout
         adjustedClout = min(adjustedClout, remainingVideoAllowance)
         
@@ -294,37 +290,61 @@ struct EngagementCalculator {
 
 extension EngagementCalculator {
     
-    /// Test new hybrid clout system with examples
-    static func testHybridCloutSystem() -> String {
-        var report = "🧪 TESTING HYBRID CLOUT SYSTEM\n\n"
+    /// Test burst vs regular clout system
+    static func testBurstCloutSystem() -> String {
+        var report = "🧪 TESTING BURST vs REGULAR CLOUT SYSTEM\n\n"
         
-        // Test Founder
-        report += "📊 FOUNDER TEST (20 hypes/tap, 50 base clout)\n"
-        for tap in 1...15 {
-            let clout = calculateCloutReward(
-                giverTier: .founder,
-                tapNumber: tap,
-                isFirstEngagement: tap == 1,
-                currentCloutFromThisUser: (tap - 1) * 50
-            )
-            let visual = calculateVisualHypeIncrement(giverTier: .founder)
-            report += "Tap \(tap): +\(visual) hypes, \(clout) clout\n"
-        }
-        
-        report += "\n📊 INFLUENCER TEST (1 hype/tap, 5 base clout)\n"
+        // Test Founder - Regular Taps
+        report += "📊 FOUNDER REGULAR TAPS (+1 hype, 5 clout/tap)\n"
+        var cumulativeClout = 0
         for tap in 1...10 {
             let clout = calculateCloutReward(
-                giverTier: .influencer,
-                tapNumber: tap,
+                giverTier: .founder, tapNumber: tap,
                 isFirstEngagement: tap == 1,
-                currentCloutFromThisUser: (tap - 1) * 5
+                currentCloutFromThisUser: cumulativeClout,
+                isBurst: false
             )
-            let visual = calculateVisualHypeIncrement(giverTier: .influencer)
-            report += "Tap \(tap): +\(visual) hypes, \(clout) clout\n"
+            let visual = calculateVisualHypeIncrement(giverTier: .founder, isBurst: false)
+            cumulativeClout += clout
+            report += "  Tap \(tap): +\(visual) hype, +\(clout) clout (total: \(cumulativeClout))\n"
         }
         
-        report += "\n✅ Hybrid Clout System Tests Complete!\n"
+        // Test Founder - Burst (Long Press)
+        report += "\n📊 FOUNDER BURST (LONG PRESS) (+20 hype, 50 clout/tap)\n"
+        cumulativeClout = 0
+        for tap in 1...10 {
+            let clout = calculateCloutReward(
+                giverTier: .founder, tapNumber: tap,
+                isFirstEngagement: tap == 1,
+                currentCloutFromThisUser: cumulativeClout,
+                isBurst: true
+            )
+            let visual = calculateVisualHypeIncrement(giverTier: .founder, isBurst: true)
+            cumulativeClout += clout
+            report += "  Burst \(tap): +\(visual) hype, +\(clout) clout (total: \(cumulativeClout))\n"
+        }
         
+        // Test Rookie (no burst benefit)
+        report += "\n📊 ROOKIE (no burst benefit, same either way)\n"
+        cumulativeClout = 0
+        for tap in 1...5 {
+            let regularClout = calculateCloutReward(
+                giverTier: .rookie, tapNumber: tap,
+                isFirstEngagement: tap == 1,
+                currentCloutFromThisUser: cumulativeClout,
+                isBurst: false
+            )
+            let burstClout = calculateCloutReward(
+                giverTier: .rookie, tapNumber: tap,
+                isFirstEngagement: tap == 1,
+                currentCloutFromThisUser: cumulativeClout,
+                isBurst: true
+            )
+            cumulativeClout += regularClout
+            report += "  Tap \(tap): regular=\(regularClout), burst=\(burstClout) (same)\n"
+        }
+        
+        report += "\n✅ Burst Clout System Tests Complete!\n"
         return report
     }
 }

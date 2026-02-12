@@ -157,7 +157,7 @@ struct ThreadView: View {
                 directReplies: directReplies.isEmpty ? nil : directReplies,
                 onSelectReply: { loadConversation(with: $0) }
             )
-            .id(selectedVideo?.id ?? UUID().uuidString)
+            .id("\(selectedVideo?.id ?? UUID().uuidString)-\(carouselVideos.count)")
         }
         .sheet(isPresented: $showingProfileView) {
             if let _ = selectedUserForProfile {

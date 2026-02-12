@@ -570,32 +570,51 @@ struct NotificationView: View {
     }
     
     // Ã°Å¸â€ â€¢ UPDATED: Extract both threadID and targetVideoID from payload
+    // FIXED: Resolve threadID from video metadata when missing from payload
     private func handleNotificationTap(_ notification: NotificationDisplayData) async {
         await viewModel.markAsRead(notification.id)
         
-        // For follow notifications, navigate to the sender's profile instead
+        // For follow notifications, navigate to the sender's profile
         if notification.notificationType == .follow {
             profilePresentation = ProfilePresentation(id: notification.senderID)
-            print("Ã°Å¸â€œÂ± Navigation to profile: \(notification.senderID)")
             return
         }
         
-        // For other notifications, try to navigate to video
+        // For video-related notifications, navigate to thread
         if let rawNotification = viewModel.allNotifications.first(where: { $0.id == notification.id }),
            let videoID = rawNotification.payload["videoID"] as? String, !videoID.isEmpty {
             
-            // Extract threadID if available, otherwise use videoID as threadID
-            let threadID = (rawNotification.payload["threadID"] as? String) ?? videoID
-            
-            videoThreadPresentation = VideoThreadPresentation(
-                threadID: threadID,
-                targetVideoID: videoID
-            )
-            
-            
-            print("Ã°Å¸â€œÂ± Navigation to thread: \(threadID), target video: \(videoID)")
-        } else {
-            print("Ã¢Å¡Â Ã¯Â¸Â No videoID in notification payload for type: \(notification.notificationType.rawValue)")
+            // Try threadID from payload first
+            if let threadID = rawNotification.payload["threadID"] as? String, !threadID.isEmpty {
+                videoThreadPresentation = VideoThreadPresentation(
+                    threadID: threadID,
+                    targetVideoID: videoID
+                )
+                print("\u{1F4F1} Navigation to thread: \(threadID), target: \(videoID)")
+            } else {
+                // No threadID in payload — fetch video to resolve its real threadID
+                // This handles old notifications sent before threadID was added
+                do {
+                    let video = try await videoService.getVideo(id: videoID)
+                    let resolvedThreadID = video.threadID ?? video.id
+                    let isReply = video.replyToVideoID != nil || video.conversationDepth > 0
+                    
+                    await MainActor.run {
+                        videoThreadPresentation = VideoThreadPresentation(
+                            threadID: resolvedThreadID,
+                            targetVideoID: isReply ? videoID : nil
+                        )
+                    }
+                    print("\u{1F4F1} Resolved thread: \(resolvedThreadID), target: \(videoID), isReply: \(isReply)")
+                } catch {
+                    // Fallback: use videoID as threadID (original behavior)
+                    videoThreadPresentation = VideoThreadPresentation(
+                        threadID: videoID,
+                        targetVideoID: videoID
+                    )
+                    print("\u{26A0}\u{FE0F} Fallback navigation for \(videoID): \(error.localizedDescription)")
+                }
+            }
         }
     }
 }

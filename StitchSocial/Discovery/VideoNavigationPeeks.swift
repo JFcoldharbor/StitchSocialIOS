@@ -20,6 +20,8 @@ struct VideoNavigationPeeks: View {
     @State private var hapticEngine: CHHapticEngine?
     @State private var hapticPlayedForVideoID: String = ""
     @State private var isHapticActive = false
+    @State private var prevThumbnail: UIImage? = nil
+    @State private var nextThumbnail: UIImage? = nil
     
     // MARK: - Computed Properties
     
@@ -73,12 +75,47 @@ struct VideoNavigationPeeks: View {
         .onAppear {
             startHeartbeatAnimation()
             setupHapticEngine()
+            loadPeekThumbnails()
         }
         .onChange(of: currentVideoIndex) { _, _ in
             stopHeartbeatHaptic()
+            loadPeekThumbnails()
         }
         .onDisappear {
             stopHeartbeatHaptic()
+        }
+    }
+    
+    // MARK: - Thumbnail Loading (NSCache, no AsyncImage)
+    
+    private func loadPeekThumbnails() {
+        prevThumbnail = nil
+        nextThumbnail = nil
+        
+        if let prev = previousVideo {
+            loadThumbnail(for: prev) { image in
+                prevThumbnail = image
+            }
+        }
+        if let next = nextVideo {
+            loadThumbnail(for: next) { image in
+                nextThumbnail = image
+            }
+        }
+    }
+    
+    private func loadThumbnail(for video: CoreVideoMetadata, completion: @escaping (UIImage) -> Void) {
+        // NSCache hit — instant
+        if let cached = ThumbnailCache.shared.get(video.id) {
+            completion(cached)
+            return
+        }
+        guard !video.thumbnailURL.isEmpty, let url = URL(string: video.thumbnailURL) else { return }
+        Task.detached(priority: .utility) {
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let image = UIImage(data: data) else { return }
+            ThumbnailCache.shared.set(image, for: video.id)
+            await MainActor.run { completion(image) }
         }
     }
     
@@ -206,24 +243,20 @@ struct VideoNavigationPeeks: View {
         position: PeekPosition,
         geometry: GeometryProxy
     ) -> some View {
+        let thumbnail = position == .left ? prevThumbnail : nextThumbnail
+        
         ZStack {
-            // ⭐ CRITICAL: Lock frame BEFORE AsyncImage loads
-            // This prevents different thumbnail dimensions from affecting layout
-            AsyncImage(url: URL(string: video.thumbnailURL)) { phase in
-                switch phase {
-                case .empty:
-                    Color.gray.opacity(0.3)
-                case .success(let image):
-                    image
+            // Cached thumbnail — no AsyncImage, no re-downloads per swipe
+            Group {
+                if let thumb = thumbnail {
+                    Image(uiImage: thumb)
                         .resizable()
                         .scaledToFill()
-                case .failure:
-                    Color.gray.opacity(0.3)
-                @unknown default:
+                } else {
                     Color.gray.opacity(0.3)
                 }
             }
-            .frame(width: 45, height: 80)  // ⭐ LOCK BEFORE CLIPPING
+            .frame(width: 45, height: 80)
             .clipped()
             .cornerRadius(8)
             

@@ -14,6 +14,10 @@ import SwiftUI
 @MainActor
 class CachingService: ObservableObject {
     
+    // MARK: - Singleton
+    
+    static let shared = CachingService()
+    
     // MARK: - Cache Storage
     
     private var videoCache: [String: CachedVideo] = [:]
@@ -79,6 +83,14 @@ class CachingService: ObservableObject {
         }
         
         print("💾 CACHE: Batched \(videos.count) videos")
+    }
+    
+    /// Get all cached videos for a specific user, sorted by createdAt descending
+    func getCachedVideosForUser(_ userID: String) -> [CoreVideoMetadata] {
+        return videoCache.values
+            .filter { !isCacheExpired($0.cachedAt) && $0.video.creatorID == userID }
+            .sorted { $0.video.createdAt > $1.video.createdAt }
+            .map { $0.video }
     }
     
     // MARK: - User Caching

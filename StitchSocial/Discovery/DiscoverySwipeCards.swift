@@ -9,7 +9,6 @@
 
 import SwiftUI
 import AVFoundation
-import AVKit
 import FirebaseAuth
 
 struct DiscoverySwipeCards: View {
@@ -40,7 +39,7 @@ struct DiscoverySwipeCards: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // 3 STABLE CARD SLOTS — rendered in reverse so slot 0 (top) renders last
+                // 3 STABLE CARD SLOTS â€” rendered in reverse so slot 0 (top) renders last
                 // ForEach over fixed Int range = SwiftUI reuses these views, never destroys them
                 ForEach((0..<maxCards).reversed(), id: \.self) { slot in
                     let videoIndex = currentIndex + slot
@@ -182,11 +181,12 @@ struct DiscoverySwipeCards: View {
         // Notify tracker this was auto-advance (no manual intent)
         discoveryTracker.cardAutoAdvanced()
         
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.7)) {
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
             dragOffset = CGSize(width: -UIScreen.main.bounds.width, height: 0)
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+        // Wait for animation to fully complete before changing index
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
             nextCard()
             isSwipeInProgress = false
         }
@@ -250,6 +250,7 @@ struct DiscoveryCard: View {
     @State private var creatorProfileURL: String? = nil
     @State private var creatorDisplayName: String? = nil
     @State private var currentVideoID: String? = nil
+    @State private var cachedThumbnail: UIImage? = nil
     @State private var setupTask: Task<Void, Never>? = nil
     
     private var displayName: String {
@@ -267,13 +268,25 @@ struct DiscoveryCard: View {
             ZStack {
                 Color.black
                 
-                if let player = player {
-                    VideoPlayer(player: player)
-                        .aspectRatio(contentMode: .fill)
+                // Thumbnail — cached UIImage for instant display, no network flash
+                if let thumb = cachedThumbnail {
+                    Image(uiImage: thumb)
+                        .resizable()
+                        .scaledToFill()
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .clipped()
-                        .disabled(true)
-                } else {
+                }
+                
+                if let player = player {
+                    CustomVideoPlayerView(player: player, onReadyForDisplay: {
+                        withAnimation(.easeIn(duration: 0.15)) {
+                            isReady = true
+                        }
+                    })
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .opacity(isReady ? 1 : 0)
+                } else if video.thumbnailURL.isEmpty {
                     ProgressView()
                         .tint(.white)
                         .scaleEffect(1.5)
@@ -290,35 +303,73 @@ struct DiscoveryCard: View {
         .cornerRadius(16)
         .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
         .onAppear {
+            loadThumbnail()
             bindVideo()
         }
         .onDisappear {
             teardown()
         }
         .onChange(of: video.id) { oldID, newID in
-            // Card slot got new video data — rebind without destroying view
+            // Card slot got new video data â€” rebind without destroying view
             guard newID != currentVideoID else { return }
+            cachedThumbnail = nil
+            isReady = false
             unbindCurrent()
+            loadThumbnail()
             bindVideo()
+            
+            // If this is the top card, ensure playback starts after rebind settles
+            if shouldAutoPlay {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    guard shouldAutoPlay, currentVideoID == video.id else { return }
+                    if let p = player, p.rate == 0 {
+                        // Player exists but isn't playing â€” kick it
+                        preloadingService.markAsCurrentlyPlaying(video.id)
+                        p.isMuted = muteManager.isMuted
+                        p.seek(to: .zero)
+                        p.play()
+                        setupLoopObserver()
+                    } else if player == nil {
+                        // Still no player â€” force rebind
+                        bindVideo()
+                    }
+                }
+            }
         }
         .onChange(of: shouldAutoPlay) { _, isTop in
             if isTop {
-                // Became top card — protect FIRST, then play
+                // Became top card â€” protect FIRST, then play
                 preloadingService.markAsCurrentlyPlaying(video.id)
                 
-                // Small delay ensures player is ready after card transition
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    guard shouldAutoPlay else { return }
-                    player?.isMuted = muteManager.isMuted
-                    player?.seek(to: .zero)
-                    player?.play()
-                    setupLoopObserver()
-                    loadCreatorProfile()
-                    trackViewIfNeeded()
+                // Delay must outlast swipe animation (0.4s) to avoid race
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    // Re-check: still top card and still same video?
+                    guard shouldAutoPlay, currentVideoID == video.id else { return }
+                    
+                    if let p = player {
+                        // FIXED: Only seek+play if not already playing
+                        // attachPlayer() already started playback — don't restart
+                        if p.rate == 0 {
+                            p.isMuted = muteManager.isMuted
+                            p.seek(to: .zero)
+                            p.play()
+                            setupLoopObserver()
+                        }
+                        loadCreatorProfile()
+                        trackViewIfNeeded()
+                    } else {
+                        // Player was evicted â€” rebind
+                        bindVideo()
+                    }
                 }
             } else {
-                player?.pause()
+                // No longer top card â€” stop looping but delay pause
+                // so it doesn't race with new top card's play()
                 removeLoopObserver()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    guard !shouldAutoPlay else { return }
+                    player?.pause()
+                }
             }
         }
         .onChange(of: muteManager.isMuted) { _, isMuted in
@@ -326,9 +377,19 @@ struct DiscoveryCard: View {
         }
         .onChange(of: isFullscreenActive) { _, isActive in
             if isActive {
-                player?.pause()
+                // Going fullscreen â€” pause after brief delay so transition is smooth
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    guard isFullscreenActive else { return }
+                    player?.pause()
+                }
             } else if shouldAutoPlay {
-                player?.play()
+                // Returning from fullscreen â€” re-protect and play
+                preloadingService.markAsCurrentlyPlaying(video.id)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    guard shouldAutoPlay, !isFullscreenActive else { return }
+                    player?.isMuted = muteManager.isMuted
+                    player?.play()
+                }
             }
         }
     }
@@ -432,7 +493,34 @@ struct DiscoveryCard: View {
     
     // MARK: - Video Binding (stable slot pattern)
     
-    /// Bind this card slot to a video — get or create player
+    /// Bind this card slot to a video â€” get or create player
+    // MARK: - Thumbnail Loading
+    
+    /// Load thumbnail from NSCache synchronously, or fetch async on miss
+    private func loadThumbnail() {
+        // Try NSCache first — instant, no network
+        if let cached = ThumbnailCache.shared.get(video.id) {
+            cachedThumbnail = cached
+            return
+        }
+        
+        // Cache miss — fetch from thumbnailURL and store
+        guard !video.thumbnailURL.isEmpty, let url = URL(string: video.thumbnailURL) else { return }
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                if let image = UIImage(data: data) {
+                    ThumbnailCache.shared.set(image, for: video.id)
+                    await MainActor.run { cachedThumbnail = image }
+                }
+            } catch {
+                // Silent fail — player will show eventually
+            }
+        }
+    }
+    
+    // MARK: - Video Binding
+    
     private func bindVideo() {
         currentVideoID = video.id
         hasTrackedView = false
@@ -479,7 +567,8 @@ struct DiscoveryCard: View {
     /// Attach a player and start playback if top card
     private func attachPlayer(_ newPlayer: AVPlayer) {
         self.player = newPlayer
-        isReady = true
+        // isReady stays false until CustomVideoPlayerView fires onReadyForDisplay
+        // Thumbnail stays visible underneath until then — no black flash
         
         if shouldAutoPlay {
             newPlayer.isMuted = muteManager.isMuted
@@ -488,8 +577,6 @@ struct DiscoveryCard: View {
             setupLoopObserver()
             loadCreatorProfile()
             trackViewIfNeeded()
-        } else {
-            newPlayer.pause()
         }
     }
     

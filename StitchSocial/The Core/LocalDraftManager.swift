@@ -52,7 +52,7 @@ class LocalDraftManager: ObservableObject {
             await loadDrafts()
         }
         
-        print("📝 DRAFT MANAGER: Initialized at \(draftsDirectory.path)")
+        print("ðŸ“ DRAFT MANAGER: Initialized at \(draftsDirectory.path)")
     }
     
     // MARK: - Public Interface
@@ -82,7 +82,7 @@ class LocalDraftManager: ObservableObject {
             }
         }
         
-        print("💾 DRAFT MANAGER: Saved draft \(editState.draftID)")
+        print("ðŸ’¾ DRAFT MANAGER: Saved draft \(editState.draftID)")
     }
     
     /// Auto-save draft (debounced)
@@ -121,7 +121,7 @@ class LocalDraftManager: ObservableObject {
         // Remove from memory
         drafts.removeAll { $0.draftID == id }
         
-        print("🗑️ DRAFT MANAGER: Deleted draft \(id)")
+        print("ðŸ—‘ï¸ DRAFT MANAGER: Deleted draft \(id)")
     }
     
     /// Load all drafts from disk
@@ -149,7 +149,7 @@ class LocalDraftManager: ObservableObject {
                         try? fileManager.removeItem(at: fileURL)
                     }
                 } catch {
-                    print("⚠️ DRAFT MANAGER: Failed to load draft from \(fileURL.lastPathComponent): \(error)")
+                    print("âš ï¸ DRAFT MANAGER: Failed to load draft from \(fileURL.lastPathComponent): \(error)")
                 }
             }
             
@@ -158,10 +158,10 @@ class LocalDraftManager: ObservableObject {
             
             drafts = loadedDrafts
             
-            print("📂 DRAFT MANAGER: Loaded \(drafts.count) drafts")
+            print("ðŸ“‚ DRAFT MANAGER: Loaded \(drafts.count) drafts")
             
         } catch {
-            print("❌ DRAFT MANAGER: Failed to load drafts: \(error)")
+            print("âŒ DRAFT MANAGER: Failed to load drafts: \(error)")
         }
     }
     
@@ -178,13 +178,97 @@ class LocalDraftManager: ObservableObject {
         }
         
         if deletedCount > 0 {
-            print("🧹 DRAFT MANAGER: Cleaned up \(deletedCount) old drafts")
+            print("ðŸ§¹ DRAFT MANAGER: Cleaned up \(deletedCount) old drafts")
         }
     }
     
     /// Get draft by ID from memory
     func getDraft(id: String) -> VideoEditState? {
         return drafts.first { $0.draftID == id }
+    }
+    
+    // MARK: - 🆕 Upload Status Queries
+    
+    /// Drafts that haven't been submitted for upload yet
+    var pendingDrafts: [VideoEditState] {
+        drafts.filter { $0.uploadStatus == DraftUploadStatus.draft }
+    }
+    
+    /// Drafts that failed to upload and can be retried
+    var failedUploads: [VideoEditState] {
+        drafts.filter { $0.uploadStatus == DraftUploadStatus.failed }
+    }
+    
+    /// Drafts currently uploading in background
+    var activeUploads: [VideoEditState] {
+        drafts.filter { $0.uploadStatus == DraftUploadStatus.uploading }
+    }
+    
+    /// Drafts queued and waiting to upload
+    var queuedUploads: [VideoEditState] {
+        drafts.filter { $0.uploadStatus == DraftUploadStatus.readyToUpload }
+    }
+    
+    /// All drafts that are not yet complete (shown in drafts UI)
+    var incompleteDrafts: [VideoEditState] {
+        drafts.filter { $0.uploadStatus != DraftUploadStatus.complete }
+    }
+    
+    /// Total count for badge display
+    var draftsBadgeCount: Int {
+        incompleteDrafts.count
+    }
+    
+    /// Whether there are any failed uploads needing attention
+    var hasFailedUploads: Bool {
+        !failedUploads.isEmpty
+    }
+    
+    /// Update upload status for a specific draft
+    func markUploadStatus(draftID: String, status: DraftUploadStatus, errorMessage: String? = nil) async {
+        guard let index = drafts.firstIndex(where: { $0.draftID == draftID }) else { return }
+        
+        switch status {
+        case .uploading:
+            drafts[index].markUploading()
+        case .failed:
+            drafts[index].markUploadFailed(error: errorMessage ?? "Unknown error")
+        case .complete:
+            drafts[index].markUploadComplete()
+        default:
+            drafts[index].uploadStatus = status
+            drafts[index].lastModified = Date()
+        }
+        
+        // Persist to disk
+        try? await saveDraft(drafts[index])
+        
+        print("📋 DRAFT MANAGER: Updated \(draftID.prefix(8)) status → \(status.displayName)")
+    }
+    
+    /// Find drafts that were interrupted mid-upload (app was killed)
+    /// Called on app launch to re-queue them
+    func recoverInterruptedUploads() -> [VideoEditState] {
+        let interrupted = drafts.filter { $0.uploadStatus == DraftUploadStatus.uploading || $0.uploadStatus == DraftUploadStatus.readyToUpload }
+        
+        if !interrupted.isEmpty {
+            print("🔄 DRAFT MANAGER: Found \(interrupted.count) interrupted uploads to recover")
+        }
+        
+        return interrupted
+    }
+    
+    /// Remove completed drafts (cleanup after successful upload)
+    func cleanupCompletedUploads() async {
+        let completed = drafts.filter { $0.uploadStatus == .complete }
+        
+        for draft in completed {
+            try? await deleteDraft(id: draft.draftID)
+        }
+        
+        if !completed.isEmpty {
+            print("🧹 DRAFT MANAGER: Cleaned up \(completed.count) completed uploads")
+        }
     }
     
     // MARK: - Private Helpers

@@ -222,11 +222,13 @@ struct CardVideoCarouselView: View {
                     isActive: index == currentIndex,
                     isPlaying: isPlaying && index == currentIndex,
                     isConversationParticipant: isConversationParticipant,
+                    currentUserID: currentUserID,
                     cardWidth: cardWidth,
                     cardHeight: cardHeight,
                     brandCyan: brandCyan,
                     brandPurple: brandPurple
                 )
+                .id(video.id) // FIX: Force unique identity so player loads correct video URL
                 .scaleEffect(getCardScale(for: index))
                 .offset(x: getCardOffset(for: index, cardWidth: cardWidth), y: 0)
                 .opacity(getCardOpacity(for: index))
@@ -422,6 +424,7 @@ private struct CarouselDiscoveryCard: View {
     let isActive: Bool
     let isPlaying: Bool
     let isConversationParticipant: Bool
+    let currentUserID: String?
     let cardWidth: CGFloat
     let cardHeight: CGFloat
     let brandCyan: Color
@@ -435,12 +438,9 @@ private struct CarouselDiscoveryCard: View {
                 // Active card - show video player
                 ZStack(alignment: .bottom) {
                     // Video player fills card
-                    VideoPlayerView(
+                    VideoPlayerComponent(
                         video: video,
-                        isActive: isActive && isPlaying,
-                        onEngagement: { _ in },
-                        overlayContext: .carousel,
-                        isConversationParticipant: isConversationParticipant
+                        isActive: isActive && isPlaying
                     )
                     
                     // Loading overlay with thumbnail
@@ -459,8 +459,20 @@ private struct CarouselDiscoveryCard: View {
                         .transition(.opacity)
                     }
                     
-                    // Bottom gradient + CreatorPill (only when not playing, since overlay handles it)
-                    if !isPlaying {
+                    // Minimal overlay when playing — creator name, title, share
+                    if isPlaying {
+                        ContextualVideoOverlay(
+                            video: video,
+                            context: .carousel,
+                            currentUserID: currentUserID,
+                            threadVideo: nil,
+                            isVisible: true,
+                            actualReplyCount: nil,
+                            isConversationParticipant: isConversationParticipant,
+                            onAction: nil
+                        )
+                    } else {
+                        // Static bottom overlay when not yet playing
                         bottomOverlay
                     }
                 }

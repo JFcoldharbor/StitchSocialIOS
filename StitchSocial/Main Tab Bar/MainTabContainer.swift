@@ -126,7 +126,7 @@ struct MainTabContainer: View {
         }
         .fullScreenCover(isPresented: $navigationCoordinator.showingFullscreenVideo) {
             if let video = navigationCoordinator.fullscreenVideo {
-                VideoPlayerView(video: video, isActive: true, onEngagement: nil)
+                VideoPlayerComponent(video: video, isActive: true)
                     .onDisappear {
                         navigationCoordinator.dismissVideo()
                     }

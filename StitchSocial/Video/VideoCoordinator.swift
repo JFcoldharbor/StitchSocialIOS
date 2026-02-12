@@ -178,7 +178,8 @@ class VideoCoordinator: ObservableObject {
         manualDescription: String? = nil,
         taggedUserIDs: [String] = [],
         recordingSource: String = "unknown",
-        hashtags: [String] = []
+        hashtags: [String] = [],
+        customThumbnailTime: TimeInterval? = nil
     ) async throws -> CoreVideoMetadata {
         
         guard !isProcessing else {
@@ -188,6 +189,13 @@ class VideoCoordinator: ObservableObject {
         let workflowStartTime = Date()
         isProcessing = true
         self.recordedVideoURL = recordedVideoURL
+        
+        // Reset all progress for fresh run
+        overallProgress = 0.0
+        audioExtractionProgress = 0.0
+        compressionProgress = 0.0
+        aiAnalysisProgress = 0.0
+        uploadProgress = 0.0
         
         print("🚀 FAST WORKFLOW: Starting optimized processing")
         print("🎬 VIDEO: \(recordedVideoURL.lastPathComponent)")
@@ -225,7 +233,8 @@ class VideoCoordinator: ObservableObject {
                 compressionResult: parallelResults.compression,
                 aiResult: parallelResults.aiAnalysis,
                 recordingContext: recordingContext,
-                userID: userID
+                userID: userID,
+                customThumbnailTime: customThumbnailTime
             )
             
             // PHASE 3: FEED INTEGRATION (90-100%)
@@ -448,7 +457,8 @@ class VideoCoordinator: ObservableObject {
         compressionResult: CompressionResult,
         aiResult: VideoAnalysisResult?,
         recordingContext: RecordingContext,
-        userID: String
+        userID: String,
+        customThumbnailTime: TimeInterval? = nil
     ) async throws -> VideoUploadResult {
         
         currentPhase = .uploading
@@ -465,13 +475,39 @@ class VideoCoordinator: ObservableObject {
             creatorName: ""
         )
         
-        // Upload the COMPRESSED video (not original!)
+        // Monitor uploadService.uploadProgress and map 0.0-1.0 → coordinator 0.7-0.9
+        let progressTask = Task { @MainActor in
+            var lastMapped = 0.7
+            while !Task.isCancelled {
+                let uploadFrac = self.uploadService.uploadProgress
+                let mapped = 0.7 + (uploadFrac * 0.2) // 0.7 → 0.9
+                if mapped > lastMapped {
+                    lastMapped = mapped
+                    self.overallProgress = max(self.overallProgress, mapped)
+                    
+                    // Update task text based on upload phase
+                    if uploadFrac < 0.2 {
+                        self.currentTask = "Preparing upload..."
+                    } else if uploadFrac < 0.7 {
+                        self.currentTask = "Uploading video..."
+                    } else if uploadFrac < 0.9 {
+                        self.currentTask = "Uploading thumbnail..."
+                    } else {
+                        self.currentTask = "Finalizing..."
+                    }
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 10fps poll
+            }
+        }
+        
         let result = try await uploadService.uploadVideo(
             videoURL: compressionResult.outputURL,
             metadata: metadata,
-            recordingContext: recordingContext
+            recordingContext: recordingContext,
+            customThumbnailTime: customThumbnailTime
         )
         
+        progressTask.cancel()
         await updateProgress(0.9)
         uploadResult = result
         
@@ -592,6 +628,7 @@ class VideoCoordinator: ObservableObject {
             aiAnalysisProgress * weights.ai
         )
         
+        // Maps to 0.0-0.7 range, updateProgress enforces monotonic increase
         await updateProgress(combined * 0.7)
         
         let activeTasks = [
@@ -639,7 +676,10 @@ class VideoCoordinator: ObservableObject {
     }
     
     private func updateProgress(_ progress: Double) async {
-        overallProgress = progress
+        // Never go backwards — prevents flickering between phases
+        if progress > overallProgress {
+            overallProgress = progress
+        }
     }
     
     private func getFileSize(_ url: URL) async -> Int64 {

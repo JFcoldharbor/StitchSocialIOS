@@ -22,7 +22,8 @@ class ProfileViewModel: ObservableObject {
     private let userService: UserService
     private let videoService: VideoService
     private let notificationService = NotificationService()
-    private let viewingUserID: String?  // NEW: For viewing other users' profiles
+    private let cachingService = CachingService.shared
+    private let viewingUserID: String?  // For viewing other users' profiles
     
     // MARK: - Profile State
     
@@ -101,8 +102,8 @@ class ProfileViewModel: ObservableObject {
         self.viewingUserID = viewingUserID
         self.animationController = ProfileAnimationController()
         
-        // 🔧 DEBUG: Confirm viewingUserID is received in init
-        print("🔧 PROFILEVIEWMODEL INIT: viewingUserID = \(viewingUserID ?? "nil")")
+        // ðŸ”§ DEBUG: Confirm viewingUserID is received in init
+        print("ðŸ”§ PROFILEVIEWMODEL INIT: viewingUserID = \(viewingUserID ?? "nil")")
         
         // Setup NotificationCenter observers for profile refresh
         setupNotificationObservers()
@@ -168,18 +169,18 @@ class ProfileViewModel: ObservableObject {
     
     /// Load profile instantly with placeholder, then enhance with real data
     func loadProfile() async {
-        // ✅ FIXED: Determine which user to load - viewingUserID takes priority
+        // âœ… FIXED: Determine which user to load - viewingUserID takes priority
         let userIDToLoad: String
         if let viewingUserID = viewingUserID {
             userIDToLoad = viewingUserID
-            print("🔍 PROFILE: Loading OTHER user profile - \(userIDToLoad)")
+            print("ðŸ” PROFILE: Loading OTHER user profile - \(userIDToLoad)")
         } else {
             guard let currentUserID = authService.currentUserID else {
                 errorMessage = "Authentication required"
                 return
             }
             userIDToLoad = currentUserID
-            print("👤 PROFILE: Loading OWN user profile - \(currentUserID)")
+            print("ðŸ‘¤ PROFILE: Loading OWN user profile - \(currentUserID)")
         }
         
         print("PROFILE: Starting instant load for user \(userIDToLoad)")
@@ -292,7 +293,7 @@ class ProfileViewModel: ObservableObject {
                 await self.loadPinnedVideos(userID: userID)
             }
             
-            // ✅ FIXED: Pass userID to ensure we load correct user's videos
+            // âœ… FIXED: Pass userID to ensure we load correct user's videos
             group.addTask {
                 await self.loadUserVideosLazily(userID: userID)
             }
@@ -322,7 +323,7 @@ class ProfileViewModel: ObservableObject {
         let targetUserID = userID ?? currentUser?.id
         guard let targetUserID = targetUserID else { return }
         
-        print("📌 PINNED: Loading pinned videos for user \(targetUserID)")
+        print("ðŸ“Œ PINNED: Loading pinned videos for user \(targetUserID)")
         
         do {
             let db = Firestore.firestore(database: Config.Firebase.databaseName)
@@ -333,7 +334,7 @@ class ProfileViewModel: ObservableObject {
                 .getDocument()
             
             guard let userData = userDoc.data() else {
-                print("📌 PINNED: No user data found")
+                print("ðŸ“Œ PINNED: No user data found")
                 return
             }
             
@@ -345,7 +346,7 @@ class ProfileViewModel: ObservableObject {
             }
             
             guard !pinnedIDs.isEmpty else {
-                print("📌 PINNED: No pinned videos")
+                print("ðŸ“Œ PINNED: No pinned videos")
                 await MainActor.run {
                     self.pinnedVideos = []
                 }
@@ -375,37 +376,37 @@ class ProfileViewModel: ObservableObject {
                 self.pinnedVideos = orderedVideos
             }
             
-            print("📌 PINNED: Loaded \(orderedVideos.count) pinned videos")
+            print("ðŸ“Œ PINNED: Loaded \(orderedVideos.count) pinned videos")
             
         } catch {
-            print("📌 PINNED ERROR: \(error.localizedDescription)")
+            print("ðŸ“Œ PINNED ERROR: \(error.localizedDescription)")
         }
     }
     
     /// Pin a video to profile (threads only, max 3)
     func pinVideo(_ video: CoreVideoMetadata) async -> Bool {
         guard let userID = currentUser?.id else {
-            print("📌 PIN ERROR: No current user")
+            print("ðŸ“Œ PIN ERROR: No current user")
             return false
         }
         
         // Validation: threads only
         guard video.conversationDepth == 0 else {
-            print("📌 PIN ERROR: Only threads can be pinned (depth must be 0)")
+            print("ðŸ“Œ PIN ERROR: Only threads can be pinned (depth must be 0)")
             errorMessage = "Only threads can be pinned to your profile"
             return false
         }
         
         // Validation: max 3 pinned
         guard pinnedVideoIDs.count < Self.maxPinnedVideos else {
-            print("📌 PIN ERROR: Maximum \(Self.maxPinnedVideos) pinned videos allowed")
+            print("ðŸ“Œ PIN ERROR: Maximum \(Self.maxPinnedVideos) pinned videos allowed")
             errorMessage = "You can only pin up to \(Self.maxPinnedVideos) videos"
             return false
         }
         
         // Validation: not already pinned
         guard !pinnedVideoIDs.contains(video.id) else {
-            print("📌 PIN ERROR: Video already pinned")
+            print("ðŸ“Œ PIN ERROR: Video already pinned")
             return false
         }
         
@@ -432,11 +433,11 @@ class ProfileViewModel: ObservableObject {
                 self.userVideos.removeAll { $0.id == video.id }
             }
             
-            print("📌 PIN SUCCESS: Pinned video \(video.id)")
+            print("ðŸ“Œ PIN SUCCESS: Pinned video \(video.id)")
             return true
             
         } catch {
-            print("📌 PIN ERROR: \(error.localizedDescription)")
+            print("ðŸ“Œ PIN ERROR: \(error.localizedDescription)")
             errorMessage = "Failed to pin video: \(error.localizedDescription)"
             return false
         }
@@ -445,12 +446,12 @@ class ProfileViewModel: ObservableObject {
     /// Unpin a video from profile
     func unpinVideo(_ video: CoreVideoMetadata) async -> Bool {
         guard let userID = currentUser?.id else {
-            print("📌 UNPIN ERROR: No current user")
+            print("ðŸ“Œ UNPIN ERROR: No current user")
             return false
         }
         
         guard pinnedVideoIDs.contains(video.id) else {
-            print("📌 UNPIN ERROR: Video not pinned")
+            print("ðŸ“Œ UNPIN ERROR: Video not pinned")
             return false
         }
         
@@ -477,11 +478,11 @@ class ProfileViewModel: ObservableObject {
                 self.insertVideoChronologically(video)
             }
             
-            print("📌 UNPIN SUCCESS: Unpinned video \(video.id)")
+            print("ðŸ“Œ UNPIN SUCCESS: Unpinned video \(video.id)")
             return true
             
         } catch {
-            print("📌 UNPIN ERROR: \(error.localizedDescription)")
+            print("ðŸ“Œ UNPIN ERROR: \(error.localizedDescription)")
             errorMessage = "Failed to unpin video: \(error.localizedDescription)"
             return false
         }
@@ -510,7 +511,6 @@ class ProfileViewModel: ObservableObject {
     
     /// Load user videos with performance optimization and pagination
     private func loadUserVideosLazily(userID: String? = nil) async {
-        // ✅ FIXED: Use passed userID or fall back to currentUser
         let targetUserID = userID ?? currentUser?.id
         guard let targetUserID = targetUserID else {
             print("PROFILE VIDEOS ERROR: No user ID available")
@@ -519,16 +519,23 @@ class ProfileViewModel: ObservableObject {
         
         print("PROFILE VIDEOS: Loading videos for user \(targetUserID)")
         
-        await MainActor.run {
+        // CACHE: Serve cached videos instantly while Firestore loads
+        let cachedVideos = cachingService.getCachedVideosForUser(targetUserID)
+        if !cachedVideos.isEmpty {
+            let filtered = cachedVideos.filter { !pinnedVideoIDs.contains($0.id) }
+            self.userVideos = filtered
+            self.isLoadingVideos = false
+            print("PROFILE CACHE: Instant display of \(filtered.count) cached videos")
+        } else {
             self.isLoadingVideos = true
-            self.lastVideoDocument = nil
-            self.hasMoreVideos = true
         }
+        
+        self.lastVideoDocument = nil
+        self.hasMoreVideos = true
         
         do {
             let db = Firestore.firestore(database: Config.Firebase.databaseName)
             
-            // Load user videos directly from Firestore with initial limit
             let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
                 .whereField(FirebaseSchema.VideoDocument.creatorID, isEqualTo: targetUserID)
                 .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
@@ -539,24 +546,23 @@ class ProfileViewModel: ObservableObject {
                 return createVideoMetadata(from: doc.data(), documentID: doc.documentID)
             }
             
-            // Filter out pinned videos from the main list
-            let filteredVideos = videos.filter { !pinnedVideoIDs.contains($0.id) }
+            // CACHE: Store fresh videos for next load
+            cachingService.cacheVideos(videos)
             
-            // Store last document for pagination
+            let filteredVideos = videos.filter { !pinnedVideoIDs.contains($0.id) }
             let lastDoc = snapshot.documents.last
             let hasMore = snapshot.documents.count >= initialVideoLimit
             
-            await MainActor.run {
-                self.userVideos = filteredVideos
-                self.lastVideoDocument = lastDoc
-                self.hasMoreVideos = hasMore
-                self.isLoadingVideos = false
-            }
+            self.userVideos = filteredVideos
+            self.lastVideoDocument = lastDoc
+            self.hasMoreVideos = hasMore
+            self.isLoadingVideos = false
             
             print("PROFILE VIDEOS: Loaded \(filteredVideos.count) videos for \(targetUserID) (hasMore: \(hasMore))")
             
         } catch {
-            await MainActor.run {
+            // If Firestore fails but we had cache, keep showing cached data
+            if userVideos.isEmpty {
                 self.isLoadingVideos = false
                 self.hasMoreVideos = false
             }
@@ -597,6 +603,9 @@ class ProfileViewModel: ObservableObject {
             
             // Filter out pinned videos
             let filteredNewVideos = newVideos.filter { !pinnedVideoIDs.contains($0.id) }
+            
+            // CACHE: Store new batch for future loads
+            cachingService.cacheVideos(newVideos)
             
             // Update state
             let newLastDoc = snapshot.documents.last

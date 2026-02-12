@@ -21,18 +21,27 @@ struct StitchSocialApp: App {
     @StateObject private var notificationService = NotificationService()
     @StateObject private var authService = AuthService()
     @StateObject private var muteManager = MuteContextManager.shared
+    @StateObject private var backgroundUploadManager = BackgroundUploadManager.shared
+    @Environment(\.scenePhase) private var scenePhase
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(notificationService)
-                .environmentObject(authService)
-                .environmentObject(muteManager)
-                .overlay(
-                    // Toast notification overlay above all content
-                    AppToastOverlay(notificationService: notificationService)
-                        .allowsHitTesting(false)
-                )
+            ZStack {
+                ContentView()
+                    .environmentObject(notificationService)
+                    .environmentObject(authService)
+                    .environmentObject(muteManager)
+                
+                // Upload progress pill — floats above all content
+                UploadProgressPill()
+                
+                // Toast notification overlay above all content
+                AppToastOverlay(notificationService: notificationService)
+                    .allowsHitTesting(false)
+            }
+                .onChange(of: scenePhase) { _, phase in
+                    handleScenePhaseChange(phase)
+                }
                 .onAppear {
                     // 🧪 DEBUG: Connect to Firebase Emulators for local testing
                     #if DEBUG
@@ -53,7 +62,11 @@ struct StitchSocialApp: App {
                     // Initialize memory management
                     initializeMemoryManagement()
                     
+                    // 🆕 Recover any interrupted background uploads from previous session
+                    backgroundUploadManager.recoverInterruptedUploads()
+                    
                     print("📱 APP STARTUP: Services initialized")
+                    print("📤 Background Upload: Recovery check complete")
                     print("📱 FCM: Automatic via FCMPushManager")
                     print("📱 Notifications: Automatic via NotificationViewModel")
                     print("🧠 Memory: VideoPreloadingService ready")
@@ -72,11 +85,39 @@ struct StitchSocialApp: App {
         }
     }
     
+    // MARK: - Scene Phase Cleanup
+    
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        switch phase {
+        case .background:
+            Task {
+                VideoDiskCache.shared.cleanupExpired()
+                ThumbnailCache.shared.clear()
+                print("🧹 APP BACKGROUND: Disk cache expired cleaned, thumbnail cache cleared")
+            }
+        case .active, .inactive:
+            break
+        @unknown default:
+            break
+        }
+    }
+    
     // MARK: - Memory Management Setup
     
     private func initializeMemoryManagement() {
         // Pre-warm the preloading service (triggers memory observers)
         _ = VideoPreloadingService.shared
+        
+        // Memory warning — emergency eviction
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            print("🔴 MEMORY WARNING: Running emergency cleanup")
+            VideoDiskCache.shared.emergencyCleanup(keepCount: 5)
+            ThumbnailCache.shared.clear()
+        }
         
         // Log initial state
         VideoPreloadingService.shared.helloWorldTest()

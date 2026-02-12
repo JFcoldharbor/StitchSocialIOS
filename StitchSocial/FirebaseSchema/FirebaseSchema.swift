@@ -76,6 +76,12 @@ struct FirebaseSchema {
         static let hypeShards = "hype_shards"
         static let coolShards = "cool_shards"
         
+        // MARK: - Megaphone / Social Signal Sub-Collections
+        /// Sub-collection under videos/{videoID}/ for notable high-tier engagements
+        static let notableEngagements = "notableEngagements"
+        /// Sub-collection under users/{userID}/ for feed injection signals
+        static let socialSignals = "socialSignals"
+        
         /// Number of shards per counter (10 = 10 writes/sec throughput)
         static let shardCount = 10
         

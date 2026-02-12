@@ -177,7 +177,18 @@ class VideoContainerCoordinator: NSObject {
                 return
             }
             
-            let playerItem = AVPlayerItem(url: url)
+            // Disk cache: use local file if available
+            let playbackURL: URL
+            if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
+                playbackURL = cachedURL
+            } else {
+                playbackURL = url
+                Task.detached(priority: .utility) {
+                    await VideoDiskCache.shared.cacheVideo(from: video.videoURL)
+                }
+            }
+            
+            let playerItem = AVPlayerItem(url: playbackURL)
             player = AVPlayer(playerItem: playerItem)
             
             // Setup player layer
@@ -335,7 +346,7 @@ class VideoContainerCoordinator: NSObject {
     }
 }
 
-// MARK: - VideoPlayerContext Extension
+// MARK: - VideoPlayerContext Description
 
 extension VideoPlayerContext {
     var description: String {
@@ -343,8 +354,9 @@ extension VideoPlayerContext {
         case .homeFeed: return "Home Feed"
         case .discovery: return "Discovery"
         case .profileGrid: return "Profile Grid"
+        case .threadView: return "Thread View"
+        case .fullscreen: return "Fullscreen"
         case .standalone: return "Standalone"
-        @unknown default: return "Unknown"
         }
     }
 }

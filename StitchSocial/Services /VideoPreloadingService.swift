@@ -691,7 +691,18 @@ class VideoPreloadingService: ObservableObject {
             evictOldestPlayer()
         }
         
-        let playerItem = AVPlayerItem(url: videoURL)
+        // Disk cache: use local file if available, else remote + background cache
+        let playbackURL: URL
+        if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
+            playbackURL = cachedURL
+        } else {
+            playbackURL = videoURL
+            Task.detached(priority: .utility) {
+                await VideoDiskCache.shared.cacheVideo(from: video.videoURL)
+            }
+        }
+        
+        let playerItem = AVPlayerItem(url: playbackURL)
         let player = AVPlayer(playerItem: playerItem)
         
         // Configure player for optimal performance
@@ -764,7 +775,18 @@ class VideoPreloadingService: ObservableObject {
         
         preloadProgress[video.id] = 0.0
         
-        let playerItem = AVPlayerItem(url: videoURL)
+        // Disk cache: use local file if available, else remote + background cache
+        let playbackURL: URL
+        if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
+            playbackURL = cachedURL
+        } else {
+            playbackURL = videoURL
+            Task.detached(priority: .utility) {
+                await VideoDiskCache.shared.cacheVideo(from: video.videoURL)
+            }
+        }
+        
+        let playerItem = AVPlayerItem(url: playbackURL)
         let player = AVPlayer(playerItem: playerItem)
         
         // Configure player for preloading

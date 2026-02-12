@@ -596,6 +596,14 @@ struct VideoPlayerComponent: View {
         }
         .onAppear {
             bindVideo()
+            
+            // FIXED: Kick playback after fullScreenCover animation settles
+            // Pool player may have been paused by Discovery swipe card
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                guard isActive, let p = player, p.rate == 0 else { return }
+                p.seek(to: .zero)
+                p.play()
+            }
         }
         .onDisappear {
             cleanupPlayer()

@@ -4,7 +4,8 @@
 //
 //  Layer 8: Views - User Tagging Selection Sheet
 //  Dependencies: SearchService (Layer 4), BasicUserInfo (Layer 1)
-//  Features: Search users, multi-select up to 5, stylish dark UI
+//  Features: Search users, multi-select up to 25, stylish dark UI
+//  UPDATED: Returns [BasicUserInfo] instead of [String] to eliminate redundant fetches
 //  REDESIGNED: Modern dark theme with gradients and animations
 //
 
@@ -14,7 +15,7 @@ struct UserTagSheet: View {
     
     // MARK: - Properties
     
-    let onSelectUsers: ([String]) -> Void
+    let onSelectUsers: ([BasicUserInfo]) -> Void
     let onDismiss: () -> Void
     let alreadyTaggedIDs: [String]
     let initiallySelectedIDs: [String]
@@ -31,7 +32,7 @@ struct UserTagSheet: View {
     
     // MARK: - Constants
     
-    private let maxTags = 5
+    private let maxTags = 25
     
     // MARK: - Computed Properties
     
@@ -46,7 +47,7 @@ struct UserTagSheet: View {
     // MARK: - Initializer
     
     init(
-        onSelectUsers: @escaping ([String]) -> Void,
+        onSelectUsers: @escaping ([BasicUserInfo]) -> Void,
         onDismiss: @escaping () -> Void,
         alreadyTaggedIDs: [String],
         initiallySelectedIDs: [String] = []
@@ -116,8 +117,7 @@ struct UserTagSheet: View {
                 
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
-                        let finalIDs = selectedUsers.map { $0.id }
-                        onSelectUsers(finalIDs)
+                        onSelectUsers(selectedUsers)
                     } label: {
                         Text("Done")
                             .font(.system(size: 16, weight: .semibold))
@@ -663,8 +663,8 @@ private func tierColor(for tier: UserTier) -> Color {
 
 #Preview {
     UserTagSheet(
-        onSelectUsers: { ids in
-            print("Selected user IDs: \(ids)")
+        onSelectUsers: { users in
+            print("Selected users: \(users.map { $0.username })")
         },
         onDismiss: {
             print("Dismissed")

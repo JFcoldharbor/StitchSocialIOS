@@ -569,12 +569,9 @@ struct ThreadNavigationView: View {
                     context: .profileGrid
                 )
             } else {
-                VideoPlayerView(
+                VideoPlayerComponent(
                     video: video,
-                    isActive: isActive,
-                    onEngagement: { interactionType in
-                        onEngagement?(interactionType, video)
-                    }
+                    isActive: isActive
                 )
             }
         }

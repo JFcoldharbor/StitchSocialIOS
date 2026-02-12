@@ -186,6 +186,36 @@ struct HomeFeedView: View {
                     showingProfileView = true
                 }
             )
+            
+        case .socialSignal(let signal):
+            SocialSignalCard(
+                signal: signal,
+                onTapToWatch: {
+                    // Record engagement — ONLY this counts as a real view/watch time
+                    Task {
+                        await SocialSignalService.shared.recordEngagement(
+                            signalID: signal.id,
+                            userID: Auth.auth().currentUser?.uid ?? ""
+                        )
+                    }
+                    // Navigate to the actual video
+                    navigateToSignalVideo(signal: signal)
+                },
+                onDismiss: {
+                    moveToNext()
+                },
+                onAppear: {
+                    // Track impression for 2-strike dismissal
+                    // No view count, no watch time — just a card appearance
+                    Task {
+                        await SocialSignalService.shared.recordImpression(
+                            signalID: signal.id,
+                            userID: Auth.auth().currentUser?.uid ?? ""
+                        )
+                    }
+                }
+            )
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
     }
     
@@ -364,6 +394,18 @@ struct HomeFeedView: View {
                     items.append(.video(thread))
                 }
                 
+                // 📢 Inject social signals (megaphone cards) every ~4 videos
+                let signals = homeFeedService.activeSocialSignals
+                if !signals.isEmpty {
+                    var insertOffset = 0
+                    for (index, signal) in signals.enumerated() {
+                        let position = min(4 + (index * 5) + insertOffset, items.count)
+                        items.insert(.socialSignal(signal), at: position)
+                        insertOffset += 1
+                    }
+                    print("📢 FEED: Injected \(signals.count) social signal cards")
+                }
+                
                 // Add suggestions every 6 videos
                 if !suggestions.isEmpty && items.count >= 6 {
                     let suggestionBatch = Array(suggestions.prefix(5))
@@ -467,6 +509,36 @@ struct HomeFeedView: View {
         }
     }
     
+    // MARK: - Social Signal Navigation
+    
+    /// Navigate to a video from a social signal card
+    /// This is the ONLY path that counts as a real view / watch time
+    private func navigateToSignalVideo(signal: SocialSignal) {
+        Task {
+            do {
+                // Load the thread for this video
+                let threads = try await homeFeedService.loadThreadsByIDs([signal.videoID])
+                guard let thread = threads.first else {
+                    print("📢 SIGNAL NAV: Video \(signal.videoID) not found")
+                    return
+                }
+                
+                // Replace the signal card with the actual video in the feed
+                if let signalIndex = feedItems.firstIndex(where: {
+                    if case .socialSignal(let s) = $0 { return s.id == signal.id }
+                    return false
+                }) {
+                    feedItems[signalIndex] = .video(thread)
+                    // Stay on the same index — now shows the real video
+                    onPageChanged()
+                    loadChildrenForCurrentItem()
+                }
+            } catch {
+                print("⚠️ SIGNAL NAV: Failed to load video — \(error.localizedDescription)")
+            }
+        }
+    }
+    
     private func checkAndLoadMore() {
         let remainingItems = feedItems.count - currentItemIndex
         
@@ -513,13 +585,24 @@ struct HomeFeedView: View {
                     return
                 }
                 
-                let moreThreads = try await homeFeedService.loadFeed(userID: userID, limit: 15)
+                // Use loadMoreContent — NOT loadFeed which resets the feed
+                let updatedFeed = try await homeFeedService.loadMoreContent(userID: userID)
                 
-                if !moreThreads.isEmpty {
-                    let newItems = moreThreads.map { FeedItem.video($0) }
-                    feedItems.append(contentsOf: newItems)
-                    hasRecycledOnce = false
-                    print("📥 FEED: Loaded 15 more videos")
+                if updatedFeed.count > feedItems.compactMap({ item -> ThreadData? in
+                    if case .video(let t) = item { return t }; return nil
+                }).count {
+                    // Find new threads not already in feedItems
+                    let existingVideoIDs = Set(feedItems.compactMap { item -> String? in
+                        if case .video(let t) = item { return t.id }; return nil
+                    })
+                    let newThreads = updatedFeed.filter { !existingVideoIDs.contains($0.id) }
+                    
+                    if !newThreads.isEmpty {
+                        let newItems = newThreads.map { FeedItem.video($0) }
+                        feedItems.append(contentsOf: newItems)
+                        hasRecycledOnce = false
+                        print("📥 FEED: Loaded \(newThreads.count) more videos")
+                    }
                 } else if !hasRecycledOnce {
                     recycleVideos()
                 }
@@ -594,11 +677,13 @@ struct HomeFeedView: View {
 enum FeedItem: Identifiable {
     case video(ThreadData)
     case suggestions([BasicUserInfo])
+    case socialSignal(SocialSignal)
     
     var id: String {
         switch self {
         case .video(let thread): return "video-\(thread.id)"
         case .suggestions(let users): return "suggestions-\(users.map { $0.id }.joined(separator: "-"))"
+        case .socialSignal(let signal): return "signal-\(signal.id)"
         }
     }
 }

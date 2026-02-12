@@ -328,7 +328,8 @@ struct VideoReviewView: View {
                         .shadow(color: .cyan.opacity(0.4), radius: 12, x: 0, y: 4)
                 )
             }
-            .disabled(editState.state.isProcessing)
+            .disabled(editState.state.isProcessing || !editState.isPropertiesLoaded)
+            .opacity(editState.isPropertiesLoaded ? 1.0 : 0.5)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 16)
@@ -365,19 +366,26 @@ struct VideoReviewView: View {
             object: editState.player.currentItem
         )
         
-        print("⏸️ VIDEO REVIEW: Stopped playback on disappear")
+        print("â¸ï¸ VIDEO REVIEW: Stopped playback on disappear")
     }
     
     private func saveDraft() async {
         do {
             try await draftManager.saveDraft(editState.state)
-            print("💾 REVIEW: Draft saved")
+            print("ðŸ’¾ REVIEW: Draft saved")
         } catch {
-            print("❌ REVIEW: Failed to save draft: \(error)")
+            print("âŒ REVIEW: Failed to save draft: \(error)")
         }
     }
     
     private func proceedToThread() async {
+        // Block until video properties are loaded (prevents race condition)
+        guard editState.isPropertiesLoaded else {
+            exportService.exportError = "Still loading video. Please wait a moment."
+            showingExportError = true
+            return
+        }
+        
         // CRITICAL: Validate trimmed duration against user's tier limit
         let videoService = VideoService()
         let userTier = authService.currentUser?.tier ?? .rookie
@@ -402,7 +410,7 @@ struct VideoReviewView: View {
                 let result = try await exportService.exportVideo(editState: editState.state)
                 editState.finishProcessing(videoURL: result.videoURL, thumbnailURL: result.thumbnailURL)
             } catch {
-                print("❌ REVIEW: Export failed: \(error)")
+                print("âŒ REVIEW: Export failed: \(error)")
                 return
             }
         }
@@ -455,18 +463,39 @@ enum EditTab: String, CaseIterable {
 class VideoEditStateManager: ObservableObject {
     
     @Published var state: VideoEditState
+    @Published var isPropertiesLoaded = false
+    @Published var currentPlaybackTime: TimeInterval = 0
+    @Published var isPlaying = false
     let player: AVPlayer
     
     private let autoCaptionService = AutoCaptionService.shared
+    private var timeObserver: Any?
     
     init(initialState: VideoEditState) {
         self.state = initialState
         self.player = AVPlayer(url: initialState.videoURL)
         
-        // Load actual video properties and auto-generate captions
+        // Track playback position at 30fps for smooth playhead
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 1.0/30.0, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.currentPlaybackTime = time.seconds
+                self.isPlaying = (self.player.rate > 0)
+            }
+        }
+        
         Task {
             await loadVideoProperties()
             await autoGenerateCaptions()
+        }
+    }
+    
+    deinit {
+        if let observer = timeObserver {
+            player.removeTimeObserver(observer)
         }
     }
     
@@ -478,11 +507,22 @@ class VideoEditStateManager: ObservableObject {
             let tracks = try await asset.loadTracks(withMediaType: .video)
             
             if let track = tracks.first {
-                let size = try await track.load(.naturalSize)
+                let naturalSize = try await track.load(.naturalSize)
+                let preferredTransform = try await track.load(.preferredTransform)
+                
+                // FIXED: Apply preferredTransform to get the actual displayed size
+                // naturalSize returns the raw buffer dimensions (e.g. 1920x1080 for portrait iPhone video)
+                // The transform rotates it to the correct orientation (e.g. 1080x1920)
+                let transformedSize = naturalSize.applying(preferredTransform)
+                let size = CGSize(
+                    width: abs(transformedSize.width),
+                    height: abs(transformedSize.height)
+                )
+                
+                print("📐 VIDEO REVIEW: naturalSize=\(naturalSize), corrected=\(size), duration=\(String(format: "%.1f", duration))s")
                 
                 // Update state with actual properties
                 await MainActor.run {
-                    // Create new state with correct properties
                     var updatedState = state
                     updatedState = VideoEditState(
                         videoURL: state.videoURL,
@@ -491,6 +531,7 @@ class VideoEditStateManager: ObservableObject {
                         draftID: state.draftID
                     )
                     state = updatedState
+                    isPropertiesLoaded = true
                 }
             }
         } catch {
@@ -511,14 +552,14 @@ class VideoEditStateManager: ObservableObject {
                     state.addCaption(caption)
                 }
                 
-                print("✅ VIDEO REVIEW: Auto-generated \(captions.count) captions")
+                print("âœ… VIDEO REVIEW: Auto-generated \(captions.count) captions")
             }
         } catch CaptionError.noAudioTrack {
-            print("ℹ️ VIDEO REVIEW: No audio track - skipping auto-captions")
+            print("â„¹ï¸ VIDEO REVIEW: No audio track - skipping auto-captions")
         } catch CaptionError.authorizationDenied {
-            print("⚠️ VIDEO REVIEW: Speech recognition not authorized - skipping auto-captions")
+            print("âš ï¸ VIDEO REVIEW: Speech recognition not authorized - skipping auto-captions")
         } catch {
-            print("⚠️ VIDEO REVIEW: Auto-caption failed: \(error)")
+            print("âš ï¸ VIDEO REVIEW: Auto-caption failed: \(error)")
         }
     }
     

@@ -95,8 +95,21 @@ struct RecordingView: View {
                         recordingContext: controller.recordingContext,
                         aiResult: controller.aiAnalysisResult,
                         recordingSource: currentRecordingSource,
-                        onVideoCreated: onVideoCreated,
-                        onCancel: onCancel
+                        onVideoCreated: { metadata in
+                            // FIXED: Pop nav stack FIRST, then notify parent
+                            // Without this, fullScreenCover won't dismiss because
+                            // NavigationStack still has .threadComposer in its path
+                            navigationPath.removeAll()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                onVideoCreated(metadata)
+                            }
+                        },
+                        onCancel: {
+                            navigationPath.removeAll()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                onCancel()
+                            }
+                        }
                     )
                 }
             }

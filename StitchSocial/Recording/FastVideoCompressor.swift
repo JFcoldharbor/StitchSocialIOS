@@ -4,7 +4,7 @@
 //
 //  Layer 4: Services - CapCut-Style Fast Video Compression
 //  Uses AVAssetWriter with VideoToolbox hardware acceleration
-//  Target: 150MB → 30MB in ~5-10 seconds
+//  Target: 150MB â†’ 30MB in ~5-10 seconds
 //
 //  Key Differences from AVAssetExportSession:
 //  1. Direct hardware encoder access via VideoToolbox
@@ -12,8 +12,7 @@
 //  3. Single-pass encoding (faster than 2-pass)
 //  4. HEVC (H.265) for 40% better compression than H.264
 //
-//  🔧 FIXED: Preserves source aspect ratio (no more cropped uploads!)
-//  🔧 FIXED: Uses ResizeAspect instead of ResizeAspectFill
+//  ðŸ”§ FIXED: Preserves source aspect ratio (no more cropped uploads!)
 //
 
 import Foundation
@@ -22,7 +21,7 @@ import VideoToolbox
 import UIKit
 
 /// CapCut-style fast video compression with hardware acceleration
-/// Compresses 150MB → 30MB in ~5-10 seconds using HEVC + VideoToolbox
+/// Compresses 150MB â†’ 30MB in ~5-10 seconds using HEVC + VideoToolbox
 @MainActor
 class FastVideoCompressor: ObservableObject {
     
@@ -108,12 +107,12 @@ class FastVideoCompressor: ObservableObject {
             let sourceInfo = try await analyzeVideo(url: sourceURL)
             let targetBytes = Int64(targetSizeMB * 1024 * 1024)
             
-            print("🎬 FAST COMPRESS: Source \(formatBytes(sourceInfo.fileSize)) → Target \(formatBytes(targetBytes))")
-            print("🎬 FAST COMPRESS: Duration \(String(format: "%.1f", sourceInfo.duration))s, Resolution \(Int(sourceInfo.resolution.width))x\(Int(sourceInfo.resolution.height))")
+            print("ðŸŽ¬ FAST COMPRESS: Source \(formatBytes(sourceInfo.fileSize)) â†’ Target \(formatBytes(targetBytes))")
+            print("ðŸŽ¬ FAST COMPRESS: Duration \(String(format: "%.1f", sourceInfo.duration))s, Resolution \(Int(sourceInfo.resolution.width))x\(Int(sourceInfo.resolution.height))")
             
             // Step 2: Check if compression is needed
             if sourceInfo.fileSize <= targetBytes {
-                print("✅ FAST COMPRESS: Already under target, copying file")
+                print("âœ… FAST COMPRESS: Already under target, copying file")
                 let outputURL = try copyToOutput(sourceURL)
                 
                 return CompressionResult(
@@ -137,7 +136,7 @@ class FastVideoCompressor: ObservableObject {
                 preserveResolution: preserveResolution
             )
             
-            print("🎬 FAST COMPRESS: Using \(settings.codec) @ \(settings.bitrate / 1000)kbps, \(Int(settings.resolution.width))x\(Int(settings.resolution.height))")
+            print("ðŸŽ¬ FAST COMPRESS: Using \(settings.codec) @ \(settings.bitrate / 1000)kbps, \(Int(settings.resolution.width))x\(Int(settings.resolution.height))")
             
             // Step 4: Perform hardware-accelerated compression
             let outputURL = try await performHardwareCompression(
@@ -173,15 +172,15 @@ class FastVideoCompressor: ObservableObject {
                 bitrate: settings.bitrate
             )
             
-            print("✅ FAST COMPRESS: \(formatBytes(sourceInfo.fileSize)) → \(formatBytes(outputSize)) in \(String(format: "%.1f", processingTime))s")
-            print("✅ FAST COMPRESS: \(String(format: "%.1f", result.compressionRatio))x compression ratio")
+            print("âœ… FAST COMPRESS: \(formatBytes(sourceInfo.fileSize)) â†’ \(formatBytes(outputSize)) in \(String(format: "%.1f", processingTime))s")
+            print("âœ… FAST COMPRESS: \(String(format: "%.1f", result.compressionRatio))x compression ratio")
             
             return result
             
         } catch {
             currentPhase = .failed
             lastError = error.localizedDescription
-            print("❌ FAST COMPRESS: \(error.localizedDescription)")
+            print("âŒ FAST COMPRESS: \(error.localizedDescription)")
             throw error
         }
     }
@@ -201,7 +200,8 @@ class FastVideoCompressor: ObservableObject {
     private struct VideoInfo {
         let duration: TimeInterval
         let fileSize: Int64
-        let resolution: CGSize
+        let resolution: CGSize       // Display size (after transform)
+        let naturalResolution: CGSize // Raw buffer size (before transform)
         let bitrate: Double
         let frameRate: Double
         let hasAudio: Bool
@@ -247,6 +247,7 @@ class FastVideoCompressor: ObservableObject {
             duration: durationSeconds,
             fileSize: fileSize,
             resolution: resolution,
+            naturalResolution: naturalSize,
             bitrate: bitrate,
             frameRate: Double(nominalFrameRate),
             hasAudio: !audioTracks.isEmpty
@@ -256,7 +257,8 @@ class FastVideoCompressor: ObservableObject {
     // MARK: - Optimal Settings Calculation
     
     private struct CompressionSettings {
-        let resolution: CGSize
+        let resolution: CGSize        // Display resolution (for logging/result)
+        let writerResolution: CGSize  // Raw buffer resolution (for AVAssetWriterInput)
         let bitrate: Int
         let frameRate: Int
         let codec: String
@@ -279,16 +281,38 @@ class FastVideoCompressor: ObservableObject {
         // Clamp bitrate to reasonable bounds
         targetVideoBitrate = max(minBitrate, min(maxBitrate, targetVideoBitrate))
         
-        // Determine optimal resolution based on bitrate budget
-        let resolution: CGSize
+        // Determine optimal DISPLAY resolution based on bitrate budget
+        let displayResolution: CGSize
         if preserveResolution {
-            resolution = sourceInfo.resolution
+            displayResolution = sourceInfo.resolution
         } else {
-            resolution = selectResolutionForBitrate(
+            displayResolution = selectResolutionForBitrate(
                 targetBitrate: targetVideoBitrate,
                 sourceResolution: sourceInfo.resolution
             )
         }
+        
+        // FIXED: Calculate WRITER resolution from naturalResolution (raw buffer dims)
+        // The writer receives raw pixel buffers at naturalSize dimensions,
+        // NOT the transformed/display dimensions. The transform is applied separately
+        // via videoInput.transform. Using display dimensions here causes
+        // dimension mismatch → black bars / pillarboxing.
+        let writerResolution: CGSize
+        if preserveResolution {
+            writerResolution = sourceInfo.naturalResolution
+        } else {
+            // Scale naturalResolution by the same factor as display resolution
+            let displayScale = max(displayResolution.width, displayResolution.height) / max(sourceInfo.resolution.width, sourceInfo.resolution.height)
+            let scaledWidth = sourceInfo.naturalResolution.width * displayScale
+            let scaledHeight = sourceInfo.naturalResolution.height * displayScale
+            // Ensure even dimensions
+            writerResolution = CGSize(
+                width: CGFloat(Int(scaledWidth) & ~1),
+                height: CGFloat(Int(scaledHeight) & ~1)
+            )
+        }
+        
+        print("📐 COMPRESSION: Display \(Int(displayResolution.width))x\(Int(displayResolution.height)), Writer \(Int(writerResolution.width))x\(Int(writerResolution.height))")
         
         // Use HEVC for better compression (40% smaller than H.264)
         // Fall back to H.264 if HEVC would be too slow
@@ -301,7 +325,8 @@ class FastVideoCompressor: ObservableObject {
         let keyFrameInterval = frameRate * 2
         
         return CompressionSettings(
-            resolution: resolution,
+            resolution: displayResolution,
+            writerResolution: writerResolution,
             bitrate: targetVideoBitrate,
             frameRate: frameRate,
             codec: useHEVC ? "HEVC" : "H.264",
@@ -311,7 +336,7 @@ class FastVideoCompressor: ObservableObject {
     }
     
     private func selectResolutionForBitrate(targetBitrate: Int, sourceResolution: CGSize) -> CGSize {
-        // 🔧 FIXED: Preserve source aspect ratio instead of forcing portrait dimensions
+        // ðŸ”§ FIXED: Preserve source aspect ratio instead of forcing portrait dimensions
         
         // Calculate source aspect ratio
         let sourceAspectRatio = sourceResolution.width / sourceResolution.height
@@ -347,8 +372,8 @@ class FastVideoCompressor: ObservableObject {
         let evenWidth = CGFloat(Int(outputWidth) & ~1)
         let evenHeight = CGFloat(Int(outputHeight) & ~1)
         
-        print("📐 COMPRESSION: Preserving aspect ratio \(String(format: "%.3f", sourceAspectRatio))")
-        print("📐 COMPRESSION: \(Int(sourceResolution.width))x\(Int(sourceResolution.height)) → \(Int(evenWidth))x\(Int(evenHeight))")
+        print("ðŸ“ COMPRESSION: Preserving aspect ratio \(String(format: "%.3f", sourceAspectRatio))")
+        print("ðŸ“ COMPRESSION: \(Int(sourceResolution.width))x\(Int(sourceResolution.height)) â†’ \(Int(evenWidth))x\(Int(evenHeight))")
         
         return CGSize(width: evenWidth, height: evenHeight)
     }
@@ -369,14 +394,6 @@ class FastVideoCompressor: ObservableObject {
         // Remove existing file
         try? FileManager.default.removeItem(at: outputURL)
         
-        // Create asset reader
-        let reader = try AVAssetReader(asset: asset)
-        
-        // Configure time range (for trimming)
-        if let range = trimRange {
-            reader.timeRange = range
-        }
-        
         // Get source tracks
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
             throw CompressionError.noVideoTrack
@@ -384,17 +401,79 @@ class FastVideoCompressor: ObservableObject {
         
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
         
-        // Configure video reader output (raw frames)
+        // FIXED: Use AVAssetReaderVideoCompositionOutput to pre-apply the transform
+        // This bakes the rotation into the pixel data so the output file has
+        // correctly oriented pixels with an identity transform.
+        // Previously used AVAssetReaderTrackOutput which reads raw (unrotated) buffers,
+        // then set videoInput.transform as metadata — but many apps ignore that metadata.
+        
+        let naturalSize = try await videoTrack.load(.naturalSize)
+        let preferredTransform = try await videoTrack.load(.preferredTransform)
+        
+        // Create a composition that applies the transform
+        let readerComposition = AVMutableComposition()
+        guard let compTrack = readerComposition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else {
+            throw CompressionError.noVideoTrack
+        }
+        
+        let fullRange = CMTimeRange(start: .zero, duration: try await asset.load(.duration))
+        try compTrack.insertTimeRange(
+            trimRange ?? fullRange,
+            of: videoTrack,
+            at: .zero
+        )
+        compTrack.preferredTransform = preferredTransform
+        
+        // Build a video composition that forces the transform into pixels
+        let videoComposition = AVMutableVideoComposition()
+        let transformedSize = naturalSize.applying(preferredTransform)
+        let renderSize = CGSize(
+            width: abs(transformedSize.width),
+            height: abs(transformedSize.height)
+        )
+        videoComposition.renderSize = renderSize
+        
+        let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
+        let fps: Int32 = nominalFrameRate > 0 ? Int32(round(nominalFrameRate)) : 30
+        videoComposition.frameDuration = CMTime(value: 1, timescale: fps)
+        
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = CMTimeRange(start: .zero, duration: readerComposition.duration)
+        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compTrack)
+        layerInstruction.setTransform(preferredTransform, at: .zero)
+        instruction.layerInstructions = [layerInstruction]
+        videoComposition.instructions = [instruction]
+        
+        // Create composition-based reader (reads pre-rotated frames at display resolution)
         let videoReaderSettings: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         ]
-        let videoOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: videoReaderSettings)
-        videoOutput.alwaysCopiesSampleData = false
-        reader.add(videoOutput)
         
-        // Configure audio reader output (if present)
+        // We need a new reader for the composition
+        let compositionReader = try AVAssetReader(asset: readerComposition)
+        if let range = trimRange {
+            // Trim already applied via insertTimeRange, but set reader range to full composition
+        }
+        
+        let videoOutput = AVAssetReaderVideoCompositionOutput(
+            videoTracks: readerComposition.tracks(withMediaType: .video),
+            videoSettings: videoReaderSettings
+        )
+        videoOutput.videoComposition = videoComposition
+        videoOutput.alwaysCopiesSampleData = false
+        compositionReader.add(videoOutput)
+        
+        // Configure audio reader output (if present) — use original asset reader
         var audioOutput: AVAssetReaderTrackOutput?
+        let audioReader: AVAssetReader? // Separate reader for audio from original asset
         if let audioTrack = audioTracks.first {
+            let audioAssetReader = try AVAssetReader(asset: asset)
+            if let range = trimRange {
+                audioAssetReader.timeRange = range
+            }
             let audioReaderSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: 44100,
@@ -402,21 +481,31 @@ class FastVideoCompressor: ObservableObject {
             ]
             let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: audioReaderSettings)
             output.alwaysCopiesSampleData = false
-            reader.add(output)
+            audioAssetReader.add(output)
             audioOutput = output
+            audioReader = audioAssetReader
+        } else {
+            audioReader = nil
         }
         
         // Create asset writer
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         
-        // Configure video writer input with hardware encoding
-        let videoWriterSettings = createVideoWriterSettings(settings: settings, sourceInfo: sourceInfo)
+        // Configure video writer input — use DISPLAY dimensions since reader now outputs rotated frames
+        // Override writerResolution with display resolution for this flow
+        let writerWidth = Int(settings.resolution.width) & ~1
+        let writerHeight = Int(settings.resolution.height) & ~1
+        
+        var videoWriterSettings = createVideoWriterSettings(settings: settings, sourceInfo: sourceInfo)
+        // Override with display dimensions since reader outputs pre-rotated frames
+        videoWriterSettings[AVVideoWidthKey] = writerWidth
+        videoWriterSettings[AVVideoHeightKey] = writerHeight
+        
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoWriterSettings)
         videoInput.expectsMediaDataInRealTime = false
+        // NO transform — pixels are already rotated
         
-        // Preserve orientation
-        let transform = try await videoTrack.load(.preferredTransform)
-        videoInput.transform = transform
+        print("📐 COMPRESSOR: naturalSize=\(naturalSize), renderSize=\(renderSize), writerDims=\(writerWidth)x\(writerHeight), fps=\(fps)")
         
         writer.add(videoInput)
         
@@ -436,15 +525,21 @@ class FastVideoCompressor: ObservableObject {
         }
         
         // Start reading and writing
-        guard reader.startReading() else {
-            throw CompressionError.readerFailed(reader.error?.localizedDescription ?? "Unknown")
+        guard compositionReader.startReading() else {
+            throw CompressionError.readerFailed(compositionReader.error?.localizedDescription ?? "Unknown")
+        }
+        
+        if let audioReader = audioReader {
+            guard audioReader.startReading() else {
+                throw CompressionError.readerFailed(audioReader.error?.localizedDescription ?? "Unknown")
+            }
         }
         
         guard writer.startWriting() else {
             throw CompressionError.writerFailed(writer.error?.localizedDescription ?? "Unknown")
         }
         
-        writer.startSession(atSourceTime: trimRange?.start ?? .zero)
+        writer.startSession(atSourceTime: .zero)
         
         // Process frames
         let totalDuration = trimRange?.duration.seconds ?? sourceInfo.duration
@@ -493,8 +588,8 @@ class FastVideoCompressor: ObservableObject {
             
             // Wait for completion
             group.notify(queue: .main) {
-                if reader.status == .failed {
-                    encodeError = CompressionError.readerFailed(reader.error?.localizedDescription ?? "Unknown")
+                if compositionReader.status == .failed {
+                    encodeError = CompressionError.readerFailed(compositionReader.error?.localizedDescription ?? "Unknown")
                 }
                 
                 writer.finishWriting {
@@ -516,9 +611,11 @@ class FastVideoCompressor: ObservableObject {
         // Use hardware-accelerated codec
         let codecKey = settings.useHEVC ? AVVideoCodecType.hevc : AVVideoCodecType.h264
         
-        // Calculate dimensions (must be even numbers)
-        let width = Int(settings.resolution.width) & ~1
-        let height = Int(settings.resolution.height) & ~1
+        // FIXED: Use writerResolution (raw buffer dimensions, NOT display dimensions)
+        // AVAssetReaderTrackOutput produces pixel buffers at naturalSize,
+        // so the writer must match. The transform handles orientation separately.
+        let width = Int(settings.writerResolution.width) & ~1
+        let height = Int(settings.writerResolution.height) & ~1
         
         var compressionProperties: [String: Any] = [
             AVVideoAverageBitRateKey: settings.bitrate,
@@ -541,10 +638,7 @@ class FastVideoCompressor: ObservableObject {
             AVVideoCodecKey: codecKey,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: compressionProperties,
-            // 🔧 FIXED: Use ResizeAspect to preserve full video (no cropping)
-            // Was: AVVideoScalingModeResizeAspectFill which CROPS the video!
-            AVVideoScalingModeKey: AVVideoScalingModeResizeAspect
+            AVVideoCompressionPropertiesKey: compressionProperties
         ]
     }
     

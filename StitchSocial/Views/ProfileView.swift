@@ -18,6 +18,7 @@ struct ProfileView: View {
     // MARK: - Dependencies
     
     @StateObject private var viewModel: ProfileViewModel
+    @ObservedObject private var followManager = FollowManager.shared
     private let authService: AuthService
     private let userService: UserService
     private let videoService: VideoService
@@ -28,7 +29,7 @@ struct ProfileView: View {
     // MARK: - State Variables
     
     @State private var scrollOffset: CGFloat = 0
-    @State private var dragOffset: CGFloat = 0  // 🔧 For swipe down to dismiss
+    @State private var dragOffset: CGFloat = 0  // ðŸ”§ For swipe down to dismiss
     @State private var showStickyTabBar = false
     @State private var showingFollowersList = false
     @State private var showingSettings = false
@@ -49,6 +50,21 @@ struct ProfileView: View {
     }
     
     @State private var videoPresentation: VideoPresentation?
+    
+    // MARK: - Thread Navigation State
+    
+    /// Wrapper for thread presentation via fullScreenCover
+    struct ThreadPresentation: Identifiable, Equatable {
+        let id: String          // video.id for uniqueness
+        let threadID: String    // actual threadID to load
+        let targetVideoID: String?  // video to scroll to within thread
+        
+        static func == (lhs: ThreadPresentation, rhs: ThreadPresentation) -> Bool {
+            lhs.id == rhs.id
+        }
+    }
+    
+    @State private var threadPresentation: ThreadPresentation?
     
     // MARK: - Video Deletion State
     
@@ -124,7 +140,7 @@ struct ProfileView: View {
                 }
             }
         }
-        .offset(y: max(0, dragOffset))  // 🔧 Allow dragging down only
+        .offset(y: max(0, dragOffset))  // ðŸ”§ Allow dragging down only
         .gesture(
             DragGesture()
                 .onChanged { value in
@@ -183,11 +199,23 @@ struct ProfileView: View {
                 video: presentation.video,
                 overlayContext: presentation.context,
                 onDismiss: {
-                    print("📱 PROFILE: Dismissing fullscreen")
+                    print("ðŸ“± PROFILE: Dismissing fullscreen")
                     NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                     videoPresentation = nil
                 }
             )
+        }
+        // NEW: ThreadView navigation from profile grid
+        .fullScreenCover(item: $threadPresentation) { presentation in
+            NavigationStack {
+                ThreadView(
+                    threadID: presentation.threadID,
+                    videoService: videoService,
+                    userService: userService,
+                    targetVideoID: presentation.targetVideoID
+                )
+            }
+            .preferredColorScheme(.dark)
         }
         // Collection Composer Sheet
         .sheet(isPresented: $showingCollectionComposer) {
@@ -244,7 +272,7 @@ struct ProfileView: View {
             }
         }
         .onChange(of: videoPresentation) { oldValue, newValue in
-            print("🔍 DEBUG: videoPresentation changed to \(newValue?.id ?? "nil")")
+            print("ðŸ” DEBUG: videoPresentation changed to \(newValue?.id ?? "nil")")
         }
         .alert("Delete Video", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -339,10 +367,10 @@ struct ProfileView: View {
                 // Remove from local array
                 userDrafts.removeAll { $0.id == draft.id }
                 
-                print("🗑️ PROFILE: Deleted draft \(draft.id)")
+                print("ðŸ—‘ï¸ PROFILE: Deleted draft \(draft.id)")
             } catch {
                 collectionError = "Failed to delete draft: \(error.localizedDescription)"
-                print("❌ PROFILE: Failed to delete draft: \(error)")
+                print("âŒ PROFILE: Failed to delete draft: \(error)")
             }
         }
     }
@@ -362,9 +390,9 @@ struct ProfileView: View {
                 userDrafts = try await collectionService.loadUserDrafts(creatorID: userID)
             }
             
-            print("📚 PROFILE: Loaded \(userCollections.count) collections, \(userDrafts.count) drafts")
+            print("ðŸ“š PROFILE: Loaded \(userCollections.count) collections, \(userDrafts.count) drafts")
         } catch {
-            print("❌ PROFILE: Failed to load collections: \(error)")
+            print("âŒ PROFILE: Failed to load collections: \(error)")
         }
         
         isLoadingCollections = false
@@ -675,17 +703,32 @@ struct ProfileView: View {
                         .cornerRadius(8)
                 }
             } else {
+                // Follow button â€” uses FollowManager.shared for app-wide consistency
+                let isFollowing = FollowManager.shared.isFollowing(user.id)
+                let isLoadingFollow = FollowManager.shared.isLoading(user.id)
+                
                 Button(action: {
-                    Task { await viewModel.toggleFollow() }
+                    Task { await FollowManager.shared.toggleFollow(for: user.id) }
                 }) {
-                    Text(viewModel.isFollowing ? "Following" : "Follow")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(viewModel.isFollowing ? .black : .white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 32)
-                        .background(viewModel.isFollowing ? Color.white : Color.cyan)
-                        .cornerRadius(8)
+                    HStack(spacing: 6) {
+                        if isLoadingFollow {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .tint(isFollowing ? .black : .white)
+                        } else {
+                            Image(systemName: isFollowing ? "checkmark" : "person.plus.fill")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        Text(isLoadingFollow ? "" : (isFollowing ? "Following" : "Follow"))
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundColor(isFollowing ? .black : .white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 32)
+                    .background(isFollowing ? Color.white : Color.cyan)
+                    .cornerRadius(8)
                 }
+                .disabled(isLoadingFollow)
                 
                 Button(action: { /* Future implementation */ }) {
                     Text("Subscribe")
@@ -699,6 +742,11 @@ struct ProfileView: View {
             }
         }
         .padding(.horizontal, 20)
+        .onAppear {
+            if let user = viewModel.currentUser, !viewModel.isOwnProfile {
+                Task { await FollowManager.shared.loadFollowState(for: user.id) }
+            }
+        }
     }
     
     // MARK: - Tab Bar Section
@@ -770,7 +818,7 @@ struct ProfileView: View {
                 Task {
                     let success = await viewModel.pinVideo(video)
                     if success {
-                        print("📌 PROFILE: Pinned video \(video.id)")
+                        print("ðŸ“Œ PROFILE: Pinned video \(video.id)")
                     }
                 }
             },
@@ -778,7 +826,7 @@ struct ProfileView: View {
                 Task {
                     let success = await viewModel.unpinVideo(video)
                     if success {
-                        print("📌 PROFILE: Unpinned video \(video.id)")
+                        print("ðŸ“Œ PROFILE: Unpinned video \(video.id)")
                     }
                 }
             },
@@ -793,21 +841,39 @@ struct ProfileView: View {
         )
     }
     
-    // MARK: - Video Navigation (FIXED - Item-based presentation)
+    // MARK: - Video Navigation (FIXED - Routes to ThreadView or FullscreenVideoView)
     
     private func openVideoInFullscreen(video: CoreVideoMetadata) {
-        print("📱 PROFILE: Tapped video \(video.id.prefix(8))")
+        print("\u{1F4F1} PROFILE: Tapped video \(video.id.prefix(8)) depth=\(video.conversationDepth)")
         
         // Kill all players first
         NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
         
-        // Present with small delay for cleanup, using item-based presentation
+        // Route based on video type:
+        // - Thread parents (depth 0 with threadID or is a thread root) -> ThreadView
+        // - Replies/stitches (depth > 0) -> ThreadView targeting the specific reply
+        // - Standalone videos (no threadID, not a parent) -> FullscreenVideoView
+        
+        let threadID = video.threadID ?? video.id
+        let isThreadParent = video.conversationDepth == 0
+        let hasThread = video.threadID != nil
+        
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            self.videoPresentation = VideoPresentation(
-                id: video.id,
-                video: video,
-                context: viewModel.isOwnProfile ? .profileOwn : .profileOther
-            )
+            if hasThread || isThreadParent {
+                // Navigate to ThreadView - targets the tapped video within the thread
+                self.threadPresentation = ThreadPresentation(
+                    id: video.id,
+                    threadID: isThreadParent ? video.id : threadID,
+                    targetVideoID: isThreadParent ? nil : video.id
+                )
+            } else {
+                // Standalone video - direct fullscreen playback
+                self.videoPresentation = VideoPresentation(
+                    id: video.id,
+                    video: video,
+                    context: self.viewModel.isOwnProfile ? .profileOwn : .profileOther
+                )
+            }
         }
     }
     
@@ -915,23 +981,23 @@ struct ProfileView: View {
         var bioComponents: [String] = []
         
         if clout > OptimizationConfig.User.defaultStartingClout * 5 {
-            bioComponents.append("🌟 High performer")
+            bioComponents.append("ðŸŒŸ High performer")
         }
         
         if videoCount >= OptimizationConfig.Threading.maxChildrenPerThread {
-            bioComponents.append("📹 Active creator")
+            bioComponents.append("ðŸ“¹ Active creator")
         }
         
         if followerCount >= 100 {
-            bioComponents.append("👥 Community leader")
+            bioComponents.append("ðŸ‘¥ Community leader")
         }
         
         if user.tier != .rookie {
-            bioComponents.append("🚀 \(user.tier.displayName)")
+            bioComponents.append("ðŸš€ \(user.tier.displayName)")
         }
         
         if user.isVerified {
-            bioComponents.append("✅ Verified")
+            bioComponents.append("âœ… Verified")
         }
         
         let bio = bioComponents.joined(separator: " | ")
@@ -941,13 +1007,13 @@ struct ProfileView: View {
     private func generateSampleBio(for user: BasicUserInfo) -> String? {
         switch user.tier {
         case .founder:
-            return "Building the future of social video 🚀 | Creator of Stitch Social"
+            return "Building the future of social video ðŸš€ | Creator of Stitch Social"
         case .coFounder:
-            return "Co-founder at Stitch Social | Passionate about connecting creators 🎬"
+            return "Co-founder at Stitch Social | Passionate about connecting creators ðŸŽ¬"
         case .topCreator:
-            return "Top creator with \(viewModel.formatClout(user.clout)) clout | Making viral content daily ✨"
+            return "Top creator with \(viewModel.formatClout(user.clout)) clout | Making viral content daily âœ¨"
         case .partner:
-            return "Official partner creator | \(viewModel.userVideos.count) threads and counting 🔥"
+            return "Official partner creator | \(viewModel.userVideos.count) threads and counting ðŸ”¥"
         default:
             return nil
         }

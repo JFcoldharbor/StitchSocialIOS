@@ -2,21 +2,18 @@
 //  ProgressiveCoolButton.swift
 //  StitchSocial
 //
-//  Layer 8: UI - Progressive Tapping Cool Button with 3D Effects and Floating Icons
-//  Dependencies: EngagementManager (Layer 6), FloatingIconManager
-//  Features: 3D depth, progressive tapping, TikTok-style floating snowflake animations
+//  Layer 8: UI - Cool Button with 3D Effects and Floating Icons
+//  UPDATED: No burst variant for cool - always +1 per tap
 //  UPDATED: Self-engagement restriction - only founders can cool their own content
 //
 
 import SwiftUI
 import Foundation
 
-/// Progressive cool button with 3D effects and floating snowflake spawning
 struct ProgressiveCoolButton: View {
     
-    // MARK: - Properties
     let videoID: String
-    let creatorID: String  // NEW: Video creator's ID for self-engagement check
+    let creatorID: String
     let currentCoolCount: Int
     let currentUserID: String
     let userTier: UserTier
@@ -24,7 +21,6 @@ struct ProgressiveCoolButton: View {
     @ObservedObject var engagementManager: EngagementManager
     @ObservedObject var iconManager: FloatingIconManager
     
-    // MARK: - State
     @State private var isPressed = false
     @State private var buttonPosition: CGPoint = .zero
     @State private var showingError = false
@@ -33,79 +29,32 @@ struct ProgressiveCoolButton: View {
     @State private var showingTrollWarning = false
     @State private var showingCloutCapWarning = false
     
-    // MARK: - Computed Properties
+    // MARK: - Computed
+    
     private var engagementState: VideoEngagementState {
         engagementManager.getEngagementState(videoID: videoID, userID: currentUserID)
     }
     
-    private var isProcessing: Bool {
-        engagementManager.isProcessingEngagement
-    }
-    
-    // MARK: - Self-Engagement Check (NEW)
-    
-    /// Check if user is trying to engage with their own content
-    private var isSelfEngagement: Bool {
-        currentUserID == creatorID
-    }
-    
-    /// Check if user is a founder tier (allowed to self-engage)
-    private var isFounderTier: Bool {
-        userTier == .founder || userTier == .coFounder
-    }
-    
-    /// Whether self-engagement should be blocked
-    private var shouldBlockSelfEngagement: Bool {
-        isSelfEngagement && !isFounderTier
-    }
-    
-    // Engagement cap tracking
-    private var hasHitEngagementCap: Bool {
-        engagementState.hasHitEngagementCap()
-    }
-    
-    // NEW: Visual hype multiplier for this tier (Cool uses same multipliers)
-    private var visualCoolMultiplier: Int {
-        EngagementConfig.getVisualHypeMultiplier(for: userTier)
-    }
-    
-    /// Whether button should be disabled
-    private var isDisabled: Bool {
-        shouldBlockSelfEngagement || hasHitEngagementCap
-    }
+    private var isProcessing: Bool { engagementManager.isProcessingEngagement }
+    private var isSelfEngagement: Bool { currentUserID == creatorID }
+    private var isFounderTier: Bool { userTier == .founder || userTier == .coFounder }
+    private var shouldBlockSelfEngagement: Bool { isSelfEngagement && !isFounderTier }
+    private var hasHitEngagementCap: Bool { engagementState.hasHitEngagementCap() }
+    private var isDisabled: Bool { shouldBlockSelfEngagement || hasHitEngagementCap }
     
     var body: some View {
         Button(action: handleTap) {
             ZStack {
-                // 3D Button Base
                 coolButtonBase
-                
-                // 3D Snowflake Icon
                 snowflakeIcon
-                
-                // Cool count display (always shown)
                 coolCountDisplay
                 
-                // NEW: Self-engagement indicator
-                if shouldBlockSelfEngagement {
-                    selfEngagementOverlay
-                }
-                
-                // Troll warning overlay
-                if showingTrollWarning {
-                    trollWarningOverlay
-                }
-                
-                // NEW: Engagement cap warning
-                if showingCloutCapWarning {
-                    cloutCapWarningOverlay
-                }
+                if shouldBlockSelfEngagement { selfEngagementOverlay }
+                if showingTrollWarning { trollWarningOverlay }
+                if showingCloutCapWarning { cloutCapWarningOverlay }
             }
             .scaleEffect(isPressed ? 0.9 : 1.0)
-            .rotation3DEffect(
-                .degrees(isPressed ? -5 : 0),
-                axis: (x: 1, y: 0, z: 0)
-            )
+            .rotation3DEffect(.degrees(isPressed ? -5 : 0), axis: (x: 1, y: 0, z: 0))
             .animation(.spring(response: 0.2, dampingFraction: 0.8), value: isPressed)
             .opacity(isDisabled ? 0.5 : 1.0)
         }
@@ -113,86 +62,55 @@ struct ProgressiveCoolButton: View {
         .disabled(isDisabled)
         .background(
             GeometryReader { geo in
-                Color.clear
-                    .onAppear {
-                        buttonPosition = CGPoint(
-                            x: geo.frame(in: .global).midX,
-                            y: geo.frame(in: .global).midY
-                        )
-                    }
+                Color.clear.onAppear {
+                    buttonPosition = CGPoint(
+                        x: geo.frame(in: .global).midX,
+                        y: geo.frame(in: .global).midY
+                    )
+                }
             }
         )
         .overlay(errorMessageOverlay)
-        .onAppear {
-            startShimmerAnimation()
-        }
+        .onAppear { startShimmerAnimation() }
     }
     
-    // MARK: - 3D Cool Button Components
+    // MARK: - Button Components
     
     private var coolButtonBase: some View {
         ZStack {
-            // Shadow layers for depth
             ForEach(0..<4, id: \.self) { layer in
                 Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color.black.opacity(0.1),
-                                Color.blue.opacity(0.2)
-                            ],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: 25
-                        )
-                    )
+                    .fill(RadialGradient(
+                        colors: [Color.black.opacity(0.1), Color.blue.opacity(0.2)],
+                        center: .center, startRadius: 0, endRadius: 25
+                    ))
                     .frame(width: 42, height: 42)
-                    .offset(
-                        x: CGFloat(layer) * 1.5,
-                        y: CGFloat(layer) * 1.5
-                    )
+                    .offset(x: CGFloat(layer) * 1.5, y: CGFloat(layer) * 1.5)
                     .opacity(0.3 - Double(layer) * 0.075)
             }
             
-            // Main button background with cap/self-engagement indicator
             Circle()
-                .fill(
-                    RadialGradient(
-                        colors: shouldBlockSelfEngagement ? [
-                            Color.gray.opacity(0.4),
-                            Color.gray.opacity(0.3),
-                            Color.black.opacity(0.8)
-                        ] : hasHitEngagementCap ? [
-                            Color.red.opacity(0.4),
-                            Color.blue.opacity(0.3),
-                            Color.black.opacity(0.8)
-                        ] : [
-                            Color.black.opacity(0.4),
-                            Color.blue.opacity(0.3),
-                            Color.black.opacity(0.8)
-                        ],
-                        center: .topLeading,
-                        startRadius: 0,
-                        endRadius: 30
-                    )
-                )
+                .fill(RadialGradient(
+                    colors: shouldBlockSelfEngagement
+                        ? [Color.gray.opacity(0.4), Color.gray.opacity(0.3), Color.black.opacity(0.8)]
+                        : hasHitEngagementCap
+                        ? [Color.red.opacity(0.4), Color.blue.opacity(0.3), Color.black.opacity(0.8)]
+                        : [Color.black.opacity(0.4), Color.blue.opacity(0.3), Color.black.opacity(0.8)],
+                    center: .topLeading, startRadius: 0, endRadius: 30
+                ))
                 .frame(width: 42, height: 42)
                 .overlay(
-                    Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: shouldBlockSelfEngagement ?
-                                [.gray, .gray.opacity(0.6)] :
-                                hasHitEngagementCap ?
-                                [.red, .orange] :
-                                isProcessing ?
-                                [.cyan, .blue, .white] : [.cyan.opacity(0.8), .blue.opacity(0.6), .white.opacity(0.4)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: isProcessing ? 2.0 : 1.5
-                        )
-                        .opacity(0.7 + sin(shimmerPhase) * 0.3)
+                    Circle().stroke(
+                        LinearGradient(
+                            colors: shouldBlockSelfEngagement ? [.gray, .gray.opacity(0.6)]
+                                : hasHitEngagementCap ? [.red, .orange]
+                                : isProcessing ? [.cyan, .blue, .white]
+                                : [.cyan.opacity(0.8), .blue.opacity(0.6), .white.opacity(0.4)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        ),
+                        lineWidth: isProcessing ? 2.0 : 1.5
+                    )
+                    .opacity(0.7 + sin(shimmerPhase) * 0.3)
                 )
                 .shadow(color: shouldBlockSelfEngagement ? .gray.opacity(0.3) : .cyan.opacity(0.3), radius: 4, x: 0, y: 2)
         }
@@ -200,38 +118,25 @@ struct ProgressiveCoolButton: View {
     
     private var snowflakeIcon: some View {
         ZStack {
-            // Shadow snowflakes for depth (always snowflake)
             ForEach(0..<3, id: \.self) { layer in
-                Image(systemName: shouldBlockSelfEngagement ? "snowflake.slash" : hasHitEngagementCap ? "snowflake.slash" : "snowflake")
+                Image(systemName: shouldBlockSelfEngagement || hasHitEngagementCap ? "snowflake.slash" : "snowflake")
                     .font(.system(size: 20, weight: .bold))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [.black.opacity(0.4), .blue.opacity(0.3)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .offset(
-                        x: CGFloat(layer) * 1,
-                        y: CGFloat(layer) * 1
-                    )
+                    .foregroundStyle(LinearGradient(
+                        colors: [.black.opacity(0.4), .blue.opacity(0.3)],
+                        startPoint: .topLeading, endPoint: .bottomTrailing
+                    ))
+                    .offset(x: CGFloat(layer) * 1, y: CGFloat(layer) * 1)
                     .opacity(0.3 - Double(layer) * 0.1)
             }
             
-            // Main snowflake icon with gradient
-            Image(systemName: shouldBlockSelfEngagement ? "snowflake.slash" : hasHitEngagementCap ? "snowflake.slash" : "snowflake")
+            Image(systemName: shouldBlockSelfEngagement || hasHitEngagementCap ? "snowflake.slash" : "snowflake")
                 .font(.system(size: 20, weight: .bold))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: shouldBlockSelfEngagement ?
-                        [.gray, .gray.opacity(0.7), .black.opacity(0.5)] :
-                        hasHitEngagementCap ?
-                        [.red, .orange, .black.opacity(0.5)] :
-                        [.white, .cyan, .blue, .black.opacity(0.1)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .foregroundStyle(LinearGradient(
+                    colors: shouldBlockSelfEngagement ? [.gray, .gray.opacity(0.7), .black.opacity(0.5)]
+                        : hasHitEngagementCap ? [.red, .orange, .black.opacity(0.5)]
+                        : [.white, .cyan, .blue, .black.opacity(0.1)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                ))
                 .shadow(color: shouldBlockSelfEngagement ? .gray : hasHitEngagementCap ? .red : .cyan, radius: 6, x: 0, y: 0)
                 .shadow(color: .black.opacity(0.3), radius: 2, x: 1, y: 1)
                 .rotationEffect(.degrees(shouldBlockSelfEngagement || hasHitEngagementCap ? 0 : shimmerPhase * 2))
@@ -246,62 +151,34 @@ struct ProgressiveCoolButton: View {
             .offset(y: -35)
     }
     
-    // NEW: Self-engagement overlay
     private var selfEngagementOverlay: some View {
         ZStack {
-            Circle()
-                .fill(Color.gray.opacity(0.3))
-                .frame(width: 50, height: 50)
-                .overlay(
-                    Circle()
-                        .stroke(Color.gray, lineWidth: 2)
-                )
-            
+            Circle().fill(Color.gray.opacity(0.3)).frame(width: 50, height: 50)
+                .overlay(Circle().stroke(Color.gray, lineWidth: 2))
             Image(systemName: "person.fill.xmark")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundColor(.gray)
+                .font(.system(size: 14, weight: .bold)).foregroundColor(.gray)
                 .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
-        }
-        .scaleEffect(1.1)
+        }.scaleEffect(1.1)
     }
     
     private var trollWarningOverlay: some View {
         ZStack {
-            Circle()
-                .fill(Color.red.opacity(0.3))
-                .frame(width: 50, height: 50)
-                .overlay(
-                    Circle()
-                        .stroke(Color.red, lineWidth: 2)
-                )
-            
+            Circle().fill(Color.red.opacity(0.3)).frame(width: 50, height: 50)
+                .overlay(Circle().stroke(Color.red, lineWidth: 2))
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundColor(.red)
+                .font(.system(size: 16, weight: .bold)).foregroundColor(.red)
                 .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
-        }
-        .scaleEffect(1.2)
-        .transition(.scale.combined(with: .opacity))
+        }.scaleEffect(1.2).transition(.scale.combined(with: .opacity))
     }
     
-    // NEW: Clout cap warning overlay
     private var cloutCapWarningOverlay: some View {
         ZStack {
-            Circle()
-                .fill(Color.orange.opacity(0.3))
-                .frame(width: 50, height: 50)
-                .overlay(
-                    Circle()
-                        .stroke(Color.orange, lineWidth: 2)
-                )
-            
+            Circle().fill(Color.orange.opacity(0.3)).frame(width: 50, height: 50)
+                .overlay(Circle().stroke(Color.orange, lineWidth: 2))
             Image(systemName: "hand.raised.fill")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundColor(.orange)
+                .font(.system(size: 16, weight: .bold)).foregroundColor(.orange)
                 .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
-        }
-        .scaleEffect(1.2)
-        .transition(.scale.combined(with: .opacity))
+        }.scaleEffect(1.2).transition(.scale.combined(with: .opacity))
     }
     
     private var errorMessageOverlay: some View {
@@ -309,17 +186,11 @@ struct ProgressiveCoolButton: View {
             if showingError {
                 VStack {
                     Spacer()
-                    
                     Text(errorMessage)
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule()
-                                .fill(Color.red.opacity(0.9))
-                                .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
-                        )
+                        .font(.caption).foregroundColor(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(Capsule().fill(Color.red.opacity(0.9))
+                            .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2))
                         .transition(.scale.combined(with: .opacity))
                         .offset(y: 60)
                 }
@@ -330,18 +201,16 @@ struct ProgressiveCoolButton: View {
     
     // MARK: - Actions
     
-    /// Handle tap interaction with floating snowflake spawning
+    /// Cool is always regular engagement - no burst variant
     private func handleTap() {
-        print("🔵 COOL TAP FIRED - videoID: \(videoID), disabled: \(isDisabled), selfBlock: \(shouldBlockSelfEngagement), engCap: \(hasHitEngagementCap), creatorID: \(creatorID), currentUserID: \(currentUserID), tier: \(userTier)")
+        print("🔵 COOL TAP - videoID: \(videoID), tier: \(userTier)")
         
-        // NEW: Check self-engagement first
         if shouldBlockSelfEngagement {
             showError("You can't cool your own content")
             triggerErrorHaptic()
             return
         }
         
-        // Check engagement cap
         if hasHitEngagementCap {
             showEngagementCapWarning()
             return
@@ -351,133 +220,76 @@ struct ProgressiveCoolButton: View {
             isPressed = true
         }
         
-        // Check for potential trolling behavior
         if shouldShowTrollWarning() {
             showTrollWarning()
             return
         }
         
-        // Cool haptic feedback
-        let impact = UIImpactFeedbackGenerator(style: .medium)
-        impact.impactOccurred()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         
-        // Determine if this is first engagement for special effects
-        let isFirstEngagement = engagementState.coolEngagements == 0
-        let isPremiumTier = EngagementConfig.hasFirstTapBonus(tier: userTier)
+        // Cool always spawns single snowflake - no burst
+        iconManager.spawnCoolIcon(
+            from: buttonPosition,
+            userTier: userTier,
+            isFirstFounderTap: false
+        )
         
-        // Spawn floating snowflake from button position
-        if isFirstEngagement && isPremiumTier {
-            // Premium tier first tap - spawn multiple snowflakes
-            iconManager.spawnMultipleIcons(
-                from: buttonPosition,
-                count: min(visualCoolMultiplier / 4, 5), // Scale particle count with multiplier
-                iconType: .cool,
-                animationType: .founderExplosion,
-                userTier: userTier
-            )
-        } else {
-            // Regular tap
-            iconManager.spawnCoolIcon(
-                from: buttonPosition,
-                userTier: userTier,
-                isFirstFounderTap: false
-            )
-        }
-        
-        // Process engagement using existing manager
         Task {
             do {
                 let success = try await engagementManager.processCool(
                     videoID: videoID,
                     userID: currentUserID,
                     userTier: userTier,
-                    creatorID: creatorID  // NEW: Pass creator ID for server-side validation
+                    creatorID: creatorID
                 )
                 
                 await MainActor.run {
                     if success {
-                        // Success haptic
-                        let successImpact = UIImpactFeedbackGenerator(style: .light)
-                        successImpact.impactOccurred()
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
                 }
-                
             } catch {
-                await MainActor.run {
-                    showError(error.localizedDescription)
-                }
+                await MainActor.run { showError(error.localizedDescription) }
             }
         }
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) {
-                isPressed = false
-            }
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) { isPressed = false }
         }
     }
     
-    /// Check if should show troll warning
     private func shouldShowTrollWarning() -> Bool {
-        // Simple troll detection - excessive cool engagements
-        let totalCools = engagementState.coolEngagements
-        
-        // Warn if user is spamming cool on content
-        return totalCools > 10
+        return engagementState.coolEngagements > 10
     }
     
-    /// Show troll warning
     private func showTrollWarning() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-            showingTrollWarning = true
-        }
-        
-        let warningImpact = UINotificationFeedbackGenerator()
-        warningImpact.notificationOccurred(.warning)
-        
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { showingTrollWarning = true }
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
         showError("Excessive cooling detected - please engage thoughtfully")
-        
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation(.easeOut(duration: 0.3)) {
-                showingTrollWarning = false
-            }
+            withAnimation(.easeOut(duration: 0.3)) { showingTrollWarning = false }
         }
     }
     
-    /// Show engagement cap warning
     private func showEngagementCapWarning() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-            showingCloutCapWarning = true
-        }
-        
-        let warningImpact = UINotificationFeedbackGenerator()
-        warningImpact.notificationOccurred(.warning)
-        
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { showingCloutCapWarning = true }
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
         showError("Maximum engagements reached for this video!")
-        
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation(.easeOut(duration: 0.3)) {
-                showingCloutCapWarning = false
-            }
+            withAnimation(.easeOut(duration: 0.3)) { showingCloutCapWarning = false }
         }
     }
     
-    /// Show error message
     private func showError(_ message: String) {
         errorMessage = message
         showingError = true
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-            showingError = false
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { showingError = false }
     }
     
-    /// Trigger error haptic
     private func triggerErrorHaptic() {
-        let errorImpact = UINotificationFeedbackGenerator()
-        errorImpact.notificationOccurred(.error)
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
     }
     
-    /// Start shimmer animation
     private func startShimmerAnimation() {
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
             shimmerPhase += 0.15

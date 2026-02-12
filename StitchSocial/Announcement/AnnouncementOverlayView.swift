@@ -12,7 +12,6 @@
 
 import SwiftUI
 import AVFoundation
-import AVKit
 
 // MARK: - Announcement Overlay View
 
@@ -52,12 +51,9 @@ struct AnnouncementOverlayView: View {
                 loadingView
             } else if let error = loadError {
                 errorView(error)
-            } else if player != nil {
-                // Video player layer
-                VideoPlayerRepresentable(
-                    player: player,
-                    gravity: .resizeAspectFill
-                )
+            } else if let player = player {
+                // Video player layer — uses shared CustomVideoPlayerView (no more VideoPlayerRepresentable)
+                CustomVideoPlayerView(player: player)
                 .ignoresSafeArea()
                 .onTapGesture {
                     togglePlayback()
@@ -141,9 +137,19 @@ struct AnnouncementOverlayView: View {
             if let url = URL(string: video.videoURL) {
                 videoURL = url
                 
-                // Create and configure player
+                // Disk cache: use local file if available
+                let playbackURL: URL
+                if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
+                    playbackURL = cachedURL
+                } else {
+                    playbackURL = url
+                    Task.detached(priority: .utility) {
+                        await VideoDiskCache.shared.cacheVideo(from: video.videoURL)
+                    }
+                }
+                
                 await MainActor.run {
-                    let newPlayer = AVPlayer(url: url)
+                    let newPlayer = AVPlayer(url: playbackURL)
                     newPlayer.isMuted = false
                     newPlayer.actionAtItemEnd = .none
                     player = newPlayer
@@ -354,8 +360,6 @@ struct AnnouncementOverlayView: View {
         print("📢 ANNOUNCEMENT: Cleaned up")
     }
 }
-
-// NOTE: Notification.Name.killAllVideoPlayers is already defined in VideoPlayerView.swift
 
 // MARK: - Preview
 

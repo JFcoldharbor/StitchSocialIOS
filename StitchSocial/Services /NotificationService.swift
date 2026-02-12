@@ -123,16 +123,18 @@ class NotificationService: ObservableObject {
         to recipientID: String,
         videoID: String,
         engagementType: String,
-        videoTitle: String
+        videoTitle: String,
+        threadID: String? = nil
     ) async throws {
         print("ðŸ”¥ ENGAGEMENT: Sending \(engagementType) notification")
         
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "recipientID": recipientID,
             "videoID": videoID,
             "engagementType": engagementType,
             "videoTitle": videoTitle
         ]
+        if let threadID = threadID { data["threadID"] = threadID }
         
         let result = try await callFunction(name: "sendEngagement", data: data)
         
@@ -149,15 +151,17 @@ class NotificationService: ObservableObject {
     func sendReplyNotification(
         to recipientID: String,
         videoID: String,
-        videoTitle: String
+        videoTitle: String,
+        threadID: String? = nil
     ) async throws {
         print("ðŸ’¬ REPLY: Sending reply notification")
         
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "recipientID": recipientID,
             "videoID": videoID,
             "videoTitle": videoTitle
         ]
+        if let threadID = threadID { data["threadID"] = threadID }
         
         let result = try await callFunction(name: "sendReply", data: data)
         
@@ -190,16 +194,18 @@ class NotificationService: ObservableObject {
         to recipientID: String,
         videoID: String,
         videoTitle: String,
-        mentionContext: String = "video"
+        mentionContext: String = "video",
+        threadID: String? = nil
     ) async throws {
         print("ðŸ“Œ MENTION: Sending mention notification")
         
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "recipientID": recipientID,
             "videoID": videoID,
             "videoTitle": videoTitle,
             "mentionContext": mentionContext
         ]
+        if let threadID = threadID { data["threadID"] = threadID }
         
         let result = try await callFunction(name: "sendMention", data: data)
         
@@ -218,7 +224,8 @@ class NotificationService: ObservableObject {
         videoTitle: String,
         originalCreatorID: String,
         parentCreatorID: String?,
-        threadUserIDs: [String]
+        threadUserIDs: [String],
+        threadID: String? = nil
     ) async throws {
         print("ðŸ§µ STITCH: Sending stitch notification")
         print("   â€¢ Video: \(videoID)")
@@ -226,13 +233,14 @@ class NotificationService: ObservableObject {
         print("   â€¢ Parent Creator: \(parentCreatorID ?? "none")")
         print("   â€¢ Thread Users: \(threadUserIDs.count)")
         
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "videoID": videoID,
             "videoTitle": videoTitle,
             "originalCreatorID": originalCreatorID,
             "parentCreatorID": parentCreatorID ?? "",
             "threadUserIDs": threadUserIDs
         ]
+        if let threadID = threadID { data["threadID"] = threadID }
         
         let result = try await callFunction(name: "sendStitch", data: data)
         
@@ -252,7 +260,8 @@ class NotificationService: ObservableObject {
         videoTitle: String,
         creatorID: String,
         followerIDs: [String],
-        engagerIDs: [String]
+        engagerIDs: [String],
+        threadID: String? = nil
     ) async throws {
         print("ðŸ† MILESTONE: Sending milestone notification")
         print("   â€¢ Milestone: \(milestone) hypes")
@@ -261,7 +270,7 @@ class NotificationService: ObservableObject {
         print("   â€¢ Followers: \(followerIDs.count)")
         print("   â€¢ Engagers: \(engagerIDs.count)")
         
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "milestone": milestone,
             "videoID": videoID,
             "videoTitle": videoTitle,
@@ -269,6 +278,7 @@ class NotificationService: ObservableObject {
             "followerIDs": followerIDs,
             "engagerIDs": engagerIDs
         ]
+        if let threadID = threadID { data["threadID"] = threadID }
         
         let result = try await callFunction(name: "sendMilestone", data: data)
         
@@ -288,17 +298,19 @@ class NotificationService: ObservableObject {
         creatorUsername: String,
         videoID: String,
         videoTitle: String,
-        followerIDs: [String]
+        followerIDs: [String],
+        threadID: String? = nil
     ) async throws {
         print("ðŸŽ¬ NEW VIDEO: Notifying \(followerIDs.count) followers")
         
-        let data: [String: Any] = [
+        var data: [String: Any] = [
             "creatorID": creatorID,
             "creatorUsername": creatorUsername,
             "videoID": videoID,
             "videoTitle": videoTitle,
             "followerIDs": followerIDs
         ]
+        if let threadID = threadID { data["threadID"] = threadID }
         
         let result = try await callFunction(name: "sendNewVideo", data: data)
         

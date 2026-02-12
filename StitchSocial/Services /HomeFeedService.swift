@@ -3,9 +3,10 @@
 //  StitchSocial
 //
 //  Layer 4: Core Services - Following Feed with Deep Discovery
-//  Dependencies: VideoService, UserService, Config, FeedViewHistory
+//  Dependencies: VideoService, UserService, Config, FeedViewHistory, SocialSignalService
 //  Features: Deep time-based discovery, seen-video exclusion, session resume
 //  UPDATED: Added view history tracking, deduplication, follower rotation
+//  UPDATED: Social signal injection — megaphone system (Partner+ hype fan-out)
 //
 //  NOTE: HomeFeedService shows content from FOLLOWED creators only.
 //  Following a creator overrides ALL discovery cool-down signals.
@@ -33,6 +34,10 @@ class HomeFeedService: ObservableObject {
     @Published var lastError: StitchError?
     @Published var feedStats = FeedStats()
     @Published var canResumeSession: Bool = false
+    
+    // MARK: - Social Signals (Megaphone System)
+    
+    @Published var activeSocialSignals: [SocialSignal] = []
     
     // MARK: - Feed State
     
@@ -160,14 +165,16 @@ class HomeFeedService: ObservableObject {
         print("🔍 DEEP DISCOVERY: Found \(followingIDs.count) following users")
         
         let recentlySeenIDs = viewHistory.getRecentlySeenVideoIDs()
-        print("🔍 DEEP DISCOVERY: Excluding \(recentlySeenIDs.count) recently seen videos")
+        var excludeIDs = recentlySeenIDs
+        excludeIDs.formUnion(currentFeedVideoIDs)
+        print("🔍 DEEP DISCOVERY: Excluding \(excludeIDs.count) seen + already-loaded videos")
         
         var allThreads: [ThreadData] = []
         
         let recentThreads = try await getRecentContent(
             followingIDs: followingIDs,
             limit: Int(Double(limit) * 0.4),
-            excludeVideoIDs: recentlySeenIDs
+            excludeVideoIDs: excludeIDs
         )
         allThreads.append(contentsOf: recentThreads)
         print("🔍 DEEP DISCOVERY: Loaded \(recentThreads.count) recent threads")
@@ -175,7 +182,7 @@ class HomeFeedService: ObservableObject {
         let mediumOldThreads = try await getMediumOldContent(
             followingIDs: followingIDs,
             limit: Int(Double(limit) * 0.3),
-            excludeVideoIDs: recentlySeenIDs
+            excludeVideoIDs: excludeIDs
         )
         allThreads.append(contentsOf: mediumOldThreads)
         print("🔍 DEEP DISCOVERY: Loaded \(mediumOldThreads.count) medium-old threads")
@@ -183,7 +190,7 @@ class HomeFeedService: ObservableObject {
         let olderThreads = try await getOlderContent(
             followingIDs: followingIDs,
             limit: Int(Double(limit) * 0.2),
-            excludeVideoIDs: recentlySeenIDs
+            excludeVideoIDs: excludeIDs
         )
         allThreads.append(contentsOf: olderThreads)
         print("🔍 DEEP DISCOVERY: Loaded \(olderThreads.count) older threads")
@@ -191,10 +198,15 @@ class HomeFeedService: ObservableObject {
         let deepCutThreads = try await getDeepCutContent(
             followingIDs: followingIDs,
             limit: Int(Double(limit) * 0.1),
-            excludeVideoIDs: recentlySeenIDs
+            excludeVideoIDs: excludeIDs
         )
         allThreads.append(contentsOf: deepCutThreads)
         print("🔍 DEEP DISCOVERY: Loaded \(deepCutThreads.count) deep cut threads")
+        
+        // 📢 SOCIAL SIGNALS: Load megaphone signals from people user follows
+        let signals = await SocialSignalService.shared.loadActiveSignals(for: userID)
+        activeSocialSignals = signals
+        print("📢 DEEP DISCOVERY: Loaded \(signals.count) social signals for feed injection")
         
         let dedupedThreads = deduplicateThreads(allThreads)
         let shuffledThreads = dedupedThreads.shuffled()
@@ -479,6 +491,8 @@ class HomeFeedService: ObservableObject {
         hasMoreContent = true
         followerRotationIndex = 0
         feedStats = FeedStats()
+        activeSocialSignals = []
+        SocialSignalService.shared.clearSessionCache()
     }
     
     func getReshuffledFeed(userID: String) async throws -> [ThreadData] {

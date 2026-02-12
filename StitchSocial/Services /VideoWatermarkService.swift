@@ -53,13 +53,26 @@ class VideoWatermarkService {
     
     // MARK: - Export Options
     
+    // MARK: - Stats for Promo Share
+    
+    struct VideoStats {
+        let viewCount: Int
+        let hypeCount: Int
+        let coolCount: Int
+        let temperature: String  // "hot", "warm", "cold", "neutral"
+    }
+    
+    // MARK: - Export Options
+    
     struct ExportOptions {
         var addWatermark: Bool = true
         var addEndScreen: Bool = true
         var addSound: Bool = true
-        
-        /// Show username overlay on custom end screen (below logo)
         var showUsernameOnCustomEndScreen: Bool = true
+        
+        /// Promo mode: slam-in cycling stats overlay (views, hype, cool, temperature)
+        var showStats: Bool = false
+        var stats: VideoStats? = nil
         
         static let `default` = ExportOptions()
     }
@@ -282,6 +295,7 @@ class VideoWatermarkService {
                         mainVideoTrack: compositionVideoTrack,
                         customEndScreenTrack: customEndScreenTrack,
                         videoSize: videoSize,
+                        naturalSize: naturalSize,
                         mainTransform: transform,
                         videoDuration: videoDuration,
                         totalDuration: totalDuration,
@@ -348,12 +362,46 @@ class VideoWatermarkService {
     }
     
     private func calculateVideoSize(naturalSize: CGSize, transform: CGAffineTransform) -> CGSize {
-        // Check if video is rotated 90 or 270 degrees
-        let isRotated = transform.b == 1.0 || transform.b == -1.0
-        if isRotated {
-            return CGSize(width: naturalSize.height, height: naturalSize.width)
-        }
-        return naturalSize
+        // Apply transform to get the actual visible rect
+        let rect = CGRect(origin: .zero, size: naturalSize).applying(transform)
+        return CGSize(width: abs(rect.width), height: abs(rect.height))
+    }
+    
+    /// Build a transform that centers and scales the source video to fill renderSize
+    /// Handles portrait iPhone videos (rotated 90°), landscape, and non-standard transforms
+    private func buildNormalizedTransform(
+        naturalSize: CGSize,
+        preferredTransform: CGAffineTransform,
+        renderSize: CGSize
+    ) -> CGAffineTransform {
+        // Apply the preferred transform to get actual visible rect
+        let transformedRect = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform)
+        let visibleWidth = abs(transformedRect.width)
+        let visibleHeight = abs(transformedRect.height)
+        
+        // Scale to fill renderSize (aspect fill)
+        let scaleX = renderSize.width / visibleWidth
+        let scaleY = renderSize.height / visibleHeight
+        let scale = max(scaleX, scaleY)
+        
+        // Center the scaled result
+        let scaledWidth = visibleWidth * scale
+        let scaledHeight = visibleHeight * scale
+        let translateX = (renderSize.width - scaledWidth) / 2
+        let translateY = (renderSize.height - scaledHeight) / 2
+        
+        // Fix origin: preferredTransform can leave rect with negative origin
+        let originFixX = -transformedRect.origin.x
+        let originFixY = -transformedRect.origin.y
+        
+        let fixedOrigin = CGAffineTransform(translationX: originFixX, y: originFixY)
+        let scaleTransform = CGAffineTransform(scaleX: scale, y: scale)
+        let centerTransform = CGAffineTransform(translationX: translateX, y: translateY)
+        
+        return preferredTransform
+            .concatenating(fixedOrigin)
+            .concatenating(scaleTransform)
+            .concatenating(centerTransform)
     }
     
     private func createVideoComposition(
@@ -361,6 +409,7 @@ class VideoWatermarkService {
         mainVideoTrack: AVMutableCompositionTrack,
         customEndScreenTrack: AVMutableCompositionTrack?,
         videoSize: CGSize,
+        naturalSize: CGSize,
         mainTransform: CGAffineTransform,
         videoDuration: CMTime,
         totalDuration: CMTime,
@@ -373,6 +422,13 @@ class VideoWatermarkService {
         videoComposition.renderSize = videoSize
         videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
         
+        // Build normalized transform that centers+fills regardless of source orientation
+        let normalizedTransform = buildNormalizedTransform(
+            naturalSize: naturalSize,
+            preferredTransform: mainTransform,
+            renderSize: videoSize
+        )
+        
         var instructions: [AVMutableVideoCompositionInstruction] = []
         
         // Instruction 1: Main video portion
@@ -380,7 +436,7 @@ class VideoWatermarkService {
         mainInstruction.timeRange = CMTimeRange(start: .zero, duration: videoDuration)
         
         let mainLayerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: mainVideoTrack)
-        mainLayerInstruction.setTransform(mainTransform, at: .zero)
+        mainLayerInstruction.setTransform(normalizedTransform, at: .zero)
         
         var mainLayerInstructions: [AVMutableVideoCompositionLayerInstruction] = [mainLayerInstruction]
         
@@ -438,7 +494,7 @@ class VideoWatermarkService {
             } else {
                 // Generated end screen - dim the main video
                 let endLayerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: mainVideoTrack)
-                endLayerInstruction.setTransform(mainTransform, at: .zero)
+                endLayerInstruction.setTransform(normalizedTransform, at: .zero)
                 endLayerInstruction.setOpacityRamp(fromStartOpacity: 1.0, toEndOpacity: 0.3, timeRange: CMTimeRange(
                     start: videoDuration,
                     duration: CMTime(seconds: 0.3, preferredTimescale: 600)
@@ -482,28 +538,36 @@ class VideoWatermarkService {
         usingCustomEndScreen: Bool
     ) -> (CALayer, CALayer) {
         
-        // Parent layer - video composition uses bottom-left origin
         let parentLayer = CALayer()
         parentLayer.frame = CGRect(origin: .zero, size: videoSize)
         parentLayer.isGeometryFlipped = true
         
-        // Video layer
         let videoLayer = CALayer()
         videoLayer.frame = CGRect(origin: .zero, size: videoSize)
         
         parentLayer.addSublayer(videoLayer)
         
-        // Add watermark layer if enabled (watermark shows on main video only, not custom end screen)
+        // Watermark (main video only)
         if options.addWatermark {
             let watermarkLayer = createAnimatedWatermarkLayer(
                 videoSize: videoSize,
-                duration: videoDuration,  // Only show watermark during main video
+                duration: videoDuration,
                 creatorUsername: creatorUsername
             )
             parentLayer.addSublayer(watermarkLayer)
         }
         
-        // Add generated end screen layer only if NOT using custom video
+        // Promo stats overlay — cycling slam-in blocks
+        if options.showStats, let stats = options.stats {
+            let statsLayer = createPromoStatsOverlay(
+                videoSize: videoSize,
+                videoDuration: videoDuration,
+                stats: stats
+            )
+            parentLayer.addSublayer(statsLayer)
+        }
+        
+        // Generated end screen (only if no custom video)
         if options.addEndScreen && !usingCustomEndScreen {
             let endScreenLayer = createEndScreenLayer(
                 videoSize: videoSize,
@@ -513,7 +577,7 @@ class VideoWatermarkService {
             parentLayer.addSublayer(endScreenLayer)
         }
         
-        // Add username overlay for custom end screen
+        // Username overlay for custom end screen
         if options.addEndScreen && usingCustomEndScreen && options.showUsernameOnCustomEndScreen {
             let usernameOverlay = createCustomEndScreenUsernameOverlay(
                 videoSize: videoSize,
@@ -524,6 +588,260 @@ class VideoWatermarkService {
         }
         
         return (parentLayer, videoLayer)
+    }
+    
+    // MARK: - Promo Stats Overlay (Slam-In Cycling)
+    
+    /// Creates cycling stat blocks that slam into center of video
+    /// Order: VIEWS → HYPE → COOL → TEMPERATURE → repeat
+    /// Each stat: scale(0.3) → scale(1.08) → scale(1) hold → scale(0.8) out
+    private func createPromoStatsOverlay(
+        videoSize: CGSize,
+        videoDuration: CMTime,
+        stats: VideoStats
+    ) -> CALayer {
+        let container = CALayer()
+        container.frame = CGRect(origin: .zero, size: videoSize)
+        
+        // Dark tint over video so stats pop — video still visible underneath
+        let dimLayer = CALayer()
+        dimLayer.frame = CGRect(origin: .zero, size: videoSize)
+        dimLayer.backgroundColor = UIColor.black.withAlphaComponent(0.45).cgColor
+        
+        // Dim only shows during main video
+        dimLayer.opacity = 0
+        let dimOn = CABasicAnimation(keyPath: "opacity")
+        dimOn.fromValue = 0
+        dimOn.toValue = 1
+        dimOn.beginTime = AVCoreAnimationBeginTimeAtZero + 0.1
+        dimOn.duration = 0.3
+        dimOn.fillMode = .forwards
+        dimOn.isRemovedOnCompletion = false
+        dimLayer.add(dimOn, forKey: nil)
+        
+        // Hide dim during end screen
+        let dimOff = CABasicAnimation(keyPath: "opacity")
+        dimOff.fromValue = 1
+        dimOff.toValue = 0
+        dimOff.beginTime = AVCoreAnimationBeginTimeAtZero + CMTimeGetSeconds(videoDuration) - 0.3
+        dimOff.duration = 0.3
+        dimOff.fillMode = .forwards
+        dimOff.isRemovedOnCompletion = false
+        dimLayer.add(dimOff, forKey: nil)
+        
+        container.addSublayer(dimLayer)
+        
+        let duration = CMTimeGetSeconds(videoDuration)
+        let scale = min(videoSize.width, videoSize.height) / 1080.0
+        
+        // Build stat entries
+        struct StatEntry {
+            let number: String
+            let label: String
+            let color: UIColor
+        }
+        
+        var entries: [StatEntry] = []
+        entries.append(StatEntry(
+            number: formatStatNumber(stats.viewCount),
+            label: "VIEWS",
+            color: .white
+        ))
+        entries.append(StatEntry(
+            number: formatStatNumber(stats.hypeCount),
+            label: "HYPE",
+            color: UIColor(red: 1.0, green: 0.27, blue: 0.27, alpha: 1.0)
+        ))
+        entries.append(StatEntry(
+            number: formatStatNumber(stats.coolCount),
+            label: "COOL",
+            color: UIColor(red: 0.27, green: 0.73, blue: 1.0, alpha: 1.0)
+        ))
+        
+        let tempDisplay = temperatureDisplay(stats.temperature)
+        entries.append(StatEntry(
+            number: tempDisplay.emoji + " " + tempDisplay.text,
+            label: "TEMPERATURE",
+            color: tempDisplay.color
+        ))
+        
+        // Cycle time: divide video duration evenly among stats
+        // Stop 1s before end screen so stats don't overlap
+        let usableDuration = max(duration - 1.0, Double(entries.count) * 1.5)
+        let cycleDuration = min(2.5, usableDuration / Double(entries.count))
+        
+        // How many full cycles fit before end screen
+        let totalCycle = cycleDuration * Double(entries.count)
+        let repeatCount = max(1, Int(floor(usableDuration / totalCycle)))
+        
+        // Create each stat block with timed slam-in/out animations
+        for (index, entry) in entries.enumerated() {
+            let statLayer = createSingleStatBlock(
+                number: entry.number,
+                label: entry.label,
+                color: entry.color,
+                videoSize: videoSize,
+                scale: scale
+            )
+            
+            // Opacity animation — slam in, hold, slam out
+            let opacityAnim = CAKeyframeAnimation(keyPath: "opacity")
+            let scaleAnim = CAKeyframeAnimation(keyPath: "transform.scale")
+            
+            // Opacity: slam in, hold, slam out, CLEAR GAP before next
+            // 0.00 - 0.06: slam in
+            // 0.06 - 0.60: hold visible
+            // 0.60 - 0.70: slam out
+            // 0.70 - 1.00: fully hidden (gap before next stat)
+            opacityAnim.values = [0, 1, 1, 0, 0] as [NSNumber]
+            opacityAnim.keyTimes = [0, 0.06, 0.60, 0.70, 1.0] as [NSNumber]
+            
+            // Scale: punch in big, settle, shrink out
+            scaleAnim.values = [0.3, 1.12, 1.0, 0.7, 0.3] as [NSNumber]
+            scaleAnim.keyTimes = [0, 0.06, 0.14, 0.70, 1.0] as [NSNumber]
+            
+            let slamIn = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
+            let hold = CAMediaTimingFunction(name: .linear)
+            let slamOut = CAMediaTimingFunction(controlPoints: 0.55, 0, 1, 0.45)
+            
+            opacityAnim.timingFunctions = [slamIn, hold, slamOut, hold]
+            scaleAnim.timingFunctions = [slamIn, slamIn, slamOut, hold]
+            
+            let offset = Double(index) * cycleDuration
+            
+            opacityAnim.beginTime = AVCoreAnimationBeginTimeAtZero + offset
+            opacityAnim.duration = totalCycle
+            opacityAnim.repeatCount = Float(repeatCount)
+            opacityAnim.fillMode = .both
+            opacityAnim.isRemovedOnCompletion = false
+            
+            scaleAnim.beginTime = AVCoreAnimationBeginTimeAtZero + offset
+            scaleAnim.duration = totalCycle
+            scaleAnim.repeatCount = Float(repeatCount)
+            scaleAnim.fillMode = .both
+            scaleAnim.isRemovedOnCompletion = false
+            
+            statLayer.opacity = 0
+            statLayer.add(opacityAnim, forKey: "statOpacity")
+            statLayer.add(scaleAnim, forKey: "statScale")
+            
+            container.addSublayer(statLayer)
+        }
+        
+        // Bottom branding text
+        let brandLayer = CATextLayer()
+        brandLayer.string = "STITCHSOCIAL"
+        brandLayer.font = UIFont.systemFont(ofSize: 14, weight: .bold) as CTFont
+        brandLayer.fontSize = 14 * scale
+        brandLayer.foregroundColor = UIColor.white.withAlphaComponent(0.35).cgColor
+        brandLayer.alignmentMode = .center
+        brandLayer.contentsScale = UIScreen.main.scale
+        let brandHeight: CGFloat = 24 * scale
+        brandLayer.frame = CGRect(
+            x: 0,
+            y: videoSize.height - brandHeight - 20 * scale,
+            width: videoSize.width,
+            height: brandHeight
+        )
+        
+        // Fade brand out before end screen
+        let brandOff = CABasicAnimation(keyPath: "opacity")
+        brandOff.fromValue = 0.35
+        brandOff.toValue = 0
+        brandOff.beginTime = AVCoreAnimationBeginTimeAtZero + CMTimeGetSeconds(videoDuration) - 0.3
+        brandOff.duration = 0.3
+        brandOff.fillMode = .forwards
+        brandOff.isRemovedOnCompletion = false
+        brandLayer.add(brandOff, forKey: nil)
+        
+        container.addSublayer(brandLayer)
+        
+        return container
+    }
+    
+    /// Single stat block: big number + label + accent line, centered in video
+    private func createSingleStatBlock(
+        number: String,
+        label: String,
+        color: UIColor,
+        videoSize: CGSize,
+        scale: CGFloat
+    ) -> CALayer {
+        let block = CALayer()
+        let blockWidth = videoSize.width * 0.9
+        let blockHeight: CGFloat = 220 * scale
+        
+        block.frame = CGRect(
+            x: (videoSize.width - blockWidth) / 2,
+            y: (videoSize.height - blockHeight) / 2 - 20 * scale,
+            width: blockWidth,
+            height: blockHeight
+        )
+        
+        // Big number — massive, fills the screen
+        let numberLayer = CATextLayer()
+        numberLayer.string = number
+        numberLayer.font = UIFont.systemFont(ofSize: 140, weight: .black) as CTFont
+        numberLayer.fontSize = 140 * scale
+        numberLayer.foregroundColor = color.cgColor
+        numberLayer.alignmentMode = .center
+        numberLayer.contentsScale = UIScreen.main.scale
+        numberLayer.shadowColor = UIColor.black.cgColor
+        numberLayer.shadowOffset = CGSize(width: 0, height: 6)
+        numberLayer.shadowRadius = 30
+        numberLayer.shadowOpacity = 0.6
+        numberLayer.frame = CGRect(x: 0, y: 0, width: blockWidth, height: 155 * scale)
+        block.addSublayer(numberLayer)
+        
+        // Label — big and bold
+        let labelLayer = CATextLayer()
+        labelLayer.string = label
+        labelLayer.font = UIFont.systemFont(ofSize: 36, weight: .bold) as CTFont
+        labelLayer.fontSize = 36 * scale
+        labelLayer.foregroundColor = color.withAlphaComponent(0.7).cgColor
+        labelLayer.alignmentMode = .center
+        labelLayer.contentsScale = UIScreen.main.scale
+        labelLayer.frame = CGRect(x: 0, y: 155 * scale, width: blockWidth, height: 44 * scale)
+        block.addSublayer(labelLayer)
+        
+        // Accent line — wider
+        let lineLayer = CALayer()
+        let lineWidth: CGFloat = 90 * scale
+        lineLayer.frame = CGRect(
+            x: (blockWidth - lineWidth) / 2,
+            y: 205 * scale,
+            width: lineWidth,
+            height: 4 * scale
+        )
+        lineLayer.backgroundColor = color.withAlphaComponent(0.5).cgColor
+        lineLayer.cornerRadius = 2 * scale
+        block.addSublayer(lineLayer)
+        
+        return block
+    }
+    
+    // MARK: - Stat Formatting Helpers
+    
+    private func formatStatNumber(_ count: Int) -> String {
+        if count >= 1_000_000 {
+            return String(format: "%.1fM", Double(count) / 1_000_000)
+        } else if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000)
+        }
+        return "\(count)"
+    }
+    
+    private func temperatureDisplay(_ temp: String) -> (emoji: String, text: String, color: UIColor) {
+        switch temp.lowercased() {
+        case "hot":
+            return ("🔥", "HOT", UIColor(red: 1.0, green: 0.67, blue: 0, alpha: 1.0))
+        case "warm":
+            return ("☀️", "WARM", UIColor(red: 1.0, green: 0.8, blue: 0.2, alpha: 1.0))
+        case "cold":
+            return ("❄️", "COLD", UIColor(red: 0.5, green: 0.78, blue: 1.0, alpha: 1.0))
+        default:
+            return ("🌡️", temp.uppercased(), UIColor.white)
+        }
     }
     
     // MARK: - Custom End Screen Username Overlay

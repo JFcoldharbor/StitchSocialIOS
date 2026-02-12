@@ -26,25 +26,23 @@ class ShareService: ObservableObject {
     @Published var isExporting: Bool = false
     @Published var exportProgress: String = ""
     @Published var showShareSheet: Bool = false
+    @Published var promoLocked: Bool = false
     
     private var currentShareURL: URL?
     private var currentShareItems: [Any] = []
     
     private let watermarkService = VideoWatermarkService.shared
+    private let promoExporter = PromoVideoExporter.shared
     
     private init() {}
     
     // MARK: - Share Video
     
-    /// Shares a video with watermark
-    /// - Parameters:
-    ///   - video: The video metadata to share
-    ///   - creatorUsername: Username of the video creator
-    ///   - threadID: Optional thread ID for deep linking
     func shareVideo(
         video: CoreVideoMetadata,
         creatorUsername: String,
         threadID: String? = nil,
+        promoMode: Bool = false,
         from viewController: UIViewController? = nil
     ) {
         guard let videoURL = URL(string: video.videoURL) else {
@@ -53,9 +51,9 @@ class ShareService: ObservableObject {
         }
         
         isExporting = true
-        exportProgress = "Preparing video..."
+        exportProgress = promoMode ? "Building promo..." : "Preparing video..."
         
-        // First, download the video if it's remote
+        // Download first (checks disk cache)
         downloadVideoIfNeeded(from: videoURL) { [weak self] localURL in
             guard let self = self, let localURL = localURL else {
                 DispatchQueue.main.async {
@@ -65,42 +63,104 @@ class ShareService: ObservableObject {
                 return
             }
             
-            DispatchQueue.main.async {
-                self.exportProgress = "Adding watermark..."
-            }
-            
-            // Add watermark
-            self.watermarkService.exportWithWatermark(
-                sourceURL: localURL,
-                creatorUsername: creatorUsername
-            ) { [weak self] result in
-                guard let self = self else { return }
-                
+            if promoMode {
+                // Promo mode → 30s clip with stats via PromoVideoExporter
                 DispatchQueue.main.async {
-                    self.isExporting = false
-                    self.exportProgress = ""
-                    
-                    switch result {
-                    case .success(let watermarkedURL):
-                        self.presentShareSheet(
-                            videoURL: watermarkedURL,
-                            video: video,
-                            creatorUsername: creatorUsername,
-                            threadID: threadID,
-                            from: viewController
-                        )
+                    self.exportProgress = "Building 30s promo..."
+                }
+                
+                let stats = PromoVideoExporter.PromoStats(
+                    viewCount: video.viewCount,
+                    hypeCount: video.hypeCount,
+                    coolCount: video.coolCount,
+                    temperature: video.temperature
+                )
+                
+                self.promoExporter.exportPromo(
+                    sourceURL: localURL,
+                    creatorUsername: creatorUsername,
+                    stats: stats
+                ) { [weak self] result in
+                    guard let self = self else { return }
+                    DispatchQueue.main.async {
+                        self.isExporting = false
+                        self.exportProgress = ""
                         
-                    case .failure(let error):
-                        print("❌ SHARE: Watermark failed - \(error.localizedDescription)")
-                        // Fallback: share without watermark
-                        self.presentShareSheet(
-                            videoURL: localURL,
-                            video: video,
-                            creatorUsername: creatorUsername,
-                            threadID: threadID,
-                            from: viewController
-                        )
+                        switch result {
+                        case .success(let promoURL):
+                            self.presentShareSheet(
+                                videoURL: promoURL,
+                                video: video,
+                                creatorUsername: creatorUsername,
+                                threadID: threadID,
+                                from: viewController
+                            )
+                        case .failure(let error):
+                            print("❌ SHARE: Promo export failed — \(error.localizedDescription)")
+                            // Fallback to regular share
+                            self.shareRegular(
+                                localURL: localURL,
+                                video: video,
+                                creatorUsername: creatorUsername,
+                                threadID: threadID,
+                                viewController: viewController
+                            )
+                        }
                     }
+                }
+            } else {
+                // Regular share → watermark only
+                self.shareRegular(
+                    localURL: localURL,
+                    video: video,
+                    creatorUsername: creatorUsername,
+                    threadID: threadID,
+                    viewController: viewController
+                )
+            }
+        }
+    }
+    
+    private func shareRegular(
+        localURL: URL,
+        video: CoreVideoMetadata,
+        creatorUsername: String,
+        threadID: String?,
+        viewController: UIViewController?
+    ) {
+        DispatchQueue.main.async {
+            self.exportProgress = "Adding watermark..."
+        }
+        
+        watermarkService.exportWithWatermark(
+            sourceURL: localURL,
+            creatorUsername: creatorUsername
+        ) { [weak self] result in
+            guard let self = self else { return }
+            
+            DispatchQueue.main.async {
+                self.isExporting = false
+                self.exportProgress = ""
+                
+                switch result {
+                case .success(let watermarkedURL):
+                    self.presentShareSheet(
+                        videoURL: watermarkedURL,
+                        video: video,
+                        creatorUsername: creatorUsername,
+                        threadID: threadID,
+                        from: viewController
+                    )
+                    
+                case .failure(let error):
+                    print("❌ SHARE: Watermark failed - \(error.localizedDescription)")
+                    self.presentShareSheet(
+                        videoURL: localURL,
+                        video: video,
+                        creatorUsername: creatorUsername,
+                        threadID: threadID,
+                        from: viewController
+                    )
                 }
             }
         }
@@ -112,6 +172,13 @@ class ShareService: ObservableObject {
         // If it's already a local file, use it directly
         if url.isFileURL {
             completion(url)
+            return
+        }
+        
+        // Check disk cache — avoid re-downloading videos we already played
+        if let cachedURL = VideoDiskCache.shared.getCachedURL(for: url.absoluteString) {
+            print("✅ SHARE: Using disk-cached video")
+            completion(cachedURL)
             return
         }
         
@@ -234,6 +301,7 @@ class ShareService: ObservableObject {
     
     func cleanup() {
         watermarkService.cleanupTempFiles()
+        promoExporter.cleanupTempFiles()
         
         if let url = currentShareURL {
             try? FileManager.default.removeItem(at: url)

@@ -130,6 +130,21 @@ class VideoService: ObservableObject {
             print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
         }
         
+        // CRITICAL: Server-side duration enforcement — fetch user tier from Firestore
+        let userDoc = try await db.collection(FirebaseSchema.Collections.users)
+            .document(validatedCreatorID)
+            .getDocument()
+        let userTierRaw = userDoc.data()?["tier"] as? String ?? "rookie"
+        let userTier = UserTier(rawValue: userTierRaw) ?? .rookie
+        let maxDuration = getMaxRecordingDuration(for: userTier)
+        
+        if duration > maxDuration + 1.0 {
+            let maxFormatted = maxDuration >= 60
+                ? String(format: "%d:%02d", Int(maxDuration) / 60, Int(maxDuration) % 60)
+                : "\(Int(maxDuration))s"
+            throw StitchError.validationError("Video duration \(Int(duration))s exceeds your tier limit of \(maxFormatted)")
+        }
+        
         // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
@@ -358,6 +373,21 @@ class VideoService: ObservableObject {
         
         if creatorID != validatedCreatorID {
             print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+        }
+        
+        // CRITICAL: Server-side duration enforcement
+        let tierDoc = try await db.collection(FirebaseSchema.Collections.users)
+            .document(validatedCreatorID)
+            .getDocument()
+        let replyTierRaw = tierDoc.data()?["tier"] as? String ?? "rookie"
+        let replyUserTier = UserTier(rawValue: replyTierRaw) ?? .rookie
+        let replyMaxDuration = getMaxRecordingDuration(for: replyUserTier)
+        
+        if duration > replyMaxDuration + 1.0 {
+            let maxFormatted = replyMaxDuration >= 60
+                ? String(format: "%d:%02d", Int(replyMaxDuration) / 60, Int(replyMaxDuration) % 60)
+                : "\(Int(replyMaxDuration))s"
+            throw StitchError.validationError("Video duration \(Int(duration))s exceeds your tier limit of \(maxFormatted)")
         }
         
         // FIX: If creatorName is empty, fetch username from Firestore

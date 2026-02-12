@@ -6,6 +6,8 @@
 //  Dependencies: VideoEngagementService, VideoService, UserService, NotificationService
 //  Features: Progressive tapping, hype rating management, INSTANT ENGAGEMENTS, Push Notifications
 //  UPDATED: Atomic increment operations - eliminates race conditions and expensive reads (40% cost reduction)
+//  UPDATED: Long press burst system - isBurst param controls regular vs burst clout/hype
+//  UPDATED: Auto-cleanup timer for engagement state cache (prevents memory bloat)
 //
 
 import Foundation
@@ -41,6 +43,12 @@ class EngagementManager: ObservableObject {
     
     private let engagementCooldown: TimeInterval = 0.5
     
+    // MARK: - 🆕 Cache Cleanup Timer
+    // Caching note: engagementStates dict caches per-session but had no auto-cleanup.
+    // clearOldStates() was never called automatically. This timer fires every 5 min
+    // to evict stale entries (>1hr old), preventing memory bloat in long sessions.
+    private var cleanupTimer: Timer?
+    
     // MARK: - Initialization
     
     init(
@@ -62,7 +70,14 @@ class EngagementManager: ObservableObject {
             )
         }
         
-        print("ðŸŽ¯ ENGAGEMENT MANAGER: Initialized with atomic increments - 40% cost reduction")
+        // 🆕 Start auto-cleanup timer for engagement state cache
+        startCacheCleanupTimer()
+        
+        print("🎯 ENGAGEMENT MANAGER: Initialized with burst system + auto-cache cleanup")
+    }
+    
+    deinit {
+        cleanupTimer?.invalidate()
     }
     
     // MARK: - Public Interface
@@ -86,21 +101,17 @@ class EngagementManager: ObservableObject {
     
     // MARK: - Self-Engagement Validation
     
-    /// Check if self-engagement should be allowed
-    /// - Returns: true if engagement should be allowed, false if blocked
     private func canSelfEngage(userID: String, creatorID: String, userTier: UserTier) -> Bool {
-        // Not self-engagement - always allowed
         if userID != creatorID {
             return true
         }
-        
-        // Self-engagement - only founders/co-founders allowed
         return userTier == .founder || userTier == .coFounder
     }
     
     // MARK: - Process Hype (ATOMIC INCREMENT - NO READS)
+    // 🆕 isBurst: false = regular tap (+1 hype, reduced clout), true = long press (full tier multiplier)
     
-    func processHype(videoID: String, userID: String, userTier: UserTier, creatorID: String? = nil) async throws -> Bool {
+    func processHype(videoID: String, userID: String, userTier: UserTier, creatorID: String? = nil, isBurst: Bool = false) async throws -> Bool {
         
         // Self-engagement validation
         if let creatorID = creatorID {
@@ -122,36 +133,36 @@ class EngagementManager: ObservableObject {
         
         var state = getEngagementState(videoID: videoID, userID: userID)
         
-        // ðŸ†• CHECK GRACE PERIOD IF TRYING TO SWITCH SIDES
+        // CHECK GRACE PERIOD IF TRYING TO SWITCH SIDES
         if state.currentSide == .cool && !state.isWithinGracePeriod {
             throw StitchError.validationError("Cannot switch from cool to hype after grace period")
         }
         
-        // ðŸ†• IF SWITCHING DURING GRACE PERIOD - RESET
+        // IF SWITCHING DURING GRACE PERIOD - RESET
         if state.currentSide == .cool && state.isWithinGracePeriod {
-            print("ðŸ”„ SWITCHING: Cool â†’ Hype (within grace period)")
+            print("🔄 SWITCHING: Cool → Hype (within grace period)")
             let originalCools = state.coolEngagements
             state.coolEngagements = 0
             state.hypeEngagements = 0
             state.totalCloutGiven = 0
+            state.totalVisualHypesGiven = 0
             
-            // âœ… ATOMIC DECREMENT - no read needed
             do {
                 try await db.collection("videos").document(videoID).updateData([
                     "coolCount": FieldValue.increment(Int64(-originalCools)),
                     "lastEngagementAt": Timestamp(),
                     "updatedAt": Timestamp()
                 ])
-                print("âœ… SWITCHING: Removed \(originalCools) cools (atomic)")
+                print("✅ SWITCHING: Removed \(originalCools) cools (atomic)")
             } catch {
-                print("âš ï¸ SWITCHING: Failed to update: \(error)")
+                print("⚠️ SWITCHING: Failed to update: \(error)")
             }
         }
         
-        // ðŸ†• SET FIRST ENGAGEMENT TIMESTAMP IF FIRST TAP
+        // SET FIRST ENGAGEMENT TIMESTAMP IF FIRST TAP
         if state.firstEngagementAt == nil {
             state.firstEngagementAt = Date()
-            print("â±ï¸ GRACE PERIOD: Started (60 seconds)")
+            print("⏱️ GRACE PERIOD: Started (60 seconds)")
         }
         
         // Check caps
@@ -163,20 +174,22 @@ class EngagementManager: ObservableObject {
             throw StitchError.validationError("Engagement cap reached for this video")
         }
         
-        // Check hype rating
-        let cost = EngagementCalculator.calculateHypeRatingCost(tier: userTier)
+        // Check hype rating (burst costs more)
+        let cost = EngagementCalculator.calculateHypeRatingCost(tier: userTier, isBurst: isBurst)
         guard HypeRatingService.shared.canAfford(cost) else {
-            throw StitchError.validationError("Insufficient hype rating")
+            throw StitchError.validationError("Insufficient hype rating" + (isBurst ? " for burst" : ""))
         }
         
-        // Instant engagement - no tapping progress
-        state.addHypeEngagement()
+        // 🆕 Calculate visual hype increment BEFORE recording (burst-aware)
+        let visualHypeIncrement = EngagementConfig.getVisualHypeMultiplier(for: userTier, isBurst: isBurst)
+        
+        // Instant engagement with visual hype tracking
+        state.addHypeEngagement(visualHypes: visualHypeIncrement)
         
         // Deduct hype rating
         HypeRatingService.shared.deductRating(cost)
         
-        // Calculate rewards
-        let visualHypeIncrement = EngagementConfig.getVisualHypeMultiplier(for: userTier)
+        // Calculate rewards (burst-aware)
         let tapNumber = state.hypeEngagements
         let isFirstEngagement = (state.hypeEngagements == 1)
         let currentCloutFromUser = state.totalCloutGiven
@@ -185,24 +198,26 @@ class EngagementManager: ObservableObject {
             giverTier: userTier,
             tapNumber: tapNumber,
             isFirstEngagement: isFirstEngagement,
-            currentCloutFromThisUser: currentCloutFromUser
+            currentCloutFromThisUser: currentCloutFromUser,
+            isBurst: isBurst
         )
         
         // Record clout
-        state.recordCloutAwarded(cloutAwarded, isHype: true)
+        state.recordCloutAwarded(cloutAwarded, isHype: true, isBurst: isBurst)
         engagementStates["\(videoID)_\(userID)"] = state
         await saveEngagementStateToFirebase(state)
         
-        // âœ… ATOMIC INCREMENT IN FIRESTORE - NO READ NEEDED (saves 40% cost)
+        // ATOMIC INCREMENT IN FIRESTORE - NO READ NEEDED
         do {
             try await db.collection("videos").document(videoID).updateData([
                 "hypeCount": FieldValue.increment(Int64(visualHypeIncrement)),
                 "lastEngagementAt": Timestamp(),
                 "updatedAt": Timestamp()
             ])
-            print("ðŸ”¥ HYPE: +\(visualHypeIncrement) hypes (atomic), +\(cloutAwarded) clout")
+            let mode = isBurst ? "BURST" : "regular"
+            print("🔥 HYPE (\(mode)): +\(visualHypeIncrement) hypes (atomic), +\(cloutAwarded) clout")
         } catch {
-            print("âŒ Failed to update video: \(error)")
+            print("❌ Failed to update video: \(error)")
             throw error
         }
         
@@ -211,8 +226,7 @@ class EngagementManager: ObservableObject {
         do {
             video = try await videoService.getVideo(id: videoID)
         } catch {
-            print("âš ï¸ Failed to fetch video for notification: \(error)")
-            // Create minimal video object for notification
+            print("⚠️ Failed to fetch video for notification: \(error)")
             video = CoreVideoMetadata(
                 id: videoID,
                 title: "Video",
@@ -254,15 +268,14 @@ class EngagementManager: ObservableObject {
                     try await notificationService.sendEngagementNotification(
                         to: creatorID,
                         videoID: videoID,
-                        engagementType: "hype",
+                        engagementType: isBurst ? "hype_burst" : "hype",
                         videoTitle: video.title
                     )
-                    print("âœ… HYPE NOTIFICATION: Sent to \(creatorID)")
+                    print("✅ HYPE NOTIFICATION: Sent to \(creatorID)")
                 } catch {
-                    print("âš ï¸ HYPE NOTIFICATION: Failed - \(error.localizedDescription)")
+                    print("⚠️ HYPE NOTIFICATION: Failed - \(error.localizedDescription)")
                 }
                 
-                // Award hype rating regen to creator for receiving hype
                 await HypeRatingService.shared.queueEngagementRegen(
                     source: .receivedHype,
                     amount: HypeRegenSource.receivedHype.baseRegenAmount
@@ -281,6 +294,7 @@ class EngagementManager: ObservableObject {
     }
     
     // MARK: - Process Cool (ATOMIC INCREMENT - NO READS)
+    // Cool has no burst variant - long press on cool is not a thing
     
     func processCool(videoID: String, userID: String, userTier: UserTier, creatorID: String? = nil) async throws -> Bool {
         
@@ -304,39 +318,38 @@ class EngagementManager: ObservableObject {
         
         var state = getEngagementState(videoID: videoID, userID: userID)
         
-        // ðŸ†• CHECK GRACE PERIOD IF TRYING TO SWITCH SIDES
+        // CHECK GRACE PERIOD IF TRYING TO SWITCH SIDES
         if state.currentSide == .hype && !state.isWithinGracePeriod {
             throw StitchError.validationError("Cannot switch from hype to cool after grace period")
         }
         
-        // ðŸ†• IF SWITCHING DURING GRACE PERIOD - RESET
+        // IF SWITCHING DURING GRACE PERIOD - RESET
         if state.currentSide == .hype && state.isWithinGracePeriod {
-            print("ðŸ”„ SWITCHING: Hype â†’ Cool (within grace period)")
-            let originalHypes = state.hypeEngagements
-            let tierMultiplier = EngagementConfig.getVisualHypeMultiplier(for: userTier)
-            let hypeDecrement = originalHypes * tierMultiplier
+            print("🔄 SWITCHING: Hype → Cool (within grace period)")
+            // 🆕 Use tracked visual hypes for accurate decrement (not tierMultiplier * count)
+            let hypeDecrement = state.totalVisualHypesGiven
             
             state.hypeEngagements = 0
             state.coolEngagements = 0
             state.totalCloutGiven = 0
+            state.totalVisualHypesGiven = 0
             
-            // âœ… ATOMIC DECREMENT - no read needed
             do {
                 try await db.collection("videos").document(videoID).updateData([
                     "hypeCount": FieldValue.increment(Int64(-hypeDecrement)),
                     "lastEngagementAt": Timestamp(),
                     "updatedAt": Timestamp()
                 ])
-                print("âœ… SWITCHING: Removed \(originalHypes) hypes (\(hypeDecrement) visual) (atomic)")
+                print("✅ SWITCHING: Removed \(hypeDecrement) visual hypes (accurate atomic)")
             } catch {
-                print("âš ï¸ SWITCHING: Failed to update: \(error)")
+                print("⚠️ SWITCHING: Failed to update: \(error)")
             }
         }
         
-        // ðŸ†• SET FIRST ENGAGEMENT TIMESTAMP IF FIRST TAP
+        // SET FIRST ENGAGEMENT TIMESTAMP IF FIRST TAP
         if state.firstEngagementAt == nil {
             state.firstEngagementAt = Date()
-            print("â±ï¸ GRACE PERIOD: Started (60 seconds)")
+            print("⏱️ GRACE PERIOD: Started (60 seconds)")
         }
         
         // Check engagement cap
@@ -356,16 +369,16 @@ class EngagementManager: ObservableObject {
         engagementStates["\(videoID)_\(userID)"] = state
         await saveEngagementStateToFirebase(state)
         
-        // âœ… ATOMIC INCREMENT IN FIRESTORE - NO READ NEEDED
+        // ATOMIC INCREMENT IN FIRESTORE - NO READ NEEDED
         do {
             try await db.collection("videos").document(videoID).updateData([
                 "coolCount": FieldValue.increment(Int64(visualCoolIncrement)),
                 "lastEngagementAt": Timestamp(),
                 "updatedAt": Timestamp()
             ])
-            print("â„ï¸ COOL: +\(visualCoolIncrement) cool (atomic), \(cloutPenalty) clout")
+            print("❄️ COOL: +\(visualCoolIncrement) cool (atomic), \(cloutPenalty) clout")
         } catch {
-            print("âŒ Failed to update video: \(error)")
+            print("❌ Failed to update video: \(error)")
             throw error
         }
         
@@ -374,7 +387,7 @@ class EngagementManager: ObservableObject {
         do {
             video = try await videoService.getVideo(id: videoID)
         } catch {
-            print("âš ï¸ Failed to fetch video for notification: \(error)")
+            print("⚠️ Failed to fetch video for notification: \(error)")
             video = CoreVideoMetadata(
                 id: videoID,
                 title: "Video",
@@ -419,9 +432,9 @@ class EngagementManager: ObservableObject {
                         engagementType: "cool",
                         videoTitle: video.title
                     )
-                    print("âœ… COOL NOTIFICATION: Sent to \(creatorID)")
+                    print("✅ COOL NOTIFICATION: Sent to \(creatorID)")
                 } catch {
-                    print("âš ï¸ COOL NOTIFICATION: Failed - \(error.localizedDescription)")
+                    print("⚠️ COOL NOTIFICATION: Failed - \(error.localizedDescription)")
                 }
             }
         }
@@ -436,35 +449,32 @@ class EngagementManager: ObservableObject {
         return true
     }
     
-    // MARK: - ðŸ†• Remove All Engagement (Long Press - ATOMIC DECREMENTS)
+    // MARK: - Remove All Engagement (Long Press - ATOMIC DECREMENTS)
+    // 🆕 Uses totalVisualHypesGiven for accurate decrement instead of tierMultiplier * count
     
     func removeAllEngagement(videoID: String, userID: String, userTier: UserTier) async throws -> Bool {
-        print("ðŸ—‘ï¸ REMOVE ALL: Attempting to remove engagement")
+        print("🗑️ REMOVE ALL: Attempting to remove engagement")
         
         var state = getEngagementState(videoID: videoID, userID: userID)
         
         // Check if within grace period
         guard state.isWithinGracePeriod else {
-            print("âŒ REMOVE ALL: Grace period expired")
+            print("❌ REMOVE ALL: Grace period expired")
             throw StitchError.validationError("Cannot remove engagement after grace period")
         }
         
-        print("âœ… REMOVE ALL: Within grace period, proceeding...")
+        print("✅ REMOVE ALL: Within grace period, proceeding...")
         
-        // Store original counts for Firebase update
-        let originalHypes = state.hypeEngagements
-        let originalCools = state.coolEngagements
-        
-        // Calculate visual decrements
-        let tierMultiplier = EngagementConfig.getVisualHypeMultiplier(for: userTier)
-        let hypeDecrement = originalHypes * tierMultiplier
-        let coolDecrement = originalCools
+        // 🆕 Use tracked totals for accurate decrement (handles mixed regular + burst)
+        let hypeDecrement = state.totalVisualHypesGiven
+        let coolDecrement = state.coolEngagements
         
         // Reset everything
         state.hypeEngagements = 0
         state.coolEngagements = 0
         state.totalEngagements = 0
         state.totalCloutGiven = 0
+        state.totalVisualHypesGiven = 0
         state.firstEngagementAt = nil
         state.lastEngagementAt = Date()
         
@@ -473,7 +483,7 @@ class EngagementManager: ObservableObject {
         engagementStates[key] = state
         await saveEngagementStateToFirebase(state)
         
-        // âœ… ATOMIC DECREMENTS IN FIRESTORE - NO READ NEEDED
+        // ATOMIC DECREMENTS IN FIRESTORE - NO READ NEEDED
         do {
             var updates: [String: Any] = [
                 "lastEngagementAt": Timestamp(),
@@ -490,7 +500,7 @@ class EngagementManager: ObservableObject {
             
             try await db.collection("videos").document(videoID).updateData(updates)
             
-            print("âœ… REMOVE ALL: Removed \(originalHypes) hypes (\(hypeDecrement) visual) and \(originalCools) cools (atomic)")
+            print("✅ REMOVE ALL: Removed \(hypeDecrement) visual hypes and \(coolDecrement) cools (accurate atomic)")
             
             // Post notification for UI update
             NotificationCenter.default.post(
@@ -502,7 +512,7 @@ class EngagementManager: ObservableObject {
             return true
             
         } catch {
-            print("âŒ REMOVE ALL: Failed to update video: \(error)")
+            print("❌ REMOVE ALL: Failed to update video: \(error)")
             throw error
         }
     }
@@ -516,11 +526,11 @@ class EngagementManager: ObservableObject {
             if let loadedState = try await videoEngagementService.loadEngagementState(key: key) {
                 await MainActor.run {
                     engagementStates[key] = loadedState
-                    print("ðŸ“„ Loaded state from Firebase for \(key)")
+                    print("📄 Loaded state from Firebase for \(key)")
                 }
             }
         } catch {
-            print("âš ï¸ Failed to load state from Firebase: \(error)")
+            print("⚠️ Failed to load state from Firebase: \(error)")
         }
     }
     
@@ -529,9 +539,9 @@ class EngagementManager: ObservableObject {
         
         do {
             try await videoEngagementService.saveEngagementState(key: key, state: state)
-            print("ðŸ’¾ Saved state to Firebase for \(key)")
+            print("💾 Saved state to Firebase for \(key)")
         } catch {
-            print("âŒ Failed to save state to Firebase: \(error)")
+            print("❌ Failed to save state to Firebase: \(error)")
         }
     }
     
@@ -586,22 +596,35 @@ class EngagementManager: ObservableObject {
     
     // MARK: - Preload & Cleanup
     
+    /// Batch preload engagement states to reduce individual Firebase reads
+    /// Caching note: This batches concurrent reads via TaskGroup. Consider adding
+    /// a dedup check to skip videoIDs already cached in engagementStates.
     func preloadEngagementStates(videoIDs: [String], userID: String) async {
-        print("ðŸ“¦ Preloading \(videoIDs.count) engagement states")
+        // 🆕 Dedup: skip already-cached states to avoid redundant Firebase reads
+        let uncachedIDs = videoIDs.filter { engagementStates["\($0)_\(userID)"] == nil }
+        
+        guard !uncachedIDs.isEmpty else {
+            print("✅ Preload: All \(videoIDs.count) states already cached")
+            return
+        }
+        
+        print("📦 Preloading \(uncachedIDs.count) engagement states (\(videoIDs.count - uncachedIDs.count) cached)")
         
         await withTaskGroup(of: Void.self) { group in
-            for videoID in videoIDs {
+            for videoID in uncachedIDs {
                 group.addTask {
                     await self.loadEngagementStateFromFirebase(videoID: videoID, userID: userID)
                 }
             }
         }
         
-        print("âœ… Preloading complete")
+        print("✅ Preloading complete")
     }
     
+    /// 🆕 Auto-cleanup: evict stale engagement states from memory cache
+    /// Prevents unbounded memory growth in long sessions
     func clearOldStates() {
-        let cutoffTime = Date().addingTimeInterval(-3600)
+        let cutoffTime = Date().addingTimeInterval(-3600) // 1 hour
         
         let keysToRemove = engagementStates.compactMap { key, state in
             state.lastEngagementAt < cutoffTime ? key : nil
@@ -612,19 +635,25 @@ class EngagementManager: ObservableObject {
         }
         
         if !keysToRemove.isEmpty {
-            print("ðŸ§¹ Cleared \(keysToRemove.count) old states")
+            print("🧹 Cleared \(keysToRemove.count) old engagement states from cache")
+        }
+    }
+    
+    /// 🆕 Start periodic cache cleanup timer
+    private func startCacheCleanupTimer() {
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.clearOldStates()
+            }
         }
     }
     
     // MARK: - Passive Discovery Signals
     
-    /// Check if a creator is suppressed/blocked in discovery for this user
-    /// Following a creator overrides this — home feed is unaffected.
     func isCreatorSuppressedInDiscovery(_ creatorID: String) -> Bool {
         return !DiscoveryEngagementTracker.shared.shouldShowCreator(creatorID)
     }
     
-    /// Get discovery weight multiplier for ranking
     func discoveryWeightForCreator(_ creatorID: String) -> Double {
         return DiscoveryEngagementTracker.shared.discoveryWeight(for: creatorID)
     }

@@ -4,10 +4,10 @@
 //
 //  Layer 4: Core Services - Video Upload Management
 //
-//  Ã°Å¸â€Â§ UPDATED: Removed hard 100MB rejection - now auto-compresses
-//  Ã°Å¸â€Â§ UPDATED: Uses FastVideoCompressor as fallback
-//  Ã°Å¸â€Â§ UPDATED: Better error messages for file size issues
-//  Ã°Å¸â€Â§ UPDATED: Added spin-off support
+//  ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ UPDATED: Removed hard 100MB rejection - now auto-compresses
+//  ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ UPDATED: Uses FastVideoCompressor as fallback
+//  ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ UPDATED: Better error messages for file size issues
+//  ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ UPDATED: Added spin-off support
 //
 
 import Foundation
@@ -51,11 +51,12 @@ class VideoUploadService: ObservableObject {
     // MARK: - Public Interface
     
     /// Uploads video with metadata to Firebase
-    /// Ã°Å¸â€Â§ UPDATED: Now auto-compresses if file exceeds 100MB limit
+    /// ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ UPDATED: Now auto-compresses if file exceeds 100MB limit
     func uploadVideo(
         videoURL: URL,
         metadata: VideoUploadMetadata,
-        recordingContext: RecordingContext
+        recordingContext: RecordingContext,
+        customThumbnailTime: TimeInterval? = nil
     ) async throws -> VideoUploadResult {
         
         let startTime = Date()
@@ -78,7 +79,7 @@ class VideoUploadService: ObservableObject {
             
             // Step 3: Generate thumbnail
             await updateProgress(0.2, task: "Generating thumbnail...")
-            let thumbnailData = try await generateThumbnail(from: finalVideoURL)
+            let thumbnailData = try await generateThumbnail(from: finalVideoURL, at: customThumbnailTime)
             
             // Step 4: Upload video to Storage
             await updateProgress(0.3, task: "Uploading video...")
@@ -129,8 +130,8 @@ class VideoUploadService: ObservableObject {
             )
             
             let orientation = VideoOrientation.from(aspectRatio: technicalMetadata.aspectRatio)
-            print("Ã¢Å“â€¦ UPLOAD SERVICE: Video uploaded successfully - \(metadata.title)")
-            print("Ã°Å¸â€œÂ UPLOAD SERVICE: \(orientation.displayName) video (aspect ratio: \(String(format: "%.3f", technicalMetadata.aspectRatio)))")
+            print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD SERVICE: Video uploaded successfully - \(metadata.title)")
+            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â UPLOAD SERVICE: \(orientation.displayName) video (aspect ratio: \(String(format: "%.3f", technicalMetadata.aspectRatio)))")
             
             return result
             
@@ -148,27 +149,27 @@ class VideoUploadService: ObservableObject {
                 error: error
             )
             
-            print("Ã¢ÂÅ’ UPLOAD SERVICE: Upload failed - \(error.localizedDescription)")
+            print("ÃƒÂ¢Ã‚ÂÃ…â€™ UPLOAD SERVICE: Upload failed - \(error.localizedDescription)")
             throw error
         }
     }
     
-    // MARK: - Ã°Å¸â€ â€¢ NEW: Smart Size Check with Auto-Compression
+    // MARK: - ÃƒÂ°Ã…Â¸Ã¢â‚¬Â Ã¢â‚¬Â¢ NEW: Smart Size Check with Auto-Compression
     
     /// Ensures video is under upload size limit, compressing if necessary
     private func ensureUploadableSize(videoURL: URL) async throws -> URL {
         let fileSize = try getFileSize(videoURL)
         
-        print("Ã°Å¸â€œÂ¦ UPLOAD: File size is \(formatFileSize(fileSize))")
+        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¦ UPLOAD: File size is \(formatFileSize(fileSize))")
         
         // If under limit, use as-is
         if fileSize <= Self.maxUploadSize {
-            print("Ã¢Å“â€¦ UPLOAD: File is within size limit")
+            print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD: File is within size limit")
             return videoURL
         }
         
         // Need to compress
-        print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD: File exceeds \(formatFileSize(Self.maxUploadSize)), compressing...")
+        print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â UPLOAD: File exceeds \(formatFileSize(Self.maxUploadSize)), compressing...")
         await updateProgress(0.05, task: "Compressing large video...")
         
         let compressor = FastVideoCompressor.shared
@@ -186,7 +187,7 @@ class VideoUploadService: ObservableObject {
                 }
             )
             
-            print("Ã¢Å“â€¦ UPLOAD: Compressed \(formatFileSize(fileSize)) Ã¢â€ â€™ \(formatFileSize(result.compressedSize))")
+            print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD: Compressed \(formatFileSize(fileSize)) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ \(formatFileSize(result.compressedSize))")
             
             // Verify it's now under limit
             if result.compressedSize <= Self.maxUploadSize {
@@ -245,7 +246,7 @@ class VideoUploadService: ObservableObject {
         let createdVideo: CoreVideoMetadata
         
         let orientation = VideoOrientation.from(aspectRatio: uploadResult.aspectRatio)
-        print("Ã°Å¸â€œÂ UPLOAD SERVICE: Creating \(orientation.displayName) video document")
+        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â UPLOAD SERVICE: Creating \(orientation.displayName) video document")
         
         switch recordingContext {
         case .newThread:
@@ -275,10 +276,10 @@ class VideoUploadService: ObservableObject {
                             videoTitle: createdVideo.title,
                             followerIDs: followerIDs
                         )
-                        print("Ã¢Å“â€¦ UPLOAD SERVICE: Notified \(followerIDs.count) followers")
+                        print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD SERVICE: Notified \(followerIDs.count) followers")
                     }
                 } catch {
-                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to notify followers - \(error)")
+                    print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â UPLOAD SERVICE: Failed to notify followers - \(error)")
                 }
             }
             
@@ -298,19 +299,11 @@ class VideoUploadService: ObservableObject {
                 hashtags: hashtags
             )
             
-            // Stitch notification
+            // Stitch notification handled by VideoCoordinator (PHASE 4)
+            // Only handle hype regen here
             Task {
                 do {
                     let threadVideo = try await videoService.getVideo(id: threadID)
-                    try await notificationService.sendStitchNotification(
-                        videoID: createdVideo.id,
-                        videoTitle: metadata.title,
-                        originalCreatorID: threadVideo.creatorID,
-                        parentCreatorID: nil,
-                        threadUserIDs: []
-                    )
-                    
-                    // Award hype rating regen to original creator for receiving a stitch
                     if threadVideo.creatorID != metadata.creatorID {
                         await HypeRatingService.shared.queueEngagementRegen(
                             source: .receivedStitch,
@@ -318,7 +311,7 @@ class VideoUploadService: ObservableObject {
                         )
                     }
                 } catch {
-                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to send stitch notification - \(error)")
+                    print("UPLOAD SERVICE: Failed to award stitch regen - \(error)")
                 }
             }
             
@@ -338,19 +331,11 @@ class VideoUploadService: ObservableObject {
                 hashtags: hashtags
             )
             
-            // Reply notification
+            // Reply notification handled by VideoCoordinator (PHASE 4)
+            // Only handle hype regen here
             Task {
                 do {
                     let parentVideo = try await videoService.getVideo(id: videoID)
-                    try await notificationService.sendStitchNotification(
-                        videoID: createdVideo.id,
-                        videoTitle: metadata.title,
-                        originalCreatorID: parentVideo.creatorID,
-                        parentCreatorID: parentVideo.creatorID,
-                        threadUserIDs: []
-                    )
-                    
-                    // Award hype rating regen to parent creator for receiving a reply
                     if parentVideo.creatorID != metadata.creatorID {
                         await HypeRatingService.shared.queueEngagementRegen(
                             source: .receivedReply,
@@ -358,7 +343,7 @@ class VideoUploadService: ObservableObject {
                         )
                     }
                 } catch {
-                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to send reply notification - \(error)")
+                    print("UPLOAD SERVICE: Failed to award reply regen - \(error)")
                 }
             }
             
@@ -378,20 +363,7 @@ class VideoUploadService: ObservableObject {
                 hashtags: hashtags
             )
             
-            Task {
-                do {
-                    let threadVideo = try await videoService.getVideo(id: threadID)
-                    try await notificationService.sendStitchNotification(
-                        videoID: createdVideo.id,
-                        videoTitle: metadata.title,
-                        originalCreatorID: threadVideo.creatorID,
-                        parentCreatorID: nil,
-                        threadUserIDs: []
-                    )
-                } catch {
-                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to send thread notification - \(error)")
-                }
-            }
+            // Continue thread notification handled by VideoCoordinator (PHASE 4)
             
         case .spinOffFrom(let videoID, let threadID, _):
             createdVideo = try await videoService.createSpinOffThread(
@@ -410,21 +382,7 @@ class VideoUploadService: ObservableObject {
                 hashtags: hashtags
             )
             
-            // Notify original video creator about spin-off
-            Task {
-                do {
-                    let sourceVideo = try await videoService.getVideo(id: videoID)
-                    try await notificationService.sendStitchNotification(
-                        videoID: createdVideo.id,
-                        videoTitle: metadata.title,
-                        originalCreatorID: sourceVideo.creatorID,
-                        parentCreatorID: sourceVideo.creatorID,
-                        threadUserIDs: []
-                    )
-                } catch {
-                    print("Ã¢Å¡Â Ã¯Â¸Â UPLOAD SERVICE: Failed to send spin-off notification - \(error)")
-                }
-            }
+            // Spin-off notification handled by VideoCoordinator (PHASE 4)
         }
         
         // Handle tagged users
@@ -433,24 +391,12 @@ class VideoUploadService: ObservableObject {
                 videoID: createdVideo.id,
                 taggedUserIDs: taggedUserIDs
             )
-            print("Ã°Å¸â€œÅ’ UPLOAD SERVICE: Saved \(taggedUserIDs.count) tagged users")
+            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…â€™ UPLOAD SERVICE: Saved \(taggedUserIDs.count) tagged users")
             
-            for taggedUserID in taggedUserIDs {
-                guard taggedUserID != metadata.creatorID else { continue }
-                
-                Task {
-                    try? await notificationService.sendMentionNotification(
-                        to: taggedUserID,
-                        videoID: createdVideo.id,
-                        videoTitle: metadata.title,
-                        mentionContext: "tagged in video"
-                    )
-                }
-            }
+            // Mention notifications handled by VideoCoordinator (PHASE 4)
         }
-        
         await updateProgress(1.0, task: "Video created successfully!")
-        print("Ã¢Å“â€¦ UPLOAD SERVICE: Video document created - \(createdVideo.id)")
+        print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD SERVICE: Video document created - \(createdVideo.id)")
         
         // MARK: - Hype Rating Regen for posting
         Task {
@@ -539,7 +485,7 @@ class VideoUploadService: ObservableObject {
         return downloadURL.absoluteString
     }
     
-    private func generateThumbnail(from videoURL: URL) async throws -> Data {
+    private func generateThumbnail(from videoURL: URL, at thumbnailTime: TimeInterval? = nil) async throws -> Data {
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let asset = AVAsset(url: videoURL)
@@ -547,7 +493,8 @@ class VideoUploadService: ObservableObject {
                 imageGenerator.appliesPreferredTrackTransform = true
                 imageGenerator.maximumSize = CGSize(width: 1080, height: 1920)
                 
-                let time = CMTime(seconds: 0.5, preferredTimescale: 600)
+                // Use custom thumbnail time if set, otherwise default to 0.5s
+                let time = CMTime(seconds: thumbnailTime ?? 0.5, preferredTimescale: 600)
                 
                 do {
                     let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
@@ -591,7 +538,7 @@ class VideoUploadService: ObservableObject {
             }
             
             let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
-            print("Ã°Å¸â€œÂ METADATA: \(orientation.displayName) - \(Int(width))x\(Int(height))")
+            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â METADATA: \(orientation.displayName) - \(Int(width))x\(Int(height))")
         }
         
         return TechnicalMetadata(

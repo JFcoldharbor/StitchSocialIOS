@@ -335,7 +335,7 @@ extension VideoService {
             .whereField(FirebaseSchema.InteractionDocument.videoID, isEqualTo: videoID)
             .whereField(FirebaseSchema.InteractionDocument.engagementType, isEqualTo: "view")
             .order(by: FirebaseSchema.InteractionDocument.timestamp, descending: true)
-            .limit(to: 100) // Limit for performance
+            .limit(to: 100)
             .getDocuments()
         
         print("📊 VIDEO SERVICE: Found \(snapshot.documents.count) view interactions")
@@ -354,7 +354,6 @@ extension VideoService {
             let watchTime = data["watchTime"] as? TimeInterval ?? 0
             let viewDate = timestamp.dateValue()
             
-            // Keep only the most recent view per user
             if viewerMap[userID] == nil || viewDate > viewerMap[userID]!.date {
                 viewerMap[userID] = (date: viewDate, watchTime: watchTime)
             }
@@ -362,36 +361,71 @@ extension VideoService {
         
         print("📊 VIDEO SERVICE: Found \(viewerMap.count) unique viewers")
         
-        var viewers: [VideoViewer] = []
+        // BATCHED: Fetch users in chunks of 10 (Firestore 'in' query limit)
+        // Old code: 1 getUser() per viewer = up to 100 Firestore reads
+        // New code: ceil(100/10) = max 10 Firestore reads
+        let userIDs = Array(viewerMap.keys)
+        var userLookup: [String: BatchedUserInfo] = [:]
         
-        // Fetch user details for each viewer
-        for (userID, viewData) in viewerMap {
+        for batch in stride(from: 0, to: userIDs.count, by: 10) {
+            let batchIDs = Array(userIDs[batch..<min(batch + 10, userIDs.count)])
+            
             do {
-                if let user = try await UserService().getUser(id: userID) {
-                    let viewer = VideoViewer(
-                        userID: userID,
-                        username: user.username,
-                        displayName: user.displayName,
-                        profileImageURL: user.profileImageURL,
-                        viewedAt: viewData.date,
-                        watchTime: viewData.watchTime,
-                        isVerified: user.isVerified,
-                        tier: user.tier.rawValue
+                let batchSnapshot = try await db.collection(FirebaseSchema.Collections.users)
+                    .whereField(FieldPath.documentID(), in: batchIDs)
+                    .getDocuments()
+                
+                for doc in batchSnapshot.documents {
+                    let data = doc.data()
+                    let user = BatchedUserInfo(
+                        id: doc.documentID,
+                        username: data["username"] as? String ?? "",
+                        displayName: data["displayName"] as? String ?? "",
+                        profileImageURL: data["profileImageURL"] as? String,
+                        isVerified: data["isVerified"] as? Bool ?? false,
+                        tier: data["tier"] as? String ?? "rookie"
                     )
-                    viewers.append(viewer)
+                    userLookup[doc.documentID] = user
                 }
             } catch {
-                print("⚠️ VIDEO SERVICE: Error fetching user \(userID): \(error)")
-                continue
+                print("⚠️ VIDEO SERVICE: Batch user fetch failed: \(error.localizedDescription)")
             }
         }
         
-        // Sort by most recent views
+        // Build viewer list from batched results
+        var viewers: [VideoViewer] = []
+        
+        for (userID, viewData) in viewerMap {
+            guard let user = userLookup[userID] else { continue }
+            
+            viewers.append(VideoViewer(
+                userID: userID,
+                username: user.username,
+                displayName: user.displayName,
+                profileImageURL: user.profileImageURL,
+                viewedAt: viewData.date,
+                watchTime: viewData.watchTime,
+                isVerified: user.isVerified,
+                tier: user.tier
+            ))
+        }
+        
         viewers.sort { $0.viewedAt > $1.viewedAt }
         
-        print("✅ VIDEO SERVICE: Returning \(viewers.count) viewers")
+        print("✅ VIDEO SERVICE: Returning \(viewers.count) viewers (batched \(userIDs.count) users in \((userIDs.count + 9) / 10) queries)")
         return viewers
     }
+}
+
+// MARK: - Lightweight User Info for Batch Fetching
+
+private struct BatchedUserInfo {
+    let id: String
+    let username: String
+    let displayName: String
+    let profileImageURL: String?
+    let isVerified: Bool
+    let tier: String
 }
 
 // MARK: - Preview

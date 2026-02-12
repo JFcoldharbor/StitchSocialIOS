@@ -6,9 +6,9 @@
 //  Dependencies: Foundation, AVFoundation
 //  Features: Tracks trim, filter, caption state before posting
 //
-//  🔧 UPDATED: Added compression state tracking
-//  🔧 UPDATED: Better trim detection (checks both start AND end)
-//  🔧 UPDATED: Added finalVideoURL that prefers compressed/processed
+//  ðŸ”§ UPDATED: Added compression state tracking
+//  ðŸ”§ UPDATED: Better trim detection (checks both start AND end)
+//  ðŸ”§ UPDATED: Added finalVideoURL that prefers compressed/processed
 //
 
 import Foundation
@@ -53,7 +53,7 @@ struct VideoEditState: Codable {
     var processedVideoURL: URL?
     var processedThumbnailURL: URL?
     
-    // MARK: - 🆕 NEW: Compression State
+    // MARK: - Compression State
     
     var compressedVideoURL: URL?
     var compressionComplete: Bool
@@ -65,6 +65,14 @@ struct VideoEditState: Codable {
     
     var draftID: String
     var lastModified: Date
+    
+    // MARK: - 🆕 Upload State (for background upload system)
+    
+    var uploadStatus: DraftUploadStatus
+    var uploadMetadata: PersistedUploadMetadata?
+    var uploadContext: PersistedRecordingContext?
+    var uploadErrorMessage: String?
+    var uploadAttemptCount: Int
     
     // MARK: - Initialization
     
@@ -106,6 +114,64 @@ struct VideoEditState: Codable {
         // Draft metadata
         self.draftID = draftID
         self.lastModified = Date()
+        
+        // Upload state defaults
+        self.uploadStatus = DraftUploadStatus.draft
+        self.uploadMetadata = nil
+        self.uploadContext = nil
+        self.uploadErrorMessage = nil
+        self.uploadAttemptCount = 0
+    }
+    
+    // MARK: - Custom Codable (backward-compatible with existing drafts)
+    
+    enum CodingKeys: String, CodingKey {
+        case videoURL, videoDuration, videoSize, createdAt
+        case trimStartTime, trimEndTime
+        case selectedFilter, filterIntensity
+        case captions
+        case isProcessing, processingProgress, processedVideoURL, processedThumbnailURL
+        case compressedVideoURL, compressionComplete, compressionProgress, originalFileSize, compressedFileSize
+        case draftID, lastModified
+        case uploadStatus, uploadMetadata, uploadContext, uploadErrorMessage, uploadAttemptCount
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        videoURL = try container.decode(URL.self, forKey: .videoURL)
+        videoDuration = try container.decode(TimeInterval.self, forKey: .videoDuration)
+        videoSize = try container.decode(CGSize.self, forKey: .videoSize)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        
+        trimStartTime = try container.decode(TimeInterval.self, forKey: .trimStartTime)
+        trimEndTime = try container.decode(TimeInterval.self, forKey: .trimEndTime)
+        
+        selectedFilter = try container.decodeIfPresent(VideoFilter.self, forKey: .selectedFilter)
+        filterIntensity = try container.decode(Double.self, forKey: .filterIntensity)
+        
+        captions = try container.decode([VideoCaption].self, forKey: .captions)
+        
+        isProcessing = try container.decode(Bool.self, forKey: .isProcessing)
+        processingProgress = try container.decode(Double.self, forKey: .processingProgress)
+        processedVideoURL = try container.decodeIfPresent(URL.self, forKey: .processedVideoURL)
+        processedThumbnailURL = try container.decodeIfPresent(URL.self, forKey: .processedThumbnailURL)
+        
+        compressedVideoURL = try container.decodeIfPresent(URL.self, forKey: .compressedVideoURL)
+        compressionComplete = try container.decode(Bool.self, forKey: .compressionComplete)
+        compressionProgress = try container.decode(Double.self, forKey: .compressionProgress)
+        originalFileSize = try container.decode(Int64.self, forKey: .originalFileSize)
+        compressedFileSize = try container.decode(Int64.self, forKey: .compressedFileSize)
+        
+        draftID = try container.decode(String.self, forKey: .draftID)
+        lastModified = try container.decode(Date.self, forKey: .lastModified)
+        
+        // 🆕 New fields with defaults for backward compatibility
+        uploadStatus = try container.decodeIfPresent(DraftUploadStatus.self, forKey: .uploadStatus) ?? .draft
+        uploadMetadata = try container.decodeIfPresent(PersistedUploadMetadata.self, forKey: .uploadMetadata)
+        uploadContext = try container.decodeIfPresent(PersistedRecordingContext.self, forKey: .uploadContext)
+        uploadErrorMessage = try container.decodeIfPresent(String.self, forKey: .uploadErrorMessage)
+        uploadAttemptCount = try container.decodeIfPresent(Int.self, forKey: .uploadAttemptCount) ?? 0
     }
     
     // MARK: - Modification Methods
@@ -118,7 +184,7 @@ struct VideoEditState: Codable {
         trimEndTime = max(trimStartTime, min(end, videoDuration))
         lastModified = Date()
         
-        // 🆕 Invalidate compression if trim changed significantly
+        // ðŸ†• Invalidate compression if trim changed significantly
         if abs(oldStart - trimStartTime) > 0.5 || abs(oldEnd - trimEndTime) > 0.5 {
             invalidateCompression()
         }
@@ -147,7 +213,7 @@ struct VideoEditState: Codable {
         }
     }
     
-    // MARK: - 🆕 NEW: Compression Methods
+    // MARK: - ðŸ†• NEW: Compression Methods
     
     mutating func setCompressedVideo(url: URL, originalSize: Int64, compressedSize: Int64) {
         compressedVideoURL = url
@@ -209,7 +275,7 @@ struct VideoEditState: Codable {
         return true
     }
     
-    // MARK: - 🔧 IMPROVED: Edit Detection
+    // MARK: - ðŸ”§ IMPROVED: Edit Detection
     
     /// Detects if start was trimmed (more than 0.1s from beginning)
     var hasStartTrim: Bool {
@@ -221,7 +287,7 @@ struct VideoEditState: Codable {
         trimEndTime < (videoDuration - 0.1)
     }
     
-    /// 🔧 FIXED: Properly detects BOTH start and end trimming
+    /// ðŸ”§ FIXED: Properly detects BOTH start and end trimming
     var hasTrim: Bool {
         hasStartTrim || hasEndTrim
     }
@@ -260,7 +326,7 @@ struct VideoEditState: Codable {
         return processedVideoURL != nil && processedThumbnailURL != nil
     }
     
-    // MARK: - 🔧 IMPROVED: Final Video URL
+    // MARK: - ðŸ”§ IMPROVED: Final Video URL
     
     /// Returns the URL to use for posting
     /// Priority: processed (if edited) > compressed > original
@@ -284,7 +350,7 @@ struct VideoEditState: Codable {
         return nil // Will generate from original
     }
     
-    // MARK: - 🆕 NEW: Compression Stats
+    // MARK: - ðŸ†• NEW: Compression Stats
     
     var compressionRatio: Double {
         guard originalFileSize > 0, compressedFileSize > 0 else { return 1.0 }
@@ -297,6 +363,210 @@ struct VideoEditState: Codable {
     
     var compressionSavingsFormatted: String {
         String(format: "%.0f%% smaller", compressionSavingsPercent)
+    }
+    
+    // MARK: - 🆕 Upload Status Methods
+    
+    mutating func markReadyToUpload(metadata: PersistedUploadMetadata, context: PersistedRecordingContext) {
+        uploadStatus = DraftUploadStatus.readyToUpload
+        uploadMetadata = metadata
+        uploadContext = context
+        uploadErrorMessage = nil
+        lastModified = Date()
+    }
+    
+    mutating func markUploading() {
+        uploadStatus = DraftUploadStatus.uploading
+        uploadAttemptCount += 1
+        uploadErrorMessage = nil
+        lastModified = Date()
+    }
+    
+    mutating func markUploadFailed(error: String) {
+        uploadStatus = DraftUploadStatus.failed
+        uploadErrorMessage = error
+        lastModified = Date()
+    }
+    
+    mutating func markUploadComplete() {
+        uploadStatus = DraftUploadStatus.complete
+        uploadErrorMessage = nil
+        lastModified = Date()
+    }
+    
+    var canRetryUpload: Bool {
+        uploadStatus == DraftUploadStatus.failed && uploadMetadata != nil && uploadContext != nil
+    }
+}
+
+// MARK: - Upload Status
+
+enum DraftUploadStatus: String, Codable {
+    case draft          // Saved locally, not yet submitted for upload
+    case readyToUpload  // User tapped Post, queued for background upload
+    case uploading      // Currently uploading in background
+    case failed         // Upload failed, can retry
+    case complete       // Successfully uploaded
+    
+    var displayName: String {
+        switch self {
+        case .draft: return "Draft"
+        case .readyToUpload: return "Queued"
+        case .uploading: return "Uploading"
+        case .failed: return "Failed"
+        case .complete: return "Posted"
+        }
+    }
+    
+    var iconName: String {
+        switch self {
+        case .draft: return "pencil"
+        case .readyToUpload: return "clock"
+        case .uploading: return "arrow.up.circle"
+        case .failed: return "exclamationmark.triangle.fill"
+        case .complete: return "checkmark.circle.fill"
+        }
+    }
+}
+
+// MARK: - Persisted Upload Metadata (Codable version of VideoUploadMetadata)
+
+struct PersistedUploadMetadata: Codable {
+    let videoID: String
+    let title: String
+    let description: String
+    let hashtags: [String]
+    let creatorID: String
+    let creatorName: String
+    let taggedUserIDs: [String]
+    let recordingSource: String
+    
+    init(
+        title: String,
+        description: String = "",
+        hashtags: [String] = [],
+        creatorID: String,
+        creatorName: String,
+        taggedUserIDs: [String] = [],
+        recordingSource: String = "unknown"
+    ) {
+        self.videoID = UUID().uuidString
+        self.title = title
+        self.description = description
+        self.hashtags = hashtags
+        self.creatorID = creatorID
+        self.creatorName = creatorName
+        self.taggedUserIDs = taggedUserIDs
+        self.recordingSource = recordingSource
+    }
+    
+    /// Convert to VideoUploadMetadata for the upload service
+    func toUploadMetadata() -> VideoUploadMetadata {
+        return VideoUploadMetadata(
+            title: title,
+            description: description,
+            hashtags: hashtags,
+            creatorID: creatorID,
+            creatorName: creatorName
+        )
+    }
+}
+
+// MARK: - Persisted Recording Context (Codable version of RecordingContext)
+
+enum PersistedRecordingContext: Codable {
+    case newThread
+    case stitchToThread(threadID: String, threadInfo: PersistedThreadInfo)
+    case replyToVideo(videoID: String, videoInfo: PersistedVideoInfo)
+    case continueThread(threadID: String, threadInfo: PersistedThreadInfo)
+    case spinOffFrom(videoID: String, threadID: String, videoInfo: PersistedVideoInfo)
+    
+    /// Convert to RecordingContext for the upload service
+    func toRecordingContext() -> RecordingContext {
+        switch self {
+        case .newThread:
+            return .newThread
+        case .stitchToThread(let threadID, let info):
+            return .stitchToThread(threadID: threadID, threadInfo: info.toThreadInfo())
+        case .replyToVideo(let videoID, let info):
+            return .replyToVideo(videoID: videoID, videoInfo: info.toCameraVideoInfo())
+        case .continueThread(let threadID, let info):
+            return .continueThread(threadID: threadID, threadInfo: info.toThreadInfo())
+        case .spinOffFrom(let videoID, let threadID, let info):
+            return .spinOffFrom(videoID: videoID, threadID: threadID, videoInfo: info.toCameraVideoInfo())
+        }
+    }
+    
+    /// Create from RecordingContext
+    static func from(_ context: RecordingContext) -> PersistedRecordingContext {
+        switch context {
+        case .newThread:
+            return .newThread
+        case .stitchToThread(let threadID, let info):
+            return .stitchToThread(threadID: threadID, threadInfo: PersistedThreadInfo.from(info))
+        case .replyToVideo(let videoID, let info):
+            return .replyToVideo(videoID: videoID, videoInfo: PersistedVideoInfo.from(info))
+        case .continueThread(let threadID, let info):
+            return .continueThread(threadID: threadID, threadInfo: PersistedThreadInfo.from(info))
+        case .spinOffFrom(let videoID, let threadID, let info):
+            return .spinOffFrom(videoID: videoID, threadID: threadID, videoInfo: PersistedVideoInfo.from(info))
+        }
+    }
+}
+
+struct PersistedThreadInfo: Codable {
+    let title: String
+    let creatorName: String
+    let creatorID: String
+    let thumbnailURL: String?
+    let participantCount: Int
+    let stitchCount: Int
+    
+    func toThreadInfo() -> ThreadInfo {
+        return ThreadInfo(
+            title: title,
+            creatorName: creatorName,
+            creatorID: creatorID,
+            thumbnailURL: thumbnailURL,
+            participantCount: participantCount,
+            stitchCount: stitchCount
+        )
+    }
+    
+    static func from(_ info: ThreadInfo) -> PersistedThreadInfo {
+        return PersistedThreadInfo(
+            title: info.title,
+            creatorName: info.creatorName,
+            creatorID: info.creatorID,
+            thumbnailURL: info.thumbnailURL,
+            participantCount: info.participantCount,
+            stitchCount: info.stitchCount
+        )
+    }
+}
+
+struct PersistedVideoInfo: Codable {
+    let title: String
+    let creatorName: String
+    let creatorID: String
+    let thumbnailURL: String?
+    
+    func toCameraVideoInfo() -> CameraVideoInfo {
+        return CameraVideoInfo(
+            title: title,
+            creatorName: creatorName,
+            creatorID: creatorID,
+            thumbnailURL: thumbnailURL
+        )
+    }
+    
+    static func from(_ info: CameraVideoInfo) -> PersistedVideoInfo {
+        return PersistedVideoInfo(
+            title: info.title,
+            creatorName: info.creatorName,
+            creatorID: info.creatorID,
+            thumbnailURL: info.thumbnailURL
+        )
     }
 }
 

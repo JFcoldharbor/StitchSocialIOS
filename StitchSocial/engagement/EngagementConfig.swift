@@ -5,6 +5,7 @@
 //  Layer 1: Foundation - Engagement System Configuration
 //  Dependencies: UserTier (Layer 1) ONLY
 //  Features: All engagement constants, tier costs, progressive tapping settings
+//  UPDATED: Long press burst system - regular tap = +1, long press = full tier multiplier
 //  UPDATED: Hybrid clout system with tier-based caps, visual hype multipliers, and anti-spam
 //
 
@@ -56,9 +57,46 @@ struct EngagementConfig {
         .founder: 0.033     // 0.033% per hype (lowest cost)
     ]
     
-    // MARK: - NEW: Visual Hype Multipliers (Tier-Based)
+    // MARK: - 🆕 Long Press Burst System
+    
+    /// Regular tap: ALL tiers give +1 visual hype (cheap, standard engagement)
+    static let regularTapVisualHype = 1
+    
+    /// Burst multiplier: ONLY premium tiers, activated by long press
+    /// This is the full tier multiplier - the "big" engagement
+    static let tierBurstMultiplier: [UserTier: Int] = [
+        .founder: 20,       // Long press = +20 visual hypes
+        .topCreator: 15,    // Long press = +15 visual hypes
+        .legendary: 12,     // Long press = +12 visual hypes
+        .partner: 10,       // Long press = +10 visual hypes
+        .elite: 8,          // Long press = +8 visual hypes
+        .ambassador: 6,     // Long press = +6 visual hypes
+        .influencer: 1,     // No burst benefit (same as regular)
+        .veteran: 1,        // No burst benefit
+        .rising: 1,         // No burst benefit
+        .rookie: 1          // No burst benefit
+    ]
+    
+    /// Burst clout multiplier: long press awards more clout than regular tap
+    static let burstCloutMultiplier = 2.0
+    
+    /// Hype rating cost multiplier for burst engagements (costs more to burst)
+    static let burstHypeCostMultiplier = 3.0
+    
+    /// Minimum long press duration to activate burst (seconds)
+    static let longPressDuration: TimeInterval = 0.5
+    
+    /// Premium tiers that benefit from long press burst
+    static let burstEligibleTiers: Set<UserTier> = [
+        .founder, .topCreator, .legendary,
+        .partner, .elite, .ambassador
+    ]
+    
+    // MARK: - OLD: Visual Hype Multipliers (REPLACED by burst system)
+    // Kept for backward compatibility in validation - use getVisualHypeMultiplier(for:isBurst:) instead
     
     /// Visual hypes added per completed engagement (tier-based, EVERY tap)
+    /// DEPRECATED: Use regularTapVisualHype for regular taps, tierBurstMultiplier for long press
     static let tierVisualHypeMultiplier: [UserTier: Int] = [
         .founder: 20,       // +20 visual hypes per tap
         .topCreator: 15,    // +15 visual hypes per tap
@@ -72,20 +110,34 @@ struct EngagementConfig {
         .rookie: 1          // +1 visual hype per tap
     ]
     
-    // MARK: - NEW: Tier-Based Clout System (Decoupled from Visual Hypes)
+    // MARK: - Tier-Based Clout System (Decoupled from Visual Hypes)
     
-    /// Base clout awarded per completed engagement (before multipliers)
+    /// Base clout awarded per REGULAR tap (before multipliers)
     static let tierBaseClout: [UserTier: Int] = [
-        .founder: 50,       // 50 clout base per tap
-        .topCreator: 40,    // 40 clout base per tap
-        .legendary: 30,     // 30 clout base per tap
-        .partner: 25,       // 25 clout base per tap
-        .elite: 20,         // 20 clout base per tap
-        .ambassador: 15,    // 15 clout base per tap
-        .influencer: 5,     // 5 clout base per tap
-        .veteran: 5,        // 5 clout base per tap
-        .rising: 5,         // 5 clout base per tap
-        .rookie: 5          // 5 clout base per tap
+        .founder: 5,        // 5 clout per regular tap (was 50 - REDUCED)
+        .topCreator: 4,     // 4 clout per regular tap (was 40 - REDUCED)
+        .legendary: 3,      // 3 clout per regular tap (was 30 - REDUCED)
+        .partner: 3,        // 3 clout per regular tap (was 25 - REDUCED)
+        .elite: 2,          // 2 clout per regular tap (was 20 - REDUCED)
+        .ambassador: 2,     // 2 clout per regular tap (was 15 - REDUCED)
+        .influencer: 5,     // 5 clout (unchanged - no burst path)
+        .veteran: 5,        // 5 clout (unchanged)
+        .rising: 5,         // 5 clout (unchanged)
+        .rookie: 5          // 5 clout (unchanged)
+    ]
+    
+    /// Burst clout awarded per LONG PRESS (premium tiers only)
+    static let tierBurstClout: [UserTier: Int] = [
+        .founder: 50,       // Full 50 clout on burst
+        .topCreator: 40,    // Full 40 clout on burst
+        .legendary: 30,     // Full 30 clout on burst
+        .partner: 25,       // Full 25 clout on burst
+        .elite: 20,         // Full 20 clout on burst
+        .ambassador: 15,    // Full 15 clout on burst
+        .influencer: 5,     // Same as regular (no burst)
+        .veteran: 5,        // Same as regular
+        .rising: 5,         // Same as regular
+        .rookie: 5          // Same as regular
     ]
     
     /// Maximum clout a single user can give to one video (tier-based caps)
@@ -103,9 +155,10 @@ struct EngagementConfig {
     ]
     
     /// First tap bonus multiplier for premium tiers (Ambassador → Founder)
+    /// ONLY applies on burst (long press) first engagement
     static let firstTapBonusMultiplier = 2.0
     
-    /// Premium tiers that receive first tap bonus
+    /// Premium tiers that receive first tap bonus (on burst only)
     static let premiumTiersWithFirstTapBonus: Set<UserTier> = [
         .founder, .topCreator, .legendary,
         .partner, .elite, .ambassador
@@ -159,13 +212,26 @@ struct EngagementConfig {
         return tierHypeCosts[tier] ?? 1.0
     }
     
-    /// Get visual hype multiplier for specific tier
-    static func getVisualHypeMultiplier(for tier: UserTier) -> Int {
-        return tierVisualHypeMultiplier[tier] ?? 1
+    /// Get hype cost with burst modifier
+    static func getHypeCost(for tier: UserTier, isBurst: Bool) -> Double {
+        let baseCost = getHypeCost(for: tier)
+        return isBurst ? baseCost * burstHypeCostMultiplier : baseCost
     }
     
-    /// Get base clout for specific tier
-    static func getBaseClout(for tier: UserTier) -> Int {
+    /// Get visual hype multiplier for specific tier and engagement type
+    /// Regular tap = +1 for everyone. Burst (long press) = full tier multiplier.
+    static func getVisualHypeMultiplier(for tier: UserTier, isBurst: Bool = false) -> Int {
+        if isBurst && burstEligibleTiers.contains(tier) {
+            return tierBurstMultiplier[tier] ?? 1
+        }
+        return regularTapVisualHype
+    }
+    
+    /// Get base clout for specific tier and engagement type
+    static func getBaseClout(for tier: UserTier, isBurst: Bool = false) -> Int {
+        if isBurst && burstEligibleTiers.contains(tier) {
+            return tierBurstClout[tier] ?? 5
+        }
         return tierBaseClout[tier] ?? 5
     }
     
@@ -174,9 +240,14 @@ struct EngagementConfig {
         return maxCloutPerUserPerVideo[tier] ?? 25
     }
     
-    /// Check if tier gets first tap bonus
+    /// Check if tier gets first tap bonus (burst only)
     static func hasFirstTapBonus(tier: UserTier) -> Bool {
         return premiumTiersWithFirstTapBonus.contains(tier)
+    }
+    
+    /// Check if tier is eligible for burst engagement
+    static func isBurstEligible(tier: UserTier) -> Bool {
+        return burstEligibleTiers.contains(tier)
     }
     
     /// Calculate clout with all modifiers applied
@@ -184,13 +255,14 @@ struct EngagementConfig {
         tier: UserTier,
         tapNumber: Int,
         isFirstEngagement: Bool,
-        currentCloutFromUser: Int
+        currentCloutFromUser: Int,
+        isBurst: Bool = false
     ) -> Int {
-        // Get base clout for tier
-        var clout = getBaseClout(for: tier)
+        // Get base clout for tier (regular vs burst)
+        var clout = getBaseClout(for: tier, isBurst: isBurst)
         
-        // Apply first tap bonus if eligible
-        if isFirstEngagement && hasFirstTapBonus(tier: tier) {
+        // Apply first tap bonus if eligible (BURST ONLY)
+        if isFirstEngagement && isBurst && hasFirstTapBonus(tier: tier) {
             clout = Int(Double(clout) * firstTapBonusMultiplier)
         }
         
@@ -246,7 +318,7 @@ struct EngagementConfig {
     static let regularCloutThreshold = 5
     
     /// OLD: Founder first tap hype multiplier
-    /// DEPRECATED: Use tierVisualHypeMultiplier[.founder] instead
+    /// DEPRECATED: Use tierBurstMultiplier[.founder] instead
     static let founderFirstTapMultiplier = 20
     
     /// OLD: Founder first tap clout bonus
@@ -264,28 +336,32 @@ extension EngagementConfig {
     
     /// Validate engagement configuration on app launch
     static func validate() -> String {
-        var report = "✅ ENGAGEMENT CONFIG VALIDATION\n\n"
+        var report = "✅ ENGAGEMENT CONFIG VALIDATION (BURST SYSTEM)\n\n"
         
         // Check all tiers have values
         let allTiers: [UserTier] = [.rookie, .rising, .veteran, .influencer,
-                                     .elite, .partner, .legendary, .topCreator, .founder]
+                                     .ambassador, .elite, .partner, .legendary, .topCreator, .founder]
         
         for tier in allTiers {
-            let visualHype = getVisualHypeMultiplier(for: tier)
-            let baseClout = getBaseClout(for: tier)
+            let regularHype = getVisualHypeMultiplier(for: tier, isBurst: false)
+            let burstHype = getVisualHypeMultiplier(for: tier, isBurst: true)
+            let regularClout = getBaseClout(for: tier, isBurst: false)
+            let burstClout = getBaseClout(for: tier, isBurst: true)
             let maxClout = getMaxCloutPerUserPerVideo(for: tier)
-            let firstTapBonus = hasFirstTapBonus(tier: tier)
+            let burstEligible = isBurstEligible(tier: tier)
             
             report += "→ \(tier.rawValue.capitalized):\n"
-            report += "  Visual: +\(visualHype) hypes/tap\n"
-            report += "  Clout: \(baseClout) base/tap\n"
+            report += "  Regular Tap: +\(regularHype) hype, \(regularClout) clout\n"
+            report += "  Long Press:  +\(burstHype) hype, \(burstClout) clout\n"
             report += "  Cap: \(maxClout) max/video\n"
-            report += "  First Tap Bonus: \(firstTapBonus ? "YES (2x)" : "NO")\n\n"
+            report += "  Burst Eligible: \(burstEligible ? "YES" : "NO")\n\n"
         }
         
         report += "🎯 Anti-Spam Settings:\n"
         report += "→ Max taps/user/video: \(maxEngagementsPerUserPerVideo)\n"
         report += "→ Max clout/video: \(maxTotalCloutPerVideo)\n"
+        report += "→ Burst hype cost: \(burstHypeCostMultiplier)x regular\n"
+        report += "→ Long press duration: \(longPressDuration)s\n"
         report += "→ Diminishing starts: Tap 4 (90%)\n"
         report += "→ Diminishing floor: Tap 9+ (40%)\n\n"
         
