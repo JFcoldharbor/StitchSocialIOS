@@ -20,6 +20,8 @@ struct ThreadComposer: View {
     let recordingContext: RecordingContext
     let aiResult: VideoAnalysisResult?
     let recordingSource: String
+    let trimStartTime: TimeInterval?
+    let trimEndTime: TimeInterval?
     let onVideoCreated: (CoreVideoMetadata) -> Void
     let onCancel: () -> Void
     
@@ -362,6 +364,8 @@ struct ThreadComposer: View {
                     recordingContext: recordingContext,
                     userID: currentUserID,
                     userTier: currentUserTier,
+                    trimStartTime: trimStartTime,
+                    trimEndTime: trimEndTime,
                     manualTitle: trimmedTitle.isEmpty ? nil : trimmedTitle,
                     manualDescription: trimmedDescription.isEmpty ? nil : trimmedDescription,
                     taggedUserIDs: taggedUserIDs,
@@ -542,10 +546,3 @@ extension RecordingContext {
     }
 }
 
-#Preview {
-    ThreadComposer(
-        recordedVideoURL: URL(string: "file://test.mp4")!,
-        recordingContext: .newThread, aiResult: nil, recordingSource: "inApp",
-        onVideoCreated: { _ in }, onCancel: { }
-    )
-}

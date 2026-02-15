@@ -95,6 +95,8 @@ struct RecordingView: View {
                         recordingContext: controller.recordingContext,
                         aiResult: controller.aiAnalysisResult,
                         recordingSource: currentRecordingSource,
+                        trimStartTime: editState.hasTrim ? editState.trimStartTime : nil,
+                        trimEndTime: editState.hasTrim ? editState.trimEndTime : nil,
                         onVideoCreated: { metadata in
                             // FIXED: Pop nav stack FIRST, then notify parent
                             // Without this, fullScreenCover won't dismiss because

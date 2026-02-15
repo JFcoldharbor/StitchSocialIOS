@@ -5,9 +5,17 @@
 //  Layer 8: Views - Authentication Interface
 //  Dependencies: AuthService, StitchColors
 //  FIXED: Proper keyboard handling and text field visibility
+//  UPDATED: Added Terms & Conditions + Safety Policy acceptance checkbox
+//           Saves acceptedTermsAt / acceptedTermsVersion to Firestore user doc on auth
+//
+//  CACHING NOTE: acceptedTermsAt is a one-time write per login session.
+//  If you add a "force re-accept on policy update" flow later, cache the
+//  accepted version string in UserDefaults to avoid a Firestore read on every
+//  cold launch. Add that to your caching optimization file when implemented.
 //
 
 import SwiftUI
+import FirebaseFirestore
 
 struct LoginView: View {
     
@@ -21,6 +29,7 @@ struct LoginView: View {
     @State private var displayName: String = ""
     @State private var confirmPassword: String = ""
     @State private var currentMode: AuthMode = .signIn
+    @State private var acceptedTerms: Bool = false
     
     // MARK: - UI State
     @State private var isLoading: Bool = false
@@ -29,6 +38,14 @@ struct LoginView: View {
     
     // MARK: - Focus State for Keyboard Management
     @FocusState private var focusedField: Field?
+    
+    // MARK: - Legal URLs
+    private let termsURL = URL(string: "https://stitchsocial.me/privacy")!
+    private let safetyURL = URL(string: "https://stitchsocial.me/privacy")!
+    private let privacyURL = URL(string: "https://stitchsocial.me/privacy")!
+    
+    // MARK: - Terms Version (bump when policies change to force re-acceptance)
+    private let currentTermsVersion = "1.0"
     
     enum Field: Hashable {
         case email
@@ -84,6 +101,10 @@ struct LoginView: View {
                         
                         // Authentication form
                         authenticationForm
+                            .padding(.horizontal, 24)
+                        
+                        // Terms acceptance checkbox + legal links
+                        termsAcceptanceView
                             .padding(.horizontal, 24)
                         
                         // Action buttons
@@ -284,15 +305,100 @@ struct LoginView: View {
         .padding(.vertical, 20)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(0.6)) // Increased opacity for better visibility
+                .fill(Color.black.opacity(0.6))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16)
-                        .stroke(Color.white.opacity(0.4), lineWidth: 1) // Increased stroke opacity
+                        .stroke(Color.white.opacity(0.4), lineWidth: 1)
                 )
         )
         .opacity(animateWelcome ? 1.0 : 0.0)
         .offset(y: animateWelcome ? 0 : 20)
         .animation(.easeInOut(duration: 0.8).delay(0.6), value: animateWelcome)
+    }
+    
+    // MARK: - Terms Acceptance View
+    private var termsAcceptanceView: some View {
+        VStack(spacing: 12) {
+            // Checkbox row
+            Button(action: { acceptedTerms.toggle() }) {
+                HStack(alignment: .top, spacing: 12) {
+                    // Checkbox
+                    Image(systemName: acceptedTerms ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 22))
+                        .foregroundColor(acceptedTerms ? StitchColors.primary : StitchColors.textSecondary)
+                    
+                    // Agreement text with tappable links
+                    agreementText
+                }
+            }
+            .buttonStyle(.plain)
+            
+            // Legal links row
+            HStack(spacing: 16) {
+                Link(destination: termsURL) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 10))
+                        Text("Terms")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(StitchColors.primary)
+                }
+                
+                Link(destination: safetyURL) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "shield.checkered")
+                            .font(.system(size: 10))
+                        Text("Safety")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(StitchColors.primary)
+                }
+                
+                Link(destination: privacyURL) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "lock.shield")
+                            .font(.system(size: 10))
+                        Text("Privacy")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundColor(StitchColors.primary)
+                }
+            }
+        }
+        .opacity(animateWelcome ? 1.0 : 0.0)
+        .offset(y: animateWelcome ? 0 : 20)
+        .animation(.easeInOut(duration: 0.8).delay(0.7), value: animateWelcome)
+    }
+    
+    // MARK: - Agreement Text
+    private var agreementText: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("I agree to the ")
+                .font(.system(size: 13))
+                .foregroundColor(StitchColors.textSecondary)
+            +
+            Text("Terms & Conditions")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(StitchColors.primary)
+            +
+            Text(", ")
+                .font(.system(size: 13))
+                .foregroundColor(StitchColors.textSecondary)
+            +
+            Text("Safety Policy")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(StitchColors.primary)
+            +
+            Text(", and ")
+                .font(.system(size: 13))
+                .foregroundColor(StitchColors.textSecondary)
+            +
+            Text("Privacy Policy")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(StitchColors.primary)
+        }
+        .multilineTextAlignment(.leading)
     }
     
     // MARK: - Password Requirements View
@@ -336,6 +442,14 @@ struct LoginView: View {
             .opacity(animateWelcome ? 1.0 : 0.0)
             .offset(y: animateWelcome ? 0 : 20)
             .animation(.easeInOut(duration: 0.8).delay(0.8), value: animateWelcome)
+            
+            // Terms reminder if not accepted
+            if !acceptedTerms {
+                Text("Please accept the Terms & Conditions to continue")
+                    .font(.system(size: 11))
+                    .foregroundColor(StitchColors.textSecondary.opacity(0.7))
+                    .multilineTextAlignment(.center)
+            }
         }
     }
     
@@ -429,8 +543,10 @@ struct LoginView: View {
         }
     }
     
-    // MARK: - Form Validation
+    // MARK: - Form Validation (now requires acceptedTerms)
     private var isFormValid: Bool {
+        guard acceptedTerms else { return false }
+        
         switch currentMode {
         case .signIn:
             return isValidEmail(email) && password.count >= 6
@@ -468,6 +584,22 @@ struct LoginView: View {
                     }
                 }
                 
+                // Post-login setup: developer bypass + auto-join official community
+                if let firebaseUser = authService.currentUser {
+                    // Set developer email for subscription bypass
+                    SubscriptionService.shared.setCurrentUserEmail(email)
+                    
+                    // Save terms acceptance to Firestore (single batched write)
+                    await saveTermsAcceptance(userID: firebaseUser.id)
+                    
+                    // Auto-join Stitch Social official community
+                    await CommunityService.shared.autoJoinOfficialCommunity(
+                        userID: firebaseUser.id,
+                        username: firebaseUser.username,
+                        displayName: firebaseUser.displayName
+                    )
+                }
+                
                 // Auto-dismiss success after 2 seconds
                 try await Task.sleep(nanoseconds: 2_000_000_000)
                 await MainActor.run {
@@ -484,12 +616,37 @@ struct LoginView: View {
         }
     }
     
+    // MARK: - Save Terms Acceptance to Firestore
+    /// Writes acceptedTermsAt + version to user doc in a single merge write.
+    /// No caching needed here — this is a one-time write per auth session.
+    /// If you later need to CHECK acceptance on app launch, cache the version
+    /// in UserDefaults to avoid a Firestore read every cold start.
+    private func saveTermsAcceptance(userID: String) async {
+        let db = Firestore.firestore()
+        let userRef = db.collection("users").document(userID)
+        
+        let termsData: [String: Any] = [
+            "acceptedTermsAt": FieldValue.serverTimestamp(),
+            "acceptedTermsVersion": currentTermsVersion,
+            "acceptedSafetyPolicy": true,
+            "acceptedPrivacyPolicy": true
+        ]
+        
+        do {
+            try await userRef.setData(termsData, merge: true)
+            print("✅ Terms acceptance saved for user: \(userID)")
+        } catch {
+            print("❌ Failed to save terms acceptance: \(error.localizedDescription)")
+        }
+    }
+    
     private func clearForm() {
         email = ""
         password = ""
         username = ""
         displayName = ""
         confirmPassword = ""
+        acceptedTerms = false
         focusedField = nil
     }
     
@@ -564,15 +721,15 @@ struct StitchTextFieldStyle: TextFieldStyle {
             .padding(.vertical, 12)
             .background(
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.black.opacity(0.6)) // Increased opacity for better visibility
+                    .fill(Color.black.opacity(0.6))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.4), lineWidth: 1) // Increased stroke opacity
+                            .stroke(Color.white.opacity(0.4), lineWidth: 1)
                     )
             )
             .foregroundColor(.white)
             .font(.system(size: 16))
-            .accentColor(StitchColors.primary) // Cursor color
+            .accentColor(StitchColors.primary)
     }
 }
 

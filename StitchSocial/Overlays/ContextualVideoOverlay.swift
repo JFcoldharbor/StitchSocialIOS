@@ -95,7 +95,7 @@ struct ContextualVideoOverlay: View {
     @State private var showingViewers = false
     @State private var selectedUserID: String? {
         didSet {
-            print("ðŸ” STATE: selectedUserID changed from \(oldValue ?? "nil") to \(selectedUserID ?? "nil")")
+            print("Ã°Å¸â€Â STATE: selectedUserID changed from \(oldValue ?? "nil") to \(selectedUserID ?? "nil")")
         }
     }
     
@@ -192,7 +192,7 @@ struct ContextualVideoOverlay: View {
             HStack {
                 Spacer()
                 VStack(spacing: 12) {
-                    // ⭐ REMOVED: Top Spacer() - moves share button down
+                    // â­ REMOVED: Top Spacer() - moves share button down
                     ShareButton(
                         video: video,
                         creatorUsername: displayCreatorName,
@@ -203,6 +203,148 @@ struct ContextualVideoOverlay: View {
                 }
             }
             .padding(.trailing, 12)
+        }
+    }
+    
+    // MARK: - Compact Carousel Overlay (Card-sized with engagement buttons)
+    private var compactCarouselOverlay: some View {
+        ZStack {
+            // Top-left: creator pill
+            VStack {
+                HStack {
+                    Button {
+                        selectedUserID = video.creatorID
+                        NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            showingProfileFullscreen = true
+                            onAction?(.profile(video.creatorID))
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(temperatureColor)
+                                .frame(width: 4, height: 4)
+                            Text(displayCreatorName)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color.black.opacity(0.4))
+                        )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    Spacer()
+                    
+                    // Share button top-right
+                    ShareButton(
+                        video: video,
+                        creatorUsername: displayCreatorName,
+                        threadID: video.threadID ?? video.id,
+                        size: .small
+                    )
+                }
+                .padding(.top, 10)
+                .padding(.horizontal, 10)
+                Spacer()
+            }
+            
+            // Bottom: title + compact action row
+            VStack(spacing: 0) {
+                Spacer()
+                
+                // Gradient scrim for readability
+                LinearGradient(
+                    colors: [.clear, .black.opacity(0.5), .black.opacity(0.7)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 140)
+                .allowsHitTesting(false)
+                
+                // Title
+                HStack {
+                    Text(currentTitle)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 1)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
+                .background(Color.black.opacity(0.5))
+                
+                // Compact action row: Cool | Hype | Stitch/Spinoff
+                HStack(alignment: .center, spacing: 0) {
+                    // Cool button
+                    VStack(spacing: 2) {
+                        ProgressiveCoolButton(
+                            videoID: video.id,
+                            creatorID: video.creatorID,
+                            currentCoolCount: videoEngagement?.coolCount ?? 0,
+                            currentUserID: currentUserID ?? "",
+                            userTier: authService.currentUser?.tier ?? .rookie,
+                            engagementManager: engagementManager,
+                            iconManager: floatingIconManager
+                        )
+                        .frame(height: 60)
+                    }
+                    .frame(maxWidth: .infinity)
+                    
+                    // Hype button
+                    VStack(spacing: 2) {
+                        ProgressiveHypeButton(
+                            videoID: video.id,
+                            creatorID: video.creatorID,
+                            currentHypeCount: videoEngagement?.hypeCount ?? 0,
+                            currentUserID: currentUserID ?? "",
+                            userTier: authService.currentUser?.tier ?? .rookie,
+                            engagementManager: engagementManager,
+                            iconManager: floatingIconManager
+                        )
+                        .frame(height: 60)
+                    }
+                    .frame(maxWidth: .infinity)
+                    
+                    // Stitch / Spinoff button
+                    if canShowReplyOrSpinoff {
+                        VStack(spacing: 2) {
+                            Button {
+                                showingStitchRecording = true
+                                if shouldShowSpinoff {
+                                    onAction?(.spinOff)
+                                } else {
+                                    onAction?(.stitch)
+                                }
+                            } label: {
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.black.opacity(0.3))
+                                        .frame(width: 36, height: 36)
+                                    Circle()
+                                        .stroke(stitchButtonRingColor.opacity(0.4), lineWidth: 1.2)
+                                        .frame(width: 36, height: 36)
+                                    Image(systemName: stitchButtonIcon)
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundColor(.white)
+                                }
+                            }
+                            .buttonStyle(ContextualScaleButtonStyle())
+                            Text(stitchButtonLabel)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.black.opacity(0.5))
+            }
         }
     }
     
@@ -223,7 +365,7 @@ struct ContextualVideoOverlay: View {
             HStack {
                 Spacer()
                 VStack(spacing: 12) {
-                    // ⭐ REMOVED: Top Spacer() - moves share button down
+                    // â­ REMOVED: Top Spacer() - moves share button down
                     ShareButton(
                         video: video,
                         creatorUsername: displayCreatorName,
@@ -259,20 +401,20 @@ struct ContextualVideoOverlay: View {
         if context == .carousel {
             // In carousel, can reply up to depth 19 (so reply creates depth 20 max)
             guard video.conversationDepth < 19 else {
-                print("🚫 CAROUSEL: At max depth - show spinoff instead")
+                print("ðŸš« CAROUSEL: At max depth - show spinoff instead")
                 return false
             }
             
             // PARTICIPANT CHECK: Only conversation participants can reply
             // Third parties should see spinoff, not reply
             if !isConversationParticipant {
-                print("🚫 CAROUSEL: Not a participant - show spinoff instead")
+                print("ðŸš« CAROUSEL: Not a participant - show spinoff instead")
                 return false
             }
             
             // Participant CAN reply, but NOT to their own video
             if isUserVideo {
-                print("🚫 CAROUSEL: Own video - no self-stitch in conversations")
+                print("ðŸš« CAROUSEL: Own video - no self-stitch in conversations")
                 return false
             }
             
@@ -281,12 +423,12 @@ struct ContextualVideoOverlay: View {
         
         // Original logic for other contexts
         guard video.conversationDepth <= 1 else {
-            print("🚫 STITCH: Blocked - depth \(video.conversationDepth) > 1")
+            print("ðŸš« STITCH: Blocked - depth \(video.conversationDepth) > 1")
             return false
         }
         if isUserVideo {
             let allowed = allowsSelfReply
-            print("🎬 STITCH: Own video - context: \(context), allowsSelfReply: \(allowed)")
+            print("ðŸŽ¬ STITCH: Own video - context: \(context), allowsSelfReply: \(allowed)")
             return allowed
         }
         return true
@@ -343,7 +485,7 @@ struct ContextualVideoOverlay: View {
     }
     
     private var shouldShowMinimalDisplay: Bool {
-        return context == .discovery || context == .carousel
+        return context == .discovery
     }
     
     private var shouldShowFullDisplay: Bool {
@@ -406,7 +548,7 @@ struct ContextualVideoOverlay: View {
                             ))
                         }
                     } catch {
-                        print("âš ï¸ CACHE: Failed to load user \(userID): \(error)")
+                        print("Ã¢Å¡Â Ã¯Â¸Â CACHE: Failed to load user \(userID): \(error)")
                     }
                     return nil
                 }
@@ -423,7 +565,7 @@ struct ContextualVideoOverlay: View {
         await MainActor.run {
             NotificationCenter.default.post(name: NSNotification.Name("UserDataCacheUpdated"), object: nil)
         }
-        print("âœ… CACHE: Loaded \(userIDs.count) users concurrently")
+        print("Ã¢Å“â€¦ CACHE: Loaded \(userIDs.count) users concurrently")
     }
     
     private static func clearExpiredCache() {
@@ -480,7 +622,9 @@ struct ContextualVideoOverlay: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                if shouldShowMinimalDisplay {
+                if context == .carousel {
+                    compactCarouselOverlay
+                } else if shouldShowMinimalDisplay {
                     minimalDiscoveryOverlay
                 } else {
                     fullContextualOverlay(geometry: geometry)
@@ -511,12 +655,12 @@ struct ContextualVideoOverlay: View {
                 viewingUserID: userIDToShow
             )
                 .onAppear {
-                    print("ðŸ“± FULLSCREEN: CreatorProfileView appeared for userID: \(userIDToShow)")
+                    print("Ã°Å¸â€œÂ± FULLSCREEN: CreatorProfileView appeared for userID: \(userIDToShow)")
                     NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                     NotificationCenter.default.post(name: NSNotification.Name("FullscreenProfileOpened"), object: nil)
                 }
                 .onDisappear {
-                    print("ðŸ“± FULLSCREEN: CreatorProfileView disappeared")
+                    print("Ã°Å¸â€œÂ± FULLSCREEN: CreatorProfileView disappeared")
                     selectedUserID = nil
                     NotificationCenter.default.post(name: NSNotification.Name("FullscreenProfileClosed"), object: nil)
                 }
@@ -556,7 +700,7 @@ struct ContextualVideoOverlay: View {
                     currentVideo = updatedVideo
                     currentTitle = updatedVideo.title
                     videoDescription = updatedVideo.description.isEmpty ? nil : updatedVideo.description
-                    print("âœï¸ EDIT: Video updated - \(updatedVideo.title)")
+                    print("Ã¢Å“ÂÃ¯Â¸Â EDIT: Video updated - \(updatedVideo.title)")
                 },
                 onDismiss: {
                     showingEditSheet = false
@@ -682,12 +826,12 @@ struct ContextualVideoOverlay: View {
                     isUserVideo: isUserVideo,
                     canEdit: canEditVideo,
                     onViewersTap: {
-                        print("ðŸ‘ï¸ VIEWS: Tapped views button")
+                        print("Ã°Å¸â€˜ÂÃ¯Â¸Â VIEWS: Tapped views button")
                         showingViewers = true
                         onAction?(.viewers)
                     },
                     onEditTap: {
-                        print("âœï¸ EDIT: Opening edit sheet from profile")
+                        print("Ã¢Å“ÂÃ¯Â¸Â EDIT: Opening edit sheet from profile")
                         showingEditSheet = true
                         onAction?(.edit)
                     }
@@ -821,10 +965,10 @@ struct ContextualVideoOverlay: View {
             Self.getCachedUserData(userID: userID) == nil
         }
         guard !usersToLoad.isEmpty else {
-            print("âœ… PRELOAD: All users already cached")
+            print("Ã¢Å“â€¦ PRELOAD: All users already cached")
             return
         }
-        print("ðŸŽ¬ PRELOAD: Loading \(usersToLoad.count) users eagerly")
+        print("Ã°Å¸Å½Â¬ PRELOAD: Loading \(usersToLoad.count) users eagerly")
         await Self.loadUserDataBatch(userIDs: usersToLoad)
     }
     
@@ -855,7 +999,7 @@ struct ContextualVideoOverlay: View {
                     engagement.viewCount = viewCount
                     engagement.lastEngagementAt = Date()
                     videoEngagement = engagement
-                    print("ðŸ”„ ENGAGEMENT: Updated counts - H:\(hypeCount) C:\(coolCount) V:\(viewCount)")
+                    print("Ã°Å¸â€â€ž ENGAGEMENT: Updated counts - H:\(hypeCount) C:\(coolCount) V:\(viewCount)")
                 }
             }
         }
@@ -888,9 +1032,9 @@ struct ContextualVideoOverlay: View {
                 currentVideo = freshVideo
                 currentTitle = freshVideo.title
             }
-            print("âœ… CONTEXTUAL OVERLAY: Loaded fresh engagement data - \(freshVideo.hypeCount) hypes, \(freshVideo.coolCount) cools, \(freshVideo.viewCount) views")
+            print("Ã¢Å“â€¦ CONTEXTUAL OVERLAY: Loaded fresh engagement data - \(freshVideo.hypeCount) hypes, \(freshVideo.coolCount) cools, \(freshVideo.viewCount) views")
         } catch {
-            print("âš ï¸ CONTEXTUAL OVERLAY: Failed to load engagement data - \(error)")
+            print("Ã¢Å¡Â Ã¯Â¸Â CONTEXTUAL OVERLAY: Failed to load engagement data - \(error)")
         }
     }
     
@@ -924,7 +1068,7 @@ struct ContextualVideoOverlay: View {
                 participantCount: 1,
                 stitchCount: video.replyCount
             )
-            print("ðŸŽ¬ STITCH CONTEXT: Stitching to THREAD (depth 0) â†’ will create depth 1 child")
+            print("Ã°Å¸Å½Â¬ STITCH CONTEXT: Stitching to THREAD (depth 0) Ã¢â€ â€™ will create depth 1 child")
             return .stitchToThread(threadID: video.id, threadInfo: threadInfo)
         } else {
             let videoInfo = CameraVideoInfo(
@@ -933,7 +1077,7 @@ struct ContextualVideoOverlay: View {
                 creatorID: video.creatorID,
                 thumbnailURL: video.thumbnailURL
             )
-            print("ðŸŽ¬ STITCH CONTEXT: Replying to CHILD (depth \(video.conversationDepth)) â†’ will create depth \(video.conversationDepth + 1)")
+            print("Ã°Å¸Å½Â¬ STITCH CONTEXT: Replying to CHILD (depth \(video.conversationDepth)) Ã¢â€ â€™ will create depth \(video.conversationDepth + 1)")
             return .replyToVideo(videoID: video.id, videoInfo: videoInfo)
         }
     }

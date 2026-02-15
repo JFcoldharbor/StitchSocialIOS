@@ -32,6 +32,33 @@ struct UserProgressionCalculator {
         return nil
     }
     
+    /// Process tier advancement and trigger side effects (community auto-create)
+    /// Call this instead of calculateTierAdvancement when you need side effects
+    @MainActor
+    static func processTierAdvancement(
+        currentClout: Int,
+        currentTier: UserTier,
+        userID: String,
+        username: String,
+        displayName: String
+    ) async -> UserTier? {
+        guard let newTier = calculateTierAdvancement(currentClout: currentClout, currentTier: currentTier) else {
+            return nil
+        }
+        
+        // Auto-create inactive community when hitting Influencer+
+        if Community.canCreateCommunity(tier: newTier) && !Community.canCreateCommunity(tier: currentTier) {
+            await CommunityService.shared.autoCreateCommunity(
+                creatorID: userID,
+                creatorUsername: username,
+                creatorDisplayName: displayName,
+                creatorTier: newTier
+            )
+        }
+        
+        return newTier
+    }
+    
     /// Check if one tier is higher than another
     static func isHigherTier(_ tier1: UserTier, than tier2: UserTier) -> Bool {
         return getTierLevel(tier1) > getTierLevel(tier2)

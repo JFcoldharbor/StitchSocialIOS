@@ -22,6 +22,8 @@ enum StitchNotificationTab: String, CaseIterable {
     case hypes = "hypes"
     case follows = "follows"
     case replies = "replies"
+    case live = "live"
+    case community = "community"
     case system = "system"
     
     var displayName: String {
@@ -31,6 +33,8 @@ enum StitchNotificationTab: String, CaseIterable {
         case .hypes: return "Hypes"
         case .follows: return "Follows"
         case .replies: return "Replies"
+        case .live: return "Live"
+        case .community: return "Community"
         case .system: return "System"
         }
     }
@@ -501,6 +505,8 @@ struct NotificationView: View {
         case .hypes: return "flame.fill"
         case .follows: return "person.badge.plus"
         case .replies: return "bubble.left.and.bubble.right"
+        case .live: return "video.fill"
+        case .community: return "person.3.fill"
         case .system: return "info.circle"
         }
     }
@@ -512,6 +518,8 @@ struct NotificationView: View {
         case .hypes: return "Share videos to get hype from the community!"
         case .follows: return "Keep creating content!"
         case .replies: return "Start conversations by replying to videos."
+        case .live: return "Live stream notifications will appear here."
+        case .community: return "Community activity will show up here."
         case .system: return "System notifications will appear here."
         }
     }

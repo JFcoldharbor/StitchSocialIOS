@@ -136,6 +136,9 @@ enum StitchNotificationType: String, CaseIterable, Codable {
     case milestone = "milestone"
     case tierUpgrade = "tier_upgrade"
     case system = "system"
+    case goLive = "go_live"
+    case communityPost = "community_post"
+    case communityXP = "community_xp"
     
     var displayName: String {
         switch self {
@@ -147,6 +150,9 @@ enum StitchNotificationType: String, CaseIterable, Codable {
         case .milestone: return "Milestone"
         case .tierUpgrade: return "Tier Upgrade"
         case .system: return "System"
+        case .goLive: return "Live"
+        case .communityPost: return "Community"
+        case .communityXP: return "XP"
         }
     }
     
@@ -160,6 +166,9 @@ enum StitchNotificationType: String, CaseIterable, Codable {
         case .milestone: return "trophy.fill"
         case .tierUpgrade: return "arrow.up.circle.fill"
         case .system: return "gear.circle.fill"
+        case .goLive: return "video.fill"
+        case .communityPost: return "bubble.left.and.bubble.right.fill"
+        case .communityXP: return "star.fill"
         }
     }
     
@@ -173,6 +182,9 @@ enum StitchNotificationType: String, CaseIterable, Codable {
         case .milestone: return .yellow
         case .tierUpgrade: return .pink
         case .system: return .gray
+        case .goLive: return .red
+        case .communityPost: return .cyan
+        case .communityXP: return .green
         }
     }
     
@@ -186,12 +198,15 @@ enum StitchNotificationType: String, CaseIterable, Codable {
         case .milestone: return "milestone reached"
         case .tierUpgrade: return "tier upgraded"
         case .system: return "system notification"
+        case .goLive: return "is live now"
+        case .communityPost: return "posted in community"
+        case .communityXP: return "XP earned"
         }
     }
 }
 
 /// Core notification document for Firebase
-struct StitchNotification: Identifiable {  // ✅
+struct StitchNotification: Identifiable {  // âœ…
     let id: String
     let recipientID: String
     let senderID: String
@@ -211,7 +226,7 @@ struct StitchNotification: Identifiable {  // ✅
         type: StitchNotificationType,
         title: String,
         message: String,
-        payload: [String: Any] = [:],  // ✅ Changed from [String: String]
+        payload: [String: Any] = [:],  // âœ… Changed from [String: String]
         isRead: Bool = false,
         createdAt: Date = Date(),
         readAt: Date? = nil,
@@ -266,7 +281,7 @@ struct NotificationToast: Codable, Identifiable {
 
 // MARK: - Content System Types
 
-/// Video content hierarchy - Thread → Child → Stepchild
+/// Video content hierarchy - Thread â†’ Child â†’ Stepchild
 enum ContentType: String, CaseIterable, Codable {
     case thread = "thread"        // Original video that starts conversation
     case child = "child"          // Direct reply to thread

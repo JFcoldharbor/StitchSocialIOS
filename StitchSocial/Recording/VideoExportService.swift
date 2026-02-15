@@ -155,31 +155,8 @@ class VideoExportService: ObservableObject {
     
     /// Check if trim values actually differ from video duration
     private func hasActualTrim(editState: VideoEditState, asset: AVAsset) -> Bool {
-        // Check if trim start is not at beginning
-        let trimStartDiffers = editState.trimStartTime > 0.1
-        
-        // For trim end, we can't easily check against duration synchronously
-        // So we consider it a trim if trimEnd is set and trimStart differs,
-        // or if trimEnd is significantly different from a reasonable max (e.g., editState has original duration)
-        
-        // If trim start is modified, that's definitely a trim
-        if trimStartDiffers {
-            return true
-        }
-        
-        // Check if the edit state indicates trimming occurred
-        // This relies on VideoEditState tracking original vs edited values
-        // For safety, if trimEndTime is less than a very long video assumption, check it
-        let trimEndTime = editState.trimEndTime
-        
-        // If trimEnd is 0 or very small, no trim (or invalid state)
-        if trimEndTime < 0.5 {
-            return false
-        }
-        
-        // We'll assume no trim if start is 0 and we can't verify end
-        // The caller (VideoEditState) should set these properly
-        return false
+        // Use VideoEditState's own trim detection — it knows the original duration
+        return editState.hasTrim
     }
     
     // MARK: - PHASE 4: Passthrough Export (Zero Quality Loss)
@@ -272,7 +249,7 @@ class VideoExportService: ObservableObject {
         asset: AVAsset,
         editState: VideoEditState
     ) async throws -> URL {
-        print("🎨 EXPORT: Full process mode - re-encoding with edits")
+        print("ðŸŽ¨ EXPORT: Full process mode - re-encoding with edits")
         
         // Create composition with trim
         let composition = try await createComposition(
@@ -281,23 +258,16 @@ class VideoExportService: ObservableObject {
             trimEnd: editState.trimEndTime
         )
         
-        // FIXED: Always create a video composition with explicit transform handling
-        // Previously only created one when a filter was applied, which caused
-        // preferredTransform to be applied as metadata-only — resulting in
-        // black bars / offset rendering for portrait gallery videos
+        // Apply filter if selected
         let videoComposition: AVVideoComposition?
-        
         if let filter = editState.selectedFilter {
-            // Apply filter composition (already handles transform correctly)
             videoComposition = try await createFilterVideoComposition(
                 filter: filter,
                 intensity: editState.filterIntensity,
                 composition: composition
             )
         } else {
-            // No filter, but still need explicit transform composition
-            // to prevent black bar / offset issues with gallery videos
-            videoComposition = try await createTransformVideoComposition(composition: composition)
+            videoComposition = nil
         }
         
         // Export with quality settings
@@ -307,51 +277,6 @@ class VideoExportService: ObservableObject {
         )
         
         return outputURL
-    }
-    
-    // MARK: - 🆕 Transform-Only Video Composition
-    
-    /// Creates an AVVideoComposition that explicitly applies the video track's transform
-    /// without any filter processing. This ensures correct orientation rendering
-    /// for all video orientations (portrait, landscape, square).
-    private func createTransformVideoComposition(
-        composition: AVMutableComposition
-    ) async throws -> AVVideoComposition? {
-        
-        guard let videoTrack = try await composition.loadTracks(withMediaType: .video).first else {
-            return nil
-        }
-        
-        let naturalSize = try await videoTrack.load(.naturalSize)
-        let preferredTransform = try await videoTrack.load(.preferredTransform)
-        
-        // Calculate correct render size from transform
-        let transformedSize = naturalSize.applying(preferredTransform)
-        let renderSize = CGSize(
-            width: abs(transformedSize.width),
-            height: abs(transformedSize.height)
-        )
-        
-        // Read source frame rate
-        let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
-        let sourceTimescale: Int32 = nominalFrameRate > 0 ? Int32(round(nominalFrameRate)) : 30
-        
-        let videoComp = AVMutableVideoComposition()
-        videoComp.renderSize = renderSize
-        videoComp.frameDuration = CMTime(value: 1, timescale: sourceTimescale)
-        
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: composition.duration)
-        
-        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
-        layerInstruction.setTransform(preferredTransform, at: .zero)
-        
-        instruction.layerInstructions = [layerInstruction]
-        videoComp.instructions = [instruction]
-        
-        print("📐 EXPORT: Created transform composition - render size: \(renderSize), fps: \(nominalFrameRate)")
-        
-        return videoComp
     }
     
     // MARK: - Composition Creation
@@ -411,10 +336,6 @@ class VideoExportService: ObservableObject {
     // MARK: - PHASE 4: Filter Video Composition
     
     /// Create AVVideoComposition for applying filters
-    /// FIXED: Uses instruction-based composition instead of closure-based init
-    /// The closure-based AVMutableVideoComposition(asset:applyingCIFiltersWithHandler:)
-    /// can produce black frames because it overrides transform handling and the
-    /// sourceImage extent doesn't match the renderSize for rotated videos.
     private func createFilterVideoComposition(
         filter: VideoFilter,
         intensity: Double,
@@ -435,95 +356,20 @@ class VideoExportService: ObservableObject {
             height: abs(transformedSize.height)
         )
         
-        // Read source frame rate
-        let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
-        let sourceTimescale: Int32 = nominalFrameRate > 0 ? Int32(round(nominalFrameRate)) : 30
-        let frameDuration = CMTime(value: 1, timescale: sourceTimescale)
-        
-        print("🎬 EXPORT: Filter composition - render size: \(renderSize), fps: \(nominalFrameRate)")
-        
-        // Build the CIFilter to apply
-        guard let ciFilterName = filter.ciFilterName else {
-            // No actual CI filter needed — fall back to transform-only composition
-            return try await createTransformVideoComposition(composition: composition)
+        // Create video composition with CIFilter
+        let videoComposition = AVMutableVideoComposition(asset: composition) { request in
+            let sourceImage = request.sourceImage.clampedToExtent()
+            
+            // Apply filter using generic method
+            let outputImage = self.applyCIFilter(filter, to: sourceImage, intensity: intensity)
+            
+            request.finish(with: outputImage.cropped(to: request.sourceImage.extent), context: nil)
         }
         
-        // Use the safer instruction-based approach with a custom compositor class
-        // that applies both the transform AND the CIFilter
-        let videoComposition = AVMutableVideoComposition()
         videoComposition.renderSize = renderSize
-        videoComposition.frameDuration = frameDuration
+        videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
         
-        // Set up a custom compositor via the closure-based API but with correct sizing
-        // We need to work with the fact that the source frames come in at naturalSize
-        // orientation and we need to apply the transform + filter
-        let filterIntensity = intensity
-        let ciContext = self.ciContext
-        
-        videoComposition.customVideoCompositorClass = nil // Use default
-        
-        // Create instruction with layer instruction that applies the transform
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: composition.duration)
-        
-        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
-        layerInstruction.setTransform(preferredTransform, at: .zero)
-        
-        instruction.layerInstructions = [layerInstruction]
-        videoComposition.instructions = [instruction]
-        
-        // Now apply the CIFilter using the colorPrimaries approach
-        // This applies the filter as a post-processing step AFTER the transform
-        videoComposition.colorPrimaries = nil // Use default
-        
-        // Actually, we need to use the CIFilter-based compositor
-        // The safest approach: use AVMutableVideoComposition with both instructions AND a filter
-        // Since we can't mix instructions with the closure API, we use a two-pass approach:
-        // Step 1: Export with correct transform (instruction-based)
-        // Step 2: Apply filter on the correctly-oriented output
-        
-        // However, for efficiency let's use AVVideoComposition(asset:) with the handler
-        // BUT set the renderSize BEFORE the handler processes frames
-        // The key insight: we need to NOT set renderSize/frameDuration after init
-        // because the closure-based init sets them automatically
-        
-        let filterVideoComposition = AVMutableVideoComposition(asset: composition) { request in
-            var sourceImage = request.sourceImage.clampedToExtent()
-            
-            // Apply the CIFilter
-            if let ciFilter = CIFilter(name: ciFilterName) {
-                ciFilter.setValue(sourceImage, forKey: kCIInputImageKey)
-                
-                if ciFilter.inputKeys.contains(kCIInputIntensityKey) {
-                    ciFilter.setValue(filterIntensity, forKey: kCIInputIntensityKey)
-                }
-                
-                if let output = ciFilter.outputImage {
-                    sourceImage = output
-                }
-            }
-            
-            // Crop to the original source extent to prevent infinite extent issues
-            let output = sourceImage.cropped(to: request.sourceImage.extent)
-            request.finish(with: output, context: ciContext)
-        }
-        
-        // The closure-based init auto-calculates renderSize from the composition
-        // including the preferredTransform. We override only frameDuration.
-        filterVideoComposition.frameDuration = frameDuration
-        
-        // Verify the auto-calculated render size is correct
-        let autoRenderSize = filterVideoComposition.renderSize
-        print("📐 EXPORT: Auto render size: \(autoRenderSize), expected: \(renderSize)")
-        
-        // If the auto-calculated size is wrong (e.g. landscape when should be portrait),
-        // force the correct size
-        if abs(autoRenderSize.width - renderSize.width) > 1 || abs(autoRenderSize.height - renderSize.height) > 1 {
-            print("⚠️ EXPORT: Auto render size mismatch — forcing correct size")
-            filterVideoComposition.renderSize = renderSize
-        }
-        
-        return filterVideoComposition
+        return videoComposition
     }
     
     // MARK: - Filter Implementation
@@ -613,34 +459,14 @@ class VideoExportService: ObservableObject {
     
     /// Generate thumbnail from video
     /// PHASE 4: Improved quality settings
-    /// FIXED: Derive maximumSize from actual video dimensions instead of hardcoded 1080x1920
     private func generateThumbnail(from videoURL: URL) async throws -> URL {
         
         let asset = AVAsset(url: videoURL)
         let imageGenerator = AVAssetImageGenerator(asset: asset)
         imageGenerator.appliesPreferredTrackTransform = true
+        imageGenerator.maximumSize = CGSize(width: 1080, height: 1920)
         imageGenerator.requestedTimeToleranceBefore = .zero
         imageGenerator.requestedTimeToleranceAfter = .zero
-        
-        // FIXED: Use actual video dimensions for thumbnail sizing
-        let videoTracks = try await asset.loadTracks(withMediaType: .video)
-        if let track = videoTracks.first {
-            let naturalSize = try await track.load(.naturalSize)
-            let preferredTransform = try await track.load(.preferredTransform)
-            let transformedSize = naturalSize.applying(preferredTransform)
-            let width = abs(transformedSize.width)
-            let height = abs(transformedSize.height)
-            
-            // Scale down to max 1080 on the longest edge while preserving aspect ratio
-            let maxEdge: CGFloat = 1080
-            let scale = min(maxEdge / max(width, height), 1.0)
-            imageGenerator.maximumSize = CGSize(width: width * scale, height: height * scale)
-            
-            print("📐 EXPORT THUMBNAIL: Using actual video size \(Int(width))x\(Int(height))")
-        } else {
-            // Fallback: let AVAssetImageGenerator use natural size
-            imageGenerator.maximumSize = .zero
-        }
         
         // Get video duration
         let duration = try await asset.load(.duration).seconds

@@ -18,6 +18,7 @@ struct CardVideoCarouselView: View {
     let currentUserID: String?
     let directReplies: [CoreVideoMetadata]?
     let onSelectReply: ((CoreVideoMetadata) -> Void)?
+    let onAction: ((ContextualOverlayAction, CoreVideoMetadata) -> Void)?
     
     // MARK: - State
     @State private var currentIndex: Int
@@ -53,7 +54,8 @@ struct CardVideoCarouselView: View {
         startingIndex: Int = 0,
         currentUserID: String? = nil,
         directReplies: [CoreVideoMetadata]? = nil,
-        onSelectReply: ((CoreVideoMetadata) -> Void)? = nil
+        onSelectReply: ((CoreVideoMetadata) -> Void)? = nil,
+        onAction: ((ContextualOverlayAction, CoreVideoMetadata) -> Void)? = nil
     ) {
         self.videos = videos
         self.parentVideo = parentVideo
@@ -61,6 +63,7 @@ struct CardVideoCarouselView: View {
         self.currentUserID = currentUserID
         self.directReplies = directReplies
         self.onSelectReply = onSelectReply
+        self.onAction = onAction
         self._currentIndex = State(initialValue: startingIndex)
     }
     
@@ -115,6 +118,8 @@ struct CardVideoCarouselView: View {
         .gesture(dismissGesture)
         .onAppear {
             hasAppeared = true
+            // Batch cache all carousel videos to reduce per-card Firebase reads
+            CachingService.shared.cacheVideos(videos, priority: .high)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.isPlaying = true
             }
@@ -226,7 +231,10 @@ struct CardVideoCarouselView: View {
                     cardWidth: cardWidth,
                     cardHeight: cardHeight,
                     brandCyan: brandCyan,
-                    brandPurple: brandPurple
+                    brandPurple: brandPurple,
+                    onAction: onAction != nil ? { action in
+                        onAction?(action, video)
+                    } : nil
                 )
                 .id(video.id) // FIX: Force unique identity so player loads correct video URL
                 .scaleEffect(getCardScale(for: index))
@@ -429,6 +437,7 @@ private struct CarouselDiscoveryCard: View {
     let cardHeight: CGFloat
     let brandCyan: Color
     let brandPurple: Color
+    let onAction: ((ContextualOverlayAction) -> Void)?
     
     private let brandPink = Color(red: 0.95, green: 0.4, blue: 0.7)
     
@@ -459,7 +468,7 @@ private struct CarouselDiscoveryCard: View {
                         .transition(.opacity)
                     }
                     
-                    // Minimal overlay when playing — creator name, title, share
+                    // Contextual overlay when playing - hype, cool, stitch, spinoff, share
                     if isPlaying {
                         ContextualVideoOverlay(
                             video: video,
@@ -469,7 +478,7 @@ private struct CarouselDiscoveryCard: View {
                             isVisible: true,
                             actualReplyCount: nil,
                             isConversationParticipant: isConversationParticipant,
-                            onAction: nil
+                            onAction: onAction
                         )
                     } else {
                         // Static bottom overlay when not yet playing

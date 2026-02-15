@@ -181,6 +181,10 @@ class DiscoveryViewModel: ObservableObject {
             case .following:
                 // TODO: Implement following filter
                 threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 40)
+                
+            case .communities:
+                // Communities handled by CommunityListView, not video feed
+                return
             }
             
             let loadedVideos = threads.map { $0.parentVideo }
@@ -287,6 +291,7 @@ enum DiscoveryCategory: String, CaseIterable {
     case recent = "recent"
     case popular = "popular"
     case following = "following"
+    case communities = "communities"
     
     var displayName: String {
         switch self {
@@ -295,6 +300,7 @@ enum DiscoveryCategory: String, CaseIterable {
         case .recent: return "Recent"
         case .popular: return "Popular"
         case .following: return "Following"
+        case .communities: return "Communities"
         }
     }
     
@@ -305,7 +311,13 @@ enum DiscoveryCategory: String, CaseIterable {
         case .recent: return "clock.fill"
         case .popular: return "star.fill"
         case .following: return "person.2.fill"
+        case .communities: return "bubble.left.and.bubble.right.fill"
         }
+    }
+    
+    /// Whether this category shows video content (vs community content)
+    var isVideoCategory: Bool {
+        return self != .communities
     }
 }
 
@@ -342,10 +354,18 @@ struct DiscoveryView: View {
     // NEW: Observe announcement service to pause videos when announcement shows
     @ObservedObject private var announcementService = AnnouncementService.shared
     
+    // MARK: - Community Services
+    @ObservedObject private var communityService = CommunityService.shared
+    
     @State private var selectedCategory: DiscoveryCategory = .all
     @State private var discoveryMode: DiscoveryMode = .swipe
     @State private var currentSwipeIndex: Int = 0
     @State private var showingSearch = false
+    
+    // MARK: - Community State
+    @State private var showingCommunityDetail = false
+    @State private var selectedCommunityItem: CommunityListItem?
+    @State private var hasUnreadCommunities = false
     
     // MARK: - Profile Navigation State
     
@@ -387,12 +407,17 @@ struct DiscoveryView: View {
                 }
                 
                 // Active hashtag filter indicator
-                if let hashtag = viewModel.selectedHashtag {
+                if selectedCategory.isVideoCategory, let hashtag = viewModel.selectedHashtag {
                     hashtagFilterBar(hashtag)
                 }
                 
                 // Content
-                if viewModel.isLoading && viewModel.videos.isEmpty {
+                if selectedCategory == .communities {
+                    // MARK: - Community Content
+                    if let userID = authService.currentUserID {
+                        CommunityListView(userID: userID)
+                    }
+                } else if viewModel.isLoading && viewModel.videos.isEmpty {
                     loadingView
                 } else if let errorMessage = viewModel.errorMessage {
                     errorView(errorMessage)
@@ -408,6 +433,13 @@ struct DiscoveryView: View {
                 await viewModel.loadInitialContent()
             }
             await viewModel.loadTrendingHashtags()
+            
+            // Check for unread communities (lightweight — uses cached list)
+            if let userID = authService.currentUserID {
+                if let communities = try? await communityService.fetchMyCommunities(userID: userID) {
+                    hasUnreadCommunities = communities.contains { $0.unreadCount > 0 || $0.isCreatorLive }
+                }
+            }
         }
         .fullScreenCover(isPresented: $showingSearch) {
             SearchView()
@@ -457,7 +489,9 @@ struct DiscoveryView: View {
                     .foregroundColor(.white)
                 
                 HStack(spacing: 8) {
-                    Text("\(viewModel.filteredVideos.count) videos")
+                    Text(selectedCategory == .communities
+                         ? "\(communityService.myCommunities.count) channels"
+                         : "\(viewModel.filteredVideos.count) videos")
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.6))
                     
@@ -477,24 +511,26 @@ struct DiscoveryView: View {
             Spacer()
             
             HStack(spacing: 16) {
-                // Randomize button
-                Button {
-                    viewModel.randomizeContent()
-                } label: {
-                    Image(systemName: "shuffle")
-                        .font(.title2)
-                        .foregroundColor(.cyan)
-                }
-                
-                // Mode Toggle
-                Button {
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                        discoveryMode = discoveryMode == .grid ? .swipe : .grid
+                // Randomize button (video categories only)
+                if selectedCategory.isVideoCategory {
+                    Button {
+                        viewModel.randomizeContent()
+                    } label: {
+                        Image(systemName: "shuffle")
+                            .font(.title2)
+                            .foregroundColor(.cyan)
                     }
-                } label: {
-                    Image(systemName: discoveryMode.icon)
-                        .font(.title2)
-                        .foregroundColor(discoveryMode == .swipe ? .cyan : .white.opacity(0.7))
+                    
+                    // Mode Toggle
+                    Button {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                            discoveryMode = discoveryMode == .grid ? .swipe : .grid
+                        }
+                    } label: {
+                        Image(systemName: discoveryMode.icon)
+                            .font(.title2)
+                            .foregroundColor(discoveryMode == .swipe ? .cyan : .white.opacity(0.7))
+                    }
                 }
                 
                 Button {
@@ -518,10 +554,19 @@ struct DiscoveryView: View {
                 ForEach(DiscoveryCategory.allCases, id: \.self) { category in
                     Button {
                         selectedCategory = category
-                        Task {
-                            await viewModel.filterBy(category: category)
+                        if category.isVideoCategory {
+                            Task {
+                                await viewModel.filterBy(category: category)
+                            }
+                            currentSwipeIndex = 0
+                        } else if category == .communities {
+                            // Load communities when tab selected
+                            Task {
+                                if let userID = authService.currentUserID {
+                                    _ = try? await communityService.fetchMyCommunities(userID: userID)
+                                }
+                            }
                         }
-                        currentSwipeIndex = 0
                     } label: {
                         VStack(spacing: 8) {
                             HStack(spacing: 4) {
@@ -531,11 +576,26 @@ struct DiscoveryView: View {
                                 Text(category.displayName)
                                     .font(.subheadline)
                                     .fontWeight(selectedCategory == category ? .semibold : .medium)
+                                
+                                // Notification dot for communities
+                                if category == .communities && hasUnreadCommunities && selectedCategory != .communities {
+                                    Circle()
+                                        .fill(Color.pink)
+                                        .frame(width: 7, height: 7)
+                                }
                             }
-                            .foregroundColor(selectedCategory == category ? .cyan : .white.opacity(0.7))
+                            .foregroundColor(
+                                selectedCategory == category
+                                    ? (category == .communities ? .pink : .cyan)
+                                    : (category == .communities ? .pink.opacity(0.7) : .white.opacity(0.7))
+                            )
                             
                             Rectangle()
-                                .fill(selectedCategory == category ? .cyan : .clear)
+                                .fill(
+                                    selectedCategory == category
+                                        ? (category == .communities ? Color.pink : Color.cyan)
+                                        : Color.clear
+                                )
                                 .frame(height: 2)
                         }
                     }

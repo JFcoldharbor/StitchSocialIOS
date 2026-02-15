@@ -221,6 +221,15 @@ class HypeRatingService: ObservableObject {
         return state.currentRating >= cost
     }
     
+    /// Restore optimistically deducted rating when server rejects engagement
+    func restoreRating(_ amount: Double) {
+        state.currentRating = min(maxRating, state.currentRating + amount)
+        state.lastUpdatedAt = Date()
+        currentRating = state.currentRating
+        print("⚡ HYPE RATING: Restored +\(String(format: "%.2f", amount))% (server rejected) → \(String(format: "%.1f", currentRating))%")
+        scheduleSave()
+    }
+    
     // MARK: - Activity Regen Triggers
     
     func receivedHypeOnContent()                { applyRegen(source: .receivedHype) }

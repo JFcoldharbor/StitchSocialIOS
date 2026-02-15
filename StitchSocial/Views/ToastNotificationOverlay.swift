@@ -129,6 +129,9 @@ extension StitchNotificationType {
         case .tierUpgrade: return .yellow
         case .milestone: return .pink
         case .system: return .gray
+        case .goLive: return .red
+        case .communityPost: return .cyan
+        case .communityXP: return .green
         }
     }
     
@@ -142,6 +145,9 @@ extension StitchNotificationType {
         case .tierUpgrade: return "arrow.up.circle.fill"
         case .milestone: return "trophy.fill"
         case .system: return "gear.circle.fill"
+        case .goLive: return "video.fill"
+        case .communityPost: return "bubble.left.and.bubble.right.fill"
+        case .communityXP: return "star.fill"
         }
     }
 }
@@ -156,6 +162,8 @@ extension NotificationToast {
         case .reply, .mention: return 5.0
         case .tierUpgrade, .milestone: return 6.0
         case .system: return 8.0
+        case .goLive: return 6.0
+        case .communityPost, .communityXP: return 4.0
         }
     }
 }

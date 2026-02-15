@@ -190,6 +190,10 @@ class NotificationViewModel: ObservableObject {
             filtered = filtered.filter { $0.type == .follow }
         case .replies:
             filtered = filtered.filter { $0.type == .reply }
+        case .live:
+            filtered = filtered.filter { $0.type == .goLive }
+        case .community:
+            filtered = filtered.filter { $0.type == .communityPost || $0.type == .communityXP }
         case .system:
             filtered = filtered.filter { $0.type == .system }
         }

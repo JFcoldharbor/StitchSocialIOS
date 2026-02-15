@@ -24,7 +24,7 @@ class SubscriptionService: ObservableObject {
     
     // MARK: - Properties
     
-    private let db = Firestore.firestore()
+    private let db = FirebaseConfig.firestore
     private let coinService = HypeCoinService.shared
     
     @Published var mySubscriptions: [ActiveSubscription] = []
@@ -33,8 +33,30 @@ class SubscriptionService: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     
-    // Cache for quick perk lookups
+    // Cache for quick perk lookups — cached per session, cleared on logout
     private var subscriptionCache: [String: SubscriptionCheckResult] = [:]
+    
+    // MARK: - Developer Bypass
+    // These emails get full subscription access without payment.
+    // Cached on login so we never re-check Firestore for this.
+    
+    private static let developerEmails: Set<String> = [
+        "developers@stitchsocial.me",
+        "james@stitchsocial.me"
+    ]
+    
+    private var cachedUserEmail: String?
+    
+    /// Call once on login with the authenticated user's email
+    func setCurrentUserEmail(_ email: String?) {
+        cachedUserEmail = email?.lowercased().trimmingCharacters(in: .whitespaces)
+    }
+    
+    /// True if current user bypasses all subscription gates
+    var isDeveloper: Bool {
+        guard let email = cachedUserEmail else { return false }
+        return Self.developerEmails.contains(email)
+    }
     
     // MARK: - Collections
     
@@ -112,7 +134,7 @@ class SubscriptionService: ObservableObject {
         try docRef.setData(from: plan)
         self.creatorPlan = plan
         
-        print("✅ SUBS: Plan updated for \(creatorID)")
+        print("âœ… SUBS: Plan updated for \(creatorID)")
         return plan
     }
     
@@ -201,7 +223,7 @@ class SubscriptionService: ObservableObject {
         // Refresh my subscriptions
         _ = try await fetchMySubscriptions(userID: subscriberID)
         
-        print("🎉 SUBS: \(subscriberID) subscribed to \(creatorID) at \(tier.displayName)")
+        print("ðŸŽ‰ SUBS: \(subscriberID) subscribed to \(creatorID) at \(tier.displayName)")
         return subscription
     }
     
@@ -234,12 +256,22 @@ class SubscriptionService: ObservableObject {
         
         subscriptionCache.removeValue(forKey: "\(subscriberID)_\(creatorID)")
         
-        print("❌ SUBS: \(subscriberID) cancelled subscription to \(creatorID)")
+        print("âŒ SUBS: \(subscriberID) cancelled subscription to \(creatorID)")
     }
     
     // MARK: - Check Subscription Status
     
     func checkSubscription(subscriberID: String, creatorID: String) async throws -> SubscriptionCheckResult {
+        // Developer bypass — full superFan access, no Firestore read
+        if isDeveloper {
+            return SubscriptionCheckResult(
+                isSubscribed: true,
+                tier: .superFan,
+                perks: SubscriptionTier.superFan.perks,
+                hypeBoost: SubscriptionTier.superFan.hypeBoost
+            )
+        }
+        
         // Check cache first
         let cacheKey = "\(subscriberID)_\(creatorID)"
         if let cached = subscriptionCache[cacheKey] {
@@ -327,6 +359,7 @@ class SubscriptionService: ObservableObject {
     // MARK: - Get Hype Boost for Engagement
     
     func getHypeBoost(userID: String, creatorID: String) async throws -> Double {
+        if isDeveloper { return SubscriptionTier.superFan.hypeBoost }
         let result = try await checkSubscription(subscriberID: userID, creatorID: creatorID)
         return result.hypeBoost
     }
@@ -334,6 +367,7 @@ class SubscriptionService: ObservableObject {
     // MARK: - Check Perk Access
     
     func hasPerk(_ perk: SubscriptionPerk, userID: String, creatorID: String) async throws -> Bool {
+        if isDeveloper { return true }
         let result = try await checkSubscription(subscriberID: userID, creatorID: creatorID)
         return result.perks.contains(perk)
     }

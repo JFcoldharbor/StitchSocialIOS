@@ -14,6 +14,7 @@
 		673BA8EB2EADCB1300BF0F3C /* FirebaseFunctionsCombine-Community in Frameworks */ = {isa = PBXBuildFile; productRef = 673BA8EA2EADCB1300BF0F3C /* FirebaseFunctionsCombine-Community */; };
 		673BA8ED2EADCB1300BF0F3C /* FirebaseInAppMessaging-Beta in Frameworks */ = {isa = PBXBuildFile; productRef = 673BA8EC2EADCB1300BF0F3C /* FirebaseInAppMessaging-Beta */; };
 		673BA8EF2EADCB1300BF0F3C /* FirebaseRemoteConfig in Frameworks */ = {isa = PBXBuildFile; productRef = 673BA8EE2EADCB1300BF0F3C /* FirebaseRemoteConfig */; };
+		675174402F3EEE17005B7066 /* RtcBasic in Frameworks */ = {isa = PBXBuildFile; productRef = 6751743F2F3EEE17005B7066 /* RtcBasic */; };
 		675B716A2EEEE99000FD97E6 /* FirebasePerformance in Frameworks */ = {isa = PBXBuildFile; productRef = 675B71692EEEE99000FD97E6 /* FirebasePerformance */; };
 		676A0EA82E50E4E700709431 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 676A0EA72E50E4E700709431 /* FirebaseAnalytics */; };
 		676A0EAA2E50E4E700709431 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 676A0EA92E50E4E700709431 /* FirebaseAuth */; };
@@ -67,6 +68,7 @@
 				673BA8EB2EADCB1300BF0F3C /* FirebaseFunctionsCombine-Community in Frameworks */,
 				675B716A2EEEE99000FD97E6 /* FirebasePerformance in Frameworks */,
 				676A0EAC2E50E4E700709431 /* FirebaseCore in Frameworks */,
+				675174402F3EEE17005B7066 /* RtcBasic in Frameworks */,
 				673BA8E72EADCB1300BF0F3C /* FirebaseAuthCombine-Community in Frameworks */,
 				676A0EAA2E50E4E700709431 /* FirebaseAuth in Frameworks */,
 				673BA8E32EADCB1300BF0F3C /* FirebaseAppCheck in Frameworks */,
@@ -132,6 +134,7 @@
 				673BA8EC2EADCB1300BF0F3C /* FirebaseInAppMessaging-Beta */,
 				673BA8EE2EADCB1300BF0F3C /* FirebaseRemoteConfig */,
 				675B71692EEEE99000FD97E6 /* FirebasePerformance */,
+				6751743F2F3EEE17005B7066 /* RtcBasic */,
 			);
 			productName = StitchSocial;
 			productReference = 676A0E292E50E40600709431 /* StitchSocial.app */;
@@ -163,6 +166,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				676A0EA62E50E4E700709431 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+				6751743E2F3EEE17005B7066 /* XCRemoteSwiftPackageReference "AgoraRtcEngine_iOS" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 676A0E2A2E50E40600709431 /* Products */;
@@ -428,6 +432,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		6751743E2F3EEE17005B7066 /* XCRemoteSwiftPackageReference "AgoraRtcEngine_iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AgoraIO/AgoraRtcEngine_iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.6.2;
+			};
+		};
 		676A0EA62E50E4E700709431 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk.git";
@@ -473,6 +485,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 676A0EA62E50E4E700709431 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseRemoteConfig;
+		};
+		6751743F2F3EEE17005B7066 /* RtcBasic */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6751743E2F3EEE17005B7066 /* XCRemoteSwiftPackageReference "AgoraRtcEngine_iOS" */;
+			productName = RtcBasic;
 		};
 		675B71692EEEE99000FD97E6 /* FirebasePerformance */ = {
 			isa = XCSwiftPackageProductDependency;

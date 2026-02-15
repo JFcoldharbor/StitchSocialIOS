@@ -17,7 +17,7 @@ class HypeCoinService: ObservableObject {
     
     // MARK: - Properties
     
-    private let db = Firestore.firestore()
+    private let db = FirebaseConfig.firestore
     
     @Published var balance: HypeCoinBalance?
     @Published var transactions: [CoinTransaction] = []
@@ -72,7 +72,7 @@ class HypeCoinService: ObservableObject {
             .getDocuments()
         
         guard existingTransaction.documents.isEmpty else {
-            print("⚠️ COINS: Transaction already credited")
+            print("âš ï¸ COINS: Transaction already credited")
             return
         }
         
@@ -103,7 +103,7 @@ class HypeCoinService: ObservableObject {
         // Refresh balance
         _ = try await fetchBalance(userID: userID)
         
-        print("💰 COINS: Credited \(coins) coins from web purchase")
+        print("ðŸ’° COINS: Credited \(coins) coins from web purchase")
     }
     
     // MARK: - Sync Balance (check for web purchases)
@@ -112,7 +112,7 @@ class HypeCoinService: ObservableObject {
     func syncBalance(userID: String) async throws {
         _ = try await fetchBalance(userID: userID)
         _ = try await fetchTransactions(userID: userID)
-        print("🔄 COINS: Balance synced")
+        print("ðŸ”„ COINS: Balance synced")
     }
     
     // MARK: - Transfer Coins (Subscription/Tip)
@@ -186,7 +186,7 @@ class HypeCoinService: ObservableObject {
         // Refresh balance
         _ = try await fetchBalance(userID: fromUserID)
         
-        print("💸 COINS: Transferred \(amount) coins from \(fromUserID) to \(toUserID)")
+        print("ðŸ’¸ COINS: Transferred \(amount) coins from \(fromUserID) to \(toUserID)")
     }
     
     // MARK: - Move Pending to Available
@@ -209,7 +209,7 @@ class HypeCoinService: ObservableObject {
         ])
         
         _ = try await fetchBalance(userID: userID)
-        print("✅ COINS: Released \(pending) pending coins")
+        print("âœ… COINS: Released \(pending) pending coins")
     }
     
     // MARK: - Cash Out
@@ -286,7 +286,7 @@ class HypeCoinService: ObservableObject {
         
         _ = try await fetchBalance(userID: userID)
         
-        print("💵 CASH OUT: \(amount) coins → $\(String(format: "%.2f", creatorAmount)) for \(tier.displayName)")
+        print("ðŸ’µ CASH OUT: \(amount) coins â†’ $\(String(format: "%.2f", creatorAmount)) for \(tier.displayName)")
         return request
     }
     

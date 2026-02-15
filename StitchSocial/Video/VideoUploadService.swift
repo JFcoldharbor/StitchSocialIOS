@@ -604,6 +604,89 @@ class VideoUploadService: ObservableObject {
     func clearError() {
         lastUploadError = nil
     }
+    
+    // MARK: - Stream Clip Upload (Video Comments / Replies)
+    
+    /// Lightweight upload for stream video comments.
+    /// Reuses existing compression + thumbnail logic.
+    /// Path: stream-clips/{communityID}/{streamID}/{commentID}.mp4
+    /// Cost: 1 Storage write (video) + 1 Storage write (thumbnail)
+    func uploadStreamClip(
+        localVideoURL: URL,
+        communityID: String,
+        streamID: String,
+        commentID: String
+    ) async throws -> (videoURL: String, thumbnailURL: String?) {
+        
+        await MainActor.run {
+            self.isUploading = true
+            self.uploadProgress = 0.0
+            self.currentTask = "Preparing clip..."
+        }
+        
+        defer {
+            Task { @MainActor in
+                self.isUploading = false
+            }
+        }
+        
+        // Compress if needed (stream clips are short so usually small)
+        let finalURL = try await ensureUploadableSize(videoURL: localVideoURL)
+        
+        // Generate thumbnail
+        await updateProgress(0.2, task: "Generating thumbnail...")
+        let thumbnailData = try await generateThumbnail(from: finalURL)
+        
+        // Upload thumbnail
+        let thumbRef = storage.reference().child("stream-clips/\(communityID)/\(streamID)/\(commentID)_thumb.jpg")
+        let thumbMeta = StorageMetadata()
+        thumbMeta.contentType = "image/jpeg"
+        _ = try await thumbRef.putDataAsync(thumbnailData, metadata: thumbMeta)
+        let thumbURL = try await thumbRef.downloadURL().absoluteString
+        
+        // Upload video
+        await updateProgress(0.4, task: "Uploading clip...")
+        let videoData = try await loadVideoData(finalURL)
+        let videoRef = storage.reference().child("stream-clips/\(communityID)/\(streamID)/\(commentID).mp4")
+        let videoMeta = StorageMetadata()
+        videoMeta.contentType = "video/mp4"
+        
+        let uploadTask = videoRef.putData(videoData, metadata: videoMeta)
+        uploadTask.observe(.progress) { [weak self] snapshot in
+            guard let progress = snapshot.progress else { return }
+            Task { @MainActor in
+                self?.uploadProgress = 0.4 + (progress.fractionCompleted * 0.5)
+            }
+        }
+        
+        _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+            uploadTask.observe(.success) { snapshot in
+                continuation.resume(returning: snapshot.metadata ?? StorageMetadata())
+            }
+            uploadTask.observe(.failure) { snapshot in
+                continuation.resume(throwing: snapshot.error ?? UploadError.uploadFailed("Stream clip upload failed"))
+            }
+        }
+        
+        let downloadURL = try await videoRef.downloadURL().absoluteString
+        
+        // Cleanup compressed file
+        if finalURL != localVideoURL {
+            try? FileManager.default.removeItem(at: finalURL)
+        }
+        
+        await updateProgress(1.0, task: "Clip uploaded!")
+        print("✅ STREAM CLIP: Uploaded \(commentID)")
+        
+        return (downloadURL, thumbURL)
+    }
+    
+    /// Get video duration from local file (for stream clips)
+    static func clipDuration(url: URL) async -> Int {
+        let asset = AVAsset(url: url)
+        let duration = try? await asset.load(.duration)
+        return Int(CMTimeGetSeconds(duration ?? .zero))
+    }
 }
 
 // MARK: - Data Models

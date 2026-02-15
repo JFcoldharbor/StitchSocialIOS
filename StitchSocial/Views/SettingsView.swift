@@ -31,6 +31,7 @@ struct SettingsView: View {
     @State private var showingAdOpportunities = false
     @State private var showingCashOut = false
     @State private var showingSubscriptionSettings = false
+    @State private var showingCommunitySettings = false
     
     // Preferences
     @State private var isHapticEnabled = UserDefaults.standard.bool(forKey: "hapticFeedbackEnabled")
@@ -43,6 +44,7 @@ struct SettingsView: View {
     }
     
     private var isCreator: Bool {
+        if SubscriptionService.shared.isDeveloper { return true }
         guard let user = currentUser else { return false }
         return AdRevenueShare.canAccessAds(tier: user.tier)
     }
@@ -159,6 +161,16 @@ struct SettingsView: View {
                     userID: user.id,
                     userTier: user.tier,
                     availableCoins: coinBalance
+                )
+            }
+        }
+        .sheet(isPresented: $showingCommunitySettings) {
+            if let user = currentUser {
+                CreatorCommunitySettingsView(
+                    creatorID: user.id,
+                    creatorUsername: user.username,
+                    creatorDisplayName: user.displayName,
+                    creatorTier: user.tier
                 )
             }
         }
@@ -316,6 +328,16 @@ struct SettingsView: View {
                 iconColor: .orange
             ) {
                 showingSubscriptionSettings = true
+            }
+            
+            // Community Settings
+            SettingsRow(
+                icon: "bubble.left.and.bubble.right.fill",
+                title: "My Community",
+                subtitle: "Create & manage your community",
+                iconColor: .cyan
+            ) {
+                showingCommunitySettings = true
             }
             
             // Revenue Share Info
