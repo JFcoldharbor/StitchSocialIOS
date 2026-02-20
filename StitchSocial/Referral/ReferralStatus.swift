@@ -6,10 +6,17 @@
 //  Dependencies: FirebaseSchema (Layer 3), UserTier (Layer 1)
 //  Features: Code generation, link sharing, reward tracking, fraud prevention
 //
+//  UPDATED: Auto-follow referrer on successful referral redemption
+//  UPDATED: Organic signup tracking for complete timeline
+//  BATCHING: processReferralSignup uses single transaction for all 5 writes
+//           (referral doc + referrer stats + new user update + 2 follow subcollection docs)
+//           This saves 4 extra round trips vs individual writes
+//
 
 import Foundation
 import Firebase
 import FirebaseFirestore
+import FirebaseFunctions
 
 // MARK: - Referral Data Models
 
@@ -36,9 +43,9 @@ enum ReferralSourceType: String, CaseIterable {
     case deeplink = "deeplink"
     case manual = "manual"
     case share = "share"
+    case organic = "organic"  // No referral code — direct signup
 }
 
-/// User referral statistics
 struct ReferralStats {
     let totalReferrals: Int
     let completedReferrals: Int
@@ -83,6 +90,7 @@ struct ReferralProcessingResult {
     let rewardsMaxed: Bool
     let message: String
     let error: String?
+    let referrerID: String?  // NEW: returned so caller knows who was followed
 }
 
 // MARK: - Referral Service
@@ -114,52 +122,53 @@ class ReferralService: ObservableObject {
     
     /// Generate or retrieve user's referral code and link
     func generateReferralLink(for userID: String) async throws -> ReferralLink {
-        print("🔗 REFERRAL: Generating referral link for user \(userID)")
-        
-        // Check if user already has a referral code
         let userDoc = try await db.collection(FirebaseSchema.Collections.users)
             .document(userID)
             .getDocument()
         
-        var referralCode: String
+        guard userDoc.exists else {
+            throw NSError(domain: "ReferralService", code: 404, userInfo: [NSLocalizedDescriptionKey: "User not found"])
+        }
         
-        if let existingCode = userDoc.data()?[FirebaseSchema.UserDocument.referralCode] as? String,
-           !existingCode.isEmpty {
-            referralCode = existingCode
-            print("✅ REFERRAL: Using existing code \(referralCode)")
+        let existingCode = userDoc.data()?[FirebaseSchema.UserDocument.referralCode] as? String
+        
+        let referralCode: String
+        if let existing = existingCode, !existing.isEmpty {
+            referralCode = existing
         } else {
-            // Generate new unique referral code
             referralCode = try await generateUniqueReferralCode()
             
-            // Save referral code to user document
             try await db.collection(FirebaseSchema.Collections.users)
                 .document(userID)
                 .updateData([
                     FirebaseSchema.UserDocument.referralCode: referralCode,
-                    FirebaseSchema.UserDocument.referralCreatedAt: Timestamp(),
-                    FirebaseSchema.UserDocument.updatedAt: Timestamp()
+                    FirebaseSchema.UserDocument.referralCreatedAt: Timestamp()
                 ])
-            
-            print("✅ REFERRAL: Generated new code \(referralCode)")
         }
         
+        let universalLink = "\(baseURL)/invite/\(referralCode)"
+        let deepLink = "\(deepLinkScheme)://invite/\(referralCode)"
+        let shareText = generateShareText(referralCode: referralCode)
         let expiresAt = Date().addingTimeInterval(TimeInterval(referralExpirationDays * 24 * 60 * 60))
         
         return ReferralLink(
             code: referralCode,
-            universalLink: "\(baseURL)/invite/\(referralCode)",
-            deepLink: "\(deepLinkScheme)://invite/\(referralCode)",
-            shareText: generateShareText(referralCode: referralCode),
+            universalLink: universalLink,
+            deepLink: deepLink,
+            shareText: shareText,
             expiresAt: expiresAt
         )
     }
     
-    /// Process referral code during user signup
+    // MARK: - Process Referral Signup (with Auto-Follow)
+    
+    /// Process referral code at signup — validates, awards, AND auto-follows referrer
+    /// BATCHING: Single Firestore transaction for all writes (referral doc + stats + follow docs)
     func processReferralSignup(
         referralCode: String,
         newUserID: String,
         platform: String = "ios",
-        sourceType: ReferralSourceType = .link,
+        sourceType: ReferralSourceType = .manual,
         deviceInfo: [String: String] = [:]
     ) async throws -> ReferralProcessingResult {
         
@@ -168,13 +177,10 @@ class ReferralService: ObservableObject {
         // Validate referral code format
         guard FirebaseSchema.ValidationRules.validateReferralCode(referralCode) else {
             return ReferralProcessingResult(
-                success: false,
-                referralID: nil,
-                cloutAwarded: 0,
-                hypeBonus: 0.0,
-                rewardsMaxed: false,
+                success: false, referralID: nil, cloutAwarded: 0,
+                hypeBonus: 0.0, rewardsMaxed: false,
                 message: "Invalid referral code format",
-                error: "INVALID_CODE_FORMAT"
+                error: "INVALID_CODE_FORMAT", referrerID: nil
             )
         }
         
@@ -186,13 +192,10 @@ class ReferralService: ObservableObject {
         
         guard let referrerDoc = referrerQuery.documents.first else {
             return ReferralProcessingResult(
-                success: false,
-                referralID: nil,
-                cloutAwarded: 0,
-                hypeBonus: 0.0,
-                rewardsMaxed: false,
+                success: false, referralID: nil, cloutAwarded: 0,
+                hypeBonus: 0.0, rewardsMaxed: false,
                 message: "Referral code not found",
-                error: "CODE_NOT_FOUND"
+                error: "CODE_NOT_FOUND", referrerID: nil
             )
         }
         
@@ -201,13 +204,10 @@ class ReferralService: ObservableObject {
         // Prevent self-referral
         guard referrerID != newUserID else {
             return ReferralProcessingResult(
-                success: false,
-                referralID: nil,
-                cloutAwarded: 0,
-                hypeBonus: 0.0,
-                rewardsMaxed: false,
+                success: false, referralID: nil, cloutAwarded: 0,
+                hypeBonus: 0.0, rewardsMaxed: false,
                 message: "Cannot refer yourself",
-                error: "SELF_REFERRAL"
+                error: "SELF_REFERRAL", referrerID: nil
             )
         }
         
@@ -219,13 +219,10 @@ class ReferralService: ObservableObject {
         if let invitedBy = existingUserDoc.data()?[FirebaseSchema.UserDocument.invitedBy] as? String,
            !invitedBy.isEmpty {
             return ReferralProcessingResult(
-                success: false,
-                referralID: nil,
-                cloutAwarded: 0,
-                hypeBonus: 0.0,
-                rewardsMaxed: false,
+                success: false, referralID: nil, cloutAwarded: 0,
+                hypeBonus: 0.0, rewardsMaxed: false,
                 message: "User already referred by someone else",
-                error: "ALREADY_REFERRED"
+                error: "ALREADY_REFERRED", referrerID: nil
             )
         }
         
@@ -261,11 +258,12 @@ class ReferralService: ObservableObject {
             FirebaseSchema.ReferralDocument.userAgent: deviceInfo["userAgent"] ?? ""
         ]
         
-        // Use transaction to ensure consistency
+        // BATCHING: Single transaction for ALL writes — referral + stats + auto-follow
+        // 5 writes in 1 round trip instead of 5 separate calls
         do {
-            let result = try await db.runTransaction { transaction, errorPointer in
+            let _ = try await db.runTransaction { transaction, errorPointer in
                 
-                // Update referrer's stats
+                // Write 1: Update referrer's stats
                 let referrerRef = self.db.collection(FirebaseSchema.Collections.users).document(referrerID)
                 transaction.updateData([
                     FirebaseSchema.UserDocument.referralCount: currentReferralCount + 1,
@@ -273,21 +271,68 @@ class ReferralService: ObservableObject {
                     FirebaseSchema.UserDocument.clout: currentClout + cloutToAward,
                     FirebaseSchema.UserDocument.hypeRatingBonus: newHypeBonus,
                     FirebaseSchema.UserDocument.referralRewardsMaxed: newCloutEarned >= self.maxCloutFromReferrals,
-                    FirebaseSchema.UserDocument.updatedAt: Timestamp()
+                    FirebaseSchema.UserDocument.updatedAt: Timestamp(),
+                    // Increment follower count for referrer
+                    FirebaseSchema.UserDocument.followerCount: FieldValue.increment(Int64(1))
                 ], forDocument: referrerRef)
                 
-                // Update new user with referrer info
+                // Write 2: Update new user with referrer info
                 let newUserRef = self.db.collection(FirebaseSchema.Collections.users).document(newUserID)
                 transaction.updateData([
                     FirebaseSchema.UserDocument.invitedBy: referrerID,
-                    FirebaseSchema.UserDocument.updatedAt: Timestamp()
+                    FirebaseSchema.UserDocument.updatedAt: Timestamp(),
+                    // Increment following count for new user
+                    FirebaseSchema.UserDocument.followingCount: FieldValue.increment(Int64(1))
                 ], forDocument: newUserRef)
                 
-                // Create referral tracking document
+                // Write 3: Create referral tracking document
                 let referralRef = self.db.collection(FirebaseSchema.Collections.referrals).document(referralID)
                 transaction.setData(referralData, forDocument: referralRef)
                 
+                // Write 4: Auto-follow — new user follows referrer
+                let followingRef = self.db.collection(FirebaseSchema.Collections.users)
+                    .document(newUserID)
+                    .collection("following")
+                    .document(referrerID)
+                transaction.setData([
+                    "followeeID": referrerID,
+                    "followerID": newUserID,
+                    "isActive": true,
+                    "createdAt": Timestamp(),
+                    "source": "referral"
+                ], forDocument: followingRef)
+                
+                // Write 5: Auto-follow — referrer gets new follower
+                let followerRef = self.db.collection(FirebaseSchema.Collections.users)
+                    .document(referrerID)
+                    .collection("followers")
+                    .document(newUserID)
+                transaction.setData([
+                    "followerID": newUserID,
+                    "followeeID": referrerID,
+                    "isActive": true,
+                    "createdAt": Timestamp(),
+                    "source": "referral"
+                ], forDocument: followerRef)
+                
                 return "success"
+            }
+            
+            print("✅ REFERRAL: Processed + auto-followed referrer \(referrerID)")
+            
+            // Fire-and-forget: Send follow notification to referrer via Cloud Function
+            // Outside transaction so it doesn't block or risk failing the referral write
+            Task {
+                do {
+                    let functions = Functions.functions(region: "us-central1")
+                    let _ = try await functions.httpsCallable("stitchnoti_sendFollow").call([
+                        "recipientID": referrerID
+                    ])
+                    print("🔔 REFERRAL: Follow notification sent to referrer \(referrerID)")
+                } catch {
+                    // Non-blocking — referral still succeeded even if notification fails
+                    print("⚠️ REFERRAL: Follow notification failed (non-blocking): \(error)")
+                }
             }
             
             return ReferralProcessingResult(
@@ -299,101 +344,114 @@ class ReferralService: ObservableObject {
                 message: rewardsMaxed ?
                     "Referral processed! (Clout reward cap reached)" :
                     "Referral successful! +\(cloutToAward) clout",
-                error: nil
+                error: nil,
+                referrerID: referrerID
             )
             
         } catch {
             return ReferralProcessingResult(
-                success: false,
-                referralID: nil,
-                cloutAwarded: 0,
-                hypeBonus: 0.0,
-                rewardsMaxed: false,
+                success: false, referralID: nil, cloutAwarded: 0,
+                hypeBonus: 0.0, rewardsMaxed: false,
                 message: "Transaction failed",
-                error: error.localizedDescription
+                error: error.localizedDescription, referrerID: nil
             )
         }
     }
+    
+    // MARK: - Organic Signup Tracking
+    
+    /// Track signups with no referral code for complete timeline
+    /// Single write — no batching needed
+    func processOrganicSignup(newUserID: String, platform: String = "ios") async {
+        let organicData: [String: Any] = [
+            "id": "organic_\(newUserID)_\(Int(Date().timeIntervalSince1970))",
+            FirebaseSchema.ReferralDocument.referrerID: NSNull(),
+            FirebaseSchema.ReferralDocument.refereeID: newUserID,
+            FirebaseSchema.ReferralDocument.referralCode: NSNull(),
+            FirebaseSchema.ReferralDocument.status: ReferralStatus.completed.rawValue,
+            FirebaseSchema.ReferralDocument.createdAt: Timestamp(),
+            FirebaseSchema.ReferralDocument.completedAt: Timestamp(),
+            FirebaseSchema.ReferralDocument.cloutAwarded: 0,
+            FirebaseSchema.ReferralDocument.sourceType: ReferralSourceType.organic.rawValue,
+            FirebaseSchema.ReferralDocument.platform: platform
+        ]
+        
+        do {
+            try await db.collection(FirebaseSchema.Collections.referrals)
+                .document("organic_\(newUserID)")
+                .setData(organicData)
+            print("📊 REFERRAL: Organic signup tracked for \(newUserID)")
+        } catch {
+            // Non-blocking — don't fail signup over tracking
+            print("⚠️ REFERRAL: Failed to track organic signup: \(error)")
+        }
+    }
+    
+    // MARK: - Stats & Analytics
     
     /// Get user's referral statistics
     func getUserReferralStats(userID: String) async throws -> ReferralStats {
         print("📊 REFERRAL: Loading stats for user \(userID)")
         
-        // Get user document
         let userDoc = try await db.collection(FirebaseSchema.Collections.users)
             .document(userID)
             .getDocument()
         
-        guard let userData = userDoc.data() else {
+        guard userDoc.exists, let userData = userDoc.data() else {
             throw NSError(domain: "ReferralService", code: 404, userInfo: [NSLocalizedDescriptionKey: "User not found"])
         }
         
-        // Extract referral data from user document
         let referralCode = userData[FirebaseSchema.UserDocument.referralCode] as? String ?? ""
-        let totalReferrals = userData[FirebaseSchema.UserDocument.referralCount] as? Int ?? 0
+        let referralCount = userData[FirebaseSchema.UserDocument.referralCount] as? Int ?? 0
         let cloutEarned = userData[FirebaseSchema.UserDocument.referralCloutEarned] as? Int ?? 0
         let hypeBonus = userData[FirebaseSchema.UserDocument.hypeRatingBonus] as? Double ?? 0.0
         let rewardsMaxed = userData[FirebaseSchema.UserDocument.referralRewardsMaxed] as? Bool ?? false
         
-        // Get detailed referral history
-        let referralsQuery = try await db.collection(FirebaseSchema.Collections.referrals)
+        // Load recent referrals
+        let referralQuery = try await db.collection(FirebaseSchema.Collections.referrals)
             .whereField(FirebaseSchema.ReferralDocument.referrerID, isEqualTo: userID)
             .order(by: FirebaseSchema.ReferralDocument.createdAt, descending: true)
-            .limit(to: 20)
+            .limit(to: 10)
             .getDocuments()
         
-        var completedReferrals = 0
-        var pendingReferrals = 0
-        var monthlyReferrals = 0
         var recentReferrals: [ReferralInfo] = []
-        
+        var pendingCount = 0
+        var monthlyCount = 0
         let thirtyDaysAgo = Date().addingTimeInterval(-30 * 24 * 60 * 60)
         
-        for doc in referralsQuery.documents {
+        for doc in referralQuery.documents {
             let data = doc.data()
-            let status = ReferralStatus(rawValue: data[FirebaseSchema.ReferralDocument.status] as? String ?? "") ?? .failed
+            let status = ReferralStatus(rawValue: data[FirebaseSchema.ReferralDocument.status] as? String ?? "") ?? .pending
             let createdAt = (data[FirebaseSchema.ReferralDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
             
-            switch status {
-            case .completed:
-                completedReferrals += 1
-            case .pending:
-                pendingReferrals += 1
-            default:
-                break
-            }
+            if status == .pending { pendingCount += 1 }
+            if createdAt > thirtyDaysAgo { monthlyCount += 1 }
             
-            if createdAt > thirtyDaysAgo {
-                monthlyReferrals += 1
-            }
-            
-            let referralInfo = ReferralInfo(
+            recentReferrals.append(ReferralInfo(
                 id: doc.documentID,
                 refereeID: data[FirebaseSchema.ReferralDocument.refereeID] as? String,
-                refereeUsername: nil, // Would need additional lookup
+                refereeUsername: nil,
                 status: status,
                 createdAt: createdAt,
                 completedAt: (data[FirebaseSchema.ReferralDocument.completedAt] as? Timestamp)?.dateValue(),
                 cloutAwarded: data[FirebaseSchema.ReferralDocument.cloutAwarded] as? Int ?? 0,
                 platform: data[FirebaseSchema.ReferralDocument.platform] as? String ?? "unknown",
-                sourceType: ReferralSourceType(rawValue: data[FirebaseSchema.ReferralDocument.sourceType] as? String ?? "") ?? .link
-            )
-            
-            recentReferrals.append(referralInfo)
+                sourceType: ReferralSourceType(rawValue: data[FirebaseSchema.ReferralDocument.sourceType] as? String ?? "") ?? .manual
+            ))
         }
         
-        let referralLink = referralCode.isEmpty ? "" : "\(baseURL)/invite/\(referralCode)"
+        let universalLink = referralCode.isEmpty ? "" : "\(baseURL)/invite/\(referralCode)"
         
         return ReferralStats(
-            totalReferrals: totalReferrals,
-            completedReferrals: completedReferrals,
-            pendingReferrals: pendingReferrals,
+            totalReferrals: referralCount,
+            completedReferrals: referralCount - pendingCount,
+            pendingReferrals: pendingCount,
             cloutEarned: cloutEarned,
             hypeRatingBonus: hypeBonus,
             rewardsMaxed: rewardsMaxed,
             referralCode: referralCode,
-            referralLink: referralLink,
-            monthlyReferrals: monthlyReferrals,
+            referralLink: universalLink,
+            monthlyReferrals: monthlyCount,
             recentReferrals: recentReferrals
         )
     }
@@ -414,7 +472,7 @@ class ReferralService: ObservableObject {
             return false
         }
         
-        // Database validation
+        // Database validation — single read
         let query = try await db.collection(FirebaseSchema.Collections.users)
             .whereField(FirebaseSchema.UserDocument.referralCode, isEqualTo: code)
             .limit(to: 1)
@@ -460,7 +518,7 @@ class ReferralService: ObservableObject {
         while attempts < maxAttempts {
             let code = FirebaseSchema.DocumentIDPatterns.generateReferralCode()
             
-            // Check if code already exists
+            // Check if code already exists — single read
             let existingQuery = try await db.collection(FirebaseSchema.Collections.users)
                 .whereField(FirebaseSchema.UserDocument.referralCode, isEqualTo: code)
                 .limit(to: 1)
@@ -479,11 +537,22 @@ class ReferralService: ObservableObject {
     /// Generate shareable text for referral links
     private func generateShareText(referralCode: String) -> String {
         return """
-        Join me on Stitch Social! 🎬✨
+        🎬 Welcome to Stitch Social! 🎬
         
-        Create awesome videos and join the conversation. Get bonus clout when you sign up with my code: \(referralCode)
+        Hey! Thanks for signing up — stick with us, it can get a little tricky the first time!
         
-        \(baseURL)/invite/\(referralCode)
+        🍎 iPhone Users:
+        1. Download the TestFlight app first (it's how you test our app before launch): https://apps.apple.com/app/testflight/id899247664
+        2. Once TestFlight is installed, come back here and tap this link to get Stitch Social: https://testflight.apple.com/join/cXbWreGc
+        3. Hit "Accept" then "Install" inside TestFlight
+        4. Open Stitch Social from your home screen and create your account
+        
+        🤖 Android Users:
+        Use this link to install directly: https://play.google.com/store/apps/details?id=com.stitchsocial.club
+        
+        🎁 At signup, enter this invite code to support the person who invited you: \(referralCode)
+        
+        Happy Stitching! 🚀✨
         """
     }
     
@@ -499,6 +568,7 @@ class ReferralService: ObservableObject {
         
         var totalReferrals = 0
         var completedReferrals = 0
+        var organicSignups = 0
         var cloutAwarded = 0
         var platformBreakdown: [String: Int] = [:]
         var sourceBreakdown: [String: Int] = [:]
@@ -506,6 +576,12 @@ class ReferralService: ObservableObject {
         for doc in recentReferrals.documents {
             let data = doc.data()
             totalReferrals += 1
+            
+            let sourceType = data[FirebaseSchema.ReferralDocument.sourceType] as? String ?? ""
+            
+            if sourceType == ReferralSourceType.organic.rawValue {
+                organicSignups += 1
+            }
             
             if let status = data[FirebaseSchema.ReferralDocument.status] as? String,
                status == ReferralStatus.completed.rawValue {
@@ -517,16 +593,17 @@ class ReferralService: ObservableObject {
                 platformBreakdown[platform, default: 0] += 1
             }
             
-            if let source = data[FirebaseSchema.ReferralDocument.sourceType] as? String {
-                sourceBreakdown[source, default: 0] += 1
-            }
+            sourceBreakdown[sourceType, default: 0] += 1
         }
         
+        let referredSignups = totalReferrals - organicSignups
         let conversionRate = totalReferrals > 0 ? Double(completedReferrals) / Double(totalReferrals) : 0.0
         
         return [
             "totalReferrals": totalReferrals,
             "completedReferrals": completedReferrals,
+            "organicSignups": organicSignups,
+            "referredSignups": referredSignups,
             "conversionRate": conversionRate,
             "totalCloutAwarded": cloutAwarded,
             "platformBreakdown": platformBreakdown,

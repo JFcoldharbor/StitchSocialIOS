@@ -1,11 +1,15 @@
 //
 //  AIVideoAnalyzer.swift
-//  CleanBeta
+//  StitchSocial
 //
 //  Layer 5: Business Logic - AI Video Content Analysis
 //  Dependencies: Layer 4 (Services), Layer 3 (Firebase), Layer 2 (Protocols), Layer 1 (Foundation)
 //  OpenAI Whisper + GPT integration for auto-generating video metadata
-//  FIXED: Added timeout protection, connection testing, and comprehensive debugging
+//
+//  OPTIMIZED: Connection test cached per session (5 min TTL) — saves 1 API call per video
+//  OPTIMIZED: AI results cached by video URL — prevents duplicate Whisper+GPT calls on re-open
+//  OPTIMIZED: Singleton pattern — no more throwaway instances in ThreadComposer
+//  UPDATED: Uses OpenAI dashboard tone-matching prompt (Stitch Dynamic)
 //
 
 import Foundation
@@ -13,9 +17,12 @@ import AVFoundation
 
 /// OpenAI speech-to-text video analysis for auto-generating titles, descriptions, and hashtags
 /// Premium feature that provides seamless content creation assistance with manual fallback
-/// Integrates with recording flow to enhance user experience
 @MainActor
 class AIVideoAnalyzer: ObservableObject {
+    
+    // MARK: - Singleton (prevents multiple instances + duplicate connection tests)
+    
+    static let shared = AIVideoAnalyzer()
     
     // MARK: - Published State
     
@@ -38,6 +45,18 @@ class AIVideoAnalyzer: ObservableObject {
     private let timeoutInterval: TimeInterval = 45.0
     private let connectionTimeoutInterval: TimeInterval = 10.0
     
+    // MARK: - Caching: Connection test TTL (5 minutes)
+    // Saves 1 API call per video — connection test result reused within TTL window
+    
+    private let connectionTestTTL: TimeInterval = 300 // 5 minutes
+    
+    // MARK: - Caching: AI results by video URL
+    // Prevents duplicate Whisper ($) + GPT ($) calls if user cancels and re-opens composer
+    
+    private var aiResultCache: [String: CachedAIResult] = [:]
+    private let aiResultCacheTTL: TimeInterval = 600 // 10 minutes
+    private let maxCachedResults = 10
+    
     // Public access to check if AI is available
     var isAIAvailable: Bool {
         return !openAIAPIKey.isEmpty && !openAIAPIKey.hasPrefix("sk-your-") && connectionStatus == .connected
@@ -51,41 +70,46 @@ class AIVideoAnalyzer: ObservableObject {
     
     // MARK: - Initialization
     
-    init() {
-        // Get OpenAI API key from Config
-        self.openAIAPIKey = Config.API.OpenAI.apiKey
+    private init() {
+        // Get OpenAI API key from Secrets.plist via Secrets.swift
+        self.openAIAPIKey = Secrets.openAIKey
         
-        print("🚨🚨🚨 AI ANALYZER INITIALIZATION 🚨🚨🚨")
+        print("🧠 AI ANALYZER: Initialized (singleton)")
         print("📊 API KEY LENGTH: \(openAIAPIKey.count)")
-        print("🔑 API KEY PREFIX: \(String(openAIAPIKey.prefix(10)))...")
-        print("⚠️ PLACEHOLDER CHECK: hasPrefix('sk-your-') = \(openAIAPIKey.hasPrefix("sk-your-"))")
         
         if openAIAPIKey.isEmpty {
-            print("❌ AI ANALYZER: API key is EMPTY")
+            print("❌ AI ANALYZER: API key is EMPTY — check Secrets.plist")
             connectionStatus = .notConfigured
         } else if openAIAPIKey.hasPrefix("sk-your-") ||
                   openAIAPIKey.hasPrefix("sk-proj-your-") ||
-                  openAIAPIKey.contains("YOUR_API_KEY") {
+                  openAIAPIKey.contains("YOUR_API_KEY") ||
+                  openAIAPIKey.contains("PASTE_YOUR") {
             print("❌ AI ANALYZER: API key is PLACEHOLDER")
             connectionStatus = .notConfigured
         } else if !openAIAPIKey.hasPrefix("sk-") && !openAIAPIKey.hasPrefix("sk-proj-") {
             print("❌ AI ANALYZER: API key has INVALID FORMAT")
             connectionStatus = .notConfigured
         } else {
-            print("✅ AI ANALYZER: API key appears valid - testing connection...")
+            print("✅ AI ANALYZER: API key loaded from Secrets.plist")
             connectionStatus = .testing
-            
-            // Test connection on initialization
             Task {
                 await testConnection()
             }
         }
     }
     
-    // MARK: - Connection Testing
+    // MARK: - Connection Testing (CACHED — 5 min TTL)
     
-    /// Test OpenAI API connection
+    /// Test OpenAI API connection. Reuses cached result within TTL to avoid wasted calls.
     func testConnection() async {
+        // Check if cached connection test is still valid
+        if let lastTest = lastConnectionTest,
+           Date().timeIntervalSince(lastTest) < connectionTestTTL,
+           connectionStatus == .connected {
+            print("✅ CONNECTION: Using cached result (TTL: \(Int(connectionTestTTL - Date().timeIntervalSince(lastTest)))s remaining)")
+            return
+        }
+        
         print("🔧 AI ANALYZER: Testing OpenAI connection...")
         
         await MainActor.run {
@@ -101,26 +125,21 @@ class AIVideoAnalyzer: ObservableObject {
             request.addValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
             request.timeoutInterval = connectionTimeoutInterval
             
-            print("🌐 CONNECTION TEST: Sending request to \(url)")
-            
             let (data, response) = try await URLSession.shared.data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw AIAnalysisError.configurationError("Invalid response type")
             }
             
-            print("📡 CONNECTION TEST: HTTP Status \(httpResponse.statusCode)")
-            
             if httpResponse.statusCode == 200 {
                 await MainActor.run {
                     connectionStatus = .connected
-                    analysisStepDetails = "OpenAI API connected successfully"
+                    analysisStepDetails = "OpenAI API connected"
                 }
-                print("✅ CONNECTION TEST: OpenAI API is accessible")
+                print("✅ CONNECTION: OpenAI API accessible (cached for \(Int(connectionTestTTL))s)")
             } else {
                 let responseString = String(data: data, encoding: .utf8) ?? "No response body"
-                print("❌ CONNECTION TEST: HTTP \(httpResponse.statusCode) - \(responseString)")
-                
+                print("❌ CONNECTION: HTTP \(httpResponse.statusCode) - \(responseString)")
                 await MainActor.run {
                     connectionStatus = .error
                     analysisStepDetails = "Connection failed: HTTP \(httpResponse.statusCode)"
@@ -128,8 +147,7 @@ class AIVideoAnalyzer: ObservableObject {
             }
             
         } catch {
-            print("❌ CONNECTION TEST: Failed - \(error.localizedDescription)")
-            
+            print("❌ CONNECTION: Failed - \(error.localizedDescription)")
             await MainActor.run {
                 connectionStatus = .error
                 analysisStepDetails = "Connection error: \(error.localizedDescription)"
@@ -137,67 +155,95 @@ class AIVideoAnalyzer: ObservableObject {
         }
     }
     
+    // MARK: - AI Result Cache Management
+    
+    /// Check cache before calling Whisper + GPT (saves $$ on re-opens)
+    private func getCachedResult(for videoURL: URL) -> VideoAnalysisResult? {
+        let key = videoURL.lastPathComponent
+        guard let cached = aiResultCache[key],
+              Date().timeIntervalSince(cached.cachedAt) < aiResultCacheTTL else {
+            return nil
+        }
+        print("💾 AI CACHE HIT: Reusing result for \(key) — saved 2 API calls")
+        return cached.result
+    }
+    
+    /// Store result in cache after successful analysis
+    private func cacheResult(_ result: VideoAnalysisResult, for videoURL: URL) {
+        let key = videoURL.lastPathComponent
+        aiResultCache[key] = CachedAIResult(result: result, cachedAt: Date())
+        
+        // LRU eviction if over limit
+        if aiResultCache.count > maxCachedResults {
+            let oldest = aiResultCache.min { $0.value.cachedAt < $1.value.cachedAt }
+            if let oldestKey = oldest?.key {
+                aiResultCache.removeValue(forKey: oldestKey)
+            }
+        }
+        print("💾 AI CACHE: Stored result for \(key) (\(aiResultCache.count)/\(maxCachedResults))")
+    }
+    
+    /// Clear expired AI result cache entries
+    func cleanupAICache() {
+        let before = aiResultCache.count
+        aiResultCache = aiResultCache.filter {
+            Date().timeIntervalSince($0.value.cachedAt) < aiResultCacheTTL
+        }
+        let removed = before - aiResultCache.count
+        if removed > 0 {
+            print("💾 AI CACHE: Cleaned \(removed) expired entries")
+        }
+    }
+    
     // MARK: - Public Interface
     
     /// Analyzes video content and generates title, description, and hashtags
-    /// Falls back gracefully when API key is not configured, allowing manual content creation
-    /// - Parameter videoURL: Local URL of recorded video
-    /// - Returns: VideoAnalysisResult with generated content or nil if API unavailable (user creates own content)
+    /// Checks cache first to avoid duplicate API calls on re-opens
     func analyzeVideo(url videoURL: URL, userID: String) async -> VideoAnalysisResult? {
-        print("🚨🚨🚨 ANALYZE VIDEO CALLED 🚨🚨🚨")
-        print("👤 USER: \(userID)")
-        print("📱 VIDEO: \(videoURL.lastPathComponent)")
-        print("🔑 API KEY LENGTH: \(openAIAPIKey.count)")
-        print("🔗 CONNECTION STATUS: \(connectionStatus)")
+        
+        // CHECK CACHE FIRST — avoids Whisper + GPT calls if already analyzed
+        if let cached = getCachedResult(for: videoURL) {
+            await MainActor.run {
+                self.lastAnalysisResult = cached
+            }
+            return cached
+        }
         
         let startTime = Date()
         
-        // Enhanced API key validation
+        // API key validation
         guard !openAIAPIKey.isEmpty else {
-            print("❌ API KEY: Empty - returning nil for manual creation")
             await updateDebugStatus("API key not configured - manual mode")
             return nil
         }
         
         guard !openAIAPIKey.hasPrefix("sk-your-") else {
-            print("❌ API KEY: Placeholder detected - returning nil for manual creation")
             await updateDebugStatus("API key is placeholder - manual mode")
             return nil
         }
         
-        // Check connection status and test if needed
+        // Check connection (uses cached result within TTL)
         if connectionStatus != .connected {
-            print("❌ CONNECTION: Not connected (\(connectionStatus)) - testing connection...")
             await testConnection()
-            
             if connectionStatus != .connected {
-                print("❌ CONNECTION: Failed to connect - returning nil for manual creation")
                 await updateDebugStatus("Connection failed - manual mode")
                 return nil
             }
-            
-            print("✅ CONNECTION: Established during test - proceeding")
         }
         
-        print("✅ VALIDATION: All checks passed - proceeding with AI analysis")
-        
-        // Use timeout wrapper for the entire analysis process
-        return await withTaskGroup(of: VideoAnalysisResult?.self) { group in
+        // Run analysis with retry
+        let result = await withTaskGroup(of: VideoAnalysisResult?.self) { group in
             
-            // Main analysis task
             group.addTask {
                 return await self.performAnalysisWithRetry(url: videoURL, userID: userID, startTime: startTime)
             }
             
-            // Timeout task
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(self.timeoutInterval * 1_000_000_000))
-                print("⏰ TIMEOUT: Analysis timed out after \(self.timeoutInterval) seconds")
                 await self.updateDebugStatus("Analysis timed out - manual mode")
                 return nil
             }
             
-            // Return first completed result
             for await result in group {
                 group.cancelAll()
                 return result
@@ -205,78 +251,61 @@ class AIVideoAnalyzer: ObservableObject {
             
             return nil
         }
+        
+        // CACHE successful result
+        if let result = result {
+            cacheResult(result, for: videoURL)
+        }
+        
+        return result
     }
     
-    // MARK: - NEW: Pre-extracted Audio Analysis (FIXED: No Double Audio Extraction)
+    // MARK: - Pre-extracted Audio Analysis (No Double Extraction)
     
-    /// Analyzes video using pre-extracted audio data - prevents double audio extraction
-    /// Use this when audio has already been extracted by AudioExtractionService
-    /// - Parameters:
-    ///   - audioData: Pre-extracted audio data from video
-    ///   - userID: User performing the analysis
-    /// - Returns: VideoAnalysisResult with generated content or nil if API unavailable
-    func analyzeWithExtractedAudio(audioData: Data, userID: String) async -> VideoAnalysisResult? {
-        print("🚨🚨🚨 ANALYZE WITH EXTRACTED AUDIO CALLED 🚨🚨🚨")
-        print("👤 USER: \(userID)")
-        print("🎵 AUDIO SIZE: \(audioData.count) bytes")
-        print("🔑 API KEY LENGTH: \(openAIAPIKey.count)")
-        print("🔗 CONNECTION STATUS: \(connectionStatus)")
+    /// Analyzes video using pre-extracted audio data
+    func analyzeWithExtractedAudio(audioData: Data, videoURL: URL? = nil, userID: String) async -> VideoAnalysisResult? {
+        
+        // Check cache if videoURL provided
+        if let videoURL = videoURL, let cached = getCachedResult(for: videoURL) {
+            await MainActor.run { self.lastAnalysisResult = cached }
+            return cached
+        }
         
         let startTime = Date()
         
-        // Enhanced API key validation
-        guard !openAIAPIKey.isEmpty else {
-            print("❌ API KEY: Empty - returning nil for manual creation")
-            await updateDebugStatus("API key not configured - manual mode")
+        guard !openAIAPIKey.isEmpty, !openAIAPIKey.hasPrefix("sk-your-") else {
             return nil
         }
         
-        guard !openAIAPIKey.hasPrefix("sk-your-") else {
-            print("❌ API KEY: Placeholder detected - returning nil for manual creation")
-            await updateDebugStatus("API key is placeholder - manual mode")
-            return nil
-        }
-        
-        // Check connection status and test if needed
         if connectionStatus != .connected {
-            print("❌ CONNECTION: Not connected (\(connectionStatus)) - testing connection...")
             await testConnection()
-            
-            if connectionStatus != .connected {
-                print("❌ CONNECTION: Failed to connect - returning nil for manual creation")
-                await updateDebugStatus("Connection failed - manual mode")
-                return nil
-            }
-            
-            print("✅ CONNECTION: Established during test - proceeding")
+            if connectionStatus != .connected { return nil }
         }
         
-        print("✅ VALIDATION: All checks passed - proceeding with AI analysis")
-        
-        // Use timeout wrapper for the entire analysis process
-        return await withTaskGroup(of: VideoAnalysisResult?.self) { group in
+        let result = await withTaskGroup(of: VideoAnalysisResult?.self) { group in
             
-            // Main analysis task
             group.addTask {
                 return await self.performAnalysisWithExtractedAudio(audioData: audioData, userID: userID, startTime: startTime)
             }
             
-            // Timeout task
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(self.timeoutInterval * 1_000_000_000))
-                print("⏰ TIMEOUT: Analysis timed out after \(self.timeoutInterval) seconds")
-                await self.updateDebugStatus("Analysis timed out - manual mode")
                 return nil
             }
             
-            // Return first completed result
             for await result in group {
                 group.cancelAll()
                 return result
             }
-            
             return nil
         }
+        
+        // Cache if we have a URL key
+        if let result = result, let videoURL = videoURL {
+            cacheResult(result, for: videoURL)
+        }
+        
+        return result
     }
     
     // MARK: - Analysis Implementation
@@ -285,72 +314,50 @@ class AIVideoAnalyzer: ObservableObject {
         var lastError: Error?
         
         for attempt in 1...maxRetries {
-            print("🔄 ATTEMPT \(attempt)/\(maxRetries): Starting analysis attempt")
-            
             do {
                 let result = try await performAnalysis(url: videoURL, userID: userID, startTime: startTime)
-                print("✅ SUCCESS: Analysis completed on attempt \(attempt)")
                 return result
-                
             } catch {
                 lastError = error
                 print("❌ ATTEMPT \(attempt) FAILED: \(error.localizedDescription)")
-                
                 if attempt < maxRetries {
-                    let delay = TimeInterval(attempt * 2) // Exponential backoff
-                    print("⏳ RETRY: Waiting \(delay) seconds before attempt \(attempt + 1)")
+                    let delay = TimeInterval(attempt * 2)
                     await updateDebugStatus("Attempt \(attempt) failed, retrying in \(Int(delay))s...")
-                    
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 }
             }
         }
         
-        print("❌ ALL ATTEMPTS FAILED: Final error - \(lastError?.localizedDescription ?? "Unknown")")
-        await updateDebugStatus("All attempts failed - manual mode")
-        
         await MainActor.run {
             self.isAnalyzing = false
             self.analysisError = lastError as? AIAnalysisError ?? .unknown(lastError?.localizedDescription ?? "Analysis failed")
-            self.showingError = false // Don't show error UI, just log and allow manual creation
+            self.showingError = false
         }
         
         return nil
     }
     
-    // NEW: Analysis with pre-extracted audio (FIXED: No Double Audio Extraction)
     private func performAnalysisWithExtractedAudio(audioData: Data, userID: String, startTime: Date) async -> VideoAnalysisResult? {
         var lastError: Error?
         
         for attempt in 1...maxRetries {
-            print("🔄 ATTEMPT \(attempt)/\(maxRetries): Starting extracted audio analysis attempt")
-            
             do {
                 let result = try await performAnalysisFromAudioData(audioData: audioData, userID: userID, startTime: startTime)
-                print("✅ SUCCESS: Extracted audio analysis completed on attempt \(attempt)")
                 return result
-                
             } catch {
                 lastError = error
                 print("❌ ATTEMPT \(attempt) FAILED: \(error.localizedDescription)")
-                
                 if attempt < maxRetries {
-                    let delay = TimeInterval(attempt * 2) // Exponential backoff
-                    print("⏳ RETRY: Waiting \(delay) seconds before attempt \(attempt + 1)")
-                    await updateDebugStatus("Attempt \(attempt) failed, retrying in \(Int(delay))s...")
-                    
+                    let delay = TimeInterval(attempt * 2)
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 }
             }
         }
         
-        print("❌ ALL ATTEMPTS FAILED: Final error - \(lastError?.localizedDescription ?? "Unknown")")
-        await updateDebugStatus("All attempts failed - manual mode")
-        
         await MainActor.run {
             self.isAnalyzing = false
             self.analysisError = lastError as? AIAnalysisError ?? .unknown(lastError?.localizedDescription ?? "Analysis failed")
-            self.showingError = false // Don't show error UI, just log and allow manual creation
+            self.showingError = false
         }
         
         return nil
@@ -364,30 +371,22 @@ class AIVideoAnalyzer: ObservableObject {
         }
         
         do {
-            // Step 1: Extract audio from video (25% progress)
+            // Step 1: Extract audio (25%)
             await updateDebugStatus("Extracting audio from video...")
             await updateProgress(0.25)
             let audioData = try await extractAudioFromVideo(videoURL)
-            print("🎵 AUDIO: Extracted successfully, size: \(audioData.count) bytes")
             
-            // Step 2: Transcribe audio to text (60% progress)
+            // Step 2: Transcribe with Whisper (60%)
             await updateDebugStatus("Transcribing audio with Whisper...")
             await updateProgress(0.6)
             let transcript = try await transcribeAudio(audioData)
-            print("📝 TRANSCRIPT: Generated, length: \(transcript.count) characters")
-            print("📝 PREVIEW: '\(String(transcript.prefix(100)))...'")
             
-            // Step 3: Generate content using GPT (90% progress)
+            // Step 3: Generate content with GPT (90%)
             await updateDebugStatus("Generating content with GPT...")
             await updateProgress(0.9)
             let result = try await generateContentFromTranscript(transcript)
-            print("🎯 CONTENT: Generated successfully")
-            print("🎯 TITLE: '\(result.title)'")
-            print("🎯 DESCRIPTION: '\(result.description)'")
-            print("🎯 HASHTAGS: \(result.hashtags)")
             
-            // Step 4: Complete analysis (100% progress)
-            await updateDebugStatus("Analysis complete!")
+            // Step 4: Complete (100%)
             await updateProgress(1.0)
             
             await MainActor.run {
@@ -396,40 +395,19 @@ class AIVideoAnalyzer: ObservableObject {
                 self.totalAnalysesPerformed += 1
             }
             
-            // Record successful analysis
-            recordAnalysisMetrics(
-                duration: Date().timeIntervalSince(startTime),
-                success: true,
-                transcriptLength: transcript.count,
-                error: nil
-            )
-            
-            print("🎉 SUCCESS: Video analysis completed in \(Date().timeIntervalSince(startTime).formatted())s")
+            recordAnalysisMetrics(duration: Date().timeIntervalSince(startTime), success: true, transcriptLength: transcript.count, error: nil)
             return result
             
         } catch {
-            print("💥 ANALYSIS ERROR: \(error)")
-            print("💥 ERROR TYPE: \(type(of: error))")
-            print("💥 DESCRIPTION: \(error.localizedDescription)")
-            
             await MainActor.run {
                 self.isAnalyzing = false
                 self.analysisError = error as? AIAnalysisError ?? .unknown(error.localizedDescription)
             }
-            
-            // Record failed analysis
-            recordAnalysisMetrics(
-                duration: Date().timeIntervalSince(startTime),
-                success: false,
-                transcriptLength: 0,
-                error: error
-            )
-            
+            recordAnalysisMetrics(duration: Date().timeIntervalSince(startTime), success: false, transcriptLength: 0, error: error)
             throw error
         }
     }
     
-    // NEW: Analysis using pre-extracted audio data (FIXED: No Double Audio Extraction)
     private func performAnalysisFromAudioData(audioData: Data, userID: String, startTime: Date) async throws -> VideoAnalysisResult {
         await MainActor.run {
             self.isAnalyzing = true
@@ -438,29 +416,18 @@ class AIVideoAnalyzer: ObservableObject {
         }
         
         do {
-            // Step 1: Skip audio extraction (already done) - Start at 25%
-            await updateDebugStatus("Using pre-extracted audio...")
             await updateProgress(0.25)
-            print("🎵 AUDIO: Using pre-extracted audio, size: \(audioData.count) bytes")
             
-            // Step 2: Transcribe audio to text (60% progress)
+            // Step 2: Transcribe (60%)
             await updateDebugStatus("Transcribing audio with Whisper...")
             await updateProgress(0.6)
             let transcript = try await transcribeAudio(audioData)
-            print("📝 TRANSCRIPT: Generated, length: \(transcript.count) characters")
-            print("📝 PREVIEW: '\(String(transcript.prefix(100)))...'")
             
-            // Step 3: Generate content using GPT (90% progress)
+            // Step 3: Generate content (90%)
             await updateDebugStatus("Generating content with GPT...")
             await updateProgress(0.9)
             let result = try await generateContentFromTranscript(transcript)
-            print("🎯 CONTENT: Generated successfully")
-            print("🎯 TITLE: '\(result.title)'")
-            print("🎯 DESCRIPTION: '\(result.description)'")
-            print("🎯 HASHTAGS: \(result.hashtags)")
             
-            // Step 4: Complete analysis (100% progress)
-            await updateDebugStatus("Analysis complete!")
             await updateProgress(1.0)
             
             await MainActor.run {
@@ -469,45 +436,22 @@ class AIVideoAnalyzer: ObservableObject {
                 self.totalAnalysesPerformed += 1
             }
             
-            // Record successful analysis
-            recordAnalysisMetrics(
-                duration: Date().timeIntervalSince(startTime),
-                success: true,
-                transcriptLength: transcript.count,
-                error: nil
-            )
-            
-            print("🎉 SUCCESS: Extracted audio analysis completed in \(Date().timeIntervalSince(startTime).formatted())s")
+            recordAnalysisMetrics(duration: Date().timeIntervalSince(startTime), success: true, transcriptLength: transcript.count, error: nil)
             return result
             
         } catch {
-            print("💥 ANALYSIS ERROR: \(error)")
-            print("💥 ERROR TYPE: \(type(of: error))")
-            print("💥 DESCRIPTION: \(error.localizedDescription)")
-            
             await MainActor.run {
                 self.isAnalyzing = false
                 self.analysisError = error as? AIAnalysisError ?? .unknown(error.localizedDescription)
             }
-            
-            // Record failed analysis
-            recordAnalysisMetrics(
-                duration: Date().timeIntervalSince(startTime),
-                success: false,
-                transcriptLength: 0,
-                error: error
-            )
-            
+            recordAnalysisMetrics(duration: Date().timeIntervalSince(startTime), success: false, transcriptLength: 0, error: error)
             throw error
         }
     }
     
     // MARK: - Audio Processing
     
-    /// Extracts audio track from video for transcription
     private func extractAudioFromVideo(_ videoURL: URL) async throws -> Data {
-        print("🎵 AUDIO EXTRACTION: Starting for \(videoURL.lastPathComponent)")
-        
         return try await withCheckedThrowingContinuation { continuation in
             Task {
                 do {
@@ -515,7 +459,6 @@ class AIVideoAnalyzer: ObservableObject {
                     let preset = AVAssetExportPresetAppleM4A
                     
                     guard let exportSession = AVAssetExportSession(asset: asset, presetName: preset) else {
-                        print("❌ AUDIO EXTRACTION: Failed to create export session")
                         continuation.resume(throwing: AIAnalysisError.audioExtractionFailed("Failed to create export session"))
                         return
                     }
@@ -525,73 +468,61 @@ class AIVideoAnalyzer: ObservableObject {
                     exportSession.outputURL = tempURL
                     exportSession.outputFileType = .m4a
                     
-                    print("🎵 AUDIO EXTRACTION: Starting export to \(tempURL.lastPathComponent)")
-                    
                     await exportSession.export()
                     
                     switch exportSession.status {
                     case .completed:
-                        print("🎵 AUDIO EXTRACTION: Export completed successfully")
-                        
                         do {
                             let audioData = try Data(contentsOf: tempURL)
                             try? FileManager.default.removeItem(at: tempURL)
-                            print("🎵 AUDIO EXTRACTION: Data loaded, size: \(audioData.count) bytes")
                             continuation.resume(returning: audioData)
                         } catch {
-                            print("❌ AUDIO EXTRACTION: Failed to read audio data: \(error)")
                             continuation.resume(throwing: AIAnalysisError.audioExtractionFailed("Failed to read audio data"))
                         }
                         
                     case .failed:
                         let errorMessage = exportSession.error?.localizedDescription ?? "Unknown export error"
-                        print("❌ AUDIO EXTRACTION: Export failed: \(errorMessage)")
                         continuation.resume(throwing: AIAnalysisError.audioExtractionFailed("Export failed: \(errorMessage)"))
                         
                     default:
-                        print("❌ AUDIO EXTRACTION: Unexpected status: \(exportSession.status.rawValue)")
                         continuation.resume(throwing: AIAnalysisError.audioExtractionFailed("Unexpected export status"))
                     }
                     
                 } catch {
-                    print("❌ AUDIO EXTRACTION: General error: \(error)")
                     continuation.resume(throwing: AIAnalysisError.audioExtractionFailed("Audio extraction failed: \(error.localizedDescription)"))
                 }
             }
         }
     }
     
-    /// Transcribes audio data to text using OpenAI Whisper
+    // MARK: - Whisper Transcription
+    
     private func transcribeAudio(_ audioData: Data) async throws -> String {
-        print("🎤 TRANSCRIPTION: Starting with \(audioData.count) bytes")
-        
         let url = URL(string: "\(Config.API.OpenAI.baseURL)/audio/transcriptions")!
-        print("🎤 URL: \(url)")
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = timeoutInterval
         
-        // Create multipart form data
         let boundary = UUID().uuidString
         request.addValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         
         var body = Data()
         
-        // Add model parameter
+        // Model
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n".data(using: .utf8)!)
         body.append("whisper-1\r\n".data(using: .utf8)!)
         
-        // Add audio file
+        // Audio file
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\n".data(using: .utf8)!)
         body.append("Content-Type: audio/m4a\r\n\r\n".data(using: .utf8)!)
         body.append(audioData)
         body.append("\r\n".data(using: .utf8)!)
         
-        // Add response format
+        // Response format
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n".data(using: .utf8)!)
         body.append("text\r\n".data(using: .utf8)!)
@@ -600,43 +531,29 @@ class AIVideoAnalyzer: ObservableObject {
         
         request.httpBody = body
         
-        print("🎤 TRANSCRIPTION: Sending request, body size: \(body.count) bytes")
-        
         let (data, response) = try await URLSession.shared.data(for: request)
-        
-        print("🎤 TRANSCRIPTION: Response received")
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AIAnalysisError.transcriptionFailed("Invalid response type")
         }
         
-        print("🎤 HTTP STATUS: \(httpResponse.statusCode)")
-        
         guard httpResponse.statusCode == 200 else {
             let responseString = String(data: data, encoding: .utf8) ?? "No response body"
-            print("❌ TRANSCRIPTION ERROR: HTTP \(httpResponse.statusCode) - \(responseString)")
             throw AIAnalysisError.transcriptionFailed("HTTP \(httpResponse.statusCode): \(responseString)")
         }
         
         guard let transcript = String(data: data, encoding: .utf8),
               !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            let responseString = String(data: data, encoding: .utf8) ?? "No response"
-            print("❌ TRANSCRIPTION: Empty transcript - \(responseString)")
             throw AIAnalysisError.transcriptionFailed("Empty transcript")
         }
         
-        let cleanTranscript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        print("✅ TRANSCRIPTION SUCCESS: \(cleanTranscript.count) characters")
-        return cleanTranscript
+        return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
-    /// Generates content using OpenAI GPT
+    // MARK: - GPT Content Generation (UPDATED: Stitch Dynamic tone-matching prompt)
+    
     private func generateContentFromTranscript(_ transcript: String) async throws -> VideoAnalysisResult {
-        print("🧠 CONTENT GENERATION: Starting with transcript (\(transcript.count) chars)")
-        print("🧠 PREVIEW: '\(String(transcript.prefix(50)))...'")
-        
         let url = URL(string: "\(Config.API.OpenAI.baseURL)/chat/completions")!
-        print("🧠 URL: \(url)")
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -644,20 +561,43 @@ class AIVideoAnalyzer: ObservableObject {
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = timeoutInterval
         
-        // Create content generation request
+        // UPDATED: Uses the Stitch Dynamic prompt from OpenAI dashboard
+        let systemPrompt = """
+        You are a social media assistant that adapts your tone based on the speaker's personality and dialect.
+
+        You will receive a transcript and visual tags. Based on the transcript, infer the speaker's tone and personality. Choose from:
+        - Urban Hype (bold, slang-heavy, energetic)
+        - Motivational Coach (uplifting, powerful, inspiring)
+        - Gen Z Trendsetter (casual, funny, trendy)
+        - Chill Vibes (laid-back, poetic, smooth)
+        - Comedy Vibes (funny, relatable, viral)
+        - Fashionista (stylish, confident, aesthetic)
+        - Neutral (professional, clear, informative)
+
+        Then generate a JSON response:
+        {
+          "title": "short, tone-matching title (under 60 chars)",
+          "description": "caption in the speaker's tone",
+          "hashtags": ["relevant", "tone-matching", "hashtags"],
+          "confidence": 0.95
+        }
+
+        Use the following style examples as tone anchors:
+        - Urban Hype: "This fit is SENDING me 🔥💯 No cap, I understood the assignment fr"
+        - Motivational Coach: "Your mindset determines your success! Keep grinding 💪✨"
+        - Gen Z Trendsetter: "Not me absolutely serving looks today bestie ✨"
+        - Chill Vibes: "Just embracing the soft life today 🌺"
+        - Comedy Vibes: "POV: You thought you looked cute but the camera said 'try again' 😭💀"
+        - Fashionista: "The way this outfit is absolutely eating... I know y'all see the vision 💅✨"
+        """
+        
         let contentRequest = OpenAIContentRequest(
             model: "gpt-4o-mini",
             messages: [
-                ChatMessage(
-                    role: "system",
-                    content: "You are a social media content expert for Stitch, a video conversation platform. Based on the video transcript, generate an engaging title, description, and relevant hashtags for a short-form video. The title should be catchy and encourage responses. The description should explain what the video is about and invite discussion. Hashtags should be relevant and trending. Respond only with valid JSON in the exact format: {\"title\": \"string\", \"description\": \"string\", \"hashtags\": [\"tag1\", \"tag2\", \"tag3\"]}"
-                ),
-                ChatMessage(
-                    role: "user",
-                    content: "Video transcript: \(transcript)"
-                )
+                ChatMessage(role: "system", content: systemPrompt),
+                ChatMessage(role: "user", content: "Video transcript: \(transcript)")
             ],
-            max_tokens: 500,
+            max_tokens: 300,
             temperature: 0.7,
             response_format: ResponseFormat(type: "json_object")
         )
@@ -665,77 +605,48 @@ class AIVideoAnalyzer: ObservableObject {
         let requestData = try JSONEncoder().encode(contentRequest)
         request.httpBody = requestData
         
-        print("🧠 CONTENT GENERATION: Sending request to GPT")
-        
         let (data, response) = try await URLSession.shared.data(for: request)
-        
-        print("🧠 CONTENT GENERATION: Response received")
         
         guard let httpResponse = response as? HTTPURLResponse else {
             throw AIAnalysisError.contentGenerationFailed("Invalid response type")
         }
         
-        print("🧠 HTTP STATUS: \(httpResponse.statusCode)")
-        
         guard httpResponse.statusCode == 200 else {
             let responseString = String(data: data, encoding: .utf8) ?? "No response body"
-            print("❌ CONTENT ERROR: HTTP \(httpResponse.statusCode) - \(responseString)")
             throw AIAnalysisError.contentGenerationFailed("HTTP \(httpResponse.statusCode): \(responseString)")
         }
-        
-        // Parse OpenAI response
-        let responseString = String(data: data, encoding: .utf8) ?? "No response"
-        print("🧠 RAW RESPONSE: \(responseString)")
         
         let openAIResponse = try JSONDecoder().decode(OpenAIResponse.self, from: data)
         
         guard let choice = openAIResponse.choices.first,
               let contentJSON = choice.message.content.data(using: .utf8) else {
-            print("❌ CONTENT: Invalid response format")
             throw AIAnalysisError.contentGenerationFailed("Invalid response format")
         }
         
-        print("🧠 CONTENT JSON: \(choice.message.content)")
-        
-        // Parse generated content
         let result = try JSONDecoder().decode(VideoAnalysisResult.self, from: contentJSON)
         
-        // Validate result
         guard !result.title.isEmpty,
               !result.description.isEmpty,
               !result.hashtags.isEmpty,
               result.title.count <= 100,
               result.description.count <= 300,
               result.hashtags.count <= 10 else {
-            print("❌ VALIDATION FAILED:")
-            print("   Title: '\(result.title)' (\(result.title.count) chars)")
-            print("   Description: '\(result.description)' (\(result.description.count) chars)")
-            print("   Hashtags: \(result.hashtags) (\(result.hashtags.count) tags)")
             throw AIAnalysisError.contentGenerationFailed("Generated content validation failed")
         }
         
-        print("✅ CONTENT SUCCESS: Valid content generated")
         return result
     }
     
     // MARK: - Helper Methods
     
-    /// Updates analysis progress
     private func updateProgress(_ progress: Double) async {
-        await MainActor.run {
-            self.analysisProgress = progress
-        }
+        await MainActor.run { self.analysisProgress = progress }
     }
     
-    /// Updates debug status message
     private func updateDebugStatus(_ message: String) async {
-        await MainActor.run {
-            self.analysisStepDetails = message
-        }
-        print("📊 DEBUG: \(message)")
+        await MainActor.run { self.analysisStepDetails = message }
     }
     
-    /// Records analysis metrics for performance tracking
     private func recordAnalysisMetrics(duration: TimeInterval, success: Bool, transcriptLength: Int, error: Error?) {
         let metrics = AnalysisMetrics(
             timestamp: Date(),
@@ -747,19 +658,15 @@ class AIVideoAnalyzer: ObservableObject {
         
         analysisHistory.append(metrics)
         
-        // Keep only last 50 metrics
+        // Keep only last 50
         if analysisHistory.count > 50 {
             analysisHistory.removeFirst()
         }
         
-        // Update success rate
         let recentSuccesses = analysisHistory.filter { $0.success }.count
         successRate = Double(recentSuccesses) / Double(analysisHistory.count) * 100.0
-        
-        print("📊 METRICS: Duration: \(duration.formatted())s, Success: \(success), Rate: \(successRate.formatted())%")
     }
     
-    /// Get analytics statistics
     func getAnalyticsStats() -> AnalyticsStats {
         let avgDuration = analysisHistory.isEmpty ? 0 : analysisHistory.reduce(0) { $0 + $1.duration } / Double(analysisHistory.count)
         
@@ -772,9 +679,15 @@ class AIVideoAnalyzer: ObservableObject {
     }
 }
 
+// MARK: - Cached AI Result
+
+struct CachedAIResult {
+    let result: VideoAnalysisResult
+    let cachedAt: Date
+}
+
 // MARK: - Data Models
 
-/// Connection status for debugging
 enum ConnectionStatus: String, CaseIterable {
     case unknown = "unknown"
     case notConfigured = "notConfigured"
@@ -803,7 +716,6 @@ enum ConnectionStatus: String, CaseIterable {
     }
 }
 
-/// OpenAI chat completion request
 struct OpenAIContentRequest: Codable {
     let model: String
     let messages: [ChatMessage]
@@ -821,7 +733,6 @@ struct ResponseFormat: Codable {
     let type: String
 }
 
-/// OpenAI API response
 struct OpenAIResponse: Codable {
     let choices: [Choice]
     
@@ -830,13 +741,11 @@ struct OpenAIResponse: Codable {
     }
 }
 
-/// Video analysis result from AI
 struct VideoAnalysisResult: Codable {
     let title: String
     let description: String
     let hashtags: [String]
     
-    /// Validates the analysis result
     var isValid: Bool {
         return !title.isEmpty &&
                !description.isEmpty &&
@@ -847,7 +756,6 @@ struct VideoAnalysisResult: Codable {
     }
 }
 
-/// AI analysis error types
 enum AIAnalysisError: Error, LocalizedError {
     case configurationError(String)
     case audioExtractionFailed(String)
@@ -857,21 +765,15 @@ enum AIAnalysisError: Error, LocalizedError {
     
     var errorDescription: String? {
         switch self {
-        case .configurationError(let message):
-            return "Configuration Error: \(message)"
-        case .audioExtractionFailed(let message):
-            return "Audio Extraction Failed: \(message)"
-        case .transcriptionFailed(let message):
-            return "Transcription Failed: \(message)"
-        case .contentGenerationFailed(let message):
-            return "Content Generation Failed: \(message)"
-        case .unknown(let message):
-            return "Unknown Error: \(message)"
+        case .configurationError(let message): return "Configuration Error: \(message)"
+        case .audioExtractionFailed(let message): return "Audio Extraction Failed: \(message)"
+        case .transcriptionFailed(let message): return "Transcription Failed: \(message)"
+        case .contentGenerationFailed(let message): return "Content Generation Failed: \(message)"
+        case .unknown(let message): return "Unknown Error: \(message)"
         }
     }
 }
 
-/// Analysis performance metrics
 struct AnalysisMetrics {
     let timestamp: Date
     let duration: TimeInterval
@@ -880,7 +782,6 @@ struct AnalysisMetrics {
     let error: String?
 }
 
-/// Analytics statistics
 struct AnalyticsStats {
     let totalAnalyses: Int
     let successRate: Double

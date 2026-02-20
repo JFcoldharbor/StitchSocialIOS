@@ -10,6 +10,7 @@
 
 import Foundation
 import FirebaseFirestore
+import FirebaseAuth
 
 // NOTE: RecentUser and LeaderboardVideo are defined in RecentUser.swift
 
@@ -83,6 +84,9 @@ class DiscoveryService: ObservableObject {
                 let videoID = document.data()[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
                 
                 guard !loadedVideoIDs.contains(videoID) else { continue }
+                
+                // Skip collection segments — they appear in Collections tab only
+                if document.data()["isCollectionSegment"] as? Bool == true { continue }
                 
                 if let thread = createThreadFromDocument(document) {
                     newThreads.append(thread)
@@ -167,6 +171,20 @@ class DiscoveryService: ObservableObject {
         
         let id = data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
         guard !id.isEmpty else { return nil }
+        
+        // Privacy filter: skip non-public or discovery-excluded videos
+        let visibility = data["visibility"] as? String ?? "public"
+        let excludeFromDiscovery = data["excludeFromDiscovery"] as? Bool ?? false
+        
+        if visibility != "public" || excludeFromDiscovery {
+            return nil
+        }
+        
+        // Teen safety: teen users only see teenSafe content
+        if PrivacyService.shared.cachedAgeGroup == .teen {
+            let teenSafe = data["teenSafe"] as? Bool ?? false
+            if !teenSafe { return nil }
+        }
         
         let parentVideo = createCoreVideoMetadata(from: data, id: id)
         return ThreadData(id: id, parentVideo: parentVideo, childVideos: [])
@@ -437,5 +455,284 @@ class DiscoveryService: ObservableObject {
         
         print("✅ DISCOVERY: Found \(leaderboardVideos.count) leaderboard videos (last 7 days, hyped)")
         return leaderboardVideos
+    }
+    
+    // MARK: - Algorithm Lanes
+    
+    /// Following feed — videos from users the current user follows.
+    /// BATCHING: Uses PrivacyService cached following IDs (0 extra reads if cached).
+    /// Firestore IN query limited to 10, so chunked for users following many people.
+    func getFollowingFeed(limit: Int = 40) async throws -> [ThreadData] {
+        isLoading = true
+        defer { isLoading = false }
+        
+        let followingIDs: [String]
+        if !PrivacyService.shared.cachedFollowingIDs.isEmpty {
+            followingIDs = Array(PrivacyService.shared.cachedFollowingIDs)
+        } else {
+            guard let uid = FirebaseAuth.Auth.auth().currentUser?.uid else { return [] }
+            followingIDs = try await UserService().getFollowingIDs(userID: uid)
+        }
+        
+        guard !followingIDs.isEmpty else { return [] }
+        
+        // Firestore IN supports max 10
+        var allThreads: [ThreadData] = []
+        let chunks = stride(from: 0, to: min(followingIDs.count, 30), by: 10).map {
+            Array(followingIDs[$0..<min($0 + 10, followingIDs.count)])
+        }
+        
+        for chunk in chunks {
+            let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+                .whereField(FirebaseSchema.VideoDocument.creatorID, in: chunk)
+                .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
+                .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
+                .limit(to: limit)
+                .getDocuments()
+            
+            for doc in snapshot.documents {
+                if let thread = createThreadFromDocument(doc) {
+                    allThreads.append(thread)
+                }
+            }
+        }
+        
+        // Sort by date, deduplicate, take limit
+        let sorted = allThreads
+            .sorted { $0.parentVideo.createdAt > $1.parentVideo.createdAt }
+        let seen = NSMutableSet()
+        let deduped = sorted.filter { seen.add($0.id) != nil ? false : true }
+        
+        print("❤️ FOLLOWING: Returning \(min(limit, deduped.count)) videos from followed creators")
+        return Array(deduped.prefix(limit))
+    }
+    
+    /// Hot Hashtags — videos from trending hashtags.
+    /// Reuses HashtagService trending list, then fetches videos matching top tags.
+    func getHotHashtagDiscovery(limit: Int = 40) async throws -> [ThreadData] {
+        isLoading = true
+        defer { isLoading = false }
+        
+        let hashtagService = HashtagService()
+        await hashtagService.loadTrendingHashtags(limit: 5)
+        let topTags = hashtagService.trendingHashtags.map { $0.tag }
+        
+        guard !topTags.isEmpty else {
+            return try await getTrendingDiscovery(limit: limit)
+        }
+        
+        var allThreads: [ThreadData] = []
+        
+        for tag in topTags.prefix(3) {
+            let result = try await hashtagService.getVideosForHashtag(tag, limit: 15)
+            for video in result.videos {
+                let thread = ThreadData(id: video.id, parentVideo: video, childVideos: [])
+                allThreads.append(thread)
+            }
+        }
+        
+        let shuffled = allThreads.shuffled()
+        print("#️⃣ HOT HASHTAGS: Returning \(min(limit, shuffled.count)) videos from trending tags")
+        return Array(shuffled.prefix(limit))
+    }
+    
+    /// Heat Check — only BLAZING and HOT temperature videos.
+    /// Single query with in-memory temperature filter.
+    func getHeatCheckDiscovery(limit: Int = 40) async throws -> [ThreadData] {
+        isLoading = true
+        defer { isLoading = false }
+        
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
+            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
+            .limit(to: limit * 4)
+            .getDocuments()
+        
+        var threads: [ThreadData] = []
+        let hotTemps: Set<String> = ["blazing", "hot"]
+        
+        for doc in snapshot.documents {
+            guard let data = doc.data() as? [String: Any],
+                  let temp = data[FirebaseSchema.VideoDocument.temperature] as? String,
+                  hotTemps.contains(temp.lowercased()) else { continue }
+            
+            if let thread = createThreadFromDocument(doc) {
+                threads.append(thread)
+                if threads.count >= limit { break }
+            }
+        }
+        
+        print("🌡️ HEAT CHECK: Returning \(threads.count) blazing/hot videos")
+        return threads.shuffled()
+    }
+    
+    /// Undiscovered — low view count videos from newer/smaller creators.
+    /// Surfaces content that hasn't gotten attention yet.
+    func getUndiscoveredDiscovery(limit: Int = 40) async throws -> [ThreadData] {
+        isLoading = true
+        defer { isLoading = false }
+        
+        // Fetch recent videos sorted by oldest first (less likely to be seen)
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
+            .order(by: FirebaseSchema.VideoDocument.viewCount)
+            .limit(to: limit * 3)
+            .getDocuments()
+        
+        var threads: [ThreadData] = []
+        
+        for doc in snapshot.documents {
+            guard let data = doc.data() as? [String: Any] else { continue }
+            let viewCount = data[FirebaseSchema.VideoDocument.viewCount] as? Int ?? 0
+            
+            // Only include low-view videos (under 50 views)
+            guard viewCount < 50 else { continue }
+            
+            if let thread = createThreadFromDocument(doc) {
+                threads.append(thread)
+                if threads.count >= limit { break }
+            }
+        }
+        
+        print("🔭 UNDISCOVERED: Returning \(threads.count) low-view videos")
+        return threads.shuffled()
+    }
+    
+    /// Longest Threads — threads with the most replies (deep conversations).
+    func getLongestThreadsDiscovery(limit: Int = 40) async throws -> [ThreadData] {
+        isLoading = true
+        defer { isLoading = false }
+        
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
+            .order(by: FirebaseSchema.VideoDocument.replyCount, descending: true)
+            .limit(to: limit)
+            .getDocuments()
+        
+        let threads = snapshot.documents.compactMap { createThreadFromDocument($0) }
+        
+        print("💬 LONGEST THREADS: Returning \(threads.count) most-replied threads")
+        return threads
+    }
+    
+    /// Spin-Offs — videos that are remixes/spin-offs of other content.
+    /// Filters for non-nil spinOffFromVideoID in memory since Firestore can't query != nil easily.
+    func getSpinOffDiscovery(limit: Int = 40) async throws -> [ThreadData] {
+        isLoading = true
+        defer { isLoading = false }
+        
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
+            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
+            .limit(to: limit * 5)
+            .getDocuments()
+        
+        var threads: [ThreadData] = []
+        
+        for doc in snapshot.documents {
+            guard let data = doc.data() as? [String: Any],
+                  let spinOffID = data["spinOffFromVideoID"] as? String,
+                  !spinOffID.isEmpty else { continue }
+            
+            if let thread = createThreadFromDocument(doc) {
+                threads.append(thread)
+                if threads.count >= limit { break }
+            }
+        }
+        
+        print("🔀 SPIN-OFFS: Returning \(threads.count) spin-off videos")
+        return threads.shuffled()
+    }
+    
+    // MARK: - Collection Discovery Lanes
+    
+    /// Fetch published collections by content type.
+    /// CACHING: Results cached in DiscoveryViewModel for session. 1 query per lane.
+    func getCollectionsByType(_ types: [String], limit: Int = 20) async throws -> [VideoCollection] {
+        guard !types.isEmpty else { return [] }
+        
+        let snapshot = try await db.collection("videoCollections")
+            .whereField("status", isEqualTo: "published")
+            .whereField("visibility", isEqualTo: "public")
+            .order(by: "publishedAt", descending: true)
+            .limit(to: limit * 2)
+            .getDocuments()
+        
+        var collections: [VideoCollection] = []
+        
+        for doc in snapshot.documents {
+            let data = doc.data()
+            let contentType = data["contentType"] as? String ?? "standard"
+            
+            // Filter by requested types
+            guard types.contains(contentType) else { continue }
+            
+            if let collection = parseVideoCollection(from: data, id: doc.documentID) {
+                collections.append(collection)
+                if collections.count >= limit { break }
+            }
+        }
+        
+        print("🎬 COLLECTIONS: Returning \(collections.count) collections for types: \(types)")
+        return collections
+    }
+    
+    /// Podcast discovery — podcasts + interviews
+    /// All collections discovery — all published public collections sorted by recency
+    /// CACHING: Results cached in DiscoveryViewModel.discoveryCollections, refreshed on tab tap.
+    /// Single Firestore read per tab selection.
+    func getAllCollectionsDiscovery(limit: Int = 30) async throws -> [VideoCollection] {
+        let snapshot = try await db.collection("videoCollections")
+            .whereField("status", isEqualTo: "published")
+            .whereField("visibility", isEqualTo: "public")
+            .order(by: "publishedAt", descending: true)
+            .limit(to: limit)
+            .getDocuments()
+        
+        let collections = snapshot.documents.compactMap { parseVideoCollection(from: $0.data(), id: $0.documentID) }
+        print("📚 DISCOVERY: Loaded \(collections.count) collections for discovery")
+        return collections
+    }
+    
+    /// Podcasts discovery — interviews + podcasts
+    func getPodcastDiscovery(limit: Int = 20) async throws -> [VideoCollection] {
+        return try await getCollectionsByType(["podcast", "interview"], limit: limit)
+    }
+    
+    /// Films discovery — short films + documentaries
+    func getFilmsDiscovery(limit: Int = 20) async throws -> [VideoCollection] {
+        return try await getCollectionsByType(["shortFilm", "documentary"], limit: limit)
+    }
+    
+    // MARK: - Collection Parsing Helper
+    
+    private func parseVideoCollection(from data: [String: Any], id: String) -> VideoCollection? {
+        let title = data["title"] as? String ?? ""
+        guard !title.isEmpty else { return nil }
+        
+        return VideoCollection(
+            id: id,
+            title: title,
+            description: data["description"] as? String ?? "",
+            creatorID: data["creatorID"] as? String ?? "",
+            creatorName: data["creatorName"] as? String ?? "",
+            coverImageURL: data["thumbnailURL"] as? String ?? data["coverImageURL"] as? String,
+            segmentIDs: data["segmentVideoIDs"] as? [String] ?? [],
+            segmentCount: data["segmentCount"] as? Int ?? 0,
+            totalDuration: data["totalDuration"] as? TimeInterval ?? 0,
+            status: CollectionStatus(rawValue: data["status"] as? String ?? "") ?? .published,
+            visibility: CollectionVisibility(rawValue: data["visibility"] as? String ?? "") ?? .publicVisible,
+            allowReplies: data["allowReplies"] as? Bool ?? true,
+            contentType: CollectionContentType(rawValue: data["contentType"] as? String ?? "") ?? .standard,
+            allowStitchReplies: data["allowStitchReplies"] as? Bool,
+            publishedAt: (data["publishedAt"] as? Timestamp)?.dateValue(),
+            createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
+            updatedAt: (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date(),
+            totalViews: data["totalViews"] as? Int ?? 0,
+            totalHypes: data["totalHypes"] as? Int ?? 0,
+            totalCools: data["totalCools"] as? Int ?? 0,
+            totalReplies: data["totalReplies"] as? Int ?? 0,
+            totalShares: data["totalShares"] as? Int ?? 0
+        )
     }
 }

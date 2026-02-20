@@ -522,7 +522,7 @@ class ProfileViewModel: ObservableObject {
         // CACHE: Serve cached videos instantly while Firestore loads
         let cachedVideos = cachingService.getCachedVideosForUser(targetUserID)
         if !cachedVideos.isEmpty {
-            let filtered = cachedVideos.filter { !pinnedVideoIDs.contains($0.id) }
+            let filtered = cachedVideos.filter { !pinnedVideoIDs.contains($0.id) && !$0.isCollectionSegment }
             self.userVideos = filtered
             self.isLoadingVideos = false
             print("PROFILE CACHE: Instant display of \(filtered.count) cached videos")
@@ -549,7 +549,7 @@ class ProfileViewModel: ObservableObject {
             // CACHE: Store fresh videos for next load
             cachingService.cacheVideos(videos)
             
-            let filteredVideos = videos.filter { !pinnedVideoIDs.contains($0.id) }
+            let filteredVideos = videos.filter { !pinnedVideoIDs.contains($0.id) && !$0.isCollectionSegment }
             let lastDoc = snapshot.documents.last
             let hasMore = snapshot.documents.count >= initialVideoLimit
             
@@ -602,7 +602,7 @@ class ProfileViewModel: ObservableObject {
             }
             
             // Filter out pinned videos
-            let filteredNewVideos = newVideos.filter { !pinnedVideoIDs.contains($0.id) }
+            let filteredNewVideos = newVideos.filter { !pinnedVideoIDs.contains($0.id) && !$0.isCollectionSegment }
             
             // CACHE: Store new batch for future loads
             cachingService.cacheVideos(newVideos)
@@ -656,7 +656,11 @@ class ProfileViewModel: ObservableObject {
             fileSize: data[FirebaseSchema.VideoDocument.fileSize] as? Int64 ?? 0,
             discoverabilityScore: data[FirebaseSchema.VideoDocument.discoverabilityScore] as? Double ?? 0.5,
             isPromoted: data[FirebaseSchema.VideoDocument.isPromoted] as? Bool ?? false,
-            lastEngagementAt: (data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp)?.dateValue()
+            lastEngagementAt: (data[FirebaseSchema.VideoDocument.lastEngagementAt] as? Timestamp)?.dateValue(),
+            collectionID: data["collectionID"] as? String,
+            segmentNumber: data["segmentNumber"] as? Int,
+            segmentTitle: data["segmentTitle"] as? String,
+            isCollectionSegment: data["isCollectionSegment"] as? Bool ?? false
         )
     }
     
@@ -906,16 +910,16 @@ class ProfileViewModel: ObservableObject {
     
     /// Filter videos for tab display (excludes pinned from Threads tab)
     func filteredVideos(for tab: Int) -> [CoreVideoMetadata] {
+        let baseVideos = userVideos.filter { !$0.isCollectionSegment }
         switch tab {
         case 0:
-            // Threads tab: exclude pinned videos
-            return userVideos.filter { $0.conversationDepth == 0 && !pinnedVideoIDs.contains($0.id) }
+            return baseVideos.filter { $0.conversationDepth == 0 && !pinnedVideoIDs.contains($0.id) }
         case 1:
-            return userVideos.filter { $0.conversationDepth == 1 }
+            return baseVideos.filter { $0.conversationDepth == 1 }
         case 2:
-            return userVideos.filter { $0.conversationDepth >= 2 }
+            return baseVideos.filter { $0.conversationDepth >= 2 }
         default:
-            return userVideos
+            return baseVideos
         }
     }
     

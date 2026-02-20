@@ -382,6 +382,16 @@ class CollectionService: ObservableObject {
         try await unpublishCollection(collectionID: collectionID)
     }
     
+    /// Soft-delete a collection — sets status to deleted, hides from all feeds.
+    /// Does NOT delete segment videos (they remain as standalone videos).
+    func deleteCollection(collectionID: String) async throws {
+        try await db.collection("videoCollections").document(collectionID).updateData([
+            "status": "deleted",
+            "updatedAt": FieldValue.serverTimestamp()
+        ])
+        print("🗑️ COLLECTION SERVICE: Collection deleted - \(collectionID)")
+    }
+    
     // MARK: - Reading Collections
     
     /// Gets a single collection by ID

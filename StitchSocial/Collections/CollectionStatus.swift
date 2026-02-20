@@ -92,6 +92,53 @@ enum CollectionVisibility: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - Collection Content Type
+
+/// What kind of content this collection represents
+/// Drives discovery routing, player behavior, and reply rules
+enum CollectionContentType: String, CaseIterable, Codable {
+    case standard = "standard"          // Default collection
+    case podcast = "podcast"            // Video podcast — long interviews, talk shows
+    case shortFilm = "shortFilm"        // Short films, skits, narrative content
+    case interview = "interview"        // Interviews, Q&A sessions
+    case series = "series"              // Recurring episodic content
+    case documentary = "documentary"    // Documentary-style long-form
+    case tutorial = "tutorial"          // Educational/how-to content
+    
+    var displayName: String {
+        switch self {
+        case .standard: return "Collection"
+        case .podcast: return "Podcast"
+        case .shortFilm: return "Short Film"
+        case .interview: return "Interview"
+        case .series: return "Series"
+        case .documentary: return "Documentary"
+        case .tutorial: return "Tutorial"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .standard: return "square.stack.3d.up"
+        case .podcast: return "mic.fill"
+        case .shortFilm: return "film"
+        case .interview: return "person.2.wave.2.fill"
+        case .series: return "play.rectangle.on.rectangle"
+        case .documentary: return "doc.text.image"
+        case .tutorial: return "graduationcap.fill"
+        }
+    }
+    
+    /// Whether video stitch replies are allowed (insert into chain)
+    /// Podcasts, films, documentaries play uninterrupted — replies exist but don't stitch
+    var allowsStitchReplies: Bool {
+        switch self {
+        case .standard, .tutorial: return true
+        case .podcast, .shortFilm, .interview, .series, .documentary: return false
+        }
+    }
+}
+
 // MARK: - Video Collection
 
 /// Core data model for a video collection (Instagram Stories/Highlights style)
@@ -124,6 +171,14 @@ struct VideoCollection: Identifiable, Codable, Hashable {
     let visibility: CollectionVisibility
     let allowReplies: Bool
     
+    /// What kind of content — drives discovery lane and reply behavior
+    let contentType: CollectionContentType
+    
+    /// Whether video replies can stitch into the segment chain.
+    /// false = replies exist as standard video comments but don't break playback.
+    /// Defaults from contentType.allowsStitchReplies but can be overridden.
+    let allowStitchReplies: Bool
+    
     // MARK: - Timestamps
     
     let publishedAt: Date?
@@ -153,6 +208,8 @@ struct VideoCollection: Identifiable, Codable, Hashable {
         status: CollectionStatus = .draft,
         visibility: CollectionVisibility = .publicVisible,
         allowReplies: Bool = true,
+        contentType: CollectionContentType = .standard,
+        allowStitchReplies: Bool? = nil,
         publishedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
@@ -174,6 +231,8 @@ struct VideoCollection: Identifiable, Codable, Hashable {
         self.status = status
         self.visibility = visibility
         self.allowReplies = allowReplies
+        self.contentType = contentType
+        self.allowStitchReplies = allowStitchReplies ?? contentType.allowsStitchReplies
         self.publishedAt = publishedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -289,7 +348,8 @@ extension VideoCollection {
         creatorID: String,
         creatorName: String,
         visibility: CollectionVisibility = .publicVisible,
-        allowReplies: Bool = true
+        allowReplies: Bool = true,
+        contentType: CollectionContentType = .standard
     ) -> VideoCollection {
         return VideoCollection(
             id: UUID().uuidString,
@@ -304,6 +364,7 @@ extension VideoCollection {
             status: .draft,
             visibility: visibility,
             allowReplies: allowReplies,
+            contentType: contentType,
             publishedAt: nil,
             createdAt: Date(),
             updatedAt: Date(),
@@ -338,6 +399,8 @@ extension VideoCollection {
             status: status,
             visibility: visibility,
             allowReplies: allowReplies,
+            contentType: contentType,
+            allowStitchReplies: allowStitchReplies,
             publishedAt: publishedAt,
             createdAt: createdAt,
             updatedAt: Date(),
@@ -364,6 +427,8 @@ extension VideoCollection {
             status: newStatus,
             visibility: visibility,
             allowReplies: allowReplies,
+            contentType: contentType,
+            allowStitchReplies: allowStitchReplies,
             publishedAt: newStatus == .published ? Date() : publishedAt,
             createdAt: createdAt,
             updatedAt: Date(),
@@ -381,7 +446,9 @@ extension VideoCollection {
         description: String? = nil,
         coverImageURL: String? = nil,
         visibility: CollectionVisibility? = nil,
-        allowReplies: Bool? = nil
+        allowReplies: Bool? = nil,
+        contentType: CollectionContentType? = nil,
+        allowStitchReplies: Bool? = nil
     ) -> VideoCollection {
         return VideoCollection(
             id: id,
@@ -396,6 +463,8 @@ extension VideoCollection {
             status: status,
             visibility: visibility ?? self.visibility,
             allowReplies: allowReplies ?? self.allowReplies,
+            contentType: contentType ?? self.contentType,
+            allowStitchReplies: allowStitchReplies ?? self.allowStitchReplies,
             publishedAt: publishedAt,
             createdAt: createdAt,
             updatedAt: Date(),
@@ -428,6 +497,8 @@ extension VideoCollection {
             status: status,
             visibility: visibility,
             allowReplies: allowReplies,
+            contentType: contentType,
+            allowStitchReplies: allowStitchReplies,
             publishedAt: publishedAt,
             createdAt: createdAt,
             updatedAt: Date(),

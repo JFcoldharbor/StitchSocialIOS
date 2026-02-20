@@ -50,8 +50,17 @@ class CollectionComposerViewModel: ObservableObject {
     /// Whether replies are allowed
     @Published var allowReplies: Bool = true
     
+    /// Content type (standard, podcast, shortFilm, etc.)
+    @Published var contentType: CollectionContentType = .standard
+    
     /// Segments in order
     @Published var segments: [SegmentDraft] = []
+    
+    /// Whether editing an existing draft (vs creating new)
+    var isEditingExisting: Bool { existingDraftID != nil }
+    
+    /// Existing draft ID if editing
+    private var existingDraftID: String?
     
     // MARK: - Published State - UI State
     
@@ -314,6 +323,14 @@ class CollectionComposerViewModel: ObservableObject {
     // MARK: - Draft Management
     
     /// Create a new draft
+    /// Ensure a draft exists before uploading. Returns draftID or nil on failure.
+    func ensureDraftExists() async -> String? {
+        if let id = draftID { return id }
+        await createNewDraft()
+        return draftID
+    }
+    
+    /// Creates a new draft in Firestore
     func createNewDraft() async {
         isLoading = true
         errorMessage = nil
@@ -364,6 +381,7 @@ class CollectionComposerViewModel: ObservableObject {
     private func loadFromDraft(_ loadedDraft: CollectionDraft) {
         draft = loadedDraft
         draftID = loadedDraft.id
+        existingDraftID = loadedDraft.id
         title = loadedDraft.title ?? ""
         description = loadedDraft.description ?? ""
         visibility = loadedDraft.visibility
@@ -444,11 +462,12 @@ class CollectionComposerViewModel: ObservableObject {
     
     // MARK: - Segment Management
     
-    /// Add a new segment from local video
-    func addSegment(localVideoPath: String, duration: TimeInterval, fileSize: Int64, thumbnailPath: String?) {
+    /// Add a new segment from local video. Returns the segment ID.
+    @discardableResult
+    func addSegment(localVideoPath: String, duration: TimeInterval, fileSize: Int64, thumbnailPath: String?) -> String? {
         guard canAddMoreSegments else {
             errorMessage = "Maximum \(maxSegments) segments allowed"
-            return
+            return nil
         }
         
         let segmentID = UUID().uuidString
@@ -469,10 +488,10 @@ class CollectionComposerViewModel: ObservableObject {
         
         segments.append(segment)
         
-        print("➕ COMPOSER VM: Added segment \(order + 1)")
+        print("➕ COMPOSER VM: Added segment \(order + 1) — \(segmentID)")
         
-        // Trigger auto-save
         triggerAutoSave()
+        return segmentID
     }
     
     /// Remove a segment by ID
@@ -619,6 +638,9 @@ class CollectionComposerViewModel: ObservableObject {
             return
         }
         
+        // Cancel auto-save to prevent draft resurrection after publish deletes it
+        cancelAutoSave()
+        
         isPublishing = true
         errorMessage = nil
         
@@ -669,6 +691,12 @@ class CollectionComposerViewModel: ObservableObject {
                 self?.triggerAutoSave()
             }
             .store(in: &cancellables)
+    }
+    
+    /// Cancel any pending auto-save (call before publish to prevent draft resurrection)
+    func cancelAutoSave() {
+        autoSaveTask?.cancel()
+        autoSaveTask = nil
     }
     
     /// Trigger auto-save task

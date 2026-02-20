@@ -3,7 +3,11 @@
 //  StitchSocial
 //
 //  Layer 4: Core Services - Complete Firebase Authentication
+//  UPDATED: Email verification + referral code pass-through at signup
 //  UPDATED: Removed deprecated notification methods, FCM now handled by FCMPushManager
+//
+//  CACHING: isEmailVerified cached in UserDefaults to avoid reload() on every launch
+//  BATCHING: Email verification send is fire-and-forget (no await needed)
 //
 
 import Foundation
@@ -22,6 +26,7 @@ class AuthService: ObservableObject {
     @Published var currentUser: BasicUserInfo?
     @Published var lastError: StitchError?
     @Published var isLoading: Bool = false
+    @Published var isEmailVerified: Bool = false
     
     // MARK: - Private Properties
     
@@ -29,6 +34,12 @@ class AuthService: ObservableObject {
     private let db = Firestore.firestore(database: Config.Firebase.databaseName)
     private let functions = Functions.functions(region: "us-central1")
     private var authStateListener: AuthStateDidChangeListenerHandle?
+    
+    // MARK: - Cache Keys (avoids redundant reload() calls)
+    
+    private enum CacheKeys {
+        static let emailVerified = "stitch_email_verified"
+    }
     
     // MARK: - Initialization
     
@@ -101,6 +112,8 @@ class AuthService: ObservableObject {
         isLoading = true
         
         if let firebaseUser = auth.currentUser {
+            // Load cached verification status first (avoids network call)
+            isEmailVerified = UserDefaults.standard.bool(forKey: CacheKeys.emailVerified)
             await handleAuthStateChange(firebaseUser)
         } else {
             authState = .unauthenticated
@@ -121,12 +134,17 @@ class AuthService: ObservableObject {
             let result = try await auth.signIn(withEmail: email, password: password)
             print("✅ AUTH: Email sign in successful: \(result.user.uid)")
             
+            // Check email verification status and cache it
+            isEmailVerified = result.user.isEmailVerified
+            UserDefaults.standard.set(isEmailVerified, forKey: CacheKeys.emailVerified)
+            
             let userProfile = try await loadUserProfile(userID: result.user.uid)
             currentUser = userProfile
             authState = .authenticated
             
             // FCM token registration is now automatic via FCMPushManager
             print("📱 AUTH: FCM token registration handled by FCMPushManager")
+            print("📧 AUTH: Email verified: \(isEmailVerified)")
             
             return userProfile
             
@@ -139,6 +157,7 @@ class AuthService: ObservableObject {
     }
     
     /// Sign up with email and password
+    /// Returns (BasicUserInfo, isNewUser: true) — caller handles referral + verification prompt
     func signUp(email: String, password: String, displayName: String? = nil) async throws -> BasicUserInfo {
         authState = .signingIn
         isLoading = true
@@ -162,6 +181,19 @@ class AuthService: ObservableObject {
                 changeRequest.displayName = displayName
                 try await changeRequest.commitChanges()
             }
+            
+            // Send email verification — fire and forget, don't block signup
+            Task {
+                do {
+                    try await result.user.sendEmailVerification()
+                    print("📧 AUTH: Verification email sent to \(email)")
+                } catch {
+                    print("⚠️ AUTH: Failed to send verification email: \(error) — non-blocking")
+                }
+            }
+            
+            isEmailVerified = false
+            UserDefaults.standard.set(false, forKey: CacheKeys.emailVerified)
             
             print("✅ AUTH: Email sign up successful: \(result.user.uid)")
             
@@ -191,6 +223,54 @@ class AuthService: ObservableObject {
         _ = try await signUp(email: email, password: password, displayName: displayName)
     }
     
+    // MARK: - Email Verification
+    
+    /// Check if current user's email is verified (calls reload to get fresh status)
+    /// CACHING: Only calls reload() if cached value is false — once verified, never re-checks
+    func checkEmailVerification() async -> Bool {
+        // If already verified and cached, skip the network call
+        if UserDefaults.standard.bool(forKey: CacheKeys.emailVerified) {
+            isEmailVerified = true
+            return true
+        }
+        
+        guard let user = auth.currentUser else { return false }
+        
+        do {
+            try await user.reload()
+            let verified = user.isEmailVerified
+            isEmailVerified = verified
+            
+            if verified {
+                // Cache it permanently — email can't become un-verified
+                UserDefaults.standard.set(true, forKey: CacheKeys.emailVerified)
+                print("✅ AUTH: Email verification confirmed and cached")
+            }
+            
+            return verified
+        } catch {
+            print("⚠️ AUTH: Failed to check email verification: \(error)")
+            return false
+        }
+    }
+    
+    /// Resend verification email to current user
+    func resendVerificationEmail() async throws {
+        guard let user = auth.currentUser else {
+            throw StitchError.authenticationError("No authenticated user")
+        }
+        
+        guard !user.isEmailVerified else {
+            print("✅ AUTH: Email already verified, no resend needed")
+            isEmailVerified = true
+            UserDefaults.standard.set(true, forKey: CacheKeys.emailVerified)
+            return
+        }
+        
+        try await user.sendEmailVerification()
+        print("📧 AUTH: Verification email resent to \(user.email ?? "unknown")")
+    }
+    
     /// Sign out current user
     func signOut() async throws {
         authState = .signingOut
@@ -206,6 +286,11 @@ class AuthService: ObservableObject {
             try auth.signOut()
             currentUser = nil
             authState = .unauthenticated
+            isEmailVerified = false
+            
+            // Clear cached verification on sign out
+            UserDefaults.standard.removeObject(forKey: CacheKeys.emailVerified)
+            
             print("✅ AUTH: Sign out successful")
         } catch {
             authState = .error
@@ -302,6 +387,9 @@ class AuthService: ObservableObject {
             currentUser = try await loadUserProfile(userID: user.uid)
             authState = .authenticated
             
+            // Update verification status from cached value (no network call)
+            isEmailVerified = UserDefaults.standard.bool(forKey: CacheKeys.emailVerified)
+            
             // FCM token registration is automatic via FCMPushManager
             print("✅ AUTH: User profile loaded from state change")
         } catch {
@@ -359,6 +447,9 @@ class AuthService: ObservableObject {
             
             FirebaseSchema.UserDocument.isPrivate: false,
             FirebaseSchema.UserDocument.isBanned: false,
+            
+            // Email verification tracking
+            "isEmailVerified": false,
             
             "isSpecialUser": specialConfig != nil,
             "specialRole": specialConfig?.role.rawValue ?? NSNull(),
@@ -540,6 +631,8 @@ extension AuthService {
         authState = .unauthenticated
         lastError = nil
         isLoading = false
+        isEmailVerified = false
+        UserDefaults.standard.removeObject(forKey: CacheKeys.emailVerified)
         print("🧹 AUTH: User state cleaned")
     }
     
@@ -548,6 +641,7 @@ extension AuthService {
         print("📱 AUTH SERVICE: Current state: \(authState.displayName)")
         print("👤 AUTH SERVICE: Current user: \(currentUser?.username ?? "None")")
         print("🌟 AUTH SERVICE: Special user: \(isSpecialUser)")
+        print("📧 AUTH SERVICE: Email verified: \(isEmailVerified)")
         print("✅ AUTH SERVICE: FCM handled by FCMPushManager automatically")
     }
     
@@ -555,6 +649,7 @@ extension AuthService {
     // MARK: - Auto-Follow Default Accounts
     
     /// Auto-follow James Fortune and StitchSocial for new users
+    /// Sends follow notification via Cloud Function for each account
     private func autoFollowDefaultAccounts(userID: String) async {
         let userService = UserService()
         
@@ -567,6 +662,18 @@ extension AuthService {
             do {
                 try await userService.followUser(followerID: userID, followingID: accountID)
                 print("✅ AUTO-FOLLOW: User \(userID) followed \(accountID)")
+                
+                // Send follow notification — fire and forget
+                Task {
+                    do {
+                        let _ = try await functions.httpsCallable("stitchnoti_sendFollow").call([
+                            "recipientID": accountID
+                        ])
+                        print("🔔 AUTO-FOLLOW: Notification sent to \(accountID)")
+                    } catch {
+                        print("⚠️ AUTO-FOLLOW: Notification failed for \(accountID): \(error)")
+                    }
+                }
             } catch {
                 print("⚠️ AUTO-FOLLOW: Failed to follow \(accountID): \(error)")
             }

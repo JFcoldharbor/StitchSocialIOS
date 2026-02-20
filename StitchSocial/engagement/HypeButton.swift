@@ -25,7 +25,6 @@ struct ProgressiveHypeButton: View {
     @State private var showingError = false
     @State private var errorMessage = ""
     @State private var pulsePhase: Double = 0
-    @State private var showingCloutCapWarning = false
     @State private var showingBurstIndicator = false
     
     // MARK: - Computed
@@ -38,17 +37,10 @@ struct ProgressiveHypeButton: View {
     private var isSelfEngagement: Bool { currentUserID == creatorID }
     private var isFounderTier: Bool { userTier == .founder || userTier == .coFounder }
     private var shouldBlockSelfEngagement: Bool { isSelfEngagement && !isFounderTier }
-    private var hasHitCloutCap: Bool { engagementState.hasHitCloutCap(for: userTier) }
     private var hasHitEngagementCap: Bool { engagementState.hasHitEngagementCap() }
     private var isBurstEligible: Bool { EngagementConfig.isBurstEligible(tier: userTier) }
     private var burstMultiplier: Int { EngagementConfig.getVisualHypeMultiplier(for: userTier, isBurst: true) }
-    private var isDisabled: Bool { shouldBlockSelfEngagement || hasHitCloutCap || hasHitEngagementCap }
-    
-    private var isNearCloutCap: Bool {
-        let remaining = engagementState.getRemainingCloutAllowance(for: userTier)
-        let max = EngagementConfig.getMaxCloutPerUserPerVideo(for: userTier)
-        return Double(remaining) / Double(max) < 0.2
-    }
+    private var isDisabled: Bool { shouldBlockSelfEngagement || hasHitEngagementCap }
     
     var body: some View {
         ZStack {
@@ -57,8 +49,6 @@ struct ProgressiveHypeButton: View {
             hypeCountDisplay
             
             if shouldBlockSelfEngagement { selfEngagementOverlay }
-            if showingCloutCapWarning { cloutCapWarningOverlay }
-            if isNearCloutCap && !hasHitCloutCap && !shouldBlockSelfEngagement { nearCapIndicator }
             if showingBurstIndicator && isBurstEligible { burstChargeOverlay }
         }
         .scaleEffect(isPressed ? 0.9 : 1.0)
@@ -116,8 +106,6 @@ struct ProgressiveHypeButton: View {
                 .fill(RadialGradient(
                     colors: shouldBlockSelfEngagement
                         ? [Color.gray.opacity(0.4), Color.black.opacity(0.7), Color.black.opacity(0.9)]
-                        : hasHitCloutCap
-                        ? [Color.red.opacity(0.4), Color.black.opacity(0.7), Color.black.opacity(0.9)]
                         : [Color.black.opacity(0.4), Color.black.opacity(0.7), Color.black.opacity(0.9)],
                     center: .topLeading, startRadius: 0, endRadius: 30
                 ))
@@ -126,7 +114,6 @@ struct ProgressiveHypeButton: View {
                     Circle().stroke(
                         LinearGradient(
                             colors: shouldBlockSelfEngagement ? [.gray, .gray.opacity(0.6)]
-                                : hasHitCloutCap ? [.red, .orange]
                                 : showingBurstIndicator ? [.yellow, .orange, .red]
                                 : isProcessing ? [.orange, .red, .yellow]
                                 : [.orange.opacity(0.6), .red.opacity(0.4)],
@@ -148,7 +135,7 @@ struct ProgressiveHypeButton: View {
     private var flameIcon: some View {
         ZStack {
             ForEach(0..<3, id: \.self) { layer in
-                Image(systemName: shouldBlockSelfEngagement || hasHitCloutCap ? "flame.slash.fill" : "flame.fill")
+                Image(systemName: shouldBlockSelfEngagement ? "flame.slash.fill" : "flame.fill")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(LinearGradient(
                         colors: [.black.opacity(0.6), .black.opacity(0.3)],
@@ -158,18 +145,17 @@ struct ProgressiveHypeButton: View {
                     .opacity(0.3 - Double(layer) * 0.1)
             }
             
-            Image(systemName: shouldBlockSelfEngagement || hasHitCloutCap ? "flame.slash.fill" : "flame.fill")
+            Image(systemName: shouldBlockSelfEngagement ? "flame.slash.fill" : "flame.fill")
                 .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(LinearGradient(
                     colors: shouldBlockSelfEngagement ? [.gray, .gray.opacity(0.7), .black.opacity(0.5)]
-                        : hasHitCloutCap ? [.red, .orange, .black.opacity(0.5)]
                         : showingBurstIndicator ? [.white, .yellow, .orange, .red]
                         : [.yellow, .orange, .red, .black.opacity(0.2)],
                     startPoint: .topLeading, endPoint: .bottomTrailing
                 ))
-                .shadow(color: shouldBlockSelfEngagement ? .gray : hasHitCloutCap ? .red : showingBurstIndicator ? .yellow : .orange, radius: 6, x: 0, y: 0)
+                .shadow(color: shouldBlockSelfEngagement ? .gray : showingBurstIndicator ? .yellow : .orange, radius: 6, x: 0, y: 0)
                 .shadow(color: .black.opacity(0.4), radius: 2, x: 1, y: 1)
-                .scaleEffect(shouldBlockSelfEngagement || hasHitCloutCap ? 1.0 : showingBurstIndicator ? 1.3 : (1.0 + sin(pulsePhase * 2) * 0.1))
+                .scaleEffect(shouldBlockSelfEngagement ? 1.0 : showingBurstIndicator ? 1.3 : (1.0 + sin(pulsePhase * 2) * 0.1))
         }
     }
     
@@ -191,20 +177,6 @@ struct ProgressiveHypeButton: View {
         }.scaleEffect(1.1)
     }
     
-    private var nearCapIndicator: some View {
-        Circle().stroke(Color.orange, lineWidth: 2).frame(width: 48, height: 48)
-            .opacity(0.6 + sin(pulsePhase * 3) * 0.3)
-    }
-    
-    private var cloutCapWarningOverlay: some View {
-        ZStack {
-            Circle().fill(Color.red.opacity(0.3)).frame(width: 50, height: 50)
-                .overlay(Circle().stroke(Color.red, lineWidth: 2))
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 16, weight: .bold)).foregroundColor(.red)
-                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
-        }.scaleEffect(1.2).transition(.scale.combined(with: .opacity))
-    }
     
     // 🆕 Burst charge indicator - glowing ring while long pressing
     private var burstChargeOverlay: some View {
@@ -229,21 +201,7 @@ struct ProgressiveHypeButton: View {
     }
     
     private var errorMessageOverlay: some View {
-        Group {
-            if showingError {
-                VStack {
-                    Spacer()
-                    Text(errorMessage)
-                        .font(.caption).foregroundColor(.white)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(Capsule().fill(Color.red.opacity(0.9))
-                            .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2))
-                        .transition(.scale.combined(with: .opacity))
-                        .offset(y: 60)
-                }
-            }
-        }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: showingError)
+        EmptyView()
     }
     
     // MARK: - Actions
@@ -258,11 +216,6 @@ struct ProgressiveHypeButton: View {
         if shouldBlockSelfEngagement {
             showError("You can't hype your own content")
             triggerErrorHaptic()
-            return
-        }
-        
-        if hasHitCloutCap {
-            showCloutCapWarning()
             return
         }
         
@@ -323,10 +276,6 @@ struct ProgressiveHypeButton: View {
                     if success {
                         let successImpact = UIImpactFeedbackGenerator(style: isBurst ? .rigid : .light)
                         successImpact.impactOccurred()
-                        
-                        if isNearCloutCap {
-                            showCloutNearCapNotice()
-                        }
                     }
                 }
             } catch {
@@ -343,22 +292,6 @@ struct ProgressiveHypeButton: View {
         }
     }
     
-    private func showCloutCapWarning() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-            showingCloutCapWarning = true
-        }
-        UINotificationFeedbackGenerator().notificationOccurred(.warning)
-        let maxClout = EngagementConfig.getMaxCloutPerUserPerVideo(for: userTier)
-        showError("You've given max clout (\(maxClout)) to this video!")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation(.easeOut(duration: 0.3)) { showingCloutCapWarning = false }
-        }
-    }
-    
-    private func showCloutNearCapNotice() {
-        let remaining = engagementState.getRemainingCloutAllowance(for: userTier)
-        showError("Only \(remaining) clout remaining for this video")
-    }
     
     private func showError(_ message: String) {
         errorMessage = message

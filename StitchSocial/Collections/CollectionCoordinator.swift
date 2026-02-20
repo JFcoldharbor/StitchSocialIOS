@@ -54,6 +54,12 @@ class CollectionCoordinator: ObservableObject {
     /// Active composer view model
     @Published private(set) var composerViewModel: CollectionComposerViewModel?
     
+    /// Link an externally-created viewModel to this coordinator (used by ComposerSheet)
+    func linkComposerViewModel(_ viewModel: CollectionComposerViewModel) {
+        composerViewModel = viewModel
+        print("🔗 COORDINATOR: Linked external composerViewModel")
+    }
+    
     /// Whether composer has unsaved changes (for discard confirmation)
     @Published var composerHasUnsavedChanges: Bool = false
     
@@ -594,18 +600,32 @@ class CollectionCoordinator: ObservableObject {
                     }
                 }
                 
-                // Wait for completion
-                _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-                    firebaseUploadTask.observe(.success) { snapshot in
-                        if let metadata = snapshot.metadata {
-                            continuation.resume(returning: metadata)
+                // Wait for completion with timeout (5 min max per segment)
+                _ = try await withThrowingTaskGroup(of: StorageMetadata.self) { group in
+                    group.addTask {
+                        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+                            firebaseUploadTask.observe(.success) { snapshot in
+                                if let metadata = snapshot.metadata {
+                                    continuation.resume(returning: metadata)
+                                }
+                            }
+                            firebaseUploadTask.observe(.failure) { snapshot in
+                                let error = snapshot.error ?? NSError(domain: "UploadError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Upload failed"])
+                                continuation.resume(throwing: error)
+                            }
                         }
                     }
-                    firebaseUploadTask.observe(.failure) { snapshot in
-                        if let error = snapshot.error {
-                            continuation.resume(throwing: error)
-                        }
+                    
+                    // Timeout task
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 300_000_000_000) // 5 minutes
+                        throw NSError(domain: "UploadError", code: -2, userInfo: [NSLocalizedDescriptionKey: "Upload timed out after 5 minutes"])
                     }
+                    
+                    // First to finish wins — cancel the other
+                    let result = try await group.next()!
+                    group.cancelAll()
+                    return result
                 }
                 
                 // Get download URL
@@ -640,18 +660,30 @@ class CollectionCoordinator: ObservableObject {
                         do {
                             let thumbUploadTask = thumbRef.putFile(from: thumbFileURL, metadata: thumbMetadata)
                             
-                            // Wait for thumbnail upload to complete
-                            _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-                                thumbUploadTask.observe(.success) { snapshot in
-                                    if let metadata = snapshot.metadata {
-                                        continuation.resume(returning: metadata)
+                            // Wait for thumbnail upload with timeout (60s)
+                            _ = try await withThrowingTaskGroup(of: StorageMetadata.self) { group in
+                                group.addTask {
+                                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+                                        thumbUploadTask.observe(.success) { snapshot in
+                                            if let metadata = snapshot.metadata {
+                                                continuation.resume(returning: metadata)
+                                            }
+                                        }
+                                        thumbUploadTask.observe(.failure) { snapshot in
+                                            let error = snapshot.error ?? NSError(domain: "UploadError", code: -1)
+                                            continuation.resume(throwing: error)
+                                        }
                                     }
                                 }
-                                thumbUploadTask.observe(.failure) { snapshot in
-                                    if let error = snapshot.error {
-                                        continuation.resume(throwing: error)
-                                    }
+                                
+                                group.addTask {
+                                    try await Task.sleep(nanoseconds: 60_000_000_000) // 60 seconds
+                                    throw NSError(domain: "UploadError", code: -2, userInfo: [NSLocalizedDescriptionKey: "Thumbnail upload timed out"])
                                 }
+                                
+                                let result = try await group.next()!
+                                group.cancelAll()
+                                return result
                             }
                             
                             // Now get download URL after upload is confirmed complete
@@ -829,16 +861,25 @@ class CollectionCoordinator: ObservableObject {
     }
     
     /// Confirm and execute publish
-    func confirmPublish() {
+    func confirmPublish() async {
         showPublishConfirmation = false
         
-        Task {
-            await composerViewModel?.publish()
+        // Cancel any pending auto-save to prevent draft resurrection
+        composerViewModel?.cancelAutoSave()
+        
+        await composerViewModel?.publish()
+        
+        if composerViewModel?.shouldDismiss == true {
+            successMessage = "Collection published!"
             
-            if composerViewModel?.shouldDismiss == true {
-                successMessage = "Collection published!"
-                dismissComposer()
-            }
+            // Notify profile to reload collections
+            NotificationCenter.default.post(name: NSNotification.Name("RefreshProfile"), object: nil)
+            
+            dismissComposer()
+        } else {
+            // Publish failed — surface the error so user sees it
+            errorMessage = composerViewModel?.errorMessage ?? "Publish failed. Please try again."
+            print("❌ COORDINATOR: Publish did not complete — shouldDismiss is false")
         }
     }
     

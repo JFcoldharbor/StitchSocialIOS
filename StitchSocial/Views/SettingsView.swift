@@ -15,6 +15,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var coinService = HypeCoinService.shared
     @ObservedObject private var subscriptionService = SubscriptionService.shared
+    @StateObject private var suggestionService = SuggestionService()
     
     // MARK: - State
     
@@ -32,6 +33,8 @@ struct SettingsView: View {
     @State private var showingCashOut = false
     @State private var showingSubscriptionSettings = false
     @State private var showingCommunitySettings = false
+    @State private var showingPrivacySettings = false
+    @State private var showingFriendSuggestions = false
     
     // Preferences
     @State private var isHapticEnabled = UserDefaults.standard.bool(forKey: "hapticFeedbackEnabled")
@@ -399,11 +402,17 @@ struct SettingsView: View {
             
             SettingsRow(
                 icon: "person.badge.plus",
-                title: "Friend Suggestions",
-                subtitle: "Discover people",
+                title: "People You May Know",
+                subtitle: "Based on mutual connections",
                 iconColor: .cyan
             ) {
-                // Navigate to friend suggestions
+                showingFriendSuggestions = true
+            }
+            .sheet(isPresented: $showingFriendSuggestions) {
+                if let user = currentUser {
+                    PeopleYouMayKnowView(userID: user.id)
+                        .environmentObject(authService)
+                }
             }
             
             SettingsRow(
@@ -449,7 +458,12 @@ struct SettingsView: View {
                 subtitle: "Account visibility",
                 iconColor: .blue
             ) {
-                // Navigate to privacy settings
+                showingPrivacySettings = true
+            }
+            .sheet(isPresented: $showingPrivacySettings) {
+                if let user = currentUser {
+                    PrivacySettingsView(userID: user.id)
+                }
             }
         }
     }
@@ -564,6 +578,8 @@ struct SettingsView: View {
         isSigningOut = true
         
         do {
+            PrivacyService.shared.clearSession()
+            suggestionService.clearMutualCache()
             try await authService.signOut()
         } catch {
             await MainActor.run {

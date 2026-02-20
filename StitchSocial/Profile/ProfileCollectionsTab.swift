@@ -467,5 +467,13 @@ class ProfileCollectionsViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
     }
+    
+    func deleteCollection(_ collection: VideoCollection) async {
+        do {
+            try await collectionService.deleteCollection(collectionID: collection.id)
+            collections.removeAll { $0.id == collection.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }
-

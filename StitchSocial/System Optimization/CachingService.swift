@@ -5,6 +5,8 @@
 //  Layer 4: Core Services - Memory-Based Caching with LRU Eviction
 //  Dependencies: Foundation, Config
 //  Features: Video metadata cache, user cache, thread cache, LRU management
+//  OPTIMIZED: Added AI result cache cleanup coordination
+//  OPTIMIZED: Now used by default in VideoCoordinator + ThreadComposer (was nil before)
 //
 
 import Foundation
@@ -344,6 +346,9 @@ class CachingService: ObservableObject {
             updateCacheStats()
             print("💾 CACHE: Cleaned \(removedCount) expired entries")
         }
+        
+        // Also clean AI result cache (coordinated cleanup)
+        AIVideoAnalyzer.shared.cleanupAICache()
     }
     
     /// Clear all caches

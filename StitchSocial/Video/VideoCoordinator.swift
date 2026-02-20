@@ -8,6 +8,8 @@
 //  🔧 UPDATED: Added trim support (trimStartTime, trimEndTime)
 //  🔧 UPDATED: Added pre-compression support (use already-compressed video)
 //  🔧 UPDATED: Background compression starts when recording ends
+//  🔧 OPTIMIZED: Uses AIVideoAnalyzer.shared singleton — no duplicate connection tests
+//  🔧 OPTIMIZED: CachingService.shared passed by default — was nil before
 //
 
 import Foundation
@@ -88,9 +90,9 @@ class VideoCoordinator: ObservableObject {
     init(
         videoService: VideoService,
         userService: UserService,
-        aiAnalyzer: AIVideoAnalyzer,
+        aiAnalyzer: AIVideoAnalyzer = .shared,
         uploadService: VideoUploadService,
-        cachingService: CachingService? = nil,
+        cachingService: CachingService? = CachingService.shared,
         audioExtractor: AudioExtractionService? = nil,
         notificationService: NotificationService? = nil
     ) {
@@ -565,6 +567,9 @@ class VideoCoordinator: ObservableObject {
         
         await updateProgress(1.0)
         self.createdVideo = createdVideo
+        
+        // OPTIMIZED: Cache created video for instant feed display
+        cachingService?.cacheVideo(createdVideo, priority: .high)
         
         return createdVideo
     }

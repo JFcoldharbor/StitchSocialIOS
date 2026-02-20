@@ -349,6 +349,9 @@ struct ProfileView: View {
                 onDraftDelete: { draft in
                     deleteDraft(draft)
                 },
+                onCollectionDelete: { collection in
+                    deleteCollection(collection)
+                },
                 onSeeAllTap: {
                     showingAllCollections = true
                 }
@@ -371,6 +374,25 @@ struct ProfileView: View {
             } catch {
                 collectionError = "Failed to delete draft: \(error.localizedDescription)"
                 print("âŒ PROFILE: Failed to delete draft: \(error)")
+            }
+        }
+    }
+    
+        // MARK: - Collection Deletion
+    
+    private func deleteCollection(_ collection: VideoCollection) {
+        Task {
+            do {
+                let collectionService = CollectionService()
+                try await collectionService.deleteCollection(collectionID: collection.id)
+                
+                // Remove from local array — instant UI update
+                userCollections.removeAll { $0.id == collection.id }
+                
+                print("PROFILE: Deleted collection \(collection.id)")
+            } catch {
+                collectionError = "Failed to delete collection: \(error.localizedDescription)"
+                print("PROFILE: Failed to delete collection: \(error)")
             }
         }
     }
@@ -1251,6 +1273,13 @@ struct CollectionComposerSheet: View {
             }
         }
         .task {
+            // CRITICAL: Link coordinator to viewModel so publish works
+            coordinator.linkComposerViewModel(viewModel)
+            viewModel.uploadCoverImage = { [weak coordinator] data, collectionID in
+                guard let coordinator = coordinator else { throw NSError(domain: "Coordinator", code: -1) }
+                return try await coordinator.uploadCoverPhoto(imageData: data, collectionID: collectionID)
+            }
+            
             if existingDraft == nil && viewModel.draftID == nil {
                 isCreating = true
                 await viewModel.createNewDraft()

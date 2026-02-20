@@ -131,9 +131,6 @@ class EngagementManager: ObservableObject {
         if state.hasHitEngagementCap() {
             throw StitchError.validationError("Engagement cap reached for this video")
         }
-        if state.hasHitCloutCap(for: userTier) {
-            throw StitchError.validationError("Clout cap reached for this video")
-        }
         
         // Check hype rating locally (burst costs more)
         let cost = EngagementCalculator.calculateHypeRatingCost(tier: userTier, isBurst: isBurst)

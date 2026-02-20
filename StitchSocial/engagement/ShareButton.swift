@@ -17,8 +17,15 @@ struct ShareModeSheet: View {
     let creatorUsername: String
     let threadID: String?
     let userTier: UserTier
+    let threadData: ThreadData?
     @ObservedObject var shareService: ShareService
     @Environment(\.dismiss) private var dismiss
+    
+    /// Collage requires thread with 3+ replies
+    private var canCollage: Bool {
+        guard let thread = threadData else { return false }
+        return thread.childVideos.count >= ThreadCollageService.minResponseClips
+    }
     
     private var isFounder: Bool {
         userTier == .founder || userTier == .coFounder
@@ -140,11 +147,62 @@ struct ShareModeSheet: View {
             }
             .disabled(!canPromo)
             
+            // Thread Collage — only visible when thread has enough replies
+            if threadData != nil {
+                Divider().background(Color.gray.opacity(0.2)).padding(.horizontal, 20)
+                
+                Button {
+                    guard canCollage, let thread = threadData else { return }
+                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        shareService.shareCollage(threadData: thread)
+                    }
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "film.stack")
+                            .font(.system(size: 22))
+                            .foregroundColor(canCollage ? .purple : .gray)
+                            .frame(width: 44, height: 44)
+                            .background((canCollage ? Color.purple : Color.gray).opacity(0.12))
+                            .clipShape(Circle())
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text("Thread Collage")
+                                    .font(.body)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(canCollage ? .white : .gray)
+                                
+                                if !canCollage {
+                                    Image(systemName: "lock.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.purple.opacity(0.6))
+                                }
+                            }
+                            
+                            Text(collageSubtext)
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.gray.opacity(0.5))
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 14)
+                }
+                .disabled(!canCollage)
+            }
+            
             Spacer()
         }
-        .frame(height: 260)
+        .frame(height: sheetHeight)
         .background(Color(UIColor.systemBackground).opacity(0.95))
-        .presentationDetents([.height(260)])
+        .presentationDetents([.height(sheetHeight)])
         .presentationDragIndicator(.hidden)
         .preferredColorScheme(.dark)
     }
@@ -153,6 +211,19 @@ struct ShareModeSheet: View {
         if isFounder { return "30s promo · Stats overlay · Founder access" }
         if canPromo { return "30s promo · Views · Hype · Temperature" }
         return "Unlocks at 100 🔥 on your videos"
+    }
+    
+    private var collageSubtext: String {
+        guard let thread = threadData else { return "" }
+        let count = thread.childVideos.count
+        if count < ThreadCollageService.minResponseClips {
+            return "Needs \(ThreadCollageService.minResponseClips)+ replies · Currently \(count)"
+        }
+        return "60s video · Pick \(ThreadCollageService.minResponseClips)-\(ThreadCollageService.maxResponseClips) replies · Watermark"
+    }
+    
+    private var sheetHeight: CGFloat {
+        threadData != nil ? 340 : 260
     }
 }
 
@@ -164,6 +235,7 @@ struct ShareButton: View {
     let threadID: String?
     let size: ButtonSize
     let userTier: UserTier
+    let threadData: ThreadData?
     
     @ObservedObject private var shareService = ShareService.shared
     @State private var showShareSheet = false
@@ -193,13 +265,15 @@ struct ShareButton: View {
         creatorUsername: String,
         threadID: String? = nil,
         size: ButtonSize = .medium,
-        userTier: UserTier = .founder
+        userTier: UserTier = .founder,
+        threadData: ThreadData? = nil
     ) {
         self.video = video
         self.creatorUsername = creatorUsername
         self.threadID = threadID
         self.size = size
         self.userTier = userTier
+        self.threadData = threadData
     }
     
     var body: some View {
@@ -236,6 +310,7 @@ struct ShareButton: View {
                 creatorUsername: creatorUsername,
                 threadID: threadID,
                 userTier: userTier,
+                threadData: threadData,
                 shareService: shareService
             )
         }
@@ -249,6 +324,7 @@ struct ShareButtonWithLabel: View {
     let creatorUsername: String
     let threadID: String?
     let userTier: UserTier
+    let threadData: ThreadData?
     
     @ObservedObject private var shareService = ShareService.shared
     @State private var showShareSheet = false
@@ -257,12 +333,14 @@ struct ShareButtonWithLabel: View {
         video: CoreVideoMetadata,
         creatorUsername: String,
         threadID: String? = nil,
-        userTier: UserTier = .founder
+        userTier: UserTier = .founder,
+        threadData: ThreadData? = nil
     ) {
         self.video = video
         self.creatorUsername = creatorUsername
         self.threadID = threadID
         self.userTier = userTier
+        self.threadData = threadData
     }
     
     var body: some View {
@@ -303,6 +381,7 @@ struct ShareButtonWithLabel: View {
                 creatorUsername: creatorUsername,
                 threadID: threadID,
                 userTier: userTier,
+                threadData: threadData,
                 shareService: shareService
             )
         }
@@ -316,6 +395,7 @@ struct CompactShareButton: View {
     let creatorUsername: String
     let threadID: String?
     let userTier: UserTier
+    let threadData: ThreadData?
     
     @ObservedObject private var shareService = ShareService.shared
     @State private var showShareSheet = false
@@ -324,12 +404,14 @@ struct CompactShareButton: View {
         video: CoreVideoMetadata,
         creatorUsername: String,
         threadID: String? = nil,
-        userTier: UserTier = .founder
+        userTier: UserTier = .founder,
+        threadData: ThreadData? = nil
     ) {
         self.video = video
         self.creatorUsername = creatorUsername
         self.threadID = threadID
         self.userTier = userTier
+        self.threadData = threadData
     }
     
     var body: some View {
@@ -367,6 +449,7 @@ struct CompactShareButton: View {
                 creatorUsername: creatorUsername,
                 threadID: threadID,
                 userTier: userTier,
+                threadData: threadData,
                 shareService: shareService
             )
         }

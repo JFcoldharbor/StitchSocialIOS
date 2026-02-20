@@ -27,7 +27,6 @@ struct ProgressiveCoolButton: View {
     @State private var errorMessage = ""
     @State private var shimmerPhase: Double = 0
     @State private var showingTrollWarning = false
-    @State private var showingCloutCapWarning = false
     
     // MARK: - Computed
     
@@ -51,7 +50,6 @@ struct ProgressiveCoolButton: View {
                 
                 if shouldBlockSelfEngagement { selfEngagementOverlay }
                 if showingTrollWarning { trollWarningOverlay }
-                if showingCloutCapWarning { cloutCapWarningOverlay }
             }
             .scaleEffect(isPressed ? 0.9 : 1.0)
             .rotation3DEffect(.degrees(isPressed ? -5 : 0), axis: (x: 1, y: 0, z: 0))
@@ -172,31 +170,11 @@ struct ProgressiveCoolButton: View {
     }
     
     private var cloutCapWarningOverlay: some View {
-        ZStack {
-            Circle().fill(Color.orange.opacity(0.3)).frame(width: 50, height: 50)
-                .overlay(Circle().stroke(Color.orange, lineWidth: 2))
-            Image(systemName: "hand.raised.fill")
-                .font(.system(size: 16, weight: .bold)).foregroundColor(.orange)
-                .shadow(color: .black, radius: 1, x: 0.5, y: 0.5)
-        }.scaleEffect(1.2).transition(.scale.combined(with: .opacity))
+        EmptyView()
     }
     
     private var errorMessageOverlay: some View {
-        Group {
-            if showingError {
-                VStack {
-                    Spacer()
-                    Text(errorMessage)
-                        .font(.caption).foregroundColor(.white)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(Capsule().fill(Color.red.opacity(0.9))
-                            .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2))
-                        .transition(.scale.combined(with: .opacity))
-                        .offset(y: 60)
-                }
-            }
-        }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: showingError)
+        EmptyView()
     }
     
     // MARK: - Actions
@@ -272,12 +250,7 @@ struct ProgressiveCoolButton: View {
     }
     
     private func showEngagementCapWarning() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { showingCloutCapWarning = true }
         UINotificationFeedbackGenerator().notificationOccurred(.warning)
-        showError("Maximum engagements reached for this video!")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            withAnimation(.easeOut(duration: 0.3)) { showingCloutCapWarning = false }
-        }
     }
     
     private func showError(_ message: String) {

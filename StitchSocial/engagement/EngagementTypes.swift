@@ -7,7 +7,6 @@
 //  Features: All engagement types defined, user-specific clout tracking for caps
 //  UPDATED: Added clout tracking per user for anti-spam system
 //  UPDATED: Added grace period support with side-switching
-//  UPDATED: Added totalVisualHypesGiven for accurate burst decrement tracking
 //
 
 import Foundation
@@ -29,8 +28,8 @@ struct EngagementResult {
 
 /// Animation types for different engagement results
 enum EngagementAnimationType: String, CaseIterable, Codable {
-    case founderExplosion   // First tap for premium tiers (Ambassador → Founder)
-    case burstEngagement    // 🆕 Long press burst for premium tiers
+    case founderExplosion   // First tap for premium tiers (Ambassador â†’ Founder)
+    case burstEngagement    // Long press burst engagement
     case standardHype       // Normal hype animation
     case standardCool       // Normal cool animation
     case tapProgress        // Progressive tap feedback
@@ -102,7 +101,7 @@ enum TapMilestone: String, CaseIterable, Codable {
     }
 }
 
-// MARK: - 🆕 Engagement Side Enum
+// MARK: - ðŸ†• Engagement Side Enum
 
 /// Engagement side for grace period tracking
 enum EngagementSide {
@@ -124,14 +123,10 @@ struct VideoEngagementState: Codable {
     
     // Clout tracking for anti-spam
     var totalCloutGiven: Int = 0
+    var totalVisualHypesGiven: Int = 0
     var engagementHistory: [EngagementRecord] = []
     
-    // 🆕 Visual hype tracking for accurate decrement on removeAll
-    // Without this, we can't know how many visual hypes to subtract
-    // since regular taps = +1 and bursts = +tierMultiplier
-    var totalVisualHypesGiven: Int = 0
-    
-    // 🆕 GRACE PERIOD FIELDS
+    // ðŸ†• GRACE PERIOD FIELDS
     var firstEngagementAt: Date? = nil
     let gracePeriodDuration: TimeInterval = 60.0  // 60 seconds
     
@@ -147,11 +142,10 @@ struct VideoEngagementState: Codable {
     
     // MARK: - INSTANT ENGAGEMENT METHODS
     
-    /// Add hype engagement (instant) with visual hype tracking
-    mutating func addHypeEngagement(visualHypes: Int = 1) {
+    /// Add hype engagement (instant)
+    mutating func addHypeEngagement() {
         totalEngagements += 1
         hypeEngagements += 1
-        totalVisualHypesGiven += visualHypes
         lastEngagementAt = Date()
     }
     
@@ -163,15 +157,14 @@ struct VideoEngagementState: Codable {
     }
     
     /// Record clout awarded for an engagement
-    mutating func recordCloutAwarded(_ clout: Int, isHype: Bool, isBurst: Bool = false) {
+    mutating func recordCloutAwarded(_ clout: Int, isHype: Bool) {
         totalCloutGiven += clout
         
         let record = EngagementRecord(
             timestamp: Date(),
             type: isHype ? .hype : .cool,
             cloutAwarded: clout,
-            tapNumber: isHype ? hypeEngagements : coolEngagements,
-            isBurst: isBurst
+            tapNumber: isHype ? hypeEngagements : coolEngagements
         )
         
         engagementHistory.append(record)
@@ -180,19 +173,24 @@ struct VideoEngagementState: Codable {
     // MARK: - Computed Properties
     
     /// Check if user has hit their clout cap for this video
+    /// 🆕 REMOVED: Per-video lifetime clout cap no longer enforced.
+    /// Hype rating + diminishing returns are the real limiters.
+    /// Returns false always — kept for compile compatibility.
     func hasHitCloutCap(for tier: UserTier) -> Bool {
-        let maxAllowed = EngagementConfig.getMaxCloutPerUserPerVideo(for: tier)
-        return totalCloutGiven >= maxAllowed
+        return false
     }
     
     /// Get remaining clout allowance for this user on this video
+    /// 🆕 REMOVED: Returns max Int so UI never shows "near cap"
     func getRemainingCloutAllowance(for tier: UserTier) -> Int {
-        let maxAllowed = EngagementConfig.getMaxCloutPerUserPerVideo(for: tier)
-        return max(0, maxAllowed - totalCloutGiven)
+        return Int.max
     }
     
     /// Check if user has hit engagement cap
+    /// 🆕 Session-aware: returns false if state is expired (24hr+)
+    /// because server resets counts on stale sessions
     func hasHitEngagementCap() -> Bool {
+        if isExpired { return false }
         return totalEngagements >= EngagementConfig.maxEngagementsPerUserPerVideo
     }
     
@@ -206,7 +204,7 @@ struct VideoEngagementState: Codable {
         return timeSinceLastEngagement > 86400 // 24 hours
     }
     
-    // 🆕 GRACE PERIOD COMPUTED PROPERTIES
+    // ðŸ†• GRACE PERIOD COMPUTED PROPERTIES
     
     /// Check if within grace period (60 seconds from first engagement)
     var isWithinGracePeriod: Bool {
@@ -222,7 +220,7 @@ struct VideoEngagementState: Codable {
     }
 }
 
-// MARK: - Engagement Record
+// MARK: - NEW: Engagement Record
 
 /// Individual engagement record for tracking
 struct EngagementRecord: Codable {
@@ -230,16 +228,6 @@ struct EngagementRecord: Codable {
     let type: EngagementInteractionType
     let cloutAwarded: Int
     let tapNumber: Int
-    let isBurst: Bool  // 🆕 Track if this was a burst (long press) engagement
-    
-    // Backward-compatible init for existing records without isBurst
-    init(timestamp: Date, type: EngagementInteractionType, cloutAwarded: Int, tapNumber: Int, isBurst: Bool = false) {
-        self.timestamp = timestamp
-        self.type = type
-        self.cloutAwarded = cloutAwarded
-        self.tapNumber = tapNumber
-        self.isBurst = isBurst
-    }
 }
 
 /// Type of engagement interaction
@@ -259,9 +247,8 @@ struct EngagementInteraction: Codable {
     let userID: String
     let type: String // "hype" or "cool"
     let cloutAwarded: Int
-    let visualHypesAdded: Int
+    let visualHypesAdded: Int  // NEW: Track visual hypes separately
     let hypeRatingCost: Double
-    let isBurst: Bool  // 🆕 Track burst vs regular
     let createdAt: Date
     
     init(
@@ -270,8 +257,7 @@ struct EngagementInteraction: Codable {
         type: String,
         cloutAwarded: Int,
         visualHypesAdded: Int,
-        hypeRatingCost: Double,
-        isBurst: Bool = false
+        hypeRatingCost: Double
     ) {
         self.id = "\(videoID)_\(userID)_\(type)_\(Int(Date().timeIntervalSince1970))"
         self.videoID = videoID
@@ -280,7 +266,6 @@ struct EngagementInteraction: Codable {
         self.cloutAwarded = cloutAwarded
         self.visualHypesAdded = visualHypesAdded
         self.hypeRatingCost = hypeRatingCost
-        self.isBurst = isBurst
         self.createdAt = Date()
     }
 }

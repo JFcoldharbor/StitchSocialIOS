@@ -205,13 +205,18 @@ class RecordingController: ObservableObject {
         return currentUser.tier == .founder || currentUser.tier == .coFounder
     }
     
+    /// Expose current user tier for AI gating in ThreadComposer
+    var currentUserTier: UserTier {
+        authService.currentUser?.tier ?? .rookie
+    }
+    
     // MARK: - Initialization
     
     init(recordingContext: RecordingContext) {
         self.recordingContext = recordingContext
         self.videoService = VideoService()
         self.authService = AuthService()
-        self.aiAnalyzer = AIVideoAnalyzer()
+        self.aiAnalyzer = AIVideoAnalyzer.shared
         self.cameraManager = CinematicCameraManager.shared
         
         self.videoCoordinator = VideoCoordinator(
@@ -219,7 +224,7 @@ class RecordingController: ObservableObject {
             userService: UserService(),
             aiAnalyzer: aiAnalyzer,
             uploadService: VideoUploadService(),
-            cachingService: nil
+            cachingService: CachingService.shared
         )
         
         print("Ã°Å¸Å½Â¬ RECORDING CONTROLLER: Initialized with tier-based recording + background compression")
@@ -561,27 +566,33 @@ class RecordingController: ObservableObject {
         for segment in segments {
             let asset = AVAsset(url: segment.videoURL)
             
+            // FIXED: Load asset duration ONCE — used for both track insertion AND playhead advance
+            // Previously wall-clock timer (segment.duration) advanced currentTime, causing
+            // cumulative audio drift on multi-segment recordings
+            let assetDuration = try await asset.load(.duration)
+            
             // Add video track
             if let assetVideoTrack = try? await asset.loadTracks(withMediaType: .video).first {
                 // Capture transform from first segment
                 if firstVideoTransform == nil {
-                    firstVideoTransform = assetVideoTrack.preferredTransform
-                    firstVideoNaturalSize = assetVideoTrack.naturalSize
-                    print("Ã°Å¸â€œÂ MERGE: First segment transform: \(assetVideoTrack.preferredTransform)")
-                    print("Ã°Å¸â€œÂ MERGE: First segment size: \(assetVideoTrack.naturalSize)")
+                    firstVideoTransform = try await assetVideoTrack.load(.preferredTransform)
+                    firstVideoNaturalSize = try await assetVideoTrack.load(.naturalSize)
+                    print("MERGE: First segment transform: \(firstVideoTransform!)")
+                    print("MERGE: First segment size: \(firstVideoNaturalSize!)")
                 }
                 
-                let timeRange = CMTimeRange(start: .zero, duration: try await asset.load(.duration))
+                let timeRange = CMTimeRange(start: .zero, duration: assetDuration)
                 try videoTrack.insertTimeRange(timeRange, of: assetVideoTrack, at: currentTime)
             }
             
             // Add audio track
             if let assetAudioTrack = try? await asset.loadTracks(withMediaType: .audio).first {
-                let timeRange = CMTimeRange(start: .zero, duration: try await asset.load(.duration))
+                let timeRange = CMTimeRange(start: .zero, duration: assetDuration)
                 try audioTrack.insertTimeRange(timeRange, of: assetAudioTrack, at: currentTime)
             }
             
-            currentTime = CMTimeAdd(currentTime, CMTime(seconds: segment.duration, preferredTimescale: 600))
+            // FIXED: Advance playhead by actual media duration, not wall-clock timer
+            currentTime = CMTimeAdd(currentTime, assetDuration)
         }
         
         // Apply the transform from first segment to maintain orientation

@@ -490,6 +490,9 @@ class VideoService: ObservableObject {
             return nil
         }
         
+        // Propagate reply count to parent collection if segment
+        await propagateToCollection(videoID: parentID, field: "totalReplies", delta: 1)
+        
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
         
@@ -824,6 +827,7 @@ class VideoService: ObservableObject {
             ])
         
         try await markVideoShardActive(videoID: videoID)
+        await propagateToCollection(videoID: videoID, field: "totalHypes", delta: Int64(amount))
         
         print("ðŸ”¥ SHARD: +\(amount) hype â†’ shard \(shardIndex) + video doc for \(videoID)")
     }
@@ -851,6 +855,7 @@ class VideoService: ObservableObject {
             ])
         
         try await markVideoShardActive(videoID: videoID)
+        await propagateToCollection(videoID: videoID, field: "totalCools", delta: Int64(amount))
         
         print("â„ï¸ SHARD: +\(amount) cool â†’ shard \(shardIndex) + video doc for \(videoID)")
     }
@@ -890,6 +895,7 @@ class VideoService: ObservableObject {
             ])
         
         try await markVideoShardActive(videoID: videoID)
+        await propagateToCollection(videoID: videoID, field: "totalHypes", delta: Int64(-safeAmount))
         
         if safeAmount < amount {
             print("ðŸ”¥ SHARD: -\(safeAmount) hype â†’ shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
@@ -933,6 +939,7 @@ class VideoService: ObservableObject {
             ])
         
         try await markVideoShardActive(videoID: videoID)
+        await propagateToCollection(videoID: videoID, field: "totalCools", delta: Int64(-safeAmount))
         
         if safeAmount < amount {
             print("â„ï¸ SHARD: -\(safeAmount) cool â†’ shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
@@ -953,6 +960,60 @@ class VideoService: ObservableObject {
         }
         
         return max(0, total)
+    }
+    
+    // MARK: - Collection Engagement Propagation
+    //
+    // When a segment gets hyped/cooled/viewed, propagate to parent collection.
+    // Uses FieldValue.increment — NO extra reads. One write per engagement.
+    // CACHING: collectionID lookup cached per-video for session to avoid re-reads.
+    
+    /// In-memory cache: videoID -> collectionID (nil = not a segment)
+    private var collectionIDCache: [String: String?] = [:]
+    
+    /// Propagate engagement delta to parent collection document.
+    /// Reads collectionID from video doc ONCE, caches for session.
+    /// field: "totalHypes", "totalCools", "totalViews", "totalReplies", "totalShares"
+    private func propagateToCollection(videoID: String, field: String, delta: Int64) async {
+        // Check cache first — avoids repeated Firestore reads
+        if let cached = collectionIDCache[videoID] {
+            guard let collectionID = cached else { return } // nil = not a segment
+            await incrementCollectionField(collectionID: collectionID, field: field, delta: delta)
+            return
+        }
+        
+        // Cache miss — read video doc once
+        do {
+            let doc = try await db.collection(FirebaseSchema.Collections.videos)
+                .document(videoID).getDocument()
+            let data = doc.data() ?? [:]
+            let isSegment = data["isCollectionSegment"] as? Bool ?? false
+            let collectionID = data["collectionID"] as? String
+            
+            if isSegment, let cID = collectionID {
+                collectionIDCache[videoID] = cID
+                await incrementCollectionField(collectionID: cID, field: field, delta: delta)
+            } else {
+                collectionIDCache[videoID] = nil // cache negative result
+            }
+        } catch {
+            print("⚠️ COLLECTION PROPAGATE: Failed to read video \(videoID): \(error)")
+        }
+    }
+    
+    /// Atomic increment on collection document — no read needed
+    private func incrementCollectionField(collectionID: String, field: String, delta: Int64) async {
+        do {
+            try await db.collection("videoCollections")
+                .document(collectionID)
+                .updateData([
+                    field: FieldValue.increment(delta),
+                    "updatedAt": Timestamp()
+                ])
+            print("📊 COLLECTION PROPAGATE: \(field) \(delta > 0 ? "+" : "")\(delta) → collection \(collectionID)")
+        } catch {
+            print("⚠️ COLLECTION PROPAGATE: Failed to update \(field) on \(collectionID): \(error)")
+        }
     }
     
     /// Read total cool count by summing all shards (for real-time display)
@@ -1100,6 +1161,7 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.viewCount: FieldValue.increment(Int64(1)),
             FirebaseSchema.VideoDocument.updatedAt: Timestamp()
         ])
+        await propagateToCollection(videoID: videoID, field: "totalViews", delta: 1)
     }
     
     /// Convenience method for tracking views

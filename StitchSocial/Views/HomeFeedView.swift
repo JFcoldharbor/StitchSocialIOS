@@ -64,6 +64,7 @@ struct HomeFeedView: View {
     
     @State private var selectedUserForProfile: String?
     @State private var showingProfileView = false
+    @ObservedObject private var shareService = ShareService.shared
     
     // MARK: - Navigation
     
@@ -101,6 +102,11 @@ struct HomeFeedView: View {
                     userService: userService,
                     videoService: videoService
                 )
+            }
+        }
+        .fullScreenCover(isPresented: $shareService.showCollageSelection) {
+            if let threadData = shareService.collageThreadData {
+                ThreadCollageSelectionView(threadData: threadData)
             }
         }
     }
@@ -249,6 +255,7 @@ struct HomeFeedView: View {
                     isVisible: true,
                     actualReplyCount: thread.childVideos.count,
                     isConversationParticipant: false,
+                    threadData: thread,
                     onAction: { action in
                         handleOverlayAction(action, thread: thread)
                     }
@@ -630,6 +637,32 @@ struct HomeFeedView: View {
     
     private func handleOverlayAction(_ action: ContextualOverlayAction, thread: ThreadData) {
         print("📺 OVERLAY: \(action)")
+        
+        switch action {
+        case .shareCollage:
+            guard thread.hasReplies else {
+                print("⚠️ COLLAGE: Thread has no replies, cannot build collage")
+                return
+            }
+            shareService.shareCollage(threadData: thread)
+            preloadService.pauseAllPlayback()
+            
+        case .share:
+            let video = getCurrentVideo(thread: thread)
+            ShareService.shared.shareVideo(
+                video: video,
+                creatorUsername: video.creatorName,
+                threadID: thread.id
+            )
+            
+        case .profile(let userID):
+            selectedUserForProfile = userID
+            showingProfileView = true
+            preloadService.pauseAllPlayback()
+            
+        default:
+            break
+        }
     }
     
     private func setupAudioSession() {

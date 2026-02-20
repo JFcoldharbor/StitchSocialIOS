@@ -36,6 +36,7 @@ struct CollectionPlayerView: View {
     // MARK: - Services
     
     @StateObject private var videoService = VideoService()
+    @StateObject private var authService = AuthService()
     
     // MARK: - Constants
     
@@ -104,9 +105,17 @@ struct CollectionPlayerView: View {
                     // Collection-specific top bar (segment indicators)
                     collectionTopBar
                     
-                    // Simple engagement overlay (not ContextualVideoOverlay to avoid kill notifications)
+                    // Full engagement overlay — hype, cool, reply, share
                     if let segment = currentSegment {
-                        simpleEngagementOverlay(for: segment)
+                        ContextualVideoOverlay(
+                            video: segment,
+                            context: .collection,
+                            currentUserID: authService.currentUserID,
+                            isVisible: true,
+                            onAction: { action in
+                                handleOverlayAction(action, for: segment)
+                            }
+                        )
                     }
                 }
             }
@@ -126,51 +135,22 @@ struct CollectionPlayerView: View {
         }
     }
     
-    // MARK: - Simple Engagement Overlay (No kill notifications)
+    // MARK: - Overlay Action Handler
     
-    private func simpleEngagementOverlay(for segment: CoreVideoMetadata) -> some View {
-        VStack {
-            Spacer()
-            
-            HStack {
-                Spacer()
-                
-                // Right side buttons
-                VStack(spacing: 20) {
-                    // Thread/Comments button
-                    Button {
-                        showingThreadView = true
-                    } label: {
-                        VStack(spacing: 4) {
-                            Image(systemName: "bubble.left.fill")
-                                .font(.system(size: 28))
-                            Text("\(segment.replyCount)")
-                                .font(.caption)
-                        }
-                        .foregroundColor(.white)
-                    }
-                    
-                    // Hype placeholder
-                    VStack(spacing: 4) {
-                        Image(systemName: "flame.fill")
-                            .font(.system(size: 28))
-                        Text("\(segment.hypeCount)")
-                            .font(.caption)
-                    }
-                    .foregroundColor(.white)
-                    
-                    // Cool placeholder
-                    VStack(spacing: 4) {
-                        Image(systemName: "snowflake")
-                            .font(.system(size: 28))
-                        Text("\(segment.coolCount)")
-                            .font(.caption)
-                    }
-                    .foregroundColor(.white)
-                }
-                .padding(.trailing, 16)
-                .padding(.bottom, 100)
-            }
+    private func handleOverlayAction(_ action: ContextualOverlayAction, for segment: CoreVideoMetadata) {
+        switch action {
+        case .thread(let threadID):
+            showingThreadView = true
+        case .reply:
+            showingThreadView = true
+        case .profile(let userID):
+            // Navigate to profile — handled by overlay internally
+            break
+        case .share:
+            // Share handled by overlay
+            break
+        default:
+            break
         }
     }
     
@@ -201,6 +181,10 @@ struct CollectionPlayerView: View {
                         print("📚 COLLECTION PLAYER: First segment URL: \(first.videoURL)")
                     }
                 }
+                
+                // Prefetch all segment videos to disk cache
+                let urls = sortedSegments.map { $0.videoURL }.filter { !$0.isEmpty }
+                Task { await VideoDiskCache.shared.prefetchVideos(urls) }
             } catch {
                 print("❌ COLLECTION PLAYER: Error loading segments: \(error)")
                 await MainActor.run {
@@ -490,30 +474,34 @@ struct CollectionPlayerView: View {
 struct ThreadDetailSheet: View {
     let video: CoreVideoMetadata
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var videoService = VideoService()
+    @StateObject private var userService = UserService()
+    
+    private var muteManager = MuteContextManager.shared
+    
+    init(video: CoreVideoMetadata) {
+        self.video = video
+    }
     
     var body: some View {
         NavigationStack {
-            // Thread view for this segment's replies
-            VStack {
-                Text("Replies to: \(video.segmentDisplayTitle)")
-                    .font(.headline)
-                    .padding()
-                
-                Text("Thread view coming soon...")
-                    .foregroundColor(.gray)
-                
-                Spacer()
-            }
-            .navigationTitle("Thread")
-            .navigationBarTitleDisplayMode(.inline)
+            ThreadView(
+                threadID: video.threadID ?? video.id,
+                videoService: videoService,
+                userService: userService,
+                targetVideoID: video.id
+            )
+            .environmentObject(muteManager)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Done") {
                         dismiss()
                     }
+                    .foregroundColor(.cyan)
                 }
             }
         }
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -578,7 +566,25 @@ struct CollectionSegmentPlayer: View {
     }
     
     private func setupPlayer() {
-        guard let url = URL(string: video.videoURL) else {
+        guard !video.videoURL.isEmpty else {
+            print("❌ SEGMENT PLAYER: Empty video URL")
+            hasError = true
+            errorMessage = "No video URL"
+            isLoading = false
+            return
+        }
+        
+        // Check disk cache first — instant local playback
+        let playbackURL: URL
+        if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
+            playbackURL = cachedURL
+            print("💾 SEGMENT PLAYER: Playing from disk cache — \(video.id.prefix(8))")
+        } else if let remoteURL = URL(string: video.videoURL) {
+            playbackURL = remoteURL
+            print("🌐 SEGMENT PLAYER: Streaming from network — \(video.id.prefix(8))")
+            // Cache in background for next play
+            Task { await VideoDiskCache.shared.cacheVideo(from: video.videoURL) }
+        } else {
             print("❌ SEGMENT PLAYER: Invalid URL: \(video.videoURL)")
             hasError = true
             errorMessage = "Invalid video URL"
@@ -586,9 +592,7 @@ struct CollectionSegmentPlayer: View {
             return
         }
         
-        print("🎬 SEGMENT PLAYER: Setting up player for URL: \(url)")
-        
-        let playerItem = AVPlayerItem(url: url)
+        let playerItem = AVPlayerItem(url: playbackURL)
         let newPlayer = AVPlayer(playerItem: playerItem)
         newPlayer.automaticallyWaitsToMinimizeStalling = true
         

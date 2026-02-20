@@ -24,13 +24,16 @@ struct ProfileCollectionsRow: View {
     let onAddTap: () -> Void
     let onCollectionTap: (VideoCollection) -> Void
     let onDraftTap: (CollectionDraft) -> Void
-    var onDraftDelete: ((CollectionDraft) -> Void)? = nil  // NEW: Delete callback
+    var onDraftDelete: ((CollectionDraft) -> Void)? = nil
+    var onCollectionDelete: ((VideoCollection) -> Void)? = nil  // NEW: Delete published collection
     let onSeeAllTap: () -> Void
     
     // MARK: - State
     
     @State private var draftToDelete: CollectionDraft?
+    @State private var collectionToDelete: VideoCollection?
     @State private var showDeleteConfirmation = false
+    @State private var showCollectionDeleteConfirmation = false
     
     // MARK: - Constants
     
@@ -100,6 +103,23 @@ struct ProfileCollectionsRow: View {
                 }
             } message: {
                 Text("This will permanently delete this draft. This cannot be undone.")
+            }
+            .confirmationDialog(
+                "Delete Collection?",
+                isPresented: $showCollectionDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    if let collection = collectionToDelete {
+                        onCollectionDelete?(collection)
+                    }
+                    collectionToDelete = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    collectionToDelete = nil
+                }
+            } message: {
+                Text("This will remove this collection from your profile. Segment videos will remain.")
             }
         }
     }
@@ -228,9 +248,23 @@ struct ProfileCollectionsRow: View {
             }
         }
         .buttonStyle(PlainButtonStyle())
+        .contextMenu {
+            if isOwnProfile {
+                Button {
+                    onCollectionTap(collection)
+                } label: {
+                    Label("Play", systemImage: "play.fill")
+                }
+                
+                Button(role: .destructive) {
+                    collectionToDelete = collection
+                    showCollectionDeleteConfirmation = true
+                } label: {
+                    Label("Delete Collection", systemImage: "trash")
+                }
+            }
+        }
     }
-    
-    // MARK: - Draft Thumbnail (WITH DELETE)
     
     private func draftThumbnail(_ draft: CollectionDraft) -> some View {
         Button {

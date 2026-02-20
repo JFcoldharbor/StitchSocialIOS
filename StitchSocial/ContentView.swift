@@ -169,26 +169,36 @@ struct ContentView: View {
     
     private var mainAppView: some View {
         ZStack(alignment: .bottom) {
-            switch selectedTab {
-            case .home:
-                HomeFeedView()
+            VStack(spacing: 0) {
+                // Email verification banner (non-blocking, dismissible)
+                EmailVerificationBanner()
                     .environmentObject(authService)
                 
-            case .discovery:
-                DiscoveryView()
-                    .environmentObject(authService)
-                
-            case .progression:
-                ProfileView(
-                    authService: authService,
-                    userService: userService,
-                    videoService: videoService
-                )
-                .environmentObject(authService)
-                
-            case .notifications:
-                NotificationView()
-                    .environmentObject(authService)
+                // Tab content
+                Group {
+                    switch selectedTab {
+                    case .home:
+                        HomeFeedView()
+                            .environmentObject(authService)
+                        
+                    case .discovery:
+                        DiscoveryView()
+                            .environmentObject(authService)
+                        
+                    case .progression:
+                        ProfileView(
+                            authService: authService,
+                            userService: userService,
+                            videoService: videoService
+                        )
+                        .environmentObject(authService)
+                        
+                    case .notifications:
+                        NotificationView()
+                            .environmentObject(authService)
+                    }
+                }
+                .frame(maxHeight: .infinity)
             }
             
             CustomDippedTabBar(

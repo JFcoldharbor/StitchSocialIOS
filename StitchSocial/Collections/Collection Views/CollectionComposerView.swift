@@ -3,7 +3,8 @@
 //  StitchSocial
 //
 //  Layer 6: Views - Collection Creation Interface
-//  WITH DEBUG LOGGING
+//  REDESIGNED: Horizontal film strip + segment detail sheet
+//  Features: Per-segment titles, tap-to-edit, reorder, inline preview
 //
 
 import SwiftUI
@@ -11,1031 +12,1183 @@ import PhotosUI
 import AVFoundation
 import UniformTypeIdentifiers
 
-/// Full-screen view for creating and editing collections
+// MARK: - Composer Field Focus
+
+enum ComposerField: Hashable {
+    case title
+    case description
+    case segmentTitle(String) // segment ID
+}
+
+// MARK: - Collection Composer View
+
 struct CollectionComposerView: View {
     
     // MARK: - Properties
     
     @ObservedObject var viewModel: CollectionComposerViewModel
     @ObservedObject var coordinator: CollectionCoordinator
-    
-    /// Dismiss action
     let onDismiss: () -> Void
     
     // MARK: - Local State
     
     @State private var selectedPhotos: [PhotosPickerItem] = []
-    @State private var showPhotoPicker = false
-    @State private var isEditingTitle = false
-    @State private var isEditingDescription = false
+    @State private var selectedSegment: SegmentDraft?
+    @State private var showSegmentDetail = false
+    @State private var showPublishSuccess = false
+    @State private var showFileImporter = false
     @FocusState private var focusedField: ComposerField?
     
-    // MARK: - Body
-    
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                // Background
-                Color(.systemGroupedBackground)
-                    .ignoresSafeArea()
-                
-                // Main Content
-                ScrollView {
-                    VStack(spacing: 20) {
-                        // Header Card
-                        metadataCard
-                        
-                        // Segments Section
-                        segmentsSection
-                        
-                        // Settings Section
-                        settingsSection
-                        
-                        // Validation Messages
-                        if !viewModel.validationErrors.isEmpty || !viewModel.validationWarnings.isEmpty {
-                            validationSection
-                        }
-                        
-                        // DEBUG: Show picker state
-                        debugSection
-                        
-                        // Spacer for bottom padding
-                        Spacer(minLength: 100)
-                    }
-                    .padding()
-                }
-                
-                // Bottom Action Bar
-                VStack {
-                    Spacer()
-                    bottomActionBar
-                }
-            }
-            .navigationTitle(viewModel.draftID == nil ? "New Collection" : "Edit Collection")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    closeButton
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    saveButton
-                }
-            }
-            .photosPicker(
-                isPresented: $showPhotoPicker,
-                selection: $selectedPhotos,
-                maxSelectionCount: max(1, viewModel.maxSegments - viewModel.segments.count),
-                matching: .videos
-            )
-            .onChange(of: showPhotoPicker) { oldValue, newValue in
-                print("🎬 COMPOSER: showPhotoPicker changed from \(oldValue) to \(newValue)")
-            }
-            .onChange(of: selectedPhotos) { oldValue, newItems in
-                print("🎬 COMPOSER: selectedPhotos changed - count: \(newItems.count)")
-                handlePhotosSelection(newItems)
-            }
-            .alert("Discard Changes?", isPresented: $coordinator.showDiscardConfirmation) {
-                Button("Discard", role: .destructive) {
-                    coordinator.discardAndClose()
-                }
-                Button("Keep Editing", role: .cancel) { }
-            } message: {
-                Text("You have unsaved changes. Are you sure you want to discard them?")
-            }
-            .alert("Delete Draft?", isPresented: $coordinator.showDeleteConfirmation) {
-                Button("Delete", role: .destructive) {
-                    coordinator.confirmDeleteDraft()
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("This will permanently delete your draft and all uploaded segments.")
-            }
-            .alert("Publish Collection?", isPresented: $coordinator.showPublishConfirmation) {
-                Button("Publish", role: .none) {
-                    Task {
-                        await viewModel.publish()
-                        if viewModel.shouldDismiss {
-                            coordinator.successMessage = "Collection published!"
-                            coordinator.dismissComposer()
-                        }
-                    }
-                }
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                Text("Your collection will be visible to \(visibilityDescription). This cannot be undone.")
-            }
-        }
-    }
-    
-    // MARK: - DEBUG Section
-    
-    private var debugSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("DEBUG INFO")
-                .font(.caption)
-                .fontWeight(.bold)
-                .foregroundColor(.red)
-            
-            Text("showPhotoPicker: \(showPhotoPicker ? "TRUE" : "FALSE")")
-                .font(.caption)
-            Text("selectedPhotos count: \(selectedPhotos.count)")
-                .font(.caption)
-            Text("segments count: \(viewModel.segments.count)")
-                .font(.caption)
-            Text("canAddMore: \(viewModel.canAddMoreSegments ? "YES" : "NO")")
-                .font(.caption)
-            Text("draftID: \(viewModel.draftID ?? "nil")")
-                .font(.caption)
-            
-            Divider()
-            
-            Text("PUBLISH STATUS")
-                .font(.caption)
-                .fontWeight(.bold)
-                .foregroundColor(.orange)
-            
-            Text("canPublish: \(viewModel.canPublish ? "YES ✅" : "NO ❌")")
-                .font(.caption)
-                .foregroundColor(viewModel.canPublish ? .green : .red)
-            Text("isTitleValid: \(viewModel.isTitleValid ? "YES" : "NO") (title: '\(viewModel.title)')")
-                .font(.caption)
-            Text("hasMinSegments: \(viewModel.hasMinimumSegments ? "YES" : "NO") (\(viewModel.segments.count)/\(viewModel.minSegments))")
-                .font(.caption)
-            Text("allUploaded: \(viewModel.allSegmentsUploaded ? "YES" : "NO")")
-                .font(.caption)
-            Text("uploadInProgress: \(viewModel.hasUploadInProgress ? "YES" : "NO")")
-                .font(.caption)
-            Text("failedCount: \(viewModel.failedSegmentCount)")
-                .font(.caption)
-            
-            // Show each segment status
-            ForEach(viewModel.segments) { segment in
-                HStack {
-                    Text("Seg \(segment.order + 1):")
-                        .font(.caption2)
-                    Text(segment.uploadStatus.rawValue)
-                        .font(.caption2)
-                        .foregroundColor(segment.isUploaded ? .green : .orange)
-                    Text("(\(Int(segment.uploadProgress * 100))%)")
-                        .font(.caption2)
-                }
-            }
-            
-            // Direct picker button for testing
-            PhotosPicker(
-                selection: $selectedPhotos,
-                maxSelectionCount: 5,
-                matching: .videos
-            ) {
-                Text("DEBUG: Direct PhotosPicker")
-                    .font(.caption)
-                    .padding(8)
-                    .background(Color.red)
-                    .foregroundColor(.white)
-                    .cornerRadius(8)
-            }
-        }
-        .padding()
-        .background(Color.yellow.opacity(0.3))
-        .cornerRadius(8)
-    }
-    
-    // MARK: - Metadata Card
-    
-    private var metadataCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Cover Photo Section
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Cover Photo")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(.secondary)
-                
-                coverPhotoSelector
-            }
-            
-            // Title Field
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Title")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.secondary)
-                    
-                    Spacer()
-                    
-                    Text(viewModel.titleCharacterCount)
-                        .font(.caption)
-                        .foregroundColor(viewModel.title.count > viewModel.maxTitleLength ? .red : .secondary)
-                }
-                
-                TextField("Collection title", text: $viewModel.title)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focusedField, equals: .title)
-            }
-            
-            // Description Field
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Description")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.secondary)
-                    
-                    Spacer()
-                    
-                    Text(viewModel.descriptionCharacterCount)
-                        .font(.caption)
-                        .foregroundColor(viewModel.description.count > viewModel.maxDescriptionLength ? .red : .secondary)
-                }
-                
-                TextField("What's this collection about?", text: $viewModel.description, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(3...6)
-                    .focused($focusedField, equals: .description)
-            }
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
-    }
-    
-    // MARK: - Cover Photo Selector
-    
+    // Cover photo
     @State private var selectedCoverPhoto: PhotosPickerItem?
     @State private var coverPhotoImage: UIImage?
     
-    private var coverPhotoSelector: some View {
-        HStack(spacing: 16) {
-            // Cover photo preview
+    var body: some View {
+        navigationWrapper
+    }
+    
+    // MARK: - Navigation Wrapper (split for type checker)
+    
+    private var navigationWrapper: some View {
+        NavigationStack {
+            decoratedContent
+        }
+    }
+    
+    private var decoratedContent: some View {
+        mainContent
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { toolbarContent }
+            .toolbarBackground(Color.black.opacity(0.9), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .sheet(isPresented: $showSegmentDetail) { segmentSheet }
+            .modifier(ComposerEventHandlers(
+                selectedPhotos: $selectedPhotos,
+                selectedCoverPhoto: $selectedCoverPhoto,
+                showPublishConfirmation: $coordinator.showPublishConfirmation,
+                showFileImporter: $showFileImporter,
+                viewModel: viewModel,
+                coordinator: coordinator,
+                handlePhotosSelection: handlePhotosSelection,
+                loadCoverPhoto: loadCoverPhoto,
+                handleFileImport: handleFileImport
+            ))
+    }
+    
+    // MARK: - Main Content (extracted for type checker)
+    
+    private var mainContent: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color.black, Color(red: 0.08, green: 0.06, blue: 0.14)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                ScrollView(showsIndicators: false) {
+                    scrollContent
+                }
+                bottomBar
+            }
+        }
+    }
+    
+    private var scrollContent: some View {
+        VStack(spacing: 24) {
+            headerSection
+                .padding(.top, 8)
+            
+            filmStripSection
+            
+            settingsCard
+            
+            if !viewModel.validationErrors.isEmpty {
+                validationBanner
+            }
+            
+            Spacer(minLength: 100)
+        }
+        .padding(.horizontal, 16)
+    }
+    
+    // MARK: - Toolbar Content
+    
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button("Cancel") {
+                coordinator.closeComposer()
+            }
+            .foregroundColor(.gray)
+        }
+        ToolbarItem(placement: .principal) {
+            Text(viewModel.isEditingExisting ? "Edit Collection" : "New Collection")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(.white)
+        }
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button {
+                Task { await viewModel.saveDraft() }
+            } label: {
+                Text(viewModel.isSaving ? "Saving..." : "Save")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.cyan)
+            }
+            .disabled(viewModel.isSaving)
+        }
+    }
+    
+    // MARK: - Segment Sheet
+    
+    @ViewBuilder
+    private var segmentSheet: some View {
+        if let segment = selectedSegment {
+            SegmentDetailSheet(
+                segment: segment,
+                segmentIndex: viewModel.segments.firstIndex(where: { $0.id == segment.id }) ?? 0,
+                totalSegments: viewModel.segments.count,
+                onTitleChange: { newTitle in
+                    viewModel.updateSegmentTitle(id: segment.id, title: newTitle)
+                },
+                onDelete: {
+                    withAnimation(.spring(response: 0.3)) {
+                        viewModel.removeSegment(id: segment.id)
+                    }
+                    showSegmentDetail = false
+                },
+                onRetry: {
+                    coordinator.retryUpload(segmentID: segment.id)
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color(red: 0.1, green: 0.08, blue: 0.16))
+        }
+    }
+    
+    // MARK: - Header Section (Cover + Title + Description)
+    
+    private var headerSection: some View {
+        HStack(alignment: .top, spacing: 16) {
+            // Cover photo
+            coverPhotoView
+            
+            // Title + Description
+            VStack(alignment: .leading, spacing: 12) {
+                // Title
+                TextField("Collection title", text: $viewModel.title)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.white)
+                    .focused($focusedField, equals: .title)
+                    .tint(.cyan)
+                
+                // Description
+                TextField("What's this about?", text: $viewModel.description, axis: .vertical)
+                    .font(.system(size: 14))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(2...4)
+                    .focused($focusedField, equals: .description)
+                    .tint(.cyan)
+                
+                // Stats row
+                HStack(spacing: 12) {
+                    Label("\(viewModel.segments.count) segments", systemImage: "film.stack")
+                    
+                    if viewModel.totalDuration > 0 {
+                        Label(formatDuration(viewModel.totalDuration), systemImage: "clock")
+                    }
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.gray)
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
+    }
+    
+    // MARK: - Cover Photo
+    
+    private var coverPhotoView: some View {
+        PhotosPicker(selection: $selectedCoverPhoto, matching: .images) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(.systemGray5))
-                    .frame(width: 120, height: 160)
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: 100, height: 140)
                 
                 if let coverImage = coverPhotoImage {
                     Image(uiImage: coverImage)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
-                        .frame(width: 120, height: 160)
+                        .frame(width: 100, height: 140)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
-                } else if let firstThumbnail = viewModel.segments.first?.thumbnailURL,
-                          !firstThumbnail.isEmpty {
-                    // Show first segment thumbnail as default
-                    AsyncImage(url: URL(string: firstThumbnail)) { image in
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
+                } else if let thumb = viewModel.segments.first?.thumbnailURL,
+                          !thumb.isEmpty, let url = URL(string: thumb) {
+                    AsyncImage(url: url) { image in
+                        image.resizable().aspectRatio(contentMode: .fill)
                     } placeholder: {
-                        Image(systemName: "photo")
-                            .font(.system(size: 32))
-                            .foregroundColor(.secondary)
+                        coverPlaceholder
                     }
-                    .frame(width: 120, height: 160)
+                    .frame(width: 100, height: 140)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 } else {
-                    VStack(spacing: 8) {
-                        Image(systemName: "photo.badge.plus")
-                            .font(.system(size: 32))
-                            .foregroundColor(.secondary)
-                        Text("Add Cover")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
+                    coverPlaceholder
                 }
                 
-                // Play icon overlay to indicate it's a collection
-                if coverPhotoImage != nil || viewModel.segments.first?.thumbnailURL != nil {
-                    VStack {
+                // Edit badge
+                VStack {
+                    Spacer()
+                    HStack {
                         Spacer()
-                        HStack {
-                            Spacer()
-                            Image(systemName: "play.circle.fill")
-                                .font(.system(size: 24))
-                                .foregroundColor(.white)
-                                .shadow(radius: 2)
-                                .padding(8)
-                        }
+                        Image(systemName: "pencil.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.white, .cyan.opacity(0.8))
+                            .padding(6)
                     }
-                    .frame(width: 120, height: 160)
                 }
+                .frame(width: 100, height: 140)
             }
-            
-            // Actions
-            VStack(alignment: .leading, spacing: 12) {
-                PhotosPicker(
-                    selection: $selectedCoverPhoto,
-                    matching: .images
-                ) {
-                    Label("Choose Photo", systemImage: "photo.on.rectangle")
-                        .font(.subheadline)
-                        .foregroundColor(.accentColor)
-                }
-                .onChange(of: selectedCoverPhoto) { _, newValue in
-                    Task {
-                        await loadCoverPhoto(from: newValue)
-                    }
-                }
-                
-                if coverPhotoImage != nil {
-                    Button {
-                        coverPhotoImage = nil
-                        selectedCoverPhoto = nil
-                        viewModel.coverImageData = nil
-                    } label: {
-                        Label("Remove", systemImage: "trash")
-                            .font(.subheadline)
-                            .foregroundColor(.red)
-                    }
-                }
-                
-                Text("9:16 ratio recommended")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            
-            Spacer()
         }
     }
     
-    private func loadCoverPhoto(from item: PhotosPickerItem?) async {
-        guard let item = item else { return }
-        
-        do {
-            if let data = try await item.loadTransferable(type: Data.self),
-               let uiImage = UIImage(data: data) {
-                await MainActor.run {
-                    self.coverPhotoImage = uiImage
-                    self.viewModel.coverImageData = data
-                    print("📸 COMPOSER: Cover photo loaded")
-                }
-            }
-        } catch {
-            print("❌ COMPOSER: Failed to load cover photo: \(error)")
+    private var coverPlaceholder: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "photo.badge.plus")
+                .font(.system(size: 24))
+                .foregroundColor(.gray)
+            Text("Cover")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.gray)
         }
+        .frame(width: 100, height: 140)
     }
     
-    // MARK: - Segments Section
+    // MARK: - Film Strip Section
     
-    private var segmentsSection: some View {
+    private var filmStripSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Header
+            // Section header
             HStack {
                 Text("Segments")
-                    .font(.headline)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.white)
                 
                 Spacer()
                 
                 if viewModel.canAddMoreSegments {
-                    addSegmentButton
+                    HStack(spacing: 8) {
+                        // Files import
+                        Button {
+                            showFileImporter = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "folder")
+                                    .font(.system(size: 12, weight: .bold))
+                                Text("Files")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.cyan.opacity(0.12))
+                            .clipShape(Capsule())
+                        }
+                        
+                        // Gallery import
+                        PhotosPicker(
+                            selection: $selectedPhotos,
+                            maxSelectionCount: max(1, viewModel.maxSegments - viewModel.segments.count),
+                            matching: .videos
+                        ) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 12, weight: .bold))
+                                Text("Gallery")
+                                    .font(.system(size: 13, weight: .semibold))
+                            }
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.cyan.opacity(0.12))
+                            .clipShape(Capsule())
+                        }
+                    }
                 }
             }
             
-            // Empty State or Segment List
-            if viewModel.segments.isEmpty {
-                emptySegmentsState
-            } else {
-                segmentsList
-            }
-            
-            // Upload Progress
+            // Upload progress bar (when active)
             if coordinator.isUploading {
-                uploadProgressSection
+                HStack(spacing: 8) {
+                    ProgressView(value: coordinator.overallUploadProgress)
+                        .tint(.cyan)
+                    Text("\(Int(coordinator.overallUploadProgress * 100))%")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.cyan)
+                        .frame(width: 36)
+                }
+                .padding(.horizontal, 4)
             }
-        }
-    }
-    
-    private var emptySegmentsState: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "video.badge.plus")
-                .font(.system(size: 48))
-                .foregroundColor(.secondary)
             
-            Text("No segments yet")
-                .font(.headline)
-                .foregroundColor(.secondary)
-            
-            Text("Add at least \(viewModel.minSegments) video segments to create a collection")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            
-            // Use PhotosPicker directly instead of Button + .photosPicker modifier
-            PhotosPicker(
-                selection: $selectedPhotos,
-                maxSelectionCount: max(1, viewModel.maxSegments - viewModel.segments.count),
-                matching: .videos
-            ) {
-                Label("Add Videos", systemImage: "plus.circle.fill")
-                    .font(.headline)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 12)
-                    .background(Color.accentColor)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
-    }
-    
-    private var segmentsList: some View {
-        VStack(spacing: 8) {
-            ForEach(Array(viewModel.segments.enumerated()), id: \.element.id) { index, segment in
-                SegmentRowView(
-                    segment: segment,
-                    index: index,
-                    onDelete: {
-                        withAnimation {
-                            viewModel.removeSegment(id: segment.id)
+            if viewModel.segments.isEmpty {
+                // Empty state
+                emptyFilmStrip
+            } else {
+                // Horizontal scrolling film strip
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(viewModel.segments.enumerated()), id: \.element.id) { index, segment in
+                            FilmStripCard(
+                                segment: segment,
+                                index: index,
+                                isSelected: selectedSegment?.id == segment.id,
+                                onTap: {
+                                    selectedSegment = segment
+                                    showSegmentDetail = true
+                                },
+                                onTitleChange: { newTitle in
+                                    viewModel.updateSegmentTitle(id: segment.id, title: newTitle)
+                                }
+                            )
                         }
-                    },
-                    onRetry: {
-                        coordinator.retryUpload(segmentID: segment.id)
-                    },
-                    onTitleChange: { newTitle in
-                        viewModel.updateSegmentTitle(id: segment.id, title: newTitle)
+                        
+                        // Add more card
+                        if viewModel.canAddMoreSegments {
+                            addSegmentCard
+                        }
                     }
-                )
-            }
-            .onMove { source, destination in
-                viewModel.moveSegment(from: source, to: destination)
+                    .padding(.vertical, 4)
+                }
             }
         }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(16)
     }
     
-    private var addSegmentButton: some View {
-        // Use PhotosPicker directly
+    // MARK: - Empty Film Strip
+    
+    private var emptyFilmStrip: some View {
+        PhotosPicker(
+            selection: $selectedPhotos,
+            maxSelectionCount: viewModel.maxSegments,
+            matching: .videos
+        ) {
+            VStack(spacing: 14) {
+                Image(systemName: "film.stack")
+                    .font(.system(size: 36))
+                    .foregroundColor(.gray.opacity(0.5))
+                
+                Text("Add video segments")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white.opacity(0.7))
+                
+                Text("Min \(viewModel.minSegments) segments to publish")
+                    .font(.system(size: 12))
+                    .foregroundColor(.gray)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 48)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [8, 6]))
+                    .foregroundColor(.gray.opacity(0.3))
+            )
+        }
+    }
+    
+    // MARK: - Add Segment Card (in strip)
+    
+    private var addSegmentCard: some View {
         PhotosPicker(
             selection: $selectedPhotos,
             maxSelectionCount: max(1, viewModel.maxSegments - viewModel.segments.count),
             matching: .videos
         ) {
-            Label("Add", systemImage: "plus")
-                .font(.subheadline)
-                .fontWeight(.medium)
+            VStack(spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+                        .foregroundColor(.gray.opacity(0.4))
+                        .frame(width: 100, height: 140)
+                    
+                    Image(systemName: "plus")
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundColor(.gray)
+                }
+                
+                Text("Add")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.gray)
+                    .frame(width: 100)
+            }
         }
     }
     
-    private var uploadProgressSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Uploading...")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                
-                Spacer()
-                
-                Text("\(Int(coordinator.overallUploadProgress * 100))%")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            
-            ProgressView(value: coordinator.overallUploadProgress)
-                .tint(.accentColor)
-            
-            Button("Cancel All") {
-                coordinator.cancelAllUploads()
-            }
-            .font(.caption)
-            .foregroundColor(.red)
-        }
-        .padding()
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
-    }
+    // MARK: - Settings Card
     
-    // MARK: - Settings Section
-    
-    private var settingsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Settings")
-                .font(.headline)
-            
-            VStack(spacing: 0) {
-                // Visibility
-                HStack {
-                    Image(systemName: viewModel.visibility.iconName)
-                        .foregroundColor(.blue)
-                        .frame(width: 28)
-                    
-                    Text("Visibility")
-                    
-                    Spacer()
-                    
-                    Picker("Visibility", selection: $viewModel.visibility) {
-                        ForEach(CollectionVisibility.allCases, id: \.self) { visibility in
-                            Text(visibility.displayName).tag(visibility)
-                        }
+    private var settingsCard: some View {
+        VStack(spacing: 0) {
+            // Visibility
+            settingsRow(
+                icon: "globe",
+                iconColor: .blue,
+                title: "Visibility"
+            ) {
+                Picker("", selection: $viewModel.visibility) {
+                    ForEach(CollectionVisibility.allCases, id: \.self) { vis in
+                        Text(vis.displayName).tag(vis)
                     }
-                    .pickerStyle(.menu)
                 }
-                .padding()
-                
-                Divider()
-                    .padding(.leading, 44)
-                
-                // Allow Replies
-                HStack {
-                    Image(systemName: "bubble.left.and.bubble.right.fill")
-                        .foregroundColor(.purple)
-                        .frame(width: 28)
-                    
-                    Toggle("Allow Replies", isOn: $viewModel.allowReplies)
-                }
-                .padding()
+                .pickerStyle(.menu)
+                .tint(.white.opacity(0.7))
             }
-            .background(Color(.systemBackground))
-            .cornerRadius(12)
+            
+            settingsDivider
+            
+            // Content Type
+            settingsRow(
+                icon: "tag",
+                iconColor: .purple,
+                title: "Type"
+            ) {
+                Picker("", selection: $viewModel.contentType) {
+                    ForEach(CollectionContentType.allCases, id: \.self) { type in
+                        Label(type.displayName, systemImage: type.icon).tag(type)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(.white.opacity(0.7))
+            }
+            
+            settingsDivider
+            
+            // Allow Replies
+            settingsRow(
+                icon: "bubble.left.and.bubble.right",
+                iconColor: .green,
+                title: "Allow Replies"
+            ) {
+                Toggle("", isOn: $viewModel.allowReplies)
+                    .tint(.cyan)
+            }
         }
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+        )
     }
     
-    // MARK: - Validation Section
+    private func settingsRow<Content: View>(
+        icon: String,
+        iconColor: Color,
+        title: String,
+        @ViewBuilder trailing: () -> Content
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15))
+                .foregroundColor(iconColor)
+                .frame(width: 24)
+            
+            Text(title)
+                .font(.system(size: 15))
+                .foregroundColor(.white)
+            
+            Spacer()
+            
+            trailing()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
     
-    private var validationSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var settingsDivider: some View {
+        Divider()
+            .background(Color.white.opacity(0.06))
+            .padding(.leading, 52)
+    }
+    
+    // MARK: - Validation Banner
+    
+    private var validationBanner: some View {
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(viewModel.validationErrors, id: \.self) { error in
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.circle.fill")
                         .foregroundColor(.red)
-                    
+                        .font(.system(size: 13))
                     Text(error)
-                        .font(.subheadline)
-                        .foregroundColor(.red)
-                }
-            }
-            
-            ForEach(viewModel.validationWarnings, id: \.self) { warning in
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                    
-                    Text(warning)
-                        .font(.subheadline)
-                        .foregroundColor(.orange)
+                        .font(.system(size: 13))
+                        .foregroundColor(.red.opacity(0.9))
                 }
             }
         }
-        .padding()
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.systemBackground))
-        .cornerRadius(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.red.opacity(0.1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.red.opacity(0.2), lineWidth: 1)
+                )
+        )
     }
     
-    // MARK: - Bottom Action Bar
+    // MARK: - Bottom Bar
     
-    private var bottomActionBar: some View {
-        VStack(spacing: 0) {
-            Divider()
-            
-            HStack(spacing: 12) {
-                // Delete Draft Button
-                if viewModel.draftID != nil {
-                    Button(role: .destructive) {
-                        coordinator.deleteCurrentDraft()
-                    } label: {
-                        Image(systemName: "trash")
-                            .font(.title3)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(.red)
-                }
-                
-                Spacer()
-                
-                // Publish Button
-                Button {
-                    print("🚀 COMPOSER: Publish button tapped")
-                    print("🚀 COMPOSER: canPublish = \(viewModel.canPublish)")
-                    print("🚀 COMPOSER: segments count = \(viewModel.segments.count)")
-                    print("🚀 COMPOSER: title = '\(viewModel.title)'")
-                    
-                    viewModel.validate()
-                    
-                    print("🚀 COMPOSER: validation errors = \(viewModel.validationErrors)")
-                    print("🚀 COMPOSER: validation warnings = \(viewModel.validationWarnings)")
-                    
-                    if viewModel.canPublish {
-                        print("🚀 COMPOSER: Showing publish confirmation")
-                        coordinator.showPublishConfirmation = true
-                    } else {
-                        print("🚀 COMPOSER: Cannot publish - showing error")
-                        coordinator.errorMessage = viewModel.validationErrors.first ?? "Cannot publish collection"
-                    }
-                } label: {
-                    HStack {
-                        if viewModel.isPublishing {
-                            ProgressView()
-                                .tint(.white)
-                        } else {
-                            Image(systemName: "paperplane.fill")
-                        }
-                        Text("Publish")
-                            .fontWeight(.semibold)
-                    }
-                    .frame(minWidth: 120)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!viewModel.canPublish || viewModel.isPublishing)
-            }
-            .padding()
-            .background(.ultraThinMaterial)
-        }
-    }
-    
-    // MARK: - Toolbar Buttons
-    
-    private var closeButton: some View {
-        Button("Cancel") {
-            coordinator.closeComposer()
-        }
-    }
-    
-    private var saveButton: some View {
-        Button {
-            Task {
-                await viewModel.saveDraft()
-            }
-        } label: {
-            if viewModel.isSaving {
-                ProgressView()
-            } else {
-                Text("Save")
-            }
-        }
-        .disabled(viewModel.isSaving)
-    }
-    
-    // MARK: - Helpers
-    
-    private var visibilityDescription: String {
-        switch viewModel.visibility {
-        case .publicVisible:
-            return "everyone"
-        case .followers:
-            return "your followers"
-        case .privateOnly:
-            return "only you"
-        }
-    }
-    
-    private func handlePhotosSelection(_ items: [PhotosPickerItem]) {
-        print("🎬 COMPOSER: handlePhotosSelection called with \(items.count) items")
-        print("🎬 COMPOSER: viewModel segments count: \(viewModel.segments.count)")
-        print("🎬 COMPOSER: coordinator.composerViewModel is nil: \(coordinator.composerViewModel == nil)")
-        
-        for item in items {
-            print("🎬 COMPOSER: Processing item: \(item)")
-            // Pass the viewModel reference directly to ensure it's not nil
-            loadVideoFromPicker(item: item, viewModel: viewModel)
-        }
-        selectedPhotos = []
-    }
-    
-    /// Load video from PhotosPicker item and add to viewModel
-    private func loadVideoFromPicker(item: PhotosPickerItem, viewModel: CollectionComposerViewModel) {
-        Task {
-            do {
-                print("📹 COMPOSER: Starting to load video...")
-                
-                // Create temp file path
-                let tempURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent(UUID().uuidString)
-                    .appendingPathExtension("mp4")
-                
-                // Try loading as Movie type
-                if let movie = try? await item.loadTransferable(type: Movie.self) {
-                    print("📹 COMPOSER: Loaded via Movie transferable at \(movie.url)")
-                    if FileManager.default.fileExists(atPath: tempURL.path) {
-                        try FileManager.default.removeItem(at: tempURL)
-                    }
-                    try FileManager.default.copyItem(at: movie.url, to: tempURL)
-                } else {
-                    print("❌ COMPOSER: Movie transferable returned nil, trying Data...")
-                    
-                    // Try loading as Data
-                    if let videoData = try? await item.loadTransferable(type: Data.self) {
-                        print("📹 COMPOSER: Loaded via Data transferable (\(videoData.count) bytes)")
-                        try videoData.write(to: tempURL)
-                    } else {
-                        print("❌ COMPOSER: Both Movie and Data transferable failed")
-                        throw CoordinatorError.videoLoadFailed
-                    }
-                }
-                
-                // Verify file exists
-                guard FileManager.default.fileExists(atPath: tempURL.path) else {
-                    print("❌ COMPOSER: Video file doesn't exist at \(tempURL.path)")
-                    throw CoordinatorError.videoLoadFailed
-                }
-                
-                // Get video metadata
-                let asset = AVURLAsset(url: tempURL)
-                let duration = try await asset.load(.duration).seconds
-                
-                // Get file size
-                let fileAttributes = try FileManager.default.attributesOfItem(atPath: tempURL.path)
-                let fileSize = fileAttributes[.size] as? Int64 ?? 0
-                
-                // Generate thumbnail
-                let thumbnailPath = await generateThumbnailForVideo(url: tempURL)
-                
-                print("📹 COMPOSER: Video loaded - duration: \(duration)s, size: \(fileSize) bytes")
-                
-                // Add to viewModel on main thread
-                await MainActor.run {
-                    viewModel.addSegment(
-                        localVideoPath: tempURL.path,
-                        duration: duration,
-                        fileSize: fileSize,
-                        thumbnailPath: thumbnailPath
-                    )
-                    print("✅ COMPOSER: Segment added, total segments: \(viewModel.segments.count)")
-                }
-                
-                // Get segment ID and start upload via coordinator
-                let segmentID = await MainActor.run {
-                    viewModel.segments.last?.id ?? UUID().uuidString
-                }
-                
-                let draftID = await MainActor.run {
-                    viewModel.draftID
-                }
-                
-                // Use coordinator for upload (it has Firebase access)
-                // Returns URLs on success so we can mark segment as uploaded
-                if let result = await coordinator.uploadSegment(
-                    segmentID: segmentID,
-                    localURL: tempURL,
-                    thumbnailPath: thumbnailPath,
-                    draftID: draftID
-                ) {
-                    // Mark segment as uploaded in viewModel directly
-                    await MainActor.run {
-                        viewModel.markSegmentUploaded(
-                            id: segmentID,
-                            videoURL: result.videoURL,
-                            thumbnailURL: result.thumbnailURL ?? ""
-                        )
-                        print("✅ COMPOSER: Segment \(segmentID) marked as uploaded in viewModel")
-                    }
-                } else {
-                    print("❌ COMPOSER: Upload failed for segment \(segmentID)")
-                }
-                
-            } catch {
-                print("❌ COMPOSER: Failed to load video: \(error)")
-                await MainActor.run {
-                    coordinator.errorMessage = "Failed to add video: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-    
-    /// Generate thumbnail for video
-    private func generateThumbnailForVideo(url: URL) async -> String? {
-        print("🖼️ COMPOSER: Generating thumbnail for \(url.path)")
-        
-        let asset = AVURLAsset(url: url)
-        let imageGenerator = AVAssetImageGenerator(asset: asset)
-        imageGenerator.appliesPreferredTrackTransform = true
-        
-        let time = CMTime(seconds: 1.0, preferredTimescale: 600)
-        
-        do {
-            let cgImage = try await imageGenerator.image(at: time).image
-            let uiImage = UIImage(cgImage: cgImage)
-            
-            let thumbnailURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension("jpg")
-            
-            if let data = uiImage.jpegData(compressionQuality: 0.8) {
-                try data.write(to: thumbnailURL)
-                print("🖼️ COMPOSER: Thumbnail saved to \(thumbnailURL.path)")
-                
-                // Verify file exists
-                if FileManager.default.fileExists(atPath: thumbnailURL.path) {
-                    print("🖼️ COMPOSER: Thumbnail file verified at \(thumbnailURL.path)")
-                    return thumbnailURL.path
-                } else {
-                    print("❌ COMPOSER: Thumbnail file NOT found after write!")
-                }
-            } else {
-                print("❌ COMPOSER: Failed to create JPEG data")
-            }
-        } catch {
-            print("⚠️ COMPOSER: Failed to generate thumbnail: \(error)")
-        }
-        
-        return nil
-    }
-}
-
-// MARK: - Focused Field
-
-enum ComposerField: Hashable {
-    case title
-    case description
-}
-
-// MARK: - Segment Row View
-
-struct SegmentRowView: View {
-    let segment: SegmentDraft
-    let index: Int
-    let onDelete: () -> Void
-    let onRetry: () -> Void
-    let onTitleChange: (String) -> Void
-    
-    @State private var editingTitle: String = ""
-    @State private var isEditingTitle: Bool = false
-    
-    var body: some View {
+    private var bottomBar: some View {
         HStack(spacing: 12) {
-            // Drag Handle
-            Image(systemName: "line.3.horizontal")
-                .font(.body)
-                .foregroundColor(.secondary)
-            
-            // Thumbnail
-            segmentThumbnail
-            
-            // Info
-            VStack(alignment: .leading, spacing: 4) {
-                // Title
-                if isEditingTitle {
-                    TextField("Segment title", text: $editingTitle)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .onSubmit {
-                            onTitleChange(editingTitle)
-                            isEditingTitle = false
-                        }
-                } else {
-                    Text(segment.displayTitle)
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .onTapGesture {
-                            editingTitle = segment.title ?? ""
-                            isEditingTitle = true
-                        }
+            // Delete draft
+            if viewModel.isEditingExisting {
+                Button(role: .destructive) {
+                    coordinator.deleteCurrentDraft()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 16))
+                        .foregroundColor(.red)
+                        .frame(width: 44, height: 44)
+                        .background(Color.red.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
-                
-                // Duration & Size
-                HStack(spacing: 8) {
-                    if let duration = segment.formattedDuration {
-                        Text(duration)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    if let size = segment.formattedFileSize {
-                        Text(size)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                // Upload Status
-                uploadStatusView
             }
             
             Spacer()
             
-            // Actions
-            if segment.uploadStatus == .failed {
-                Button {
-                    onRetry()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .foregroundColor(.orange)
-                }
-            }
-            
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Image(systemName: "trash")
-                    .foregroundColor(.red)
-            }
-        }
-        .padding()
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
-    }
-    
-    private var segmentThumbnail: some View {
-        ZStack {
-            if let thumbnailURL = segment.thumbnailURL, let url = URL(string: thumbnailURL) {
-                AsyncImage(url: url) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    thumbnailPlaceholder
-                }
-            } else if let localPath = segment.thumbnailLocalPath {
-                if let uiImage = UIImage(contentsOfFile: localPath) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
+            // Publish
+            Button {
+                viewModel.validate()
+                if viewModel.canPublish {
+                    coordinator.showPublishConfirmation = true
                 } else {
-                    thumbnailPlaceholder
+                    coordinator.errorMessage = viewModel.validationErrors.first ?? "Cannot publish"
                 }
-            } else {
-                thumbnailPlaceholder
-            }
-            
-            // Part number overlay
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    Text("\(index + 1)")
-                        .font(.caption2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                        .padding(4)
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(4)
+            } label: {
+                HStack(spacing: 8) {
+                    if viewModel.isPublishing {
+                        ProgressView()
+                            .tint(.black)
+                            .scaleEffect(0.8)
+                    } else {
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 14))
+                    }
+                    Text("Publish")
+                        .font(.system(size: 16, weight: .bold))
                 }
+                .foregroundColor(.black)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 12)
+                .background(
+                    viewModel.canPublish
+                        ? LinearGradient(colors: [.cyan, .cyan.opacity(0.8)], startPoint: .leading, endPoint: .trailing)
+                        : LinearGradient(colors: [.gray.opacity(0.3), .gray.opacity(0.2)], startPoint: .leading, endPoint: .trailing)
+                )
+                .clipShape(Capsule())
             }
-            .padding(4)
+            .disabled(!viewModel.canPublish || viewModel.isPublishing)
         }
-        .frame(width: 60, height: 80)
-        .cornerRadius(8)
-        .clipped()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            Color.black.opacity(0.95)
+                .overlay(
+                    Rectangle()
+                        .fill(Color.white.opacity(0.06))
+                        .frame(height: 1),
+                    alignment: .top
+                )
+        )
     }
     
-    private var thumbnailPlaceholder: some View {
-        ZStack {
-            Color(.tertiarySystemBackground)
+    // MARK: - Helpers
+    
+    private func loadCoverPhoto(from item: PhotosPickerItem?) async {
+        guard let item = item else { return }
+        do {
+            if let data = try await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data) {
+                coverPhotoImage = image
+                viewModel.coverImageData = data
+            }
+        } catch {
+            print("❌ COMPOSER: Cover photo load failed: \(error)")
+        }
+    }
+    
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let mins = Int(seconds) / 60
+        let secs = Int(seconds) % 60
+        return String(format: "%d:%02d", mins, secs)
+    }
+    
+    // MARK: - Video Import (Sequential — first to last)
+    
+    /// Process photo picker items one at a time in order.
+    /// Ensures draft exists first, then loads → adds → uploads each sequentially.
+    func handlePhotosSelection(_ items: [PhotosPickerItem]) {
+        let capturedItems = items
+        selectedPhotos = []
+        
+        Task {
+            // Ensure draft exists before any uploads
+            guard let draftID = await viewModel.ensureDraftExists() else {
+                await MainActor.run {
+                    coordinator.errorMessage = "Failed to create draft for uploads"
+                }
+                return
+            }
             
-            Image(systemName: "video.fill")
-                .font(.title3)
-                .foregroundColor(.secondary)
+            for (index, item) in capturedItems.enumerated() {
+                print("📤 COMPOSER: Processing video \(index + 1)/\(capturedItems.count)")
+                await loadAndUploadPickerItem(item, draftID: draftID)
+            }
+            
+            print("✅ COMPOSER: All \(capturedItems.count) videos processed sequentially")
+        }
+    }
+    
+    /// Load a single picker item, add to model, upload, wait for completion.
+    private func loadAndUploadPickerItem(_ item: PhotosPickerItem, draftID: String) async {
+        do {
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("mp4")
+            
+            if let movie = try? await item.loadTransferable(type: Movie.self) {
+                if FileManager.default.fileExists(atPath: tempURL.path) {
+                    try FileManager.default.removeItem(at: tempURL)
+                }
+                try FileManager.default.copyItem(at: movie.url, to: tempURL)
+            } else if let videoData = try? await item.loadTransferable(type: Data.self) {
+                try videoData.write(to: tempURL)
+            } else {
+                print("❌ COMPOSER: Failed to load video from picker")
+                return
+            }
+            
+            await processAndUploadVideo(at: tempURL, draftID: draftID)
+        } catch {
+            print("❌ COMPOSER: Picker item load failed: \(error)")
+            await MainActor.run {
+                coordinator.errorMessage = "Failed to add video: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    /// Process file importer results sequentially.
+    func handleFileImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            Task {
+                guard let draftID = await viewModel.ensureDraftExists() else {
+                    await MainActor.run {
+                        coordinator.errorMessage = "Failed to create draft for uploads"
+                    }
+                    return
+                }
+                
+                for (index, url) in urls.enumerated() {
+                    guard url.startAccessingSecurityScopedResource() else {
+                        print("❌ COMPOSER: Cannot access file: \(url.lastPathComponent)")
+                        continue
+                    }
+                    
+                    print("📤 COMPOSER: Importing file \(index + 1)/\(urls.count)")
+                    
+                    let tempURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(UUID().uuidString)
+                        .appendingPathExtension(url.pathExtension)
+                    
+                    do {
+                        try FileManager.default.copyItem(at: url, to: tempURL)
+                        await processAndUploadVideo(at: tempURL, draftID: draftID)
+                    } catch {
+                        print("❌ COMPOSER: File import failed: \(error)")
+                        await MainActor.run {
+                            coordinator.errorMessage = "Failed to import: \(error.localizedDescription)"
+                        }
+                    }
+                    
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+        case .failure(let error):
+            coordinator.errorMessage = "File picker error: \(error.localizedDescription)"
+        }
+    }
+    
+    /// Core sequential pipeline: extract metadata → add segment → upload → wait → mark complete.
+    private func processAndUploadVideo(at tempURL: URL, draftID: String) async {
+        do {
+            guard FileManager.default.fileExists(atPath: tempURL.path) else {
+                print("❌ COMPOSER: Video file missing at \(tempURL.path)")
+                return
+            }
+            
+            // 1. Extract metadata
+            let asset = AVURLAsset(url: tempURL)
+            let duration = try await asset.load(.duration).seconds
+            let attrs = try FileManager.default.attributesOfItem(atPath: tempURL.path)
+            let fileSize = attrs[.size] as? Int64 ?? 0
+            let thumbnailPath = await generateThumbnail(for: tempURL)
+            
+            // 2. Add segment — capture exact ID (no race on .last)
+            let segmentID: String? = await MainActor.run {
+                viewModel.addSegment(
+                    localVideoPath: tempURL.path,
+                    duration: duration,
+                    fileSize: fileSize,
+                    thumbnailPath: thumbnailPath
+                )
+            }
+            
+            guard let segmentID = segmentID else {
+                print("❌ COMPOSER: Failed to add segment (max reached?)")
+                return
+            }
+            
+            // 3. Upload and WAIT for completion (sequential)
+            if let result = await coordinator.uploadSegment(
+                segmentID: segmentID,
+                localURL: tempURL,
+                thumbnailPath: thumbnailPath,
+                draftID: draftID
+            ) {
+                await MainActor.run {
+                    viewModel.markSegmentUploaded(
+                        id: segmentID,
+                        videoURL: result.videoURL,
+                        thumbnailURL: result.thumbnailURL ?? ""
+                    )
+                }
+                print("✅ COMPOSER: Segment \(segmentID) uploaded")
+            } else {
+                await MainActor.run {
+                    viewModel.markSegmentFailed(id: segmentID, error: "Upload failed or timed out")
+                }
+                print("❌ COMPOSER: Segment \(segmentID) upload failed")
+            }
+        } catch {
+            print("❌ COMPOSER: processAndUploadVideo failed: \(error)")
+        }
+    }
+    
+    private func generateThumbnail(for url: URL) async -> String? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        let time = CMTime(seconds: 1.0, preferredTimescale: 600)
+        
+        do {
+            let cgImage = try await generator.image(at: time).image
+            let thumbnailURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("jpg")
+            
+            if let data = UIImage(cgImage: cgImage).jpegData(compressionQuality: 0.8) {
+                try data.write(to: thumbnailURL)
+                return thumbnailURL.path
+            }
+        } catch {
+            print("⚠️ COMPOSER: Thumbnail generation failed: \(error)")
+        }
+        return nil
+    }
+}
+
+// MARK: - Film Strip Card
+
+struct FilmStripCard: View {
+    let segment: SegmentDraft
+    let index: Int
+    let isSelected: Bool
+    let onTap: () -> Void
+    let onTitleChange: (String) -> Void
+    
+    @State private var editingTitle: String = ""
+    @State private var isEditingTitle = false
+    @FocusState private var titleFocused: Bool
+    
+    var body: some View {
+        VStack(spacing: 6) {
+            // Thumbnail
+            ZStack {
+                // Thumbnail image
+                thumbnailView
+                    .frame(width: 100, height: 140)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                
+                // Part number badge
+                VStack {
+                    HStack {
+                        Text("\(index + 1)")
+                            .font(.system(size: 11, weight: .black))
+                            .foregroundColor(.white)
+                            .frame(width: 22, height: 22)
+                            .background(Color.black.opacity(0.7))
+                            .clipShape(Circle())
+                            .padding(4)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .frame(width: 100, height: 140)
+                
+                // Duration badge
+                if let duration = segment.formattedDuration {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Text(duration)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.black.opacity(0.7))
+                                .cornerRadius(4)
+                                .padding(4)
+                        }
+                    }
+                    .frame(width: 100, height: 140)
+                }
+                
+                // Upload status overlay
+                statusOverlay
+                
+                // Selection ring
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.cyan, lineWidth: 2)
+                        .frame(width: 100, height: 140)
+                }
+            }
+            .onTapGesture { onTap() }
+            
+            // Editable title
+            if isEditingTitle {
+                TextField("Title", text: $editingTitle)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .frame(width: 100)
+                    .focused($titleFocused)
+                    .onSubmit {
+                        onTitleChange(editingTitle)
+                        isEditingTitle = false
+                    }
+                    .tint(.cyan)
+            } else {
+                Text(segment.title ?? "Part \(index + 1)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(1)
+                    .frame(width: 100)
+                    .onTapGesture {
+                        editingTitle = segment.title ?? ""
+                        isEditingTitle = true
+                        titleFocused = true
+                    }
+            }
         }
     }
     
     @ViewBuilder
-    private var uploadStatusView: some View {
+    private var thumbnailView: some View {
+        if let url = segment.thumbnailURL, let imageURL = URL(string: url) {
+            AsyncImage(url: imageURL) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                thumbnailPlaceholder
+            }
+        } else if let path = segment.thumbnailLocalPath, let img = UIImage(contentsOfFile: path) {
+            Image(uiImage: img).resizable().aspectRatio(contentMode: .fill)
+        } else {
+            thumbnailPlaceholder
+        }
+    }
+    
+    private var thumbnailPlaceholder: some View {
+        ZStack {
+            Color.white.opacity(0.06)
+            Image(systemName: "video.fill")
+                .font(.system(size: 20))
+                .foregroundColor(.gray.opacity(0.4))
+        }
+    }
+    
+    @ViewBuilder
+    private var statusOverlay: some View {
         switch segment.uploadStatus {
-        case .pending:
-            HStack(spacing: 4) {
-                Image(systemName: "clock")
-                Text("Pending")
-            }
-            .font(.caption2)
-            .foregroundColor(.secondary)
-            
         case .uploading:
-            HStack(spacing: 4) {
-                ProgressView()
-                    .scaleEffect(0.6)
-                Text("\(Int(segment.uploadProgress * 100))%")
+            ZStack {
+                Color.black.opacity(0.5)
+                VStack(spacing: 4) {
+                    ProgressView()
+                        .tint(.cyan)
+                        .scaleEffect(0.8)
+                    Text("\(Int(segment.uploadProgress * 100))%")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.cyan)
+                }
             }
-            .font(.caption2)
-            .foregroundColor(.accentColor)
-            
-        case .processing:
-            HStack(spacing: 4) {
-                Image(systemName: "gearshape")
-                Text("Processing")
-            }
-            .font(.caption2)
-            .foregroundColor(.orange)
-            
-        case .complete:
-            HStack(spacing: 4) {
-                Image(systemName: "checkmark.circle.fill")
-                Text("Ready")
-            }
-            .font(.caption2)
-            .foregroundColor(.green)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .frame(width: 100, height: 140)
             
         case .failed:
-            HStack(spacing: 4) {
-                Image(systemName: "exclamationmark.circle.fill")
-                Text(segment.uploadError ?? "Failed")
+            ZStack {
+                Color.red.opacity(0.3)
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(.red)
             }
-            .font(.caption2)
-            .foregroundColor(.red)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .frame(width: 100, height: 140)
             
-        case .cancelled:
-            HStack(spacing: 4) {
-                Image(systemName: "xmark.circle")
-                Text("Cancelled")
+        case .pending:
+            ZStack {
+                Color.black.opacity(0.4)
+                Image(systemName: "clock")
+                    .font(.system(size: 16))
+                    .foregroundColor(.orange)
             }
-            .font(.caption2)
-            .foregroundColor(.secondary)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .frame(width: 100, height: 140)
+            
+        case .complete:
+            // Small checkmark badge
+            VStack {
+                HStack {
+                    Spacer()
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(.green)
+                        .background(Color.black.opacity(0.5).clipShape(Circle()))
+                        .padding(4)
+                }
+                Spacer()
+            }
+            .frame(width: 100, height: 140)
+            
+        default:
+            EmptyView()
         }
+    }
+}
+
+// MARK: - Segment Detail Sheet
+
+struct SegmentDetailSheet: View {
+    let segment: SegmentDraft
+    let segmentIndex: Int
+    let totalSegments: Int
+    let onTitleChange: (String) -> Void
+    let onDelete: () -> Void
+    let onRetry: () -> Void
+    
+    @State private var title: String = ""
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Text("Part \(segmentIndex + 1) of \(totalSegments)")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.cyan)
+                
+                Spacer()
+                
+                Button("Done") {
+                    onTitleChange(title)
+                    dismiss()
+                }
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.cyan)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+            
+            Divider().background(Color.white.opacity(0.08))
+            
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Thumbnail preview (large)
+                    thumbnailPreview
+                    
+                    // Title field
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Segment Title")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.gray)
+                        
+                        TextField("Part \(segmentIndex + 1)", text: $title)
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(12)
+                            .background(Color.white.opacity(0.06))
+                            .cornerRadius(10)
+                            .tint(.cyan)
+                    }
+                    .padding(.horizontal, 20)
+                    
+                    // Info row
+                    HStack(spacing: 20) {
+                        infoChip(icon: "clock", label: segment.formattedDuration ?? "--:--")
+                        infoChip(icon: "doc", label: segment.formattedFileSize ?? "-- MB")
+                        infoChip(icon: statusIcon, label: statusLabel)
+                    }
+                    .padding(.horizontal, 20)
+                    
+                    // Actions
+                    VStack(spacing: 10) {
+                        if segment.uploadStatus == .failed {
+                            Button {
+                                onRetry()
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "arrow.clockwise")
+                                    Text("Retry Upload")
+                                }
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.orange)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(Color.orange.opacity(0.1))
+                                .cornerRadius(10)
+                            }
+                        }
+                        
+                        Button(role: .destructive) {
+                            onDelete()
+                        } label: {
+                            HStack {
+                                Image(systemName: "trash")
+                                Text("Remove Segment")
+                            }
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(.red)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(10)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .padding(.top, 16)
+            }
+        }
+        .onAppear {
+            title = segment.title ?? ""
+        }
+    }
+    
+    private var thumbnailPreview: some View {
+        ZStack {
+            if let url = segment.thumbnailURL, let imageURL = URL(string: url) {
+                AsyncImage(url: imageURL) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Color.white.opacity(0.06)
+                }
+            } else if let path = segment.thumbnailLocalPath, let img = UIImage(contentsOfFile: path) {
+                Image(uiImage: img).resizable().aspectRatio(contentMode: .fill)
+            } else {
+                Color.white.opacity(0.06)
+                Image(systemName: "video.fill")
+                    .font(.system(size: 36))
+                    .foregroundColor(.gray.opacity(0.4))
+            }
+        }
+        .frame(height: 200)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 20)
+    }
+    
+    private func infoChip(icon: String, label: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+        }
+        .foregroundColor(.gray)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(0.06))
+        .cornerRadius(8)
+    }
+    
+    private var statusIcon: String {
+        switch segment.uploadStatus {
+        case .complete: return "checkmark.circle"
+        case .uploading: return "arrow.up.circle"
+        case .failed: return "exclamationmark.triangle"
+        case .pending: return "clock"
+        default: return "circle"
+        }
+    }
+    
+    private var statusLabel: String {
+        segment.uploadStatus.displayName
+    }
+}
+
+// MARK: - Event Handlers Modifier (isolates onChange + confirmationDialog for type checker)
+
+struct ComposerEventHandlers: ViewModifier {
+    @Binding var selectedPhotos: [PhotosPickerItem]
+    @Binding var selectedCoverPhoto: PhotosPickerItem?
+    @Binding var showPublishConfirmation: Bool
+    @Binding var showFileImporter: Bool
+    let viewModel: CollectionComposerViewModel
+    let coordinator: CollectionCoordinator
+    let handlePhotosSelection: ([PhotosPickerItem]) -> Void
+    let loadCoverPhoto: (PhotosPickerItem?) async -> Void
+    let handleFileImport: (Result<[URL], Error>) -> Void
+    
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: selectedPhotos) { _, newItems in
+                guard !newItems.isEmpty else { return }
+                handlePhotosSelection(newItems)
+            }
+            .onChange(of: selectedCoverPhoto) { _, newValue in
+                Task { await loadCoverPhoto(newValue) }
+            }
+            .confirmationDialog(
+                "Publish Collection",
+                isPresented: $showPublishConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Publish") {
+                    Task { await coordinator.confirmPublish() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Publish \"\(viewModel.title)\" with \(viewModel.segments.count) segments?")
+            }
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie],
+                allowsMultipleSelection: true
+            ) { result in
+                handleFileImport(result)
+            }
     }
 }
 
@@ -1044,7 +1197,8 @@ struct SegmentRowView: View {
 #if DEBUG
 struct CollectionComposerView_Previews: PreviewProvider {
     static var previews: some View {
-        Text("Preview not available")
+        Text("Preview requires ViewModel + Coordinator")
+            .preferredColorScheme(.dark)
     }
 }
 #endif

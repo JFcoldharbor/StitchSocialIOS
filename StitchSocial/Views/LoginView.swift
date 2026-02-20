@@ -3,19 +3,13 @@
 //  StitchSocial
 //
 //  Layer 8: Views - Authentication Interface
-//  Dependencies: AuthService, StitchColors
+//  Dependencies: AuthService, ReferralService, StitchColors
+//  UPDATED: Referral code field at signup + email verification trigger
+//  UPDATED: Organic signup tracking for no-referral users
 //  FIXED: Proper keyboard handling and text field visibility
-//  UPDATED: Added Terms & Conditions + Safety Policy acceptance checkbox
-//           Saves acceptedTermsAt / acceptedTermsVersion to Firestore user doc on auth
-//
-//  CACHING NOTE: acceptedTermsAt is a one-time write per login session.
-//  If you add a "force re-accept on policy update" flow later, cache the
-//  accepted version string in UserDefaults to avoid a Firestore read on every
-//  cold launch. Add that to your caching optimization file when implemented.
 //
 
 import SwiftUI
-import FirebaseFirestore
 
 struct LoginView: View {
     
@@ -28,24 +22,17 @@ struct LoginView: View {
     @State private var username: String = ""
     @State private var displayName: String = ""
     @State private var confirmPassword: String = ""
+    @State private var referralCode: String = ""
     @State private var currentMode: AuthMode = .signIn
-    @State private var acceptedTerms: Bool = false
     
     // MARK: - UI State
     @State private var isLoading: Bool = false
     @State private var showingSuccess: Bool = false
     @State private var animateWelcome: Bool = false
+    @State private var referralMessage: String?
     
     // MARK: - Focus State for Keyboard Management
     @FocusState private var focusedField: Field?
-    
-    // MARK: - Legal URLs
-    private let termsURL = URL(string: "https://stitchsocial.me/privacy")!
-    private let safetyURL = URL(string: "https://stitchsocial.me/privacy")!
-    private let privacyURL = URL(string: "https://stitchsocial.me/privacy")!
-    
-    // MARK: - Terms Version (bump when policies change to force re-acceptance)
-    private let currentTermsVersion = "1.0"
     
     enum Field: Hashable {
         case email
@@ -53,6 +40,7 @@ struct LoginView: View {
         case displayName
         case password
         case confirmPassword
+        case referralCode
     }
     
     enum AuthMode: CaseIterable {
@@ -88,12 +76,12 @@ struct LoginView: View {
             backgroundView
             
             // Main content with proper keyboard handling
-            GeometryReader { geometry in
+            ScrollViewReader { scrollProxy in
                 ScrollView {
                     VStack(spacing: 24) {
                         // Header with logo
                         headerView
-                            .padding(.top, max(50, geometry.safeAreaInsets.top + 20))
+                            .padding(.top, 60)
                         
                         // Welcome section
                         welcomeSection
@@ -103,22 +91,30 @@ struct LoginView: View {
                         authenticationForm
                             .padding(.horizontal, 24)
                         
-                        // Terms acceptance checkbox + legal links
-                        termsAcceptanceView
-                            .padding(.horizontal, 24)
-                        
                         // Action buttons
                         actionButtons
                             .padding(.horizontal, 24)
+                            .id("actionButtons")
                         
                         // Mode switcher
                         modeSwitcher
                             .padding(.bottom, 40)
+                        
+                        // Extra padding so bottom fields can scroll above keyboard
+                        Spacer()
+                            .frame(height: 200)
+                            .id("bottomSpacer")
                     }
-                    .frame(minHeight: geometry.size.height)
                 }
                 .scrollDismissesKeyboard(.interactively)
-                .ignoresSafeArea(.keyboard, edges: .bottom)
+                .onChange(of: focusedField) { newField in
+                    guard let field = newField else { return }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            scrollProxy.scrollTo(field, anchor: .center)
+                        }
+                    }
+                }
             }
             
             // Success overlay
@@ -237,6 +233,7 @@ struct LoginView: View {
                 focusState: $focusedField,
                 field: .email
             )
+            .id(Field.email)
             
             // Username field (sign up only)
             if currentMode == .signUp {
@@ -249,6 +246,7 @@ struct LoginView: View {
                     focusState: $focusedField,
                     field: .username
                 )
+                .id(Field.username)
                 
                 CustomTextField(
                     title: "Display Name",
@@ -259,6 +257,7 @@ struct LoginView: View {
                     focusState: $focusedField,
                     field: .displayName
                 )
+                .id(Field.displayName)
             }
             
             // Password field
@@ -271,6 +270,7 @@ struct LoginView: View {
                 focusState: $focusedField,
                 field: .password
             )
+            .id(Field.password)
             
             // Password requirements (sign up only)
             if currentMode == .signUp && !password.isEmpty {
@@ -288,6 +288,7 @@ struct LoginView: View {
                     focusState: $focusedField,
                     field: .confirmPassword
                 )
+                .id(Field.confirmPassword)
                 
                 if !confirmPassword.isEmpty && password != confirmPassword {
                     HStack {
@@ -299,6 +300,10 @@ struct LoginView: View {
                         Spacer()
                     }
                 }
+                
+                // MARK: - Referral Code Field (signup only)
+                referralCodeSection
+                    .id(Field.referralCode)
             }
         }
         .padding(.horizontal, 24)
@@ -316,89 +321,47 @@ struct LoginView: View {
         .animation(.easeInOut(duration: 0.8).delay(0.6), value: animateWelcome)
     }
     
-    // MARK: - Terms Acceptance View
-    private var termsAcceptanceView: some View {
-        VStack(spacing: 12) {
-            // Checkbox row
-            Button(action: { acceptedTerms.toggle() }) {
-                HStack(alignment: .top, spacing: 12) {
-                    // Checkbox
-                    Image(systemName: acceptedTerms ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 22))
-                        .foregroundColor(acceptedTerms ? StitchColors.primary : StitchColors.textSecondary)
-                    
-                    // Agreement text with tappable links
-                    agreementText
-                }
-            }
-            .buttonStyle(.plain)
+    // MARK: - Referral Code Section
+    private var referralCodeSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Divider
+            Rectangle()
+                .fill(Color.white.opacity(0.1))
+                .frame(height: 1)
+                .padding(.vertical, 4)
             
-            // Legal links row
-            HStack(spacing: 16) {
-                Link(destination: termsURL) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "doc.text")
-                            .font(.system(size: 10))
-                        Text("Terms")
-                            .font(.system(size: 12, weight: .medium))
+            Text("Referral Code")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(StitchColors.textSecondary)
+            
+            HStack(spacing: 12) {
+                TextField("Have a code? (optional)", text: $referralCode)
+                    .textFieldStyle(StitchTextFieldStyle())
+                    .keyboardType(.default)
+                    .autocapitalization(.allCharacters)
+                    .focused($focusedField, equals: .referralCode)
+                    .submitLabel(.done)
+                    .onSubmit {
+                        focusedField = nil
                     }
-                    .foregroundColor(StitchColors.primary)
+            }
+            
+            // Referral result message
+            if let message = referralMessage {
+                HStack(spacing: 4) {
+                    Image(systemName: message.contains("✅") ? "checkmark.circle.fill" : "info.circle.fill")
+                        .foregroundColor(message.contains("✅") ? .green : .gray)
+                    Text(message)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(message.contains("✅") ? .green : .gray)
+                    Spacer()
                 }
-                
-                Link(destination: safetyURL) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "shield.checkered")
-                            .font(.system(size: 10))
-                        Text("Safety")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundColor(StitchColors.primary)
-                }
-                
-                Link(destination: privacyURL) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "lock.shield")
-                            .font(.system(size: 10))
-                        Text("Privacy")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundColor(StitchColors.primary)
-                }
+            } else {
+                Text("Skip if you don't have one")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StitchColors.textSecondary.opacity(0.6))
             }
         }
-        .opacity(animateWelcome ? 1.0 : 0.0)
-        .offset(y: animateWelcome ? 0 : 20)
-        .animation(.easeInOut(duration: 0.8).delay(0.7), value: animateWelcome)
-    }
-    
-    // MARK: - Agreement Text
-    private var agreementText: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("I agree to the ")
-                .font(.system(size: 13))
-                .foregroundColor(StitchColors.textSecondary)
-            +
-            Text("Terms & Conditions")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(StitchColors.primary)
-            +
-            Text(", ")
-                .font(.system(size: 13))
-                .foregroundColor(StitchColors.textSecondary)
-            +
-            Text("Safety Policy")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(StitchColors.primary)
-            +
-            Text(", and ")
-                .font(.system(size: 13))
-                .foregroundColor(StitchColors.textSecondary)
-            +
-            Text("Privacy Policy")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(StitchColors.primary)
-        }
-        .multilineTextAlignment(.leading)
     }
     
     // MARK: - Password Requirements View
@@ -443,40 +406,43 @@ struct LoginView: View {
             .offset(y: animateWelcome ? 0 : 20)
             .animation(.easeInOut(duration: 0.8).delay(0.8), value: animateWelcome)
             
-            // Terms reminder if not accepted
-            if !acceptedTerms {
-                Text("Please accept the Terms & Conditions to continue")
-                    .font(.system(size: 11))
-                    .foregroundColor(StitchColors.textSecondary.opacity(0.7))
-                    .multilineTextAlignment(.center)
+            // Forgot password (sign in only)
+            if currentMode == .signIn {
+                Button(action: {
+                    // Handle forgot password
+                    Task {
+                        guard isValidEmail(email) else { return }
+                        try? await authService.resetPassword(email: email)
+                    }
+                }) {
+                    Text("Forgot Password?")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(StitchColors.primary)
+                }
             }
         }
     }
     
     // MARK: - Mode Switcher
     private var modeSwitcher: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text(currentMode == .signIn ? "Don't have an account?" : "Already have an account?")
-                    .font(.system(size: 14))
-                    .foregroundColor(StitchColors.textSecondary)
-                
-                Button(action: {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        currentMode = currentMode == .signIn ? .signUp : .signIn
-                        // Clear form when switching modes
-                        clearForm()
-                    }
-                }) {
-                    Text(currentMode == .signIn ? "Sign Up" : "Sign In")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(StitchColors.primary)
+        HStack {
+            Text(currentMode == .signIn ? "Don't have an account?" : "Already have an account?")
+                .font(.system(size: 14))
+                .foregroundColor(StitchColors.textSecondary)
+            
+            Button(action: {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    currentMode = currentMode == .signIn ? .signUp : .signIn
+                    clearForm()
                 }
+            }) {
+                Text(currentMode == .signIn ? "Sign Up" : "Sign In")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(StitchColors.primary)
             }
-            .opacity(animateWelcome ? 1.0 : 0.0)
-            .offset(y: animateWelcome ? 0 : 20)
-            .animation(.easeInOut(duration: 0.8).delay(1.0), value: animateWelcome)
         }
+        .opacity(animateWelcome ? 1.0 : 0.0)
+        .animation(.easeInOut(duration: 0.8).delay(1.0), value: animateWelcome)
     }
     
     // MARK: - Success Overlay
@@ -485,34 +451,31 @@ struct LoginView: View {
             Color.black.opacity(0.8)
                 .ignoresSafeArea()
             
-            VStack(spacing: 24) {
-                // Use real logo with checkmark overlay
-                ZStack {
-                    Image("StitchSocialLogo")
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 100, height: 100)
-                    
-                    // Success checkmark badge
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(StitchColors.success)
-                        .background(Circle().fill(Color.black).frame(width: 28, height: 28))
-                        .offset(x: 35, y: 35)
-                }
+            VStack(spacing: 20) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(StitchColors.success)
+                    .scaleEffect(showingSuccess ? 1.0 : 0.5)
+                    .animation(.spring(response: 0.5, dampingFraction: 0.6), value: showingSuccess)
                 
-                VStack(spacing: 8) {
-                    Text("Welcome to Stitch!")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(.white)
-                    
-                    Text("Your account is ready to go")
-                        .font(.system(size: 16))
-                        .foregroundColor(StitchColors.textSecondary)
+                Text("Welcome!")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(.white)
+                
+                Text("Your account is ready to go")
+                    .font(.system(size: 16))
+                    .foregroundColor(StitchColors.textSecondary)
+                
+                // Show referral result if applicable
+                if let message = referralMessage, message.contains("✅") {
+                    Text(message)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.green)
+                        .padding(.top, 4)
                 }
-                .opacity(showingSuccess ? 1.0 : 0.0)
-                .animation(.easeInOut(duration: 0.6).delay(0.3), value: showingSuccess)
             }
+            .opacity(showingSuccess ? 1.0 : 0.0)
+            .animation(.easeInOut(duration: 0.6).delay(0.3), value: showingSuccess)
         }
     }
     
@@ -543,10 +506,8 @@ struct LoginView: View {
         }
     }
     
-    // MARK: - Form Validation (now requires acceptedTerms)
+    // MARK: - Form Validation
     private var isFormValid: Bool {
-        guard acceptedTerms else { return false }
-        
         switch currentMode {
         case .signIn:
             return isValidEmail(email) && password.count >= 6
@@ -569,12 +530,19 @@ struct LoginView: View {
                 switch currentMode {
                 case .signIn:
                     try await authService.signIn(email: email, password: password)
+                    
                 case .signUp:
+                    // Step 1: Create account (sends verification email automatically)
                     try await authService.signUp(
                         email: email,
                         password: password,
                         displayName: displayName
                     )
+                    
+                    // Step 2: Process referral or track organic signup
+                    if let firebaseUser = authService.currentUser {
+                        await processReferralAtSignup(newUserID: firebaseUser.id)
+                    }
                 }
                 
                 // Show success state
@@ -588,9 +556,6 @@ struct LoginView: View {
                 if let firebaseUser = authService.currentUser {
                     // Set developer email for subscription bypass
                     SubscriptionService.shared.setCurrentUserEmail(email)
-                    
-                    // Save terms acceptance to Firestore (single batched write)
-                    await saveTermsAcceptance(userID: firebaseUser.id)
                     
                     // Auto-join Stitch Social official community
                     await CommunityService.shared.autoJoinOfficialCommunity(
@@ -616,27 +581,52 @@ struct LoginView: View {
         }
     }
     
-    // MARK: - Save Terms Acceptance to Firestore
-    /// Writes acceptedTermsAt + version to user doc in a single merge write.
-    /// No caching needed here — this is a one-time write per auth session.
-    /// If you later need to CHECK acceptance on app launch, cache the version
-    /// in UserDefaults to avoid a Firestore read every cold start.
-    private func saveTermsAcceptance(userID: String) async {
-        let db = Firestore.firestore()
-        let userRef = db.collection("users").document(userID)
+    // MARK: - Referral Processing at Signup
+    
+    /// Process referral code or track organic signup
+    /// Called after successful account creation
+    private func processReferralAtSignup(newUserID: String) async {
+        print("🔥 LOGIN: processReferralAtSignup called for \(newUserID)")
+        print("🔥 LOGIN: referralCode field value: '\(referralCode)'")
         
-        let termsData: [String: Any] = [
-            "acceptedTermsAt": FieldValue.serverTimestamp(),
-            "acceptedTermsVersion": currentTermsVersion,
-            "acceptedSafetyPolicy": true,
-            "acceptedPrivacyPolicy": true
-        ]
+        let referralService = ReferralService()
+        let trimmedCode = referralCode.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        do {
-            try await userRef.setData(termsData, merge: true)
-            print("✅ Terms acceptance saved for user: \(userID)")
-        } catch {
-            print("❌ Failed to save terms acceptance: \(error.localizedDescription)")
+        if trimmedCode.isEmpty {
+            // No referral code — track as organic signup
+            await referralService.processOrganicSignup(newUserID: newUserID)
+            print("📊 LOGIN: Organic signup tracked for \(newUserID)")
+        } else {
+            // Has referral code — validate and process with auto-follow
+            do {
+                let result = try await referralService.processReferralSignup(
+                    referralCode: trimmedCode,
+                    newUserID: newUserID,
+                    platform: "ios",
+                    sourceType: .manual
+                )
+                
+                await MainActor.run {
+                    if result.success {
+                        referralMessage = "✅ \(result.message)"
+                        if let referrerID = result.referrerID {
+                            print("✅ LOGIN: Referral processed — now following \(referrerID)")
+                        }
+                    } else {
+                        referralMessage = result.message
+                        // Still track as organic if code failed
+                        Task {
+                            await referralService.processOrganicSignup(newUserID: newUserID)
+                        }
+                    }
+                }
+            } catch {
+                print("⚠️ LOGIN: Referral processing failed: \(error) — tracking as organic")
+                await referralService.processOrganicSignup(newUserID: newUserID)
+                await MainActor.run {
+                    referralMessage = "Code not found — signed up without referral"
+                }
+            }
         }
     }
     
@@ -646,7 +636,8 @@ struct LoginView: View {
         username = ""
         displayName = ""
         confirmPassword = ""
-        acceptedTerms = false
+        referralCode = ""
+        referralMessage = nil
         focusedField = nil
     }
     
@@ -708,6 +699,8 @@ struct CustomTextField: View {
         case .password:
             focusState.wrappedValue = .confirmPassword
         case .confirmPassword:
+            focusState.wrappedValue = .referralCode
+        case .referralCode:
             focusState.wrappedValue = nil
         }
     }

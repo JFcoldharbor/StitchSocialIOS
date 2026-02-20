@@ -11,7 +11,8 @@
 //  StitchSocial
 //
 //  Layer 4: Services - Video Sharing
-//  Features: Share watermarked videos to other apps
+//  Features: Share watermarked videos, promo clips, and thread collages to other apps
+//  UPDATED: Added collage mode — presents ThreadCollageSelectionView via published state
 //
 
 import Foundation
@@ -27,6 +28,10 @@ class ShareService: ObservableObject {
     @Published var exportProgress: String = ""
     @Published var showShareSheet: Bool = false
     @Published var promoLocked: Bool = false
+    
+    /// Collage mode — set threadData and flip to true to present ThreadCollageSelectionView
+    @Published var showCollageSelection: Bool = false
+    @Published var collageThreadData: ThreadData?
     
     private var currentShareURL: URL?
     private var currentShareItems: [Any] = []
@@ -164,6 +169,74 @@ class ShareService: ObservableObject {
                 }
             }
         }
+    }
+    
+    // MARK: - Share Thread Collage
+    
+    /// Launch collage selection UI for a thread
+    /// CACHING: Uses pre-loaded ThreadData — zero extra Firestore reads.
+    /// If ThreadData isn't loaded yet, caller should fetch via VideoService.getCompleteThread()
+    /// and cache the result before calling this.
+    func shareCollage(threadData: ThreadData) {
+        self.collageThreadData = threadData
+        self.showCollageSelection = true
+        print("🎬 SHARE: Launching collage selection for thread \(threadData.id) (\(threadData.childVideos.count) replies)")
+    }
+    
+    /// Share a completed collage video file
+    /// Called by ThreadCollageSelectionView after build completes
+    func shareCompletedCollage(
+        collageURL: URL,
+        creatorUsername: String,
+        threadID: String,
+        from viewController: UIViewController? = nil
+    ) {
+        let shareText = "Check out this thread collage by @\(creatorUsername) on StitchSocial!"
+            + "\n\nstitch://thread/\(threadID)"
+            + "\n\nDownload StitchSocial: https://apps.apple.com/app/stitchsocial"
+        
+        currentShareURL = collageURL
+        currentShareItems = [collageURL, shareText]
+        
+        let activityVC = UIActivityViewController(
+            activityItems: currentShareItems,
+            applicationActivities: nil
+        )
+        
+        activityVC.excludedActivityTypes = [
+            .addToReadingList,
+            .assignToContact,
+            .openInIBooks,
+            .print
+        ]
+        
+        activityVC.completionWithItemsHandler = { [weak self] activityType, completed, _, _ in
+            if completed {
+                print("✅ SHARE: Collage shared via \(activityType?.rawValue ?? "unknown")")
+            }
+            if let url = self?.currentShareURL {
+                try? FileManager.default.removeItem(at: url)
+            }
+            self?.currentShareURL = nil
+            self?.currentShareItems = []
+        }
+        
+        let presenter = viewController ?? Self.topViewController()
+        
+        if let popover = activityVC.popoverPresentationController {
+            popover.sourceView = presenter?.view
+            popover.sourceRect = CGRect(x: UIScreen.main.bounds.midX, y: UIScreen.main.bounds.midY, width: 0, height: 0)
+            popover.permittedArrowDirections = []
+        }
+        
+        presenter?.present(activityVC, animated: true)
+        print("📤 SHARE: Presenting collage share sheet")
+    }
+    
+    /// Dismiss collage selection
+    func dismissCollageSelection() {
+        showCollageSelection = false
+        collageThreadData = nil
     }
     
     // MARK: - Download Video

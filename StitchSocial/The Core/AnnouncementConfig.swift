@@ -162,7 +162,7 @@ class BackgroundPostManager: ObservableObject {
             let coordinator = VideoCoordinator(
                 videoService: VideoService(),
                 userService: UserService(),
-                aiAnalyzer: AIVideoAnalyzer(),
+                aiAnalyzer: AIVideoAnalyzer.shared,
                 uploadService: VideoUploadService()
             )
             

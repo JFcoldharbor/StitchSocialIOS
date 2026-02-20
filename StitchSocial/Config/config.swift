@@ -57,15 +57,8 @@ struct Config {
                     return plistKey
                 }
                 
-                // Development fallback - YOUR REAL API KEY
-                switch Environment.current {
-                case .development:
-                    return "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"
-                case .staging:
-                    return "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"
-                case .production:
-                    return "" // Production keys should only come from secure environment variables
-                }
+                // Load from Secrets.plist (gitignored, never committed)
+                return Secrets.openAIKey
             }()
             
             static let baseURL = "https://api.openai.com/v1"

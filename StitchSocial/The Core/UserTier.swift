@@ -90,6 +90,17 @@ enum UserTier: String, CaseIterable, Codable {
         return self == .founder || self == .coFounder
     }
     
+    /// Whether this tier has access to AI video analysis (Whisper + GPT)
+    /// Rookie/Rising = manual mode (zero API cost), Veteran+ = AI tone-matching
+    var hasAIAnalysis: Bool {
+        switch self {
+        case .rookie, .rising:
+            return false
+        default:
+            return true
+        }
+    }
+    
     /// Check if this tier is achievable through normal progression
     var isAchievableTier: Bool {
         return !isFounderTier

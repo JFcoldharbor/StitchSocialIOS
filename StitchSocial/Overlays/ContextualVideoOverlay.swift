@@ -59,6 +59,9 @@ struct ContextualVideoOverlay: View {
     let isVisible: Bool
     let onAction: ((ContextualOverlayAction) -> Void)?
     
+    /// Pre-loaded thread for collage share — avoids extra Firestore read
+    let threadData: ThreadData?
+    
     /// Actual reply count from ThreadData - overrides video.replyCount when provided
     let actualReplyCount: Int?
     
@@ -124,7 +127,8 @@ struct ContextualVideoOverlay: View {
         threadVideo: CoreVideoMetadata? = nil,
         isVisible: Bool = true,
         actualReplyCount: Int? = nil,
-        isConversationParticipant: Bool = false,  // NEW: Default to false (not in conversation)
+        isConversationParticipant: Bool = false,
+        threadData: ThreadData? = nil,
         onAction: ((ContextualOverlayAction) -> Void)? = nil
     ) {
         self.video = video
@@ -135,7 +139,8 @@ struct ContextualVideoOverlay: View {
         self.threadVideo = threadVideo
         self.isVisible = isVisible
         self.actualReplyCount = actualReplyCount
-        self.isConversationParticipant = isConversationParticipant  // NEW: Initialize property
+        self.isConversationParticipant = isConversationParticipant
+        self.threadData = threadData
         self.onAction = onAction
     }
     
@@ -197,7 +202,8 @@ struct ContextualVideoOverlay: View {
                         video: video,
                         creatorUsername: displayCreatorName,
                         threadID: video.threadID ?? video.id,
-                        size: .medium
+                        size: .medium,
+                        threadData: threadData
                     )
                     Spacer()  // Keep bottom spacer but much smaller due to reduced spacing
                 }
@@ -244,7 +250,8 @@ struct ContextualVideoOverlay: View {
                         video: video,
                         creatorUsername: displayCreatorName,
                         threadID: video.threadID ?? video.id,
-                        size: .small
+                        size: .small,
+                        threadData: threadData
                     )
                 }
                 .padding(.top, 10)
@@ -310,12 +317,14 @@ struct ContextualVideoOverlay: View {
                     }
                     .frame(maxWidth: .infinity)
                     
-                    // Stitch / Spinoff button
+                    // Stitch / Spinoff / Reply button
                     if canShowReplyOrSpinoff {
                         VStack(spacing: 2) {
                             Button {
                                 showingStitchRecording = true
-                                if shouldShowSpinoff {
+                                if isStitchBlocked {
+                                    onAction?(.reply)
+                                } else if shouldShowSpinoff {
                                     onAction?(.spinOff)
                                 } else {
                                     onAction?(.stitch)
@@ -370,7 +379,8 @@ struct ContextualVideoOverlay: View {
                         video: video,
                         creatorUsername: displayCreatorName,
                         threadID: video.threadID ?? video.id,
-                        size: .medium
+                        size: .medium,
+                        threadData: threadData
                     )
                     Spacer()  // Keep bottom spacer but much smaller due to reduced spacing
                 }
@@ -442,11 +452,13 @@ struct ContextualVideoOverlay: View {
         case .fullscreen: return true
         case .discovery: return false
         case .profileOther: return false
-        case .carousel: return false  // Never allow self-reply in carousel conversations
+        case .carousel: return false
+        case .collection: return true
         }
     }
     
     private var stitchButtonIcon: String {
+        if isStitchBlocked { return "arrowshape.turn.up.left.fill" }
         if shouldShowSpinoff {
             return "arrow.triangle.branch"
         }
@@ -454,6 +466,7 @@ struct ContextualVideoOverlay: View {
     }
     
     private var stitchButtonLabel: String {
+        if isStitchBlocked { return "Reply" }
         if shouldShowSpinoff {
             return "Spinoff"
         }
@@ -461,6 +474,7 @@ struct ContextualVideoOverlay: View {
     }
     
     private var stitchButtonRingColor: Color {
+        if isStitchBlocked { return .cyan }
         if shouldShowSpinoff {
             return .orange
         }
@@ -482,6 +496,11 @@ struct ContextualVideoOverlay: View {
     // NEW: Can show reply OR spinoff
     private var canShowReplyOrSpinoff: Bool {
         return canReply || shouldShowSpinoff
+    }
+    
+    /// Collections only allow replies — no stitching or spinoffs
+    private var isStitchBlocked: Bool {
+        context == .collection
     }
     
     private var shouldShowMinimalDisplay: Bool {
@@ -901,8 +920,9 @@ struct ContextualVideoOverlay: View {
                     VStack(spacing: 4) {
                         Button {
                             showingStitchRecording = true
-                            // Call appropriate action based on context
-                            if shouldShowSpinoff {
+                            if isStitchBlocked {
+                                onAction?(.reply)
+                            } else if shouldShowSpinoff {
                                 onAction?(.spinOff)
                             } else {
                                 onAction?(.stitch)
@@ -1093,6 +1113,7 @@ enum OverlayContext {
     case thread
     case fullscreen
     case carousel  // NEW: For carousel conversation view
+    case collection // Collection segment playback
 }
 
 enum ContextualOverlayAction {
@@ -1103,6 +1124,7 @@ enum ContextualOverlayAction {
     case unfollow
     case followToggle
     case share
+    case shareCollage   // NEW: Launch thread collage builder
     case reply
     case stitch
     case spinOff  // NEW: For creating spinoff threads at max depth
