@@ -17,6 +17,7 @@ struct CardVideoCarouselView: View {
     let startingIndex: Int
     let currentUserID: String?
     let directReplies: [CoreVideoMetadata]?
+    let laneParticipantIDs: Set<String>  // The 2 users in the current private lane
     let onSelectReply: ((CoreVideoMetadata) -> Void)?
     let onAction: ((ContextualOverlayAction, CoreVideoMetadata) -> Void)?
     
@@ -40,12 +41,19 @@ struct CardVideoCarouselView: View {
     // MARK: - Computed Properties
     
     private var conversationParticipantIDs: Set<String> {
-        Set(videos.map { $0.creatorID })
+        // If we have explicit lane participants, use those (stepchild lanes)
+        if !laneParticipantIDs.isEmpty {
+            return laneParticipantIDs
+        }
+        // Fallback: derive from videos in carousel
+        return Set(videos.map { $0.creatorID })
     }
     
     private var isConversationParticipant: Bool {
         guard let userID = currentUserID else { return false }
-        return conversationParticipantIDs.contains(userID)
+        // If no lane selected yet (viewing child, no lane tapped), everyone can reply
+        if laneParticipantIDs.isEmpty { return true }
+        return laneParticipantIDs.contains(userID)
     }
     
     init(
@@ -54,6 +62,7 @@ struct CardVideoCarouselView: View {
         startingIndex: Int = 0,
         currentUserID: String? = nil,
         directReplies: [CoreVideoMetadata]? = nil,
+        laneParticipantIDs: Set<String> = [],
         onSelectReply: ((CoreVideoMetadata) -> Void)? = nil,
         onAction: ((ContextualOverlayAction, CoreVideoMetadata) -> Void)? = nil
     ) {
@@ -62,6 +71,7 @@ struct CardVideoCarouselView: View {
         self.startingIndex = startingIndex
         self.currentUserID = currentUserID
         self.directReplies = directReplies
+        self.laneParticipantIDs = laneParticipantIDs
         self.onSelectReply = onSelectReply
         self.onAction = onAction
         self._currentIndex = State(initialValue: startingIndex)

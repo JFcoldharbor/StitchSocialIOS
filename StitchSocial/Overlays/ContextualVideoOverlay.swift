@@ -114,6 +114,18 @@ struct ContextualVideoOverlay: View {
     // Recording state
     @State private var showingStitchRecording = false
     
+    // MARK: - Lazy Thread Data (fetched once per threadID, cached globally)
+    // When threadData isn't passed by caller, we lazy-load it so ShareButton
+    // can show all 3 options (Regular, Promo, Thread Collage) everywhere.
+    // Static cache prevents repeated Firestore reads across overlay instances.
+    @State private var resolvedThreadData: ThreadData?
+    private static var threadDataCache: [String: ThreadData] = [:]
+    
+    /// Use caller-provided threadData if available, otherwise lazy-loaded
+    private var effectiveThreadData: ThreadData? {
+        threadData ?? resolvedThreadData
+    }
+    
     // MARK: - Edit State
     @State private var showingEditSheet = false
     @State private var currentVideo: CoreVideoMetadata?
@@ -203,7 +215,7 @@ struct ContextualVideoOverlay: View {
                         creatorUsername: displayCreatorName,
                         threadID: video.threadID ?? video.id,
                         size: .medium,
-                        threadData: threadData
+                        threadData: effectiveThreadData
                     )
                     Spacer()  // Keep bottom spacer but much smaller due to reduced spacing
                 }
@@ -251,7 +263,7 @@ struct ContextualVideoOverlay: View {
                         creatorUsername: displayCreatorName,
                         threadID: video.threadID ?? video.id,
                         size: .small,
-                        threadData: threadData
+                        threadData: effectiveThreadData
                     )
                 }
                 .padding(.top, 10)
@@ -380,7 +392,7 @@ struct ContextualVideoOverlay: View {
                         creatorUsername: displayCreatorName,
                         threadID: video.threadID ?? video.id,
                         size: .medium,
-                        threadData: threadData
+                        threadData: effectiveThreadData
                     )
                     Spacer()  // Keep bottom spacer but much smaller due to reduced spacing
                 }
@@ -657,6 +669,7 @@ struct ContextualVideoOverlay: View {
             setupOverlay()
             setupNotificationObservers()
             Self.clearExpiredCache()
+            lazyLoadThreadData()
         }
         .onDisappear {
             removeNotificationObservers()
@@ -971,6 +984,37 @@ struct ContextualVideoOverlay: View {
         Task {
             await preloadUserData()
             await loadVideoEngagement()
+        }
+    }
+    
+    /// Lazy-load ThreadData when not provided by caller.
+    /// Cached by threadID so repeated overlays for same thread = 0 extra reads.
+    /// Cost: 1 parent read + 1 children query per unique threadID, then cached.
+    private func lazyLoadThreadData() {
+        // Skip if caller already provided threadData
+        guard threadData == nil else { return }
+        
+        let threadID = video.threadID ?? video.id
+        
+        // Check static cache first — no Firestore read
+        if let cached = Self.threadDataCache[threadID] {
+            resolvedThreadData = cached
+            return
+        }
+        
+        // Fetch in background
+        Task {
+            do {
+                let data = try await videoService.getCompleteThread(threadID: threadID)
+                Self.threadDataCache[threadID] = data
+                await MainActor.run {
+                    resolvedThreadData = data
+                }
+                print("📦 THREAD CACHE: Loaded \(threadID) (\(data.childVideos.count) children)")
+            } catch {
+                // Non-fatal — share button just won't show Thread Collage
+                print("⚠️ THREAD CACHE: Failed to load \(threadID): \(error.localizedDescription)")
+            }
         }
     }
     

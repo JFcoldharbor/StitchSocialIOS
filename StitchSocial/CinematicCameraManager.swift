@@ -175,7 +175,31 @@ class CinematicCameraManager: NSObject, ObservableObject {
     // MARK: - Recording
     
     func startRecording(completion: @escaping (URL?) -> Void) {
-        guard let movieOutput = movieOutput, !isRecording else {
+        guard let movieOutput = movieOutput else {
+            print("❌ CAMERA: No movie output configured")
+            completion(nil)
+            return
+        }
+        
+        // DEBUG: Log the actual state of all guards before checking them
+        print("🔍 START CHECK: movieOutput.isRecording=\(movieOutput.isRecording) isRecording=\(isRecording) session.isRunning=\(captureSession.isRunning)")
+        // Our @Published isRecording flag can be stale if stopRecording() was
+        // called but the delegate hasn't fired didFinishRecordingTo yet.
+        guard !movieOutput.isRecording else {
+            print("⚠️ CAMERA: movieOutput is still recording — skipping startRecording to prevent crash")
+            completion(nil)
+            return
+        }
+        
+        guard captureSession.isRunning else {
+            print("⚠️ CAMERA: captureSession not running — skipping startRecording")
+            completion(nil)
+            return
+        }
+        
+        // Double-check our own flag too
+        guard !isRecording else {
+            print("⚠️ CAMERA: isRecording flag still true — skipping")
             completion(nil)
             return
         }
@@ -196,22 +220,39 @@ class CinematicCameraManager: NSObject, ObservableObject {
         }
         
         recordingCompletion = completion
-        isRecording = true
+        
+        // DO NOT set isRecording = true here.
+        // Let the didStartRecordingTo delegate callback set it.
+        // This prevents the race where stopRecording sets isRecording = false
+        // before AVFoundation has actually stopped, and a new startRecording
+        // sees isRecording == false and calls movieOutput.startRecording
+        // while the previous recording is still finalizing.
         
         sessionQueue.async {
             movieOutput.startRecording(to: outputURL, recordingDelegate: self)
-            print("📱 CAMERA: Recording started")
+            print("📱 CAMERA: startRecording dispatched to sessionQueue")
         }
     }
     
     func stopRecording() {
-        guard let movieOutput = movieOutput, isRecording else { return }
+        guard let movieOutput = movieOutput else { return }
         
-        isRecording = false
+        // Only stop if AVFoundation says it's actually recording
+        guard movieOutput.isRecording else {
+            print("⚠️ CAMERA: stopRecording called but movieOutput not recording — ignoring")
+            return
+        }
+        
+        // DO NOT set isRecording = false here.
+        // The didFinishRecordingTo delegate callback will set it to false
+        // once AVFoundation has fully finalized the file.
+        // Setting it here creates the race condition where a fast tap-down
+        // sees isRecording == false and calls startRecording before the
+        // previous stop has completed internally.
         
         sessionQueue.async {
             movieOutput.stopRecording()
-            print("📱 CAMERA: Recording stopped")
+            print("📱 CAMERA: stopRecording dispatched to sessionQueue")
         }
     }
     

@@ -2,18 +2,19 @@
 //  DiscoveryView.swift (UPDATED)
 //  StitchSocial
 //
-//  Enhanced with deep time-based randomization
-//  Shows varied content from all time periods, not just newest
-//  FIXED: Fullscreen handling now uses .fullScreenCover(item:) to prevent video stopping
-//  FIXED: Observes AnnouncementService to stop video playback when announcement shows
-//  FIXED: loadMoreContent APPENDS to end without reshuffling seen content
+//  Enhanced with weighted algorithm + TTL cache integration
+//  FIXED: Fullscreen handling uses .fullScreenCover(item:)
+//  FIXED: Observes AnnouncementService to stop video playback
+//  FIXED: loadMoreContent APPENDS to end without reshuffling
+//  NEW: refreshContent invalidates service caches before re-fetching
+//  NEW: Category switches hit TTL cache (0 Firestore reads within 5 min)
 //
 
 import SwiftUI
 import Foundation
 import FirebaseAuth
 
-// MARK: - Discovery ViewModel with Deep Randomization
+// MARK: - Discovery ViewModel with Weighted Algorithm
 
 @MainActor
 class DiscoveryViewModel: ObservableObject {
@@ -41,7 +42,7 @@ class DiscoveryViewModel: ObservableObject {
     private let discoveryService = DiscoveryService()
     private let hashtagService = HashtagService()
     
-    // MARK: - Load Initial Content with Deep Randomization
+    // MARK: - Load Initial Content (TTL-aware)
     
     func loadInitialContent() async {
         guard !isLoading else { return }
@@ -50,9 +51,10 @@ class DiscoveryViewModel: ObservableObject {
         defer { isLoading = false }
         
         do {
-            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â DISCOVERY: Loading deep randomized content")
+            print("🎲 DISCOVERY: Loading weighted content")
             
             // Load videos and collections in parallel
+            // Service-level TTL cache means these may be instant (0 reads)
             async let threadsTask = discoveryService.getDeepRandomizedDiscovery(limit: 40)
             async let collectionsTask = discoveryService.getAllCollectionsDiscovery(limit: 6)
             
@@ -61,11 +63,10 @@ class DiscoveryViewModel: ObservableObject {
             let loadedVideos = threads.map { $0.parentVideo }
             
             await MainActor.run {
-                // Filter out videos with empty IDs
                 let validVideos = loadedVideos.filter { !$0.id.isEmpty }
                 
                 if validVideos.count < loadedVideos.count {
-                    print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
+                    print("⚠️ DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
                 }
                 
                 videos = validVideos
@@ -73,12 +74,12 @@ class DiscoveryViewModel: ObservableObject {
                 interleaveCollections(swipeCollections)
                 errorMessage = nil
                 
-                print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ DISCOVERY: Loaded \(filteredVideos.count) randomized videos")
+                print("✅ DISCOVERY: Loaded \(filteredVideos.count) weighted videos")
             }
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to load discovery content"
-                print("ÃƒÂ¢Ã‚ÂÃ…â€™ DISCOVERY: Load failed: \(error)")
+                print("❌ DISCOVERY: Load failed: \(error)")
             }
         }
     }
@@ -122,51 +123,50 @@ class DiscoveryViewModel: ObservableObject {
         defer { isLoading = false }
         
         do {
-            print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¥ DISCOVERY: Loading more content (appending to end)")
+            print("📥 DISCOVERY: Loading more content (appending to end)")
             
-            // Load another batch
             let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 30)
             let newVideos = threads.map { $0.parentVideo }
             
             await MainActor.run {
-                // Filter out videos with empty IDs
                 let validVideos = newVideos.filter { !$0.id.isEmpty }
                 
-                // FIXED: Just append to END - don't reshuffle!
+                // Append to END — don't reshuffle seen content
                 videos.append(contentsOf: validVideos)
                 filteredVideos.append(contentsOf: validVideos)
                 
-                print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
+                print("✅ DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
             }
         } catch {
-            print("ÃƒÂ¢Ã‚ÂÃ…â€™ DISCOVERY: Failed to load more: \(error)")
+            print("❌ DISCOVERY: Failed to load more: \(error)")
         }
     }
     
-    // MARK: - Refresh Content (full reset + reshuffle)
+    // MARK: - Refresh Content (invalidate caches + full reset)
     
     func refreshContent() async {
+        // Invalidate service-level caches so we get fresh Firestore data
+        discoveryService.invalidateVideoCaches()
+        
         videos = []
         filteredVideos = []
         await loadInitialContent()
     }
     
-    // MARK: - Randomize Content (explicit reshuffle)
+    // MARK: - Randomize Content (explicit reshuffle, 0 reads)
     
     func randomizeContent() {
-        // Ultra-shuffle existing videos
         videos = videos.shuffled()
         applyFilterAndShuffle()
         
-        print("ÃƒÂ°Ã…Â¸Ã…Â½Ã‚Â² DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
+        print("🎲 DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
     }
     
-    // MARK: - Category Filtering
+    // MARK: - Category Filtering (TTL cached — tab switch = 0 reads within TTL)
     
     func filterBy(category: DiscoveryCategory) async {
         currentCategory = category
         
-        // Non-video categories handled by the view
         guard category.isVideoCategory else { return }
         
         isLoading = true
@@ -204,6 +204,8 @@ class DiscoveryViewModel: ObservableObject {
                 threads = try await discoveryService.getSpinOffDiscovery(limit: 40)
                 
             case .rollTheDice:
+                // Roll the Dice always forces fresh fetch + extra shuffle
+                discoveryService.invalidateVideoCaches()
                 let allThreads = try await discoveryService.getDeepRandomizedDiscovery(limit: 60)
                 threads = allThreads.shuffled()
                 
@@ -214,23 +216,22 @@ class DiscoveryViewModel: ObservableObject {
             let loadedVideos = threads.map { $0.parentVideo }
             
             await MainActor.run {
-                // Filter out videos with empty IDs
                 let validVideos = loadedVideos.filter { !$0.id.isEmpty }
                 videos = validVideos
                 applyFilterAndShuffle()
                 
-                print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â  DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
+                print("📊 DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
             }
             
         } catch {
             await MainActor.run {
                 errorMessage = "Failed to load \(category.displayName) content"
-                print("ÃƒÂ¢Ã‚ÂÃ…â€™ DISCOVERY: Category load failed: \(error)")
+                print("❌ DISCOVERY: Category load failed: \(error)")
             }
         }
     }
     
-    // MARK: - Collection Loading (Podcasts, Films)
+    // MARK: - Collection Loading (Podcasts, Films — cached in service)
     
     func loadCollections(for category: DiscoveryCategory) async {
         isLoadingCollections = true
@@ -261,7 +262,6 @@ class DiscoveryViewModel: ObservableObject {
     }
     
     /// Insert collection placeholder cards into filteredVideos every ~7 items.
-    /// Creates synthetic CoreVideoMetadata entries mapped via collectionCardMap.
     func interleaveCollections(_ collections: [VideoCollection]) {
         guard !collections.isEmpty else { return }
         collectionCardMap.removeAll()
@@ -270,7 +270,6 @@ class DiscoveryViewModel: ObservableObject {
         for (i, collection) in collections.enumerated() {
             let placeholderID = "collection_card_\(collection.id)"
             
-            // Build a synthetic video the swipe card can render
             let placeholder = CoreVideoMetadata(
                 id: placeholderID,
                 title: collection.title,
@@ -305,7 +304,6 @@ class DiscoveryViewModel: ObservableObject {
             
             collectionCardMap[placeholderID] = collection
             
-            // Insert every ~7 cards
             let insertIndex = min((i + 1) * 7 + insertOffset, filteredVideos.count)
             filteredVideos.insert(placeholder, at: insertIndex)
             insertOffset += 1
@@ -318,16 +316,13 @@ class DiscoveryViewModel: ObservableObject {
     private func diversifyShuffle(videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
         guard videos.count > 1 else { return videos }
         
-        // Group by creator
         var creatorBuckets: [String: [CoreVideoMetadata]] = [:]
         for video in videos {
             creatorBuckets[video.creatorID, default: []].append(video)
         }
         
-        // Shuffle each creator's videos
         var shuffledBuckets = creatorBuckets.mapValues { $0.shuffled() }
         
-        // Interleave to maximize variety
         var result: [CoreVideoMetadata] = []
         var recentCreators: [String] = []
         let maxRecentTracking = 5
@@ -442,7 +437,6 @@ enum DiscoveryCategory: String, CaseIterable {
         }
     }
     
-    /// Whether this category shows single video content (vs special views)
     var isVideoCategory: Bool {
         switch self {
         case .communities, .collections, .pymk, .podcasts, .films: return false
@@ -450,13 +444,12 @@ enum DiscoveryCategory: String, CaseIterable {
         }
     }
     
-    /// Whether this category shows collection content
     var isCollectionCategory: Bool {
         return self == .podcasts || self == .films || self == .collections
     }
 }
 
-// MARK: - Video Presentation Wrapper (for item-based fullScreenCover)
+// MARK: - Video Presentation Wrapper
 
 struct DiscoveryVideoPresentation: Identifiable, Equatable {
     let id: String
@@ -486,7 +479,7 @@ struct DiscoveryView: View {
     private let userService = UserService()
     private let videoService = VideoService()
     
-    // NEW: Observe announcement service to pause videos when announcement shows
+    // Observe announcement service to pause videos when announcement shows
     @ObservedObject private var announcementService = AnnouncementService.shared
     
     // MARK: - Community Services
@@ -507,7 +500,7 @@ struct DiscoveryView: View {
     @State private var selectedUserForProfile: String?
     @State private var showingProfileView = false
     
-    // FIXED: Use item-based presentation instead of boolean
+    // Item-based fullscreen presentation
     @State private var videoPresentation: DiscoveryVideoPresentation?
     @EnvironmentObject var muteManager: MuteContextManager
     
@@ -537,13 +530,13 @@ struct DiscoveryView: View {
             .ignoresSafeArea()
             
             VStack(spacing: 0) {
-                // Compact toolbar — shuffle, view mode, search
+                // Compact toolbar
                 discoveryToolbar
                 
-                // Category Selector (tabs ARE the header)
+                // Category Selector
                 categorySelector
                 
-                // Trending Hashtags (show when Hot Hashtags or Trending selected)
+                // Trending Hashtags
                 if selectedCategory == .trending || selectedCategory == .hotHashtags {
                     trendingHashtagsSection
                 }
@@ -555,17 +548,14 @@ struct DiscoveryView: View {
                 
                 // Content
                 if selectedCategory == .communities {
-                    // MARK: - Community Content
                     if let userID = authService.currentUserID {
                         CommunityListView(userID: userID)
                     }
                 } else if selectedCategory == .pymk {
-                    // MARK: - People You May Know
                     if let userID = authService.currentUserID {
                         PeopleYouMayKnowView(userID: userID)
                     }
                 } else if selectedCategory.isCollectionCategory {
-                    // MARK: - Collection Lanes (Podcasts, Films)
                     collectionLaneView
                 } else if viewModel.isLoading && viewModel.videos.isEmpty {
                     loadingView
@@ -584,7 +574,7 @@ struct DiscoveryView: View {
             }
             await viewModel.loadTrendingHashtags()
             
-            // Check for unread communities (lightweight — uses cached list)
+            // Check for unread communities
             if let userID = authService.currentUserID {
                 if let communities = try? await communityService.fetchMyCommunities(userID: userID) {
                     hasUnreadCommunities = communities.contains { $0.unreadCount > 0 || $0.isCreatorLive }
@@ -597,24 +587,21 @@ struct DiscoveryView: View {
         .sheet(item: $selectedHashtagPresentation) { presentation in
             HashtagView(initialHashtag: presentation.hashtag)
         }
-        // FIXED: Use item-based fullScreenCover to prevent video stopping
-        // Use .fullscreen context to get FULL overlay (not minimal .discovery overlay)
         .fullScreenCover(item: $videoPresentation) { presentation in
             FullscreenVideoView(
                 video: presentation.video,
                 overlayContext: .fullscreen,
                 onDismiss: {
-                    print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â± DISCOVERY: Dismissing fullscreen")
+                    print("📱 DISCOVERY: Dismissing fullscreen")
                     videoPresentation = nil
                 }
             )
         }
-        // NEW: React to announcement state changes
         .onChange(of: announcementService.isShowingAnnouncement) { _, isShowing in
             if isShowing {
-                print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¢ DISCOVERY: Announcement showing - pausing videos")
+                print("📢 DISCOVERY: Announcement showing - pausing videos")
             } else {
-                print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¢ DISCOVERY: Announcement dismissed - can resume videos")
+                print("📢 DISCOVERY: Announcement dismissed - can resume videos")
             }
         }
         .sheet(isPresented: $showingProfileView) {
@@ -672,7 +659,6 @@ struct DiscoveryView: View {
             Spacer()
             
             HStack(spacing: 16) {
-                // Randomize button (video categories only)
                 if selectedCategory.isVideoCategory {
                     Button {
                         viewModel.randomizeContent()
@@ -682,7 +668,6 @@ struct DiscoveryView: View {
                             .foregroundColor(.cyan)
                     }
                     
-                    // Mode Toggle
                     Button {
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                             discoveryMode = discoveryMode == .grid ? .swipe : .grid
@@ -711,7 +696,6 @@ struct DiscoveryView: View {
     
     private var discoveryToolbar: some View {
         HStack {
-            // Loading indicator
             if viewModel.isLoading {
                 HStack(spacing: 4) {
                     ProgressView()
@@ -732,7 +716,6 @@ struct DiscoveryView: View {
             Spacer()
             
             HStack(spacing: 18) {
-                // Shuffle (video categories only)
                 if selectedCategory.isVideoCategory {
                     Button {
                         viewModel.randomizeContent()
@@ -742,7 +725,6 @@ struct DiscoveryView: View {
                             .foregroundColor(.cyan)
                     }
                     
-                    // Grid / Swipe toggle
                     Button {
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                             discoveryMode = discoveryMode == .grid ? .swipe : .grid
@@ -754,7 +736,6 @@ struct DiscoveryView: View {
                     }
                 }
                 
-                // Search
                 Button {
                     showingSearch.toggle()
                 } label: {
@@ -801,7 +782,6 @@ struct DiscoveryView: View {
                             Text(category.displayName)
                                 .font(.system(size: 13, weight: selectedCategory == category ? .bold : .medium))
                             
-                            // Notification dot for communities
                             if category == .communities && hasUnreadCommunities && selectedCategory != .communities {
                                 Circle()
                                     .fill(Color.pink)
@@ -948,10 +928,7 @@ struct DiscoveryView: View {
     
     @ViewBuilder
     private var contentView: some View {
-        // NEW: Don't render video content at all when announcement is showing
-        // This ensures no background video playback
         if announcementService.isShowingAnnouncement {
-            // Show placeholder while announcement is displayed
             Color.clear
         } else {
             switch discoveryMode {
@@ -961,7 +938,6 @@ struct DiscoveryView: View {
                         videos: viewModel.filteredVideos,
                         currentIndex: $currentSwipeIndex,
                         onVideoTap: { video in
-                            // Check if this is a collection card
                             if let collection = viewModel.collectionCardMap[video.id] {
                                 selectedCollection = collection
                                 showingCollectionPlayer = true
@@ -981,7 +957,6 @@ struct DiscoveryView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .onChange(of: currentSwipeIndex) { _, newValue in
-                        // Load more when getting close to end
                         if newValue >= viewModel.filteredVideos.count - 10 {
                             Task {
                                 await viewModel.loadMoreContent()
@@ -989,7 +964,6 @@ struct DiscoveryView: View {
                         }
                     }
                     
-                    // Swipe Instructions
                     swipeInstructionsIndicator
                         .padding(.top, 20)
                 }
@@ -1073,7 +1047,7 @@ struct DiscoveryView: View {
         .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
     }
     
-    // MARK: - Collection Lane View (Podcasts, Films)
+    // MARK: - Collection Lane View
     
     private var collectionLaneView: some View {
         Group {
@@ -1100,10 +1074,8 @@ struct DiscoveryView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if selectedCategory == .collections {
-                // 2-column grid for Collections tab
                 collectionsGridView
             } else {
-                // List style for Podcasts / Films
                 ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: 16) {
                         ForEach(viewModel.discoveryCollections) { collection in
@@ -1157,7 +1129,6 @@ struct DiscoveryView: View {
     
     private func collectionGridCard(_ collection: VideoCollection) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Cover image
             ZStack(alignment: .bottomTrailing) {
                 if let coverURL = collection.coverImageURL, let url = URL(string: coverURL) {
                     AsyncImage(url: url) { image in
@@ -1188,7 +1159,6 @@ struct DiscoveryView: View {
                         .cornerRadius(10)
                 }
                 
-                // Segment count badge
                 HStack(spacing: 3) {
                     Image(systemName: "play.rectangle.fill")
                         .font(.system(size: 9))
@@ -1203,13 +1173,11 @@ struct DiscoveryView: View {
                 .padding(6)
             }
             
-            // Title
             Text(collection.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.white)
                 .lineLimit(2)
             
-            // Creator
             Text(collection.creatorName)
                 .font(.system(size: 11))
                 .foregroundColor(.gray)

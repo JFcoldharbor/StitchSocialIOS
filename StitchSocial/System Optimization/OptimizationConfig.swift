@@ -217,6 +217,70 @@ struct OptimizationConfig {
         static let maxCacheAge: TimeInterval = 7 * 24 * 60 * 60 // 7 days
     }
     
+    // MARK: - Discovery Cache Configuration
+    
+    /// TTL and fetch limits for DiscoveryService category caches.
+    /// All values centralized here so they're tunable without touching service code.
+    ///
+    /// WIRING:
+    /// - DiscoveryService.defaultTTL reads Discovery.defaultCategoryTTL
+    /// - DiscoveryService.shortTTL reads Discovery.fastChangingCategoryTTL
+    /// - Each fetch method uses Discovery fetch multipliers to cap over-reads
+    /// - CachingService.shared receives all fetched threads for app-wide reuse
+    struct Discovery {
+        
+        // -- TTL --
+        
+        /// Default TTL for most category caches (All, Following, Heat Check, etc.)
+        static let defaultCategoryTTL: TimeInterval = 300  // 5 min
+        
+        /// Shorter TTL for fast-changing categories (Trending, Recent)
+        static let fastChangingCategoryTTL: TimeInterval = 120  // 2 min
+        
+        /// TTL for collection caches (Podcasts, Films, All Collections)
+        static let collectionCacheTTL: TimeInterval = 300  // 5 min
+        
+        /// TTL for Recent Users cache (slow-changing)
+        static let recentUsersCacheTTL: TimeInterval = 600  // 10 min
+        
+        /// TTL for Hype Leaderboard cache (slow-changing)
+        static let leaderboardCacheTTL: TimeInterval = 600  // 10 min
+        
+        // -- Fetch Limits --
+        
+        /// Fetch multiplier for categories that filter in-memory.
+        /// E.g., Heat Check fetches limit * fetchMultiplierStandard docs,
+        /// then filters for blazing/hot in memory.
+        static let fetchMultiplierStandard: Double = 2.0  // was 3-5x in old code
+        
+        /// Fetch multiplier for rare-match categories (Spin-Offs).
+        /// Spin-offs require scanning more docs because few match.
+        static let fetchMultiplierRare: Double = 3.0  // was 5x in old code
+        
+        /// Max Firestore batch size per pagination loop in main feed
+        static let mainFeedBatchSize = 60  // was 100
+        
+        /// Max pagination attempts before giving up
+        static let maxPaginationAttempts = 5  // was 10
+        
+        // -- Algorithm Weights --
+        
+        /// Weight for discoverabilityScore in weighted feed
+        static let weightDiscoverability: Double = 0.40
+        
+        /// Weight for recency decay in weighted feed
+        static let weightRecency: Double = 0.25
+        
+        /// Weight for temperature signal in weighted feed
+        static let weightTemperature: Double = 0.20
+        
+        /// Weight for engagement ratio in weighted feed
+        static let weightEngagement: Double = 0.15
+        
+        /// Jitter range added to prevent stale ordering (±)
+        static let scoringJitter: Double = 0.15
+    }
+    
     // MARK: - Network Configuration
     
     /// Network requests and timeouts

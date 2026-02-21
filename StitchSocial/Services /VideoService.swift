@@ -418,6 +418,20 @@ class VideoService: ObservableObject {
         let threadID = parentData[FirebaseSchema.VideoDocument.threadID] as? String ?? parentID
         let parentDepth = parentData[FirebaseSchema.VideoDocument.conversationDepth] as? Int ?? 0
         
+        // LANE VALIDATION: Stepchild replies (depth 2+) restricted to lane participants + 20 cap
+        if parentDepth >= 1 {
+            let parentVideo = createCoreVideoMetadata(from: parentData, id: parentID)
+            let (canReply, reason) = try await ConversationLaneService.shared.canUserReply(
+                to: parentVideo,
+                userID: validatedCreatorID
+            )
+            guard canReply else {
+                print("🚫 VIDEO SERVICE: Reply blocked — \(reason)")
+                throw StitchError.validationError("Cannot reply: \(reason)")
+            }
+            print("✅ VIDEO SERVICE: Lane validation passed — \(reason)")
+        }
+        
         let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
         
         // Determine video orientation for logging
@@ -492,6 +506,18 @@ class VideoService: ObservableObject {
         
         // Propagate reply count to parent collection if segment
         await propagateToCollection(videoID: parentID, field: "totalReplies", delta: 1)
+        
+        // Invalidate lane cache so nav bar refreshes with new message
+        if parentDepth >= 1 {
+            // Find the child anchor — if parentDepth == 1, parent IS the anchor
+            // If parentDepth > 1, we need to walk up (but ConversationLaneService handles this)
+            if parentDepth == 1 {
+                ConversationLaneService.shared.invalidateLane(childVideoID: parentID)
+            } else {
+                // For deeper replies, invalidate based on threadID — catches all lanes
+                ConversationLaneService.shared.clearCache()
+            }
+        }
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")

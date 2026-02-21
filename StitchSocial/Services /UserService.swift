@@ -713,7 +713,8 @@ extension UserService {
     func backfillDefaultFollows() async {
         let defaultAccounts = [
             "4ifwg1CxDGbZ9amfPOvl0lMR6982",  // James Fortune
-            "L9cfRdqpDMWA9tq12YBh3IkhnGh1"   // StitchSocial
+            "L9cfRdqpDMWA9tq12YBh3IkhnGh1",   // StitchSocial
+            "AZUAsfkobQWSqXzgTR1UM2uogZn2"    // Teddy Ruks
         ]
         
         print("🔄 BACKFILL: Starting auto-follow backfill for default accounts")

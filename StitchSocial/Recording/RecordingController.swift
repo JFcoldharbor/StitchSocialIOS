@@ -277,12 +277,18 @@ class RecordingController: ObservableObject {
     func startRecording() {
         guard currentPhase == .ready else { return }
         
+        // CRITICAL: Don't start if camera is still finalizing a previous recording
+        guard !cameraManager.isRecording else {
+            print("\u{26A0}\u{FE0F} RECORDING: Camera still recording/finalizing -- skipping")
+            return
+        }
+        
         currentPhase = .recording
         recordingPhase = .recording
         recordingStartTime = Date()
         recordingDuration = 0
         
-        // ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ Reset compression state for new recording
+        // Reset compression state for new recording
         resetCompressionState()
         
         if !isUnlimitedRecording {
@@ -291,11 +297,22 @@ class RecordingController: ObservableObject {
         
         cameraManager.startRecording { [weak self] videoURL in
             Task { @MainActor [weak self] in
-                await self?.handleRecordingCompleted(videoURL)
+                guard let self = self else { return }
+                
+                // Camera rejected the start
+                if videoURL == nil && !self.cameraManager.isRecording {
+                    self.stopRecordingTimer()
+                    self.currentPhase = .ready
+                    self.recordingPhase = .ready
+                    print("\u{26A0}\u{FE0F} RECORDING: Camera rejected start -- reset to ready")
+                    return
+                }
+                
+                await self.handleRecordingCompleted(videoURL)
             }
         }
        
-        print("ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½Ãƒâ€šÃ‚Â¬ RECORDING: Started - Tier: \(authService.currentUser?.tier.rawValue ?? "unknown"), Duration: \(isUnlimitedRecording ? "Unlimited" : "\(maxRecordingDuration)s")")
+        print("\u{1F3AC} RECORDING: Started - Tier: \(authService.currentUser?.tier.rawValue ?? "unknown"), Duration: \(isUnlimitedRecording ? "Unlimited" : "\(maxRecordingDuration)s")")
     }
     
     func stopRecording() {
@@ -401,18 +418,27 @@ class RecordingController: ObservableObject {
     // MARK: - Segment Management (NEW - TikTok-style tap-and-hold)
     
     /// Start recording a new segment (called when finger goes down)
+    /// Start recording a new segment (called when finger goes down)
     func startSegment() {
         guard currentPhase != .recording else { return }
         
         // CRITICAL: Don't start if previous segment is still being saved
         guard !isSavingSegment else {
-            print("Ã¢Å¡Â Ã¯Â¸Â SEGMENT: Cannot start - previous segment still saving")
+            print("\u{26A0}\u{FE0F} SEGMENT: Cannot start - previous segment still saving")
+            return
+        }
+        
+        // CRITICAL: Don't start if camera is still finalizing the previous stop.
+        // CinematicCameraManager.isRecording is only set false by the
+        // didFinishRecordingTo delegate, so this catches the race window.
+        guard !cameraManager.isRecording else {
+            print("\u{26A0}\u{FE0F} SEGMENT: Cannot start - camera still recording/finalizing")
             return
         }
         
         // Check if we can continue recording (tier limit check)
         guard videoService.canContinueRecording(currentDuration: totalDuration, userTier: authService.currentUser?.tier ?? .rookie) else {
-            print("Ã¢Å¡Â Ã¯Â¸Â SEGMENT: Tier limit reached, cannot start new segment")
+            print("\u{26A0}\u{FE0F} SEGMENT: Tier limit reached, cannot start new segment")
             return
         }
         
@@ -424,10 +450,22 @@ class RecordingController: ObservableObject {
         // Start timer for current segment
         startRecordingTimer()
         
-        // Start camera recording
+        // Start camera recording -- completion returns nil if camera rejects
         cameraManager.startRecording { [weak self] videoURL in
             Task { @MainActor [weak self] in
-                self?.handleSegmentRecorded(videoURL)
+                guard let self = self else { return }
+                
+                // Camera rejected the start (still finalizing, session down, etc.)
+                if videoURL == nil && !self.cameraManager.isRecording {
+                    self.stopRecordingTimer()
+                    self.currentPhase = .ready
+                    self.recordingPhase = .ready
+                    self.currentSegmentDuration = 0
+                    print("\u{26A0}\u{FE0F} SEGMENT: Camera rejected start -- reset to ready")
+                    return
+                }
+                
+                self.handleSegmentRecorded(videoURL)
             }
         }
         
@@ -435,7 +473,7 @@ class RecordingController: ObservableObject {
         let impact = UIImpactFeedbackGenerator(style: .medium)
         impact.impactOccurred()
         
-        print("Ã°Å¸Å½Â¬ SEGMENT: Started segment \(segments.count + 1)")
+        print("\u{1F3AC} SEGMENT: Started segment \(segments.count + 1)")
     }
     
     /// Stop recording current segment (called when finger releases)

@@ -449,33 +449,34 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         let type = userInfo["type"] as? String ?? "general"
         
         switch type {
-        case "video", "engagement", "hype", "cool", "reengagement_stitches", "reengagement_milestone":
-            if let videoID = userInfo["videoID"] as? String {
-                print("🎬 NOTIFICATION: Navigate to video \(videoID)")
+        // All video-related notifications → thread view with target video
+        case "video", "engagement", "hype", "cool", "reengagement_stitches",
+             "reengagement_milestone", "stitch", "thread", "reply", "newVideo", "mention":
+            let videoID = userInfo["videoID"] as? String
+            let threadID = userInfo["threadID"] as? String ?? videoID
+            
+            if let tid = threadID {
+                print("🧵 NOTIFICATION: Navigate to thread \(tid), target: \(videoID ?? "root")")
                 NotificationCenter.default.post(
-                    name: .navigateToVideo,
+                    name: .navigateToThread,
                     object: nil,
-                    userInfo: ["videoID": videoID]
+                    userInfo: [
+                        "threadID": tid,
+                        "targetVideoID": videoID ?? tid
+                    ]
                 )
+            } else {
+                print("📱 NOTIFICATION: No thread/video ID, opening notifications")
+                NotificationCenter.default.post(name: .navigateToNotifications, object: nil)
             }
             
         case "follow", "user", "reengagement_followers":
-            if let userID = userInfo["userID"] as? String {
+            if let userID = userInfo["userID"] as? String ?? userInfo["senderID"] as? String {
                 print("👤 NOTIFICATION: Navigate to user profile \(userID)")
                 NotificationCenter.default.post(
                     name: .navigateToProfile,
                     object: nil,
                     userInfo: ["userID": userID]
-                )
-            }
-            
-        case "thread", "reply":
-            if let threadID = userInfo["threadID"] as? String {
-                print("🧵 NOTIFICATION: Navigate to thread \(threadID)")
-                NotificationCenter.default.post(
-                    name: .navigateToThread,
-                    object: nil,
-                    userInfo: ["threadID": threadID]
                 )
             }
             

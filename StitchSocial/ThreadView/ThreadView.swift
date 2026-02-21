@@ -18,6 +18,7 @@ struct ThreadView: View {
     let targetVideoID: String?
     
     @StateObject private var authService = AuthService()
+    private let laneService = ConversationLaneService.shared
     
     // MARK: - State
     @State private var parentVideo: CoreVideoMetadata?
@@ -30,6 +31,8 @@ struct ThreadView: View {
     @State private var showCarousel = false
     @State private var carouselVideos: [CoreVideoMetadata] = []
     @State private var directReplies: [CoreVideoMetadata] = []
+    @State private var laneParticipantIDs: Set<String> = []  // The 2 users in current lane
+    @State private var currentLaneAnchorID: String?          // The child video anchoring current lane
     @State private var dragOffset: CGFloat = 0
     @State private var isDragging = false
     @State private var isPanelExpanded = false
@@ -155,6 +158,7 @@ struct ThreadView: View {
                 startingIndex: selectedVideo.flatMap { v in carouselVideos.firstIndex(where: { $0.id == v.id }) } ?? 0,
                 currentUserID: authService.currentUser?.id,
                 directReplies: directReplies.isEmpty ? nil : directReplies,
+                laneParticipantIDs: laneParticipantIDs,
                 onSelectReply: { loadConversation(with: $0) }
             )
             .id("\(selectedVideo?.id ?? UUID().uuidString)-\(carouselVideos.count)")
@@ -550,12 +554,20 @@ struct ThreadView: View {
         } else {
             Task {
                 do {
-                    let allReplies = try await videoService.getTimestampedReplies(videoID: video.id)
-                    let depth2Replies = allReplies.filter { $0.conversationDepth == video.conversationDepth + 1 }
+                    // Get lanes (unique conversation partners) for this child
+                    let lanes = try await laneService.getLanes(
+                        forChildVideoID: video.id,
+                        childCreatorID: video.creatorID
+                    )
+                    
+                    // Convert lane first-replies to directReplies for nav bar
+                    let laneFirstReplies = lanes.map { $0.firstReply }
                     
                     await MainActor.run {
                         self.carouselVideos = [video]
-                        self.directReplies = depth2Replies
+                        self.directReplies = laneFirstReplies
+                        self.laneParticipantIDs = []  // No lane selected yet
+                        self.currentLaneAnchorID = video.id
                         
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             self.showCarousel = true
@@ -565,6 +577,7 @@ struct ThreadView: View {
                     await MainActor.run {
                         self.carouselVideos = [video]
                         self.directReplies = []
+                        self.laneParticipantIDs = []
                         self.showCarousel = true
                     }
                 }
@@ -577,19 +590,23 @@ struct ThreadView: View {
         
         Task {
             do {
-                let allReplies = try await videoService.getTimestampedReplies(videoID: childVideo.id)
-                let conversationPartnerID = reply.creatorID
-                let currentUserID = authService.currentUser?.id
-                
-                let conversationMessages = allReplies.filter { message in
-                    let messageCreator = message.creatorID
-                    return (messageCreator == conversationPartnerID || messageCreator == currentUserID)
-                }
+                // Load full conversation chain between child creator and this responder
+                let messages = try await laneService.loadLaneMessages(
+                    childVideo: childVideo,
+                    participant1: childVideo.creatorID,
+                    participant2: reply.creatorID
+                )
                 
                 await MainActor.run {
-                    self.carouselVideos = [childVideo] + conversationMessages
+                    // Carousel: child video first, then the full back-and-forth chain
+                    self.carouselVideos = [childVideo] + messages
+                    // Track who's in this lane so overlay knows who can reply
+                    self.laneParticipantIDs = [childVideo.creatorID, reply.creatorID]
+                    self.currentLaneAnchorID = childVideo.id
                 }
-            } catch { }
+            } catch {
+                print("❌ LANE: Failed to load conversation — \(error.localizedDescription)")
+            }
         }
     }
     
@@ -622,23 +639,60 @@ struct ThreadView: View {
             let targetVideo = try await videoService.getVideo(id: targetID)
             var currentVideo = targetVideo
             
+            // Walk up to find the depth-1 child anchor
             while currentVideo.conversationDepth > 1, let replyTo = currentVideo.replyToVideoID {
                 currentVideo = try await videoService.getVideo(id: replyTo)
             }
             
             guard currentVideo.conversationDepth == 1 else { return }
             
-            let stepchildren = try await videoService.getTimestampedReplies(videoID: currentVideo.id)
-            let conversationVideos = [currentVideo] + stepchildren
+            let childAnchor = currentVideo
             
-            guard conversationVideos.contains(where: { $0.id == targetID }) else { return }
+            // Load full lane messages using lane service
+            // Determine lane participants from the target video chain
+            let lanes = try await laneService.getLanes(
+                forChildVideoID: childAnchor.id,
+                childCreatorID: childAnchor.creatorID
+            )
             
-            await MainActor.run {
-                self.selectedVideo = targetVideo
-                self.carouselVideos = conversationVideos
+            // Find which lane the target video belongs to
+            let targetCreator = targetVideo.creatorID
+            let matchingLane = lanes.first { $0.isParticipant(targetCreator) }
+            
+            if let lane = matchingLane {
+                let messages = try await laneService.loadLaneMessages(
+                    childVideo: childAnchor,
+                    participant1: lane.childCreatorID,
+                    participant2: lane.responderID
+                )
                 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    self.showCarousel = true
+                let conversationVideos = [childAnchor] + messages
+                
+                guard conversationVideos.contains(where: { $0.id == targetID }) else { return }
+                
+                await MainActor.run {
+                    self.selectedVideo = targetVideo
+                    self.carouselVideos = conversationVideos
+                    self.laneParticipantIDs = lane.participantIDs
+                    self.currentLaneAnchorID = childAnchor.id
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        self.showCarousel = true
+                    }
+                }
+            } else {
+                // Fallback: just show the stepchildren flat
+                let stepchildren = try await videoService.getTimestampedReplies(videoID: childAnchor.id)
+                let conversationVideos = [childAnchor] + stepchildren
+                
+                await MainActor.run {
+                    self.selectedVideo = targetVideo
+                    self.carouselVideos = conversationVideos
+                    self.laneParticipantIDs = []
+                    
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        self.showCarousel = true
+                    }
                 }
             }
         } catch { }

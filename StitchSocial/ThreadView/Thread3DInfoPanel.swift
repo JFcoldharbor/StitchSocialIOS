@@ -45,6 +45,7 @@ struct Thread3DInfoPanel: View {
             }
         }
         .onAppear {
+            isExpanded = true
             startAnimations()
         }
     }

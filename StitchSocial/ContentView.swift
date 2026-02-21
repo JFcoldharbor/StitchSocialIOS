@@ -42,6 +42,11 @@ struct ContentView: View {
     @State private var showMemoryDebug = false
     #endif
     
+    // MARK: - Push Notification Navigation
+    @State private var pendingThreadNav: ThreadNavItem?
+    @State private var pendingTargetVideoID: String?
+    @State private var pendingProfileUserID: String?
+    
     // MARK: - Body
     
     var body: some View {
@@ -232,43 +237,47 @@ struct ContentView: View {
         .ignoresSafeArea(.keyboard, edges: .bottom)
         // MARK: - Push Notification Deep Link Handlers
         .onReceive(NotificationCenter.default.publisher(for: .navigateToVideo)) { notification in
+            // Route video notifications through thread view
             if let videoID = notification.userInfo?["videoID"] as? String {
-                selectedTab = .notifications
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    NotificationCenter.default.post(
-                        name: .pushNotificationNavigateToVideo,
-                        object: nil,
-                        userInfo: ["videoID": videoID]
-                    )
-                }
+                pendingTargetVideoID = videoID
+                pendingThreadNav = ThreadNavItem(threadID: videoID)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToProfile)) { notification in
             if let userID = notification.userInfo?["userID"] as? String {
+                // TODO: Present profile view when ProfileView init is confirmed
                 selectedTab = .notifications
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    NotificationCenter.default.post(
-                        name: .pushNotificationNavigateToProfile,
-                        object: nil,
-                        userInfo: ["userID": userID]
-                    )
-                }
+                print("👤 NOTIFICATION: Navigate to profile \(userID)")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToThread)) { notification in
             if let threadID = notification.userInfo?["threadID"] as? String {
-                selectedTab = .notifications
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    NotificationCenter.default.post(
-                        name: .pushNotificationNavigateToThread,
-                        object: nil,
-                        userInfo: ["threadID": threadID]
-                    )
-                }
+                pendingTargetVideoID = notification.userInfo?["targetVideoID"] as? String
+                pendingThreadNav = ThreadNavItem(threadID: threadID)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToNotifications)) { _ in
             selectedTab = .notifications
+        }
+        .fullScreenCover(item: $pendingThreadNav) { nav in
+            NavigationStack {
+                ThreadView(
+                    threadID: nav.threadID,
+                    videoService: videoService,
+                    userService: userService,
+                    targetVideoID: pendingTargetVideoID
+                )
+                .environmentObject(MuteContextManager.shared)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Close") {
+                            pendingThreadNav = nil
+                            pendingTargetVideoID = nil
+                        }
+                    }
+                }
+            }
         }
         #if DEBUG
         .onShake {
@@ -578,6 +587,13 @@ extension UIWindow {
 #endif
 
 // MARK: - Preview
+
+// MARK: - Navigation Helper
+
+struct ThreadNavItem: Identifiable {
+    let id = UUID()
+    let threadID: String
+}
 
 #Preview {
     ContentView()

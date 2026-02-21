@@ -76,11 +76,7 @@ struct StitchSocialApp: App {
                         Config.printConfigurationStatus()
                     }
                     
-                    // Run backfill for existing users (one-time)
-                    Task {
-                        let userService = UserService()
-                        await userService.backfillDefaultFollows()
-                    }
+                    // Auto-follow handled by Cloud Function #24 (onUserCreated) — no client-side backfill needed
                     
                     // Post-login setup for returning users
                     Task {
