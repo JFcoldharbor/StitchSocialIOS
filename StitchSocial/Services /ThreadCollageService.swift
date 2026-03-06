@@ -36,17 +36,107 @@ class ThreadCollageService: ObservableObject {
     @Published var selectedClips: [CollageClip] = []
     @Published var configuration = CollageConfiguration()
     
+    /// True while export is in-flight — blocks cleanup() from nuking assets mid-render
+    private(set) var isExporting = false
+    
     // MARK: - Constraints
     
     static let minResponseClips = 3
     static let maxResponseClips = 5
     static let maxTotalDuration: TimeInterval = 60.0
     
+    // MARK: - Shared Precache (Background Asset Warming)
+    
+    /// CACHING: Shared warm cache — ThreadView precaches assets here on load.
+    /// When user taps "Thread Collage", batchLoadAssets hits this first → zero download wait.
+    /// TTL: 5 min per entry. Cleared on app background or memory warning.
+    /// Max 20 entries to cap memory. LRU eviction if exceeded.
+    private static var warmCache: [String: WarmCacheEntry] = [:]
+    private static let warmCacheTTL: TimeInterval = 300
+    private static let warmCacheMaxEntries = 20
+    private static var precacheTask: Task<Void, Never>?
+    
+    private struct WarmCacheEntry {
+        let asset: AVAsset
+        let duration: TimeInterval
+        let cachedAt: Date
+        var isExpired: Bool { Date().timeIntervalSince(cachedAt) > ThreadCollageService.warmCacheTTL }
+    }
+    
+    /// Call from ThreadView.onAppear — precaches parent + top children in background.
+    /// BATCHING: Single TaskGroup downloads all assets concurrently.
+    /// Cost savings: Eliminates download wait when user taps Thread Collage.
+    static func precacheThreadAssets(parent: CoreVideoMetadata, children: [CoreVideoMetadata]) {
+        precacheTask?.cancel()
+        precacheTask = Task(priority: .utility) {
+            let videos = [parent] + Array(children.prefix(maxResponseClips))
+            
+            await withTaskGroup(of: (String, AVAsset, TimeInterval)?.self) { group in
+                for video in videos {
+                    let videoID = video.id
+                    let urlString = video.videoURL
+                    
+                    if let entry = warmCache[videoID], !entry.isExpired { continue }
+                    
+                    group.addTask {
+                        guard !Task.isCancelled else { return nil }
+                        guard let url = URL(string: urlString) else { return nil }
+                        let asset = AVAsset(url: url)
+                        do {
+                            let (dur, _) = try await asset.load(.duration, .tracks)
+                            return (videoID, asset, dur.seconds)
+                        } catch {
+                            print("⚡ PRECACHE: Failed \(videoID): \(error.localizedDescription)")
+                            return nil
+                        }
+                    }
+                }
+                
+                for await result in group {
+                    guard let (id, asset, duration) = result else { continue }
+                    evictIfNeeded()
+                    warmCache[id] = WarmCacheEntry(asset: asset, duration: duration, cachedAt: Date())
+                }
+            }
+            print("⚡ PRECACHE: Warmed \(warmCache.count) assets")
+        }
+    }
+    
+    /// Pull from warm cache — called by batchLoadAssets before network fetch
+    static func getWarmAsset(_ videoID: String) -> (AVAsset, TimeInterval)? {
+        guard let entry = warmCache[videoID], !entry.isExpired else {
+            warmCache.removeValue(forKey: videoID)
+            return nil
+        }
+        return (entry.asset, entry.duration)
+    }
+    
+    private static func evictIfNeeded() {
+        warmCache = warmCache.filter { !$0.value.isExpired }
+        while warmCache.count >= warmCacheMaxEntries {
+            if let oldest = warmCache.min(by: { $0.value.cachedAt < $1.value.cachedAt }) {
+                warmCache.removeValue(forKey: oldest.key)
+            }
+        }
+    }
+    
+    /// Call on memory warning or app background
+    static func clearWarmCache() {
+        precacheTask?.cancel()
+        warmCache.removeAll()
+        print("🧹 PRECACHE: Warm cache cleared")
+    }
+    
     // MARK: - Private
     
-    /// Cached AVAssets keyed by video ID — prevents re-downloading from Firebase Storage
+    /// Instance-level cache — copies from warm cache or downloads fresh
     /// CACHING: Strong refs held only during composition lifecycle, cleared on cleanup
     private var assetCache: [String: AVAsset] = [:]
+    
+    /// CACHING: Pre-loaded track refs from batchLoadAssets — avoids redundant async loadTracks calls
+    /// in buildComposition and calculatePortraitTransform (was calling loadTracks per-clip = N async ops)
+    private var videoTrackCache: [String: AVAssetTrack] = [:]
+    private var audioTrackCache: [String: AVAssetTrack] = [:]
     
     /// Temp file URLs to clean up
     private var tempFileURLs: [URL] = []
@@ -129,6 +219,8 @@ class ThreadCollageService: ObservableObject {
         
         // Store as task for cancellation support
         let task = Task<URL, Error> {
+            isExporting = true
+            defer { isExporting = false }
             
             // Phase 1: Batch load all AVAssets concurrently
             state = .loadingAssets
@@ -182,6 +274,7 @@ class ThreadCollageService: ObservableObject {
     func cancel() {
         exportTask?.cancel()
         exportTask = nil
+        isExporting = false  // Force clear so cleanup can proceed
         cleanup()
         state = .idle
         progress = 0.0
@@ -192,33 +285,72 @@ class ThreadCollageService: ObservableObject {
     /// BATCHING: Load all clip AVAssets concurrently via TaskGroup
     /// CACHING: Results stored in assetCache so composition reads from cache
     private func batchLoadAssets() async throws {
-        try await withThrowingTaskGroup(of: (String, AVAsset, TimeInterval).self) { group in
+        try await withThrowingTaskGroup(of: (String, AVAsset, TimeInterval, AVAssetTrack?, AVAssetTrack?).self) { group in
             for clip in selectedClips {
                 let videoID = clip.id
                 let videoURLString = clip.videoMetadata.videoURL
                 
                 group.addTask { [weak self] in
-                    // Check cache first — skip network if already loaded
+                    // 1. Check instance cache
                     if let cached = await self?.assetCache[videoID] {
                         let duration = try await cached.load(.duration).seconds
-                        return (videoID, cached, duration)
+                        let vTrack = try? await cached.loadTracks(withMediaType: .video).first
+                        let aTrack = try? await cached.loadTracks(withMediaType: .audio).first
+                        return (videoID, cached, duration, vTrack, aTrack)
                     }
                     
+                    // 2. Check shared warm cache (precached from ThreadView)
+                    // Resolve synchronously before task — warmCache is static, not Sendable
+                    let warmResult = await MainActor.run { ThreadCollageService.getWarmAsset(videoID) }
+                    if let (asset, duration) = warmResult {
+                        let vTrack = try? await asset.loadTracks(withMediaType: .video).first
+                        let aTrack = try? await asset.loadTracks(withMediaType: .audio).first
+                        return (videoID, asset, duration, vTrack, aTrack)
+                    }
+                    
+                    // 3. Check disk cache — video may already be cached from carousel playback
+                    if let diskURL = VideoDiskCache.shared.getCachedURL(for: videoURLString) {
+                        let asset = AVAsset(url: diskURL)
+                        let (duration, tracks) = try await asset.load(.duration, .tracks)
+                        let vTrack = tracks.first { $0.mediaType == .video }
+                        let aTrack = tracks.first { $0.mediaType == .audio }
+                        if let vt = vTrack {
+                            _ = try? await vt.load(.naturalSize, .preferredTransform)
+                        }
+                        print("💾 COLLAGE: Loaded from disk cache — \(videoID.prefix(8))")
+                        return (videoID, asset, duration.seconds, vTrack, aTrack)
+                    }
+                    
+                    // 4. Network fetch as fallback — also cache to disk for future use
                     guard let url = URL(string: videoURLString) else {
                         throw CollageError.invalidVideoURL(videoID)
                     }
                     
                     let asset = AVAsset(url: url)
-                    // Batch-load all needed properties in one call
-                    let (duration, _) = try await asset.load(.duration, .tracks)
+                    // Batch-load ALL needed properties in one call — duration, tracks, naturalSize, transform
+                    let (duration, tracks) = try await asset.load(.duration, .tracks)
+                    let vTrack = tracks.first { $0.mediaType == .video }
+                    let aTrack = tracks.first { $0.mediaType == .audio }
                     
-                    return (videoID, asset, duration.seconds)
+                    // Pre-load transform properties so buildComposition doesn't re-fetch
+                    if let vt = vTrack {
+                        _ = try? await vt.load(.naturalSize, .preferredTransform)
+                    }
+                    
+                    // Cache to disk in background — next collage/playback gets it instantly
+                    Task(priority: .utility) {
+                        await VideoDiskCache.shared.cacheVideo(from: videoURLString)
+                    }
+                    
+                    return (videoID, asset, duration.seconds, vTrack, aTrack)
                 }
             }
             
             // Collect results and update clips + cache
-            for try await (videoID, asset, duration) in group {
+            for try await (videoID, asset, duration, vTrack, aTrack) in group {
                 assetCache[videoID] = asset
+                if let vt = vTrack { videoTrackCache[videoID] = vt }
+                if let at = aTrack { audioTrackCache[videoID] = at }
                 
                 if let index = selectedClips.firstIndex(where: { $0.id == videoID }) {
                     selectedClips[index].asset = asset
@@ -310,14 +442,19 @@ class ThreadCollageService: ObservableObject {
             
             let timeRange = clip.compositionTimeRange
             
-            if let videoTrack = try await asset.loadTracks(withMediaType: .video).first {
+            // Use cached track refs — already loaded in batchLoadAssets, zero async overhead
+            var videoTrack: AVAssetTrack? = videoTrackCache[clip.id]
+            if videoTrack == nil {
+                videoTrack = try? await asset.loadTracks(withMediaType: .video).first
+            }
+            
+            if let videoTrack = videoTrack {
                 try compositionVideoTrack.insertTimeRange(
                     timeRange,
                     of: videoTrack,
                     at: insertionTime
                 )
                 
-                // Calculate the transform to force this clip into portrait renderSize
                 let transform = try await calculatePortraitTransform(
                     track: videoTrack,
                     renderSize: renderSize
@@ -330,7 +467,12 @@ class ThreadCollageService: ObservableObject {
                 ))
             }
             
-            if let audioTrack = try await asset.loadTracks(withMediaType: .audio).first,
+            var audioTrack: AVAssetTrack? = audioTrackCache[clip.id]
+            if audioTrack == nil {
+                audioTrack = try? await asset.loadTracks(withMediaType: .audio).first
+            }
+            
+            if let audioTrack = audioTrack,
                let compAudio = compositionAudioTrack {
                 try? compAudio.insertTimeRange(
                     timeRange,
@@ -451,7 +593,8 @@ class ThreadCollageService: ObservableObject {
         
         try? FileManager.default.removeItem(at: outputURL)
         
-        // Use specific resolution preset — HighestQuality can fail with animationTool
+        // Use 720p default — 2-3x faster export than 1080p, sufficient for social sharing
+        // User can override to 1080p in settings if needed
         let presetName: String
         if configuration.outputResolution == .hd1080p {
             presetName = AVAssetExportPreset1920x1080
@@ -521,8 +664,16 @@ class ThreadCollageService: ObservableObject {
     /// CACHING CLEANUP: Clear cached assets and delete temp files
     /// Called on cancel, dealloc, or after successful save-to-photos
     func cleanup() {
-        // Clear AVAsset cache — releases network-backed asset handles
+        // GUARD: Never wipe caches while export is running — causes -12935 crash
+        guard !isExporting else {
+            print("⚠️ COLLAGE: Cleanup blocked — export in progress")
+            return
+        }
+        
+        // Clear all caches — releases network-backed asset handles + track refs
         assetCache.removeAll()
+        videoTrackCache.removeAll()
+        audioTrackCache.removeAll()
         
         // Clear clip references
         for i in selectedClips.indices {

@@ -117,7 +117,7 @@ struct ThreadCollageSelectionView: View {
             Text(buildError ?? "Unknown error")
         }
         .onAppear {
-            // Kill all background playback — prevents audio overlap
+            // Kill all background playback — prevents audio overlap with trim preview
             BackgroundActivityManager.shared.killAllBackgroundActivity(reason: "Collage selection")
             VideoPreloadingService.shared.pauseAllPlayback()
             
@@ -125,7 +125,10 @@ struct ThreadCollageSelectionView: View {
             collageService.setMainVideo(threadData.parentVideo)
         }
         .onDisappear {
-            collageService.cleanup()
+            // Only cleanup if not mid-export — prevents -12935 crash
+            if !collageService.isExporting {
+                collageService.cleanup()
+            }
         }
     }
     
@@ -187,37 +190,68 @@ struct ThreadCollageSelectionView: View {
     }
     
     private func mainVideoCard(_ video: CoreVideoMetadata) -> some View {
-        HStack(spacing: 12) {
-            // Thumbnail
-            thumbnailView(for: video, size: CGSize(width: 80, height: 120))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.yellow, lineWidth: 2)
-                )
-            
-            VStack(alignment: .leading, spacing: 6) {
-                Text(video.title.isEmpty ? "Main Stitch" : video.title)
-                    .font(.system(size: 15, weight: .semibold))
+        Button {
+            // Tap main video to open trim editor — select the section you want
+            trimEditingClipID = video.id
+        } label: {
+            HStack(spacing: 12) {
+                // Thumbnail
+                ZStack(alignment: .bottomTrailing) {
+                    thumbnailView(for: video, size: CGSize(width: 80, height: 120))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.yellow, lineWidth: 2)
+                        )
+                    
+                    // Trim hint
+                    HStack(spacing: 3) {
+                        Image(systemName: "scissors")
+                            .font(.system(size: 9))
+                        Text("Trim")
+                            .font(.system(size: 9, weight: .medium))
+                    }
                     .foregroundColor(.white)
-                    .lineLimit(2)
-                
-                Text("@\(video.creatorName)")
-                    .font(.system(size: 13))
-                    .foregroundColor(.white.opacity(0.6))
-                
-                HStack(spacing: 12) {
-                    Label(formatDuration(video.duration), systemImage: "clock")
-                    Label("\(video.hypeCount)", systemImage: "flame")
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.black.opacity(0.7))
+                    .cornerRadius(4)
+                    .padding(4)
                 }
-                .font(.system(size: 12))
-                .foregroundColor(.white.opacity(0.5))
+                
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(video.title.isEmpty ? "Main Stitch" : video.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(2)
+                    
+                    Text("@\(video.creatorName)")
+                        .font(.system(size: 13))
+                        .foregroundColor(.white.opacity(0.6))
+                    
+                    HStack(spacing: 12) {
+                        if let mainClip = collageService.selectedClips.first(where: { $0.isMainClip }) {
+                            Label("\(Int(mainClip.allocatedDuration))s of \(Int(mainClip.originalDuration))s", systemImage: "scissors")
+                                .foregroundColor(.yellow)
+                        } else {
+                            Label(formatDuration(video.duration), systemImage: "clock")
+                        }
+                        Label("\(video.hypeCount)", systemImage: "flame")
+                    }
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.5))
+                    
+                    Text("Tap to trim")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.yellow.opacity(0.8))
+                }
+                
+                Spacer()
             }
-            
-            Spacer()
+            .padding(12)
+            .background(Color.white.opacity(0.08))
+            .cornerRadius(12)
         }
-        .padding(12)
-        .background(Color.white.opacity(0.08))
-        .cornerRadius(12)
+        .buttonStyle(.plain)
     }
     
     // MARK: - Responses Section

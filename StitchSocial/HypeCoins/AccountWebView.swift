@@ -31,9 +31,14 @@ struct AccountWebView: View {
     }
     
     private var fullURL: URL? {
-        guard let token = authToken, !token.isEmpty else { return nil }
+        guard let token = authToken, !token.isEmpty else {
+            print("🔴 WEBVIEW: No auth token available yet")
+            return nil
+        }
         let urlString = "\(baseURL)\(initialPath)?token=\(token)&app=true"
         print("🌐 WEBVIEW URL: \(baseURL)\(initialPath)")
+        print("🔑 WEBVIEW TOKEN LENGTH: \(token.count) chars")
+        print("🔗 WEBVIEW FULL URL LENGTH: \(urlString.count) chars")
         return URL(string: urlString)
     }
     
@@ -207,6 +212,26 @@ struct WebViewContainer: UIViewRepresentable {
         
         configuration.userContentController.add(context.coordinator, name: "purchaseComplete")
         configuration.userContentController.add(context.coordinator, name: "closeWebView")
+        configuration.userContentController.add(context.coordinator, name: "debugLog")
+        
+        // Inject console.log bridge so web page logs appear in Xcode
+        let consoleOverride = WKUserScript(source: """
+            (function() {
+                var origLog = console.log;
+                var origError = console.error;
+                console.log = function() {
+                    var msg = Array.from(arguments).map(function(a) { return typeof a === 'object' ? JSON.stringify(a) : String(a); }).join(' ');
+                    origLog.apply(console, arguments);
+                    try { window.webkit.messageHandlers.debugLog.postMessage('LOG: ' + msg); } catch(e) {}
+                };
+                console.error = function() {
+                    var msg = Array.from(arguments).map(function(a) { return typeof a === 'object' ? JSON.stringify(a) : String(a); }).join(' ');
+                    origError.apply(console, arguments);
+                    try { window.webkit.messageHandlers.debugLog.postMessage('ERROR: ' + msg); } catch(e) {}
+                };
+            })();
+        """, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        configuration.userContentController.addUserScript(consoleOverride)
         
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -219,8 +244,11 @@ struct WebViewContainer: UIViewRepresentable {
     }
     
     func updateUIView(_ webView: WKWebView, context: Context) {
-        if webView.url == nil {
+        // Only load once — prevent SwiftUI re-render loop from reloading the page
+        if !context.coordinator.hasLoaded {
+            context.coordinator.hasLoaded = true
             let request = URLRequest(url: url)
+            print("🚀 WEBVIEW: Loading URL now")
             webView.load(request)
         }
     }
@@ -231,6 +259,7 @@ struct WebViewContainer: UIViewRepresentable {
     
     class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var parent: WebViewContainer
+        var hasLoaded = false
         
         init(_ parent: WebViewContainer) {
             self.parent = parent
@@ -238,11 +267,39 @@ struct WebViewContainer: UIViewRepresentable {
         
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             parent.isLoading = true
+            print("🔄 WEBVIEW: Started loading - \(webView.url?.absoluteString.prefix(80) ?? "nil")")
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             parent.isLoading = false
             parent.webTitle = webView.title ?? "Manage Account"
+            
+            // Debug: Check what the web page sees
+            let debugJS = """
+                (function() {
+                    var url = window.location.href;
+                    var hasToken = url.includes('token=');
+                    var sessionToken = null;
+                    try { sessionToken = sessionStorage.getItem('stitch_auth_token'); } catch(e) {}
+                    var debugInfo = {
+                        url: url.substring(0, 100),
+                        hasTokenInURL: hasToken,
+                        hasSessionToken: sessionToken !== null,
+                        sessionTokenLength: sessionToken ? sessionToken.length : 0,
+                        title: document.title,
+                        bodyText: document.body ? document.body.innerText.substring(0, 200) : 'no body'
+                    };
+                    return JSON.stringify(debugInfo);
+                })();
+            """
+            webView.evaluateJavaScript(debugJS) { result, error in
+                if let result = result as? String {
+                    print("🔍 WEBVIEW DEBUG: \(result)")
+                }
+                if let error = error {
+                    print("🔴 WEBVIEW JS ERROR: \(error.localizedDescription)")
+                }
+            }
             
             let darkModeCSS = """
                 document.body.style.backgroundColor = '#000';
@@ -292,6 +349,11 @@ struct WebViewContainer: UIViewRepresentable {
                 
             case "closeWebView":
                 print("✅ WEBVIEW: Close message received")
+                
+            case "debugLog":
+                if let msg = message.body as? String {
+                    print("🌐 JS: \(msg)")
+                }
                 
             default:
                 break

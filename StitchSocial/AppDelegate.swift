@@ -63,6 +63,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Setup Background Tasks
         setupBackgroundTasks()
         
+        // Setup memory warning observer — clears collage warm cache to free AVAssets
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil, queue: .main
+        ) { _ in
+            print("⚠️ APP: Memory warning — clearing collage warm cache")
+            ThreadCollageService.clearWarmCache()
+        }
+        
         // TEMP: Force backfill to run again (REMOVE AFTER ONE RUN)
         UserDefaults.standard.removeObject(forKey: "creatorNameBackfillComplete")
         print("🔄 BACKFILL: Forcing re-run (flag cleared)")
@@ -227,6 +236,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     func applicationWillResignActive(_ application: UIApplication) {
         print("🟡 APP: Will resign active")
+        
+        // Clear collage warm cache — no need to hold AVAssets in background
+        ThreadCollageService.clearWarmCache()
         
         // Stop user presence tracking
         if Config.Features.enableUserPresence {

@@ -22,22 +22,37 @@ struct StitchSocialApp: App {
     @StateObject private var authService = AuthService()
     @StateObject private var muteManager = MuteContextManager.shared
     @StateObject private var backgroundUploadManager = BackgroundUploadManager.shared
+    @StateObject private var versionGate = VersionGateService.shared
     @Environment(\.scenePhase) private var scenePhase
     
     var body: some Scene {
         WindowGroup {
             ZStack {
-                ContentView()
-                    .environmentObject(notificationService)
-                    .environmentObject(authService)
-                    .environmentObject(muteManager)
-                
-                // Upload progress pill — floats above all content
-                UploadProgressPill()
-                
-                // Toast notification overlay above all content
-                AppToastOverlay(notificationService: notificationService)
-                    .allowsHitTesting(false)
+                // Version gate — blocks the entire app if update required
+                if versionGate.needsUpdate && versionGate.forceUpdate {
+                    ForceUpdateView(versionGate: versionGate)
+                } else {
+                    ContentView()
+                        .environmentObject(notificationService)
+                        .environmentObject(authService)
+                        .environmentObject(muteManager)
+                    
+                    // Upload progress pill — floats above all content
+                    UploadProgressPill()
+                    
+                    // Toast notification overlay above all content
+                    AppToastOverlay(notificationService: notificationService)
+                        .allowsHitTesting(false)
+                    
+                    // Non-blocking update banner (when forceUpdate == false)
+                    if versionGate.needsUpdate && !versionGate.forceUpdate {
+                        VStack {
+                            Spacer()
+                            updateBanner
+                        }
+                        .transition(.move(edge: .bottom))
+                    }
+                }
             }
                 .onChange(of: scenePhase) { _, phase in
                     handleScenePhaseChange(phase)
@@ -71,6 +86,11 @@ struct StitchSocialApp: App {
                     print("📱 Notifications: Automatic via NotificationViewModel")
                     print("🧠 Memory: VideoPreloadingService ready")
                     
+                    // Version gate check — 1 Firestore read, cached 1 hour
+                    Task {
+                        await versionGate.checkVersion()
+                    }
+                    
                     // Print config status if debug mode
                     if Config.Features.enableDebugLogging {
                         Config.printConfigurationStatus()
@@ -101,19 +121,138 @@ struct StitchSocialApp: App {
     private func handleScenePhaseChange(_ phase: ScenePhase) {
         switch phase {
         case .background:
-            Task {
-                VideoDiskCache.shared.cleanupExpired()
-                ThumbnailCache.shared.clear()
-                print("🧹 APP BACKGROUND: Disk cache expired cleaned, thumbnail cache cleared")
-            }
-        case .active, .inactive:
+            performBackgroundCleanup()
+            
+        case .active:
+            performForegroundResume()
+            
+        case .inactive:
             break
         @unknown default:
             break
         }
     }
     
+    // MARK: - Background Cleanup (Battery Fix)
+    
+    /// Stops ALL background-draining activity when app enters background.
+    /// This is the single biggest battery optimization — kills:
+    /// - Snapshot listeners (persistent WebSocket connections)
+    /// - Singleton service timers (BatchingService, XP, coins, heartbeats)
+    /// - Video preloading / AVPlayer instances
+    /// - Animation timers via notification broadcast
+    ///
+    /// Cost: 0. Everything resumes on foreground return.
+    private func performBackgroundCleanup() {
+        print("🔋 BACKGROUND CLEANUP: Stopping all background activity")
+        
+        // 1. Kill all background tasks via the existing kill switch
+        BackgroundActivityManager.shared.killAllBackgroundActivity(reason: "App entering background")
+        
+        // 2. Stop notification snapshot listener (persistent WebSocket)
+        notificationService.stopListening()
+        print("🔋 STOPPED: NotificationService snapshot listener")
+        
+        // 3. Flush and stop CommunityXPService timer
+        Task {
+            await CommunityXPService.shared.onAppBackground()
+        }
+        print("🔋 STOPPED: CommunityXPService flush timer")
+        
+        // 4. Stop all video preloading and release AVPlayers
+        VideoPreloadingService.shared.clearAllPlayers()
+        print("🔋 STOPPED: VideoPreloadingService — all AVPlayers released")
+        
+        // 5. Disk cache cleanup (already existed)
+        VideoDiskCache.shared.cleanupExpired()
+        ThumbnailCache.shared.clear()
+        
+        // 6. Broadcast timer kill to all views listening for it
+        // This catches: ProfileAnimations, EmberParticlesView, FloatingIcon,
+        // AnnouncementOverlayView, and any other timer-based views
+        NotificationCenter.default.post(name: .killAllBackgroundTimers, object: nil)
+        print("🔋 BROADCAST: killAllBackgroundTimers sent")
+        
+        // 7. Re-check version gate on next foreground (cache handles cost)
+        // Nothing to do here — checkVersion() is called in .active
+        
+        print("🔋 BACKGROUND CLEANUP: Complete — all drains stopped")
+    }
+    
+    // MARK: - Foreground Resume
+    
+    /// Resumes essential services when app returns to foreground.
+    /// Only restarts what's needed — the current visible tab handles its own setup.
+    private func performForegroundResume() {
+        print("🔋 FOREGROUND RESUME: Restarting essential services")
+        
+        // 1. Re-check version gate (1-hour TTL cache — usually 0 reads)
+        Task {
+            await versionGate.checkVersion()
+        }
+        
+        // 2. Restart notification listener if user is logged in
+        if let userID = Auth.auth().currentUser?.uid {
+            notificationService.startListening(for: userID) { _ in
+                // Notifications handled by NotificationViewModel
+            }
+            print("🔋 RESUMED: NotificationService snapshot listener")
+        }
+        
+        // 3. Discovery cache invalidation if stale (>10 min in background)
+        // DiscoveryService handles this internally via TTL
+        
+        print("🔋 FOREGROUND RESUME: Complete")
+    }
+    
     // MARK: - Memory Management Setup
+    
+    /// Soft update banner — shown at bottom of screen when forceUpdate == false
+    private var updateBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.down.app.fill")
+                .font(.system(size: 20))
+                .foregroundColor(.cyan)
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Update Available")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                Text("Build \(versionGate.minimumBuild)+ recommended")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+            
+            Spacer()
+            
+            Button {
+                if !versionGate.testflightURL.isEmpty,
+                   let url = URL(string: versionGate.testflightURL) {
+                    UIApplication.shared.open(url)
+                } else if let url = URL(string: "itms-beta://") {
+                    UIApplication.shared.open(url)
+                }
+            } label: {
+                Text("Update")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.cyan)
+                    .cornerRadius(8)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.08))
+        .cornerRadius(14)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
+        .padding(.bottom, 100) // Above tab bar
+    }
     
     private func initializeMemoryManagement() {
         // Pre-warm the preloading service (triggers memory observers)

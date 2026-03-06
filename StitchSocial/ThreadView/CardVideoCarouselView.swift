@@ -128,8 +128,10 @@ struct CardVideoCarouselView: View {
         .gesture(dismissGesture)
         .onAppear {
             hasAppeared = true
-            // Batch cache all carousel videos to reduce per-card Firebase reads
+            // Batch cache all carousel VIDEO METADATA to reduce per-card Firestore reads
             CachingService.shared.cacheVideos(videos, priority: .high)
+            // DISK CACHE: Prefetch current + next 2 video FILES in background
+            prefetchVideoFiles(around: startingIndex)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.isPlaying = true
             }
@@ -137,6 +139,10 @@ struct CardVideoCarouselView: View {
         .onDisappear {
             isPlaying = false
             hasAppeared = false
+        }
+        .onChange(of: currentIndex) { newIndex in
+            // Prefetch next 2 video files whenever user swipes
+            prefetchVideoFiles(around: newIndex)
         }
     }
     
@@ -341,6 +347,18 @@ struct CardVideoCarouselView: View {
         }
     }
     
+    /// DISK CACHE: Prefetch current + next 2 video MP4 files to disk.
+    /// Without this, every card swipe streams from Firebase Storage = slow on bad WiFi.
+    /// CollectionPlayerView and DiscoverySwipeCards both do this — ThreadView was missing it.
+    private func prefetchVideoFiles(around index: Int) {
+        // Current + next 2 ahead
+        let indicesToPrefetch = [index, index + 1, index + 2].filter { $0 >= 0 && $0 < videos.count }
+        let urls = indicesToPrefetch.map { videos[$0].videoURL }
+        Task(priority: .utility) {
+            await VideoDiskCache.shared.prefetchVideos(urls)
+        }
+    }
+    
     private func dismissCarousel() {
         dismiss()
     }
@@ -454,10 +472,9 @@ private struct CarouselDiscoveryCard: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             if isActive {
-                // Active card - show video player
+                // Active card - disk-cache-aware video player
                 ZStack(alignment: .bottom) {
-                    // Video player fills card
-                    VideoPlayerComponent(
+                    CachedVideoPlayer(
                         video: video,
                         isActive: isActive && isPlaying
                     )
@@ -465,10 +482,7 @@ private struct CarouselDiscoveryCard: View {
                     // Loading overlay with thumbnail
                     if !isPlaying {
                         ZStack {
-                            // Thumbnail background
                             thumbnailLayer
-                            
-                            // Subtle loading indicator
                             VStack(spacing: 12) {
                                 ProgressView()
                                     .tint(.white)
@@ -478,7 +492,7 @@ private struct CarouselDiscoveryCard: View {
                         .transition(.opacity)
                     }
                     
-                    // Contextual overlay when playing - hype, cool, stitch, spinoff, share
+                    // Contextual overlay when playing
                     if isPlaying {
                         ContextualVideoOverlay(
                             video: video,
@@ -491,7 +505,6 @@ private struct CarouselDiscoveryCard: View {
                             onAction: onAction
                         )
                     } else {
-                        // Static bottom overlay when not yet playing
                         bottomOverlay
                     }
                 }
@@ -588,5 +601,150 @@ private struct CarouselDiscoveryCard: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+// MARK: - Disk-Cache-Aware Video Player
+
+/// Replaces raw VideoPlayerComponent with disk-cache-first playback.
+/// CACHING: Checks VideoDiskCache.shared before streaming from Firebase Storage.
+/// FIX: Waits for .readyToPlay status before playing — fixes missing audio on slow networks.
+/// BATCHING: Caches video to disk in background after first stream for instant replay.
+private struct CachedVideoPlayer: UIViewRepresentable {
+    let video: CoreVideoMetadata
+    let isActive: Bool
+    
+    func makeUIView(context: Context) -> CachedPlayerUIView {
+        let view = CachedPlayerUIView()
+        view.configure(video: video)
+        return view
+    }
+    
+    func updateUIView(_ uiView: CachedPlayerUIView, context: Context) {
+        if isActive {
+            uiView.play()
+        } else {
+            uiView.pause()
+        }
+    }
+    
+    static func dismantleUIView(_ uiView: CachedPlayerUIView, coordinator: ()) {
+        uiView.cleanup()
+    }
+}
+
+/// UIView wrapper for AVPlayerLayer with disk cache integration.
+/// Lifecycle: configure → cache check → load player item → wait readyToPlay → play
+final class CachedPlayerUIView: UIView {
+    
+    private var player: AVPlayer?
+    private var playerLayer: AVPlayerLayer?
+    private var statusObserver: NSKeyValueObservation?
+    private var loopObserver: Any?
+    private var isReadyToPlay = false
+    private var pendingPlay = false
+    private var currentVideoID: String?
+    
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    
+    private var avPlayerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        avPlayerLayer.videoGravity = .resizeAspectFill
+        backgroundColor = .black
+    }
+    
+    required init?(coder: NSCoder) { fatalError() }
+    
+    func configure(video: CoreVideoMetadata) {
+        // Prevent re-configuring same video
+        guard currentVideoID != video.id else { return }
+        cleanup()
+        currentVideoID = video.id
+        isReadyToPlay = false
+        pendingPlay = false
+        
+        // 1. Check disk cache first — instant local playback
+        let playbackURL: URL
+        if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
+            playbackURL = cachedURL
+            print("💾 CAROUSEL: Playing from disk cache — \(video.id.prefix(8))")
+        } else if let remoteURL = URL(string: video.videoURL) {
+            playbackURL = remoteURL
+            print("🌐 CAROUSEL: Streaming from network — \(video.id.prefix(8))")
+            // Cache in background for next play
+            Task { await VideoDiskCache.shared.cacheVideo(from: video.videoURL) }
+        } else {
+            print("❌ CAROUSEL: Invalid URL: \(video.videoURL)")
+            return
+        }
+        
+        // 2. Create player item and wait for readyToPlay before playing
+        let playerItem = AVPlayerItem(url: playbackURL)
+        playerItem.preferredForwardBufferDuration = 3 // Buffer 3s ahead
+        
+        let newPlayer = AVPlayer(playerItem: playerItem)
+        newPlayer.automaticallyWaitsToMinimizeStalling = true
+        self.player = newPlayer
+        avPlayerLayer.player = newPlayer
+        
+        // 3. Observe readyToPlay — fixes audio not loading on slow networks
+        statusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if item.status == .readyToPlay {
+                    self.isReadyToPlay = true
+                    if self.pendingPlay {
+                        self.player?.play()
+                    }
+                } else if item.status == .failed {
+                    print("❌ CAROUSEL: Player item failed — \(item.error?.localizedDescription ?? "unknown")")
+                }
+            }
+        }
+        
+        // 4. Loop playback
+        loopObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { [weak self] _ in
+            self?.player?.seek(to: .zero)
+            self?.player?.play()
+        }
+    }
+    
+    func play() {
+        if isReadyToPlay {
+            player?.play()
+        } else {
+            pendingPlay = true
+        }
+    }
+    
+    func pause() {
+        pendingPlay = false
+        player?.pause()
+    }
+    
+    func cleanup() {
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        statusObserver?.invalidate()
+        statusObserver = nil
+        if let obs = loopObserver {
+            NotificationCenter.default.removeObserver(obs)
+            loopObserver = nil
+        }
+        player = nil
+        currentVideoID = nil
+        isReadyToPlay = false
+        pendingPlay = false
+    }
+    
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        avPlayerLayer.frame = bounds
     }
 }

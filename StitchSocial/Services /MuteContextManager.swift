@@ -64,15 +64,14 @@ class MuteContextManager: ObservableObject {
         let wasOnCall = isOnCall
         isOnCall = !calls.isEmpty
         
-        // If call just started, force mute
+        // Auto-mute as courtesy when call starts — user can unmute if they want
         if isOnCall && !wasOnCall {
-            print("☎️ MUTE: Call started - forcing mute ON")
+            print("☎️ MUTE: Call started - auto-muting (user can override)")
             isMuted = true
         }
         
-        // If call just ended, restore previous state
         if !isOnCall && wasOnCall {
-            print("☎️ MUTE: Call ended - user can unmute if desired")
+            print("☎️ MUTE: Call ended")
         }
     }
     
@@ -107,8 +106,7 @@ class MuteContextManager: ObservableObject {
         
         // Volume UP detected (higher than typical playback volume)
         if volume > 0.7 {
-            // Only unmute (volume UP unmutes only)
-            if isMuted && !isOnCall {
+            if isMuted {
                 lastVolumeButtonTime = Date()
                 DispatchQueue.main.async {
                     print("🔊 MUTE: Volume UP pressed - unmuting")
@@ -127,11 +125,6 @@ class MuteContextManager: ObservableObject {
     }
     
     func unmute() {
-        // Can't unmute during a call
-        guard !isOnCall else {
-            print("⚠️ MUTE: Cannot unmute during phone call")
-            return
-        }
         isMuted = false
     }
     
@@ -145,9 +138,9 @@ class MuteContextManager: ObservableObject {
         
         lastToggleTime = Date()
         
-        if isMuted && !isOnCall {
+        if isMuted {
             unmute()
-        } else if !isMuted {
+        } else {
             mute()
         }
     }

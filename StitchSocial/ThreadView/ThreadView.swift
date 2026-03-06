@@ -40,6 +40,7 @@ struct ThreadView: View {
     
     @State private var selectedUserForProfile: String?
     @State private var showingProfileView = false
+    @State private var showCollageSelection = false
     
     // Pagination
     @State private var currentPage: Int = 0
@@ -138,6 +139,12 @@ struct ThreadView: View {
         }
         .ignoresSafeArea()
         .onAppear { loadThreadData() }
+        .onReceive(NotificationCenter.default.publisher(for: .openThreadCollage)) { notification in
+            // ShareButton's long-press menu posted this — present collage as fullScreenCover
+            if let _ = notification.userInfo?["threadData"] as? ThreadData {
+                showCollageSelection = true
+            }
+        }
         .fullScreenCover(isPresented: $showFullscreen) {
             if let video = selectedVideo {
                 FullscreenVideoView(
@@ -159,9 +166,29 @@ struct ThreadView: View {
                 currentUserID: authService.currentUser?.id,
                 directReplies: directReplies.isEmpty ? nil : directReplies,
                 laneParticipantIDs: laneParticipantIDs,
-                onSelectReply: { loadConversation(with: $0) }
+                onSelectReply: { loadConversation(with: $0) },
+                onAction: { action, video in
+                    if case .shareCollage = action {
+                        // Dismiss carousel first, then present collage
+                        showCarousel = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            showCollageSelection = true
+                        }
+                    }
+                }
             )
             .id("\(selectedVideo?.id ?? UUID().uuidString)-\(carouselVideos.count)")
+        }
+        .fullScreenCover(isPresented: $showCollageSelection) {
+            if let parent = parentVideo {
+                ThreadCollageSelectionView(
+                    threadData: ThreadData(
+                        id: parent.threadID ?? parent.id,
+                        parentVideo: parent,
+                        childVideos: childVideos
+                    )
+                )
+            }
         }
         .sheet(isPresented: $showingProfileView) {
             if let _ = selectedUserForProfile {
@@ -278,7 +305,24 @@ struct ThreadView: View {
             
             Spacer()
             
-            Color.clear.frame(width: 44, height: 44)
+            // Thread Collage button — visible when thread has children
+            if childVideos.count >= ThreadCollageService.minResponseClips {
+                Button {
+                    showCollageSelection = true
+                } label: {
+                    Image(systemName: "film.stack")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(brandDark)
+                        .padding(12)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .shadow(color: Color.black.opacity(0.1), radius: 8)
+                        )
+                }
+            } else {
+                Color.clear.frame(width: 44, height: 44)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.top, 60)

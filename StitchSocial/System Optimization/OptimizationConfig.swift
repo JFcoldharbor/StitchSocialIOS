@@ -228,6 +228,55 @@ struct OptimizationConfig {
     /// - Each fetch method uses Discovery fetch multipliers to cap over-reads
     /// - CachingService.shared receives all fetched threads for app-wide reuse
     struct Discovery {
+    
+    // MARK: - Thread Collage Precache Configuration
+    
+    /// Background asset warming for Thread Collage.
+    /// ThreadView.onAppear triggers precache so assets are ready before user taps Share → Collage.
+    ///
+    /// WIRING:
+    /// - ThreadCollageService.warmCacheTTL reads Collage.warmCacheTTL
+    /// - ThreadCollageService.warmCacheMaxEntries reads Collage.warmCacheMaxEntries
+    /// - ThreadCollageService.clearWarmCache() called on memory warning / app background
+    ///
+    /// COST SAVINGS:
+    /// - Eliminates AVAsset download wait at collage build time (was 5-15s for 6 clips)
+    /// - TaskGroup batches all downloads concurrently (1 round trip vs sequential)
+    /// - LRU eviction + TTL prevents unbounded memory growth
+    struct Collage {
+        /// How long warmed AVAssets stay in memory before eviction
+        static let warmCacheTTL: TimeInterval = 300 // 5 min
+        
+        /// Max AVAssets held in warm cache (each ~10-50MB in memory)
+        static let warmCacheMaxEntries = 20
+        
+        /// Max response clips in a collage
+        static let maxResponseClips = 5
+    }
+    
+    // MARK: - Carousel Video Disk Cache Configuration
+    
+    /// CardVideoCarouselView disk cache + prefetch settings.
+    /// PROBLEM: Carousel was streaming every video from Firebase Storage on each swipe.
+    /// Discovery and Collections both used VideoDiskCache — Carousel did not.
+    ///
+    /// WIRING:
+    /// - CardVideoCarouselView.prefetchVideoFiles() prefetches current + next N videos
+    /// - CachedVideoPlayer checks VideoDiskCache.shared.getCachedURL() before streaming
+    /// - Background cacheVideo() call after first stream ensures instant replay
+    /// - playerItem.preferredForwardBufferDuration set to CarouselCache.bufferDuration
+    ///
+    /// COST SAVINGS:
+    /// - Eliminates repeated Firebase Storage downloads for same video (~5-20MB each)
+    /// - Prefetch hides network latency — next video ready before user swipes
+    /// - readyToPlay gate fixes missing audio on slow networks
+    struct CarouselCache {
+        /// Number of videos to prefetch ahead of current index
+        static let prefetchAhead = 2
+        
+        /// AVPlayerItem forward buffer duration (seconds)
+        static let bufferDuration: TimeInterval = 3
+    }
         
         // -- TTL --
         

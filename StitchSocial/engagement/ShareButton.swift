@@ -156,7 +156,12 @@ struct ShareModeSheet: View {
                     dismiss()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        shareService.shareCollage(threadData: thread)
+                        // Post notification — ThreadView listens and presents collage as fullScreenCover
+                        NotificationCenter.default.post(
+                            name: .openThreadCollage,
+                            object: nil,
+                            userInfo: ["threadData": thread]
+                        )
                     }
                 } label: {
                     HStack(spacing: 14) {
@@ -533,4 +538,13 @@ extension View {
     func shareOverlay() -> some View {
         modifier(ShareOverlayModifier())
     }
+}
+
+// MARK: - Thread Collage Notification
+
+extension Notification.Name {
+    /// Posted by ShareModeSheet when user taps Thread Collage.
+    /// userInfo contains ["threadData": ThreadData].
+    /// ThreadView listens and presents collage as .fullScreenCover.
+    static let openThreadCollage = Notification.Name("openThreadCollage")
 }
