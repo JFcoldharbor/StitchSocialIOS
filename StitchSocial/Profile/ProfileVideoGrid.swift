@@ -44,6 +44,11 @@ struct ProfileVideoGrid: View {
     @State private var showingDeleteConfirmation = false
     @State private var videoToDelete: CoreVideoMetadata?
     @State private var isDeletingVideo = false
+    @State private var autoPaginationAttempts = 0
+    
+    /// Max auto-pagination attempts to prevent infinite loops
+    /// if a user truly has no thread-parent videos
+    private let maxAutoPaginationAttempts = 5
     
     // MARK: - Body
     
@@ -51,7 +56,7 @@ struct ProfileVideoGrid: View {
         Group {
             if isLoading {
                 loadingVideosView
-            } else if videos.isEmpty && pinnedVideos.isEmpty {
+            } else if videos.isEmpty && pinnedVideos.isEmpty && !hasMoreVideos {
                 emptyVideosView
             } else {
                 videoContentView
@@ -78,10 +83,34 @@ struct ProfileVideoGrid: View {
                 pinnedVideosSection
             }
             if videos.isEmpty {
-                emptyVideosView
+                if hasMoreVideos && !isLoadingMore {
+                    // Grid is empty but more pages exist — auto-paginate
+                    // WHY: User's recent videos may all be stitches/replies (depth > 0).
+                    // Thread parents are buried past page 1. Keep loading until found
+                    // or maxAutoPaginationAttempts reached.
+                    ProgressView()
+                        .tint(.white)
+                        .frame(height: 120)
+                        .onAppear {
+                            if autoPaginationAttempts < maxAutoPaginationAttempts {
+                                autoPaginationAttempts += 1
+                                print("🔄 GRID: Auto-paginating for tab \(selectedTab) (attempt \(autoPaginationAttempts)/\(maxAutoPaginationAttempts))")
+                                onLoadMore?()
+                            }
+                        }
+                } else if isLoadingMore {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(height: 120)
+                } else {
+                    emptyVideosView
+                }
             } else {
                 videoGrid
             }
+        }
+        .onChange(of: selectedTab) { _, _ in
+            autoPaginationAttempts = 0
         }
     }
     

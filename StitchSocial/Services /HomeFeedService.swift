@@ -7,11 +7,19 @@
 //  Features: Deep time-based discovery, seen-video exclusion, session resume
 //  UPDATED: Added view history tracking, deduplication, follower rotation
 //  UPDATED: Social signal injection — megaphone system (Partner+ hype fan-out)
+//  UPDATED: Thread children sorted by netScore — cooled stitches sink, hyped rise
+//  UPDATED: Thread children cached with 60s TTL — prevents redundant Firestore reads
 //
 //  NOTE: HomeFeedService shows content from FOLLOWED creators only.
 //  Following a creator overrides ALL discovery cool-down signals.
 //  Discovery suppression/blocking (via DiscoveryEngagementTracker) does NOT
 //  affect the home feed — if you follow someone, their content always shows here.
+//
+//  CACHING: Thread children cached per threadID with 60s TTL.
+//  WHY: Users swipe back/forth between threads constantly. Without cache,
+//  every vertical swipe fires loadThreadChildren → Firestore read.
+//  60s TTL balances freshness (hype/cool updates) with cost savings.
+//  Invalidate on hype/cool events via invalidateThreadChildrenCache().
 //
 
 import Foundation
@@ -63,6 +71,18 @@ class HomeFeedService: ObservableObject {
     private var cachedFollowingIDs: [String] = []
     private var followingIDsCacheTime: Date?
     private let followingCacheExpiration: TimeInterval = 300
+    
+    // MARK: - Thread Children Cache
+    //
+    // CACHING: Stores sorted children per threadID with timestamp.
+    // 60s TTL — short enough for engagement freshness, long enough to
+    // prevent repeated reads when user swipes back to same thread.
+    // BATCHING: Not needed here — single query per thread, results cached.
+    //
+    
+    private var threadChildrenCache: [String: CachedThreadChildren] = [:]
+    private let threadChildrenTTL: TimeInterval = 60  // 60 seconds
+    private let maxThreadChildrenCacheEntries = 30    // LRU cap
     
     // MARK: - Initialization
     
@@ -492,6 +512,7 @@ class HomeFeedService: ObservableObject {
         followerRotationIndex = 0
         feedStats = FeedStats()
         activeSocialSignals = []
+        threadChildrenCache.removeAll()
         SocialSignalService.shared.clearSessionCache()
     }
     
@@ -499,12 +520,30 @@ class HomeFeedService: ObservableObject {
         clearFollowingCache()
         followerRotationIndex = 0
         currentFeedVideoIDs.removeAll()
+        threadChildrenCache.removeAll()
         return try await loadFeedWithDeepDiscovery(userID: userID, limit: defaultFeedSize)
     }
     
-    // MARK: - Load Thread Children
+    // MARK: - Load Thread Children (CACHED + SORTED BY ENGAGEMENT)
+    //
+    // CACHING: Results cached per threadID with 60s TTL.
+    // Saves Firestore reads when user swipes back to same thread.
+    //
+    // SORTING: Children (stitches) sorted by netScore descending.
+    // Parent always stays at index 0 in the swipe carousel.
+    // Cooled stitches sink to end, hyped stitches appear first after parent.
+    // Stepchildren keep chronological order (they don't appear in swipe carousel).
+    //
     
     func loadThreadChildren(threadID: String) async throws -> [CoreVideoMetadata] {
+        
+        // Check cache first — skip Firestore if fresh
+        if let cached = threadChildrenCache[threadID],
+           !cached.isExpired {
+            print("💾 THREAD CACHE HIT: \(threadID.prefix(8)) — \(cached.children.count) children (saved 1 read)")
+            return cached.children
+        }
+        
         let db = Firestore.firestore(database: Config.Firebase.databaseName)
         
         let query = db.collection(FirebaseSchema.Collections.videos)
@@ -557,8 +596,79 @@ class HomeFeedService: ObservableObject {
             children.append(childVideo)
         }
         
-        print("✅ HOME FEED: Loaded \(children.count) children for thread \(threadID)")
-        return children
+        // SORT: Direct children (stitches) by netScore descending.
+        // Cooled stitches sink, hyped stitches rise.
+        // Stepchildren (depth > 1) not in swipe carousel but sorted too for consistency.
+        // Tie-breaker: newer content wins (createdAt descending).
+        let sortedChildren = children.sorted { a, b in
+            let scoreA = a.hypeCount - a.coolCount
+            let scoreB = b.hypeCount - b.coolCount
+            if scoreA != scoreB {
+                return scoreA > scoreB
+            }
+            return a.createdAt > b.createdAt
+        }
+        
+        // Cache sorted results
+        threadChildrenCache[threadID] = CachedThreadChildren(
+            children: sortedChildren,
+            cachedAt: Date(),
+            ttl: threadChildrenTTL
+        )
+        
+        // LRU eviction — prevent unbounded growth
+        pruneThreadChildrenCache()
+        
+        print("✅ HOME FEED: Loaded \(sortedChildren.count) children for thread \(threadID) (sorted by engagement)")
+        return sortedChildren
+    }
+    
+    // MARK: - Thread Children Cache Management
+    
+    /// Invalidate cache for a specific thread — call after hype/cool events
+    func invalidateThreadChildrenCache(threadID: String) {
+        threadChildrenCache.removeValue(forKey: threadID)
+        print("🗑️ THREAD CACHE: Invalidated \(threadID.prefix(8))")
+    }
+    
+    /// Invalidate all thread children caches — call on feed refresh
+    func invalidateAllThreadChildrenCaches() {
+        threadChildrenCache.removeAll()
+        print("🗑️ THREAD CACHE: Cleared all entries")
+    }
+    
+    /// Prune oldest entries when cache exceeds max size
+    private func pruneThreadChildrenCache() {
+        guard threadChildrenCache.count > maxThreadChildrenCacheEntries else { return }
+        
+        // Remove expired first
+        let expiredKeys = threadChildrenCache.filter { $0.value.isExpired }.map { $0.key }
+        for key in expiredKeys {
+            threadChildrenCache.removeValue(forKey: key)
+        }
+        
+        // If still over limit, evict oldest
+        while threadChildrenCache.count > maxThreadChildrenCacheEntries {
+            if let oldest = threadChildrenCache.min(by: { $0.value.cachedAt < $1.value.cachedAt }) {
+                threadChildrenCache.removeValue(forKey: oldest.key)
+            }
+        }
+    }
+}
+
+// MARK: - Thread Children Cache Entry
+
+/// Lightweight cache entry for sorted thread children
+/// WHY separate from CachingService: Thread children have a shorter TTL (60s vs 1hr)
+/// and need per-thread invalidation on hype/cool events. Keeping it local
+/// avoids polluting the global cache with high-churn, short-lived data.
+private struct CachedThreadChildren {
+    let children: [CoreVideoMetadata]
+    let cachedAt: Date
+    let ttl: TimeInterval
+    
+    var isExpired: Bool {
+        Date().timeIntervalSince(cachedAt) > ttl
     }
 }
 

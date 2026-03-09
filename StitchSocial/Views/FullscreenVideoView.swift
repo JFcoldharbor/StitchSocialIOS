@@ -62,13 +62,26 @@ struct FullscreenVideoView: View {
     private var allVideos: [CoreVideoMetadata] {
         guard let thread = currentThread else { return [video] }
         
-        // ⭐ NEW: Only show direct children (currentDepth + 1), not stepchildren
+        // ⭐ Only show direct children (currentDepth + 1), not stepchildren
         let currentDepth = video.conversationDepth
         let directChildren = thread.childVideos.filter { child in
             child.conversationDepth == currentDepth + 1
         }
         
-        return [thread.parentVideo] + directChildren
+        // SORT: Children by netScore descending — cooled stitches sink, hyped rise.
+        // Parent stays at index 0 (creator's video always leads).
+        // Tie-breaker: newer content wins.
+        // No extra reads — sorts already-fetched data in memory.
+        let sortedChildren = directChildren.sorted { a, b in
+            let scoreA = a.hypeCount - a.coolCount
+            let scoreB = b.hypeCount - b.coolCount
+            if scoreA != scoreB {
+                return scoreA > scoreB
+            }
+            return a.createdAt > b.createdAt
+        }
+        
+        return [thread.parentVideo] + sortedChildren
     }
     
     private var currentVideo: CoreVideoMetadata {

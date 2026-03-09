@@ -446,6 +446,18 @@ struct HomeFeedView: View {
                     child.isSpinOff == false
                 }
                 
+                // SORT: Children by netScore descending — cooled stitches sink, hyped rise.
+                // Parent stays at index 0 in the swipe carousel (set by videoItemView).
+                // No extra reads — sorts already-fetched data in memory.
+                let sortedChildren = directChildren.sorted { a, b in
+                    let scoreA = a.hypeCount - a.coolCount
+                    let scoreB = b.hypeCount - b.coolCount
+                    if scoreA != scoreB {
+                        return scoreA > scoreB
+                    }
+                    return a.createdAt > b.createdAt
+                }
+                
                 if let index = feedItems.firstIndex(where: { item in
                     if case .video(let t) = item { return t.id == threadID }
                     return false
@@ -453,10 +465,10 @@ struct HomeFeedView: View {
                     feedItems[index] = .video(ThreadData(
                         id: thread.id,
                         parentVideo: thread.parentVideo,
-                        childVideos: directChildren
+                        childVideos: sortedChildren
                     ))
                     threadChildrenLoaded = true
-                    print("✅ THREAD: Loaded \(directChildren.count) direct children (filtered from \(allChildren.count))")
+                    print("✅ THREAD: Loaded \(sortedChildren.count) direct children sorted by engagement (filtered from \(allChildren.count))")
                     
                     // Preload children via preloadNextVideos
                     preloadNextVideos()
