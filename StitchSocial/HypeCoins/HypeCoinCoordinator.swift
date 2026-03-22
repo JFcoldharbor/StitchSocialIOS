@@ -252,7 +252,9 @@ final class HypeCoinCoordinator: ObservableObject {
                     amount: amount,
                     type: .tipReceived
                 )
-                await syncBalance()
+                // Do NOT syncBalance() here — the real-time listener will update
+                // once Firestore propagates. Eager fetch returns stale pre-tip value
+                // and overwrites the optimistic UI balance.
                 completion?(true)
                 print("💸 COINS: Tipped \(amount) to \(toUserID)")
             } catch {
@@ -318,7 +320,7 @@ final class HypeCoinCoordinator: ObservableObject {
     
     // MARK: - Subscriptions
     
-    func subscribe(toCreatorID: String, tier: SubscriptionTier) async throws {
+    func subscribe(toCreatorID: String, creatorTier: UserTier) async throws {
         guard let userID = currentUserID else {
             throw CoinError.transferFailed
         }
@@ -329,11 +331,11 @@ final class HypeCoinCoordinator: ObservableObject {
         _ = try await subscriptionService.subscribe(
             subscriberID: userID,
             creatorID: toCreatorID,
-            tier: tier
+            creatorTier: creatorTier
         )
         
         await syncBalance()
-        print("🎉 COINS: Subscribed to \(toCreatorID) at \(tier.displayName)")
+        print("🎉 COINS: Subscribed to \(toCreatorID) at \(creatorTier.displayName)")
     }
     
     func cancelSubscription(creatorID: String) async throws {

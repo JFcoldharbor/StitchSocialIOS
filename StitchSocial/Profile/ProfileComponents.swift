@@ -428,6 +428,7 @@ extension Color {
         case .topCreator: return .yellow
         case .founder: return .gold
         case .coFounder: return .gold
+        case .business: return Color(red: 0.0, green: 0.75, blue: 0.85) // Teal (flat fallback)
         }
     }
 }

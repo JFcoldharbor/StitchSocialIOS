@@ -158,7 +158,7 @@ class AuthService: ObservableObject {
     
     /// Sign up with email and password
     /// Returns (BasicUserInfo, isNewUser: true) — caller handles referral + verification prompt
-    func signUp(email: String, password: String, displayName: String? = nil) async throws -> BasicUserInfo {
+    func signUp(email: String, password: String, username: String? = nil, displayName: String? = nil, accountType: AccountType = .personal, brandName: String? = nil, websiteURL: String? = nil, businessCategory: AdCategory? = nil) async throws -> BasicUserInfo {
         authState = .signingIn
         isLoading = true
         lastError = nil
@@ -197,7 +197,7 @@ class AuthService: ObservableObject {
             
             print("✅ AUTH: Email sign up successful: \(result.user.uid)")
             
-            let userProfile = try await createNewUserProfile(for: result.user, providedDisplayName: displayName)
+            let userProfile = try await createNewUserProfile(for: result.user, providedUsername: username, providedDisplayName: displayName, accountType: accountType, brandName: brandName, websiteURL: websiteURL, businessCategory: businessCategory)
             currentUser = userProfile
             authState = .authenticated
             
@@ -219,8 +219,8 @@ class AuthService: ObservableObject {
         _ = try await signIn(email: email, password: password)
     }
     
-    func signUpWithEmail(_ email: String, password: String, displayName: String? = nil) async throws {
-        _ = try await signUp(email: email, password: password, displayName: displayName)
+    func signUpWithEmail(_ email: String, password: String, username: String? = nil, displayName: String? = nil, accountType: AccountType = .personal, brandName: String? = nil, websiteURL: String? = nil, businessCategory: AdCategory? = nil) async throws {
+        _ = try await signUp(email: email, password: password, username: username, displayName: displayName, accountType: accountType, brandName: brandName, websiteURL: websiteURL, businessCategory: businessCategory)
     }
     
     // MARK: - Email Verification
@@ -355,6 +355,18 @@ class AuthService: ObservableObject {
         print("✅ AUTH: User profile updated")
     }
     
+    /// Refresh currentUser from Firestore — call after external profile edits (UserService.updateProfile)
+    @MainActor
+    func refreshCurrentUser() async {
+        guard let userID = auth.currentUser?.uid else { return }
+        do {
+            currentUser = try await loadUserProfile(userID: userID)
+            print("🔄 AUTH: Current user refreshed")
+        } catch {
+            print("⚠️ AUTH: Failed to refresh current user: \(error.localizedDescription)")
+        }
+    }
+    
     // MARK: - Private Authentication Flow
     
     private func setupAuthListener() {
@@ -407,24 +419,39 @@ class AuthService: ObservableObject {
     
     // MARK: - User Profile Creation
     
-    private func createNewUserProfile(for user: User, providedDisplayName: String? = nil) async throws -> BasicUserInfo {
+    private func createNewUserProfile(for user: User, providedUsername: String? = nil, providedDisplayName: String? = nil, accountType: AccountType = .personal, brandName: String? = nil, websiteURL: String? = nil, businessCategory: AdCategory? = nil) async throws -> BasicUserInfo {
         let email = user.email ?? ""
         
         print("🔍 CREATING USER PROFILE DEBUG:")
         print("   User UID: \(user.uid)")
         print("   Email: \(email)")
+        print("   Account Type: \(accountType.rawValue)")
         print("   Database: \(Config.Firebase.databaseName)")
         
         let specialConfig = SpecialUsersConfig.getSpecialUser(for: email)
         
-        let username = generateUsername(from: email, id: user.uid)
-        let displayName = providedDisplayName ??
-                         user.displayName ??
-                         specialConfig?.customTitle ??
-                         "New User"
+        // Use provided username, fall back to auto-generated
+        let username: String = {
+            if let provided = providedUsername, !provided.isEmpty {
+                return provided
+            }
+            return generateUsername(from: email, id: user.uid)
+        }()
         
-        let tier = specialConfig?.tierRawValue ?? UserTier.rookie.rawValue
-        let startingClout = specialConfig?.startingClout ?? OptimizationConfig.User.defaultStartingClout
+        // Business accounts use brandName as displayName
+        let displayName: String = {
+            if accountType == .business, let brandName = brandName {
+                return brandName
+            }
+            return providedDisplayName ??
+                   user.displayName ??
+                   specialConfig?.customTitle ??
+                   "New User"
+        }()
+        
+        // Business accounts don't use tier progression
+        let tier = accountType == .business ? UserTier.rookie.rawValue : (specialConfig?.tierRawValue ?? UserTier.rookie.rawValue)
+        let startingClout = accountType == .business ? 0 : (specialConfig?.startingClout ?? OptimizationConfig.User.defaultStartingClout)
         
         var userData: [String: Any] = [
             FirebaseSchema.UserDocument.id: user.uid,
@@ -437,6 +464,7 @@ class AuthService: ObservableObject {
             FirebaseSchema.UserDocument.profileImageURL: user.photoURL?.absoluteString ?? "",
             FirebaseSchema.UserDocument.createdAt: Timestamp(),
             FirebaseSchema.UserDocument.updatedAt: Timestamp(),
+            FirebaseSchema.UserDocument.accountType: accountType.rawValue,
             
             FirebaseSchema.UserDocument.followerCount: 0,
             FirebaseSchema.UserDocument.followingCount: 0,
@@ -456,6 +484,20 @@ class AuthService: ObservableObject {
             "specialPerks": specialConfig?.specialPerks ?? [],
             "priority": specialConfig?.priority ?? 0
         ]
+        
+        // Business-specific fields
+        if accountType == .business {
+            if let brandName = brandName {
+                userData[FirebaseSchema.UserDocument.brandName] = brandName
+            }
+            if let websiteURL = websiteURL {
+                userData[FirebaseSchema.UserDocument.websiteURL] = websiteURL
+            }
+            if let category = businessCategory {
+                userData[FirebaseSchema.UserDocument.businessCategory] = category.rawValue
+            }
+            userData[FirebaseSchema.UserDocument.isVerifiedBusiness] = false
+        }
         
         if let customBio = specialConfig?.customBio {
             userData["bio"] = customBio
@@ -503,6 +545,10 @@ class AuthService: ObservableObject {
     // MARK: - Helper Methods
     
     private func createBasicUserInfo(from data: [String: Any], uid: String) -> BasicUserInfo {
+        let accountTypeRaw = data[FirebaseSchema.UserDocument.accountType] as? String ?? "personal"
+        let accountType = AccountType(rawValue: accountTypeRaw) ?? .personal
+        let businessProfile = BusinessProfileBuilder.build(from: data)
+        
         return BasicUserInfo(
             id: uid,
             username: data[FirebaseSchema.UserDocument.username] as? String ?? "unknown",
@@ -511,7 +557,9 @@ class AuthService: ObservableObject {
             clout: data[FirebaseSchema.UserDocument.clout] as? Int ?? 0,
             isVerified: data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false,
             profileImageURL: data[FirebaseSchema.UserDocument.profileImageURL] as? String,
-            createdAt: (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
+            createdAt: (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date(),
+            accountType: accountType,
+            businessProfile: businessProfile
         )
     }
     

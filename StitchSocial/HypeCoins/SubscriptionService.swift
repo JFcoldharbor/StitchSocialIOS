@@ -2,408 +2,339 @@
 //  SubscriptionService.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 2/2/26.
+//  Handles creator subscription plans and fan active subscriptions.
 //
-
-
+//  CACHING:
+//  - creatorPlanCache: [creatorID: CreatorSubscriptionPlan] — 10min TTL
+//  - mySubsCache: [ActiveSubscription] — 5min TTL
+//  - isSubscribedCache: [creatorID: Bool] — 5min TTL
+//  Single reads on miss, no polling. Invalidate on write.
 //
-//  SubscriptionService.swift
-//  StitchSocial
-//
-//  Service for subscriptions, perks, and subscriber management
+//  BATCHING: None needed — plan reads are per-creator, subs list is per-user.
 //
 
 import Foundation
 import FirebaseFirestore
+import FirebaseAuth
+import Combine
 
-class SubscriptionService: ObservableObject {
-    
-    // MARK: - Singleton
-    
+final class SubscriptionService: ObservableObject {
+
     static let shared = SubscriptionService()
-    
-    // MARK: - Properties
-    
+
+    // MARK: - Published
+
+    @Published private(set) var mySubscriptions: [ActiveSubscription] = []  // fan view
+    @Published private(set) var mySubscribers:    [ActiveSubscription] = []  // creator view
+    @Published private(set) var creatorPlan: CreatorSubscriptionPlan?
+
+    // MARK: - Cache
+
+    private var creatorPlanCache:   [String: (plan: CreatorSubscriptionPlan, fetchedAt: Date)] = [:]
+    private var isSubscribedCache:  [String: (value: Bool, fetchedAt: Date)] = [:]
+    private var mySubsFetchedAt:       Date?
+    private var mySubscribersFetchedAt: Date?
+
+    private let planTTL:  TimeInterval = 600   // 10 min
+    private let subsTTL:  TimeInterval = 300   // 5 min
+
+    // MARK: - Firestore
+
     private let db = FirebaseConfig.firestore
-    private let coinService = HypeCoinService.shared
-    
-    @Published var mySubscriptions: [ActiveSubscription] = []
-    @Published var mySubscribers: [SubscriberInfo] = []
-    @Published var creatorPlan: CreatorSubscriptionPlan?
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-    
-    // Cache for quick perk lookups — cached per session, cleared on logout
-    private var subscriptionCache: [String: SubscriptionCheckResult] = [:]
-    
-    // MARK: - Developer Bypass
-    // These emails get full subscription access without payment.
-    // Cached on login so we never re-check Firestore for this.
-    
-    private static let developerEmails: Set<String> = [
-        "developers@stitchsocial.me",
-        "james@stitchsocial.me"
-    ]
-    
-    private var cachedUserEmail: String?
-    
-    /// Call once on login with the authenticated user's email
-    func setCurrentUserEmail(_ email: String?) {
-        cachedUserEmail = email?.lowercased().trimmingCharacters(in: .whitespaces)
-    }
-    
-    /// True if current user bypasses all subscription gates
-    var isDeveloper: Bool {
-        guard let email = cachedUserEmail else { return false }
-        return Self.developerEmails.contains(email)
-    }
-    
-    // MARK: - Collections
-    
-    private enum Collections {
-        static let plans = "subscription_plans"
-        static let subscriptions = "subscriptions"
-        static let subscribers = "subscribers"
-        static let events = "subscription_events"
-    }
-    
-    // MARK: - Initialization
-    
+
+    private var plansCollection:  CollectionReference { db.collection("creator_subscription_plans") }
+    private var subsCollection:   CollectionReference { db.collection("subscriptions") }
+
+    private var currentUserEmail: String?
+
     private init() {}
-    
-    // MARK: - Creator Plan Setup
-    
-    @MainActor
-    func fetchCreatorPlan(creatorID: String) async throws -> CreatorSubscriptionPlan? {
-        let docRef = db.collection(Collections.plans).document(creatorID)
-        let doc = try await docRef.getDocument()
-        
-        if let plan = try? doc.data(as: CreatorSubscriptionPlan.self) {
-            self.creatorPlan = plan
-            return plan
-        }
-        
-        return nil
+
+    func setCurrentUserEmail(_ email: String?) {
+        currentUserEmail = email
     }
-    
-    @MainActor
-    func createOrUpdatePlan(
-        creatorID: String,
-        isEnabled: Bool,
-        supporterPrice: Int,
-        superFanPrice: Int,
-        supporterEnabled: Bool,
-        superFanEnabled: Bool,
-        welcomeMessage: String?
-    ) async throws -> CreatorSubscriptionPlan {
-        
-        // Validate prices
-        guard SubscriptionTier.supporter.coinRange.contains(supporterPrice) else {
-            throw SubscriptionError.invalidPrice
+
+    // MARK: - Creator Plan
+
+    func fetchCreatorPlan(creatorID: String) async throws -> CreatorSubscriptionPlan? {
+        guard Auth.auth().currentUser != nil else { return nil }
+
+        if let cached = creatorPlanCache[creatorID],
+           Date().timeIntervalSince(cached.fetchedAt) < planTTL {
+            return cached.plan
         }
-        guard SubscriptionTier.superFan.coinRange.contains(superFanPrice) else {
-            throw SubscriptionError.invalidPrice
+
+        let doc = try await plansCollection.document(creatorID).getDocument()
+        guard doc.exists, let plan = try? doc.data(as: CreatorSubscriptionPlan.self) else {
+            return nil
         }
-        
-        let docRef = db.collection(Collections.plans).document(creatorID)
-        let existingDoc = try await docRef.getDocument()
-        
-        var plan: CreatorSubscriptionPlan
-        
-        if existingDoc.exists, var existing = try? existingDoc.data(as: CreatorSubscriptionPlan.self) {
-            // Update existing
-            existing.isEnabled = isEnabled
-            existing.supporterPrice = supporterPrice
-            existing.superFanPrice = superFanPrice
-            existing.supporterEnabled = supporterEnabled
-            existing.superFanEnabled = superFanEnabled
-            existing.customWelcomeMessage = welcomeMessage
-            existing.updatedAt = Date()
-            plan = existing
-        } else {
-            // Create new
-            plan = CreatorSubscriptionPlan(creatorID: creatorID)
-            plan.isEnabled = isEnabled
-            plan.supporterPrice = supporterPrice
-            plan.superFanPrice = superFanPrice
-            plan.supporterEnabled = supporterEnabled
-            plan.superFanEnabled = superFanEnabled
-            plan.customWelcomeMessage = welcomeMessage
-        }
-        
-        try docRef.setData(from: plan)
-        self.creatorPlan = plan
-        
-        print("âœ… SUBS: Plan updated for \(creatorID)")
+
+        creatorPlanCache[creatorID] = (plan, Date())
+        await MainActor.run { if plan.creatorID == Auth.auth().currentUser?.uid { creatorPlan = plan } }
         return plan
     }
-    
+
+    func createOrUpdatePlan(
+        creatorID: String,
+        creatorTier: UserTier,
+        isEnabled: Bool,
+        tierPricing: TierPricing,
+        welcomeMessage: String?
+    ) async throws -> CreatorSubscriptionPlan {
+        var plan: CreatorSubscriptionPlan
+
+        if let existing = try await fetchCreatorPlan(creatorID: creatorID) {
+            plan = existing
+            // 60-day cooldown applies to perk changes (prices are now fixed)
+            if plan.tierPricing.customPerks != tierPricing.customPerks {
+                guard plan.canChangePrice else {
+                    throw SubscriptionError.priceCooldownActive(daysLeft: plan.daysUntilPriceChange)
+                }
+                plan.lastPriceChangeAt = Date()
+                plan.nextPriceChangeAllowedAt = Calendar.current.date(byAdding: .day, value: 60, to: Date())
+            }
+            plan.isEnabled = isEnabled
+            plan.tierPricing = tierPricing
+            plan.customWelcomeMessage = welcomeMessage
+            plan.updatedAt = Date()
+        } else {
+            plan = CreatorSubscriptionPlan(creatorID: creatorID, tierPricing: tierPricing)
+            // id assigned by Firestore from doc path
+            plan.isEnabled = isEnabled
+            plan.customWelcomeMessage = welcomeMessage
+        }
+
+        try plansCollection.document(creatorID).setData(from: plan, merge: false)
+
+        // Invalidate cache
+        creatorPlanCache.removeValue(forKey: creatorID)
+        await MainActor.run { creatorPlan = plan }
+        return plan
+    }
+
     // MARK: - Subscribe
-    
-    @MainActor
+
     func subscribe(
         subscriberID: String,
         creatorID: String,
-        tier: SubscriptionTier
+        creatorTier: UserTier,
+        coinTier: CoinPriceTier = .starter
     ) async throws -> ActiveSubscription {
-        
-        isLoading = true
-        defer { isLoading = false }
-        
-        // Fetch creator's plan
-        guard let plan = try await fetchCreatorPlan(creatorID: creatorID),
-              plan.isEnabled,
-              plan.isTierEnabled(tier) else {
-            throw SubscriptionError.subscriptionsNotEnabled
+        guard let plan = try await fetchCreatorPlan(creatorID: creatorID), plan.isEnabled else {
+            throw SubscriptionError.planNotFound
         }
-        
-        let price = plan.priceForTier(tier)
-        
-        // Check if already subscribed
-        if let existing = try await getSubscription(subscriberID: subscriberID, creatorID: creatorID) {
-            if existing.isActive {
-                throw SubscriptionError.alreadySubscribed
-            }
-        }
-        
-        // Transfer coins
-        try await coinService.transferCoins(
+
+        let price = coinTier.rawValue  // fixed platform price
+
+        // Debit coins
+        try await HypeCoinService.shared.transferCoins(
             fromUserID: subscriberID,
             toUserID: creatorID,
             amount: price,
-            type: .subscriptionReceived,
-            subscriptionID: nil
+            type: .subscriptionSent
         )
-        
-        // Create subscription
-        let subscription = ActiveSubscription(
-            id: "\(subscriberID)_\(creatorID)",
+
+        // Resolve perks from creator's plan — uses custom config if set, otherwise platform defaults
+        let resolvedPerks = plan.tierPricing.perks(for: coinTier)
+        let perkRawValues = resolvedPerks.map { $0.rawValue }
+
+        let subID = "\(subscriberID)_\(creatorID)"
+        let sub = ActiveSubscription(
             subscriberID: subscriberID,
             creatorID: creatorID,
-            tier: tier,
             coinsPaid: price,
+            coinTier: coinTier,
             status: .active,
-            startedAt: Date(),
-            expiresAt: Calendar.current.date(byAdding: .month, value: 1, to: Date()) ?? Date(),
-            renewalEnabled: true,
-            renewalCount: 0
+            subscribedAt: Date(),
+            currentPeriodStart: Date(),
+            currentPeriodEnd: Calendar.current.date(byAdding: .month, value: 1, to: Date()) ?? Date(),
+            autoRenew: true,
+            grantedPerks: perkRawValues
         )
-        
-        try db.collection(Collections.subscriptions)
-            .document(subscription.id)
-            .setData(from: subscription)
-        
-        // Update creator's plan stats
-        try await db.collection(Collections.plans)
-            .document(creatorID)
-            .updateData([
-                "subscriberCount": FieldValue.increment(Int64(1)),
-                "totalEarned": FieldValue.increment(Int64(price))
-            ])
-        
-        // Record event
-        let event = SubscriptionEvent(
-            id: UUID().uuidString,
-            subscriptionID: subscription.id,
-            subscriberID: subscriberID,
-            creatorID: creatorID,
-            type: .newSubscription,
-            tier: tier,
-            coinAmount: price,
-            createdAt: Date()
-        )
-        
-        try db.collection(Collections.events)
-            .document(event.id)
-            .setData(from: event)
-        
-        // Clear cache
-        subscriptionCache.removeValue(forKey: "\(subscriberID)_\(creatorID)")
-        
-        // Refresh my subscriptions
-        _ = try await fetchMySubscriptions(userID: subscriberID)
-        
-        print("ðŸŽ‰ SUBS: \(subscriberID) subscribed to \(creatorID) at \(tier.displayName)")
-        return subscription
-    }
-    
-    // MARK: - Cancel Subscription
-    
-    @MainActor
-    func cancelSubscription(subscriberID: String, creatorID: String) async throws {
-        let subRef = db.collection(Collections.subscriptions).document("\(subscriberID)_\(creatorID)")
-        
-        try await subRef.updateData([
-            "renewalEnabled": false,
-            "status": SubscriptionStatus.cancelled.rawValue
+
+        try subsCollection.document(subID).setData(from: sub, merge: false)
+
+        // Increment subscriber count — fire and forget, non-critical
+        try? await plansCollection.document(creatorID).updateData([
+            "subscriberCount": FieldValue.increment(Int64(1)),
+            "totalEarned": FieldValue.increment(Int64(price))
         ])
-        
-        // Record event
-        let event = SubscriptionEvent(
-            id: UUID().uuidString,
-            subscriptionID: "\(subscriberID)_\(creatorID)",
-            subscriberID: subscriberID,
-            creatorID: creatorID,
-            type: .cancellation,
-            tier: .supporter, // Will be overwritten
-            coinAmount: 0,
-            createdAt: Date()
-        )
-        
-        try db.collection(Collections.events)
-            .document(event.id)
-            .setData(from: event)
-        
-        subscriptionCache.removeValue(forKey: "\(subscriberID)_\(creatorID)")
-        
-        print("âŒ SUBS: \(subscriberID) cancelled subscription to \(creatorID)")
+
+        // Invalidate
+        isSubscribedCache.removeValue(forKey: creatorID)
+        mySubsFetchedAt = nil
+        return sub
     }
-    
-    // MARK: - Check Subscription Status
-    
-    func checkSubscription(subscriberID: String, creatorID: String) async throws -> SubscriptionCheckResult {
-        // Developer bypass — full superFan access, no Firestore read
-        if isDeveloper {
-            return SubscriptionCheckResult(
-                isSubscribed: true,
-                tier: .superFan,
-                perks: SubscriptionTier.superFan.perks,
-                hypeBoost: SubscriptionTier.superFan.hypeBoost
-            )
+
+    // MARK: - Cancel
+
+    func cancelSubscription(subscriberID: String, creatorID: String) async throws {
+        let subID = "\(subscriberID)_\(creatorID)"
+        try await subsCollection.document(subID).updateData([
+            "status": SubscriptionStatus.cancelled.rawValue,
+            "autoRenew": false,
+            "updatedAt": Timestamp(date: Date())
+        ])
+
+        try? await plansCollection.document(creatorID).updateData([
+            "subscriberCount": FieldValue.increment(Int64(-1))
+        ])
+
+        isSubscribedCache.removeValue(forKey: creatorID)
+        mySubsFetchedAt = nil
+        mySubscribersFetchedAt = nil
+
+        await MainActor.run {
+            mySubscriptions.removeAll { $0.creatorID == creatorID }
+            mySubscribers.removeAll { $0.subscriberID == creatorID }
         }
-        
-        // Check cache first
-        let cacheKey = "\(subscriberID)_\(creatorID)"
-        if let cached = subscriptionCache[cacheKey] {
-            return cached
-        }
-        
-        guard let subscription = try await getSubscription(subscriberID: subscriberID, creatorID: creatorID),
-              subscription.isActive else {
-            let result = SubscriptionCheckResult.none
-            subscriptionCache[cacheKey] = result
-            return result
-        }
-        
-        let result = SubscriptionCheckResult(
-            isSubscribed: true,
-            tier: subscription.tier,
-            perks: subscription.tier.perks,
-            hypeBoost: subscription.tier.hypeBoost
-        )
-        
-        subscriptionCache[cacheKey] = result
-        return result
     }
-    
-    // MARK: - Get Subscription
-    
-    func getSubscription(subscriberID: String, creatorID: String) async throws -> ActiveSubscription? {
-        let docRef = db.collection(Collections.subscriptions).document("\(subscriberID)_\(creatorID)")
-        let doc = try await docRef.getDocument()
-        return try? doc.data(as: ActiveSubscription.self)
-    }
-    
-    // MARK: - Fetch My Subscriptions (as subscriber)
-    
-    @MainActor
+
+    // MARK: - Fetch My Subscriptions
+
+    @discardableResult
     func fetchMySubscriptions(userID: String) async throws -> [ActiveSubscription] {
-        let snapshot = try await db.collection(Collections.subscriptions)
+        guard Auth.auth().currentUser != nil else { return [] }
+
+        if let fetched = mySubsFetchedAt,
+           Date().timeIntervalSince(fetched) < subsTTL,
+           !mySubscriptions.isEmpty { return mySubscriptions }
+
+        let snapshot = try await subsCollection
             .whereField("subscriberID", isEqualTo: userID)
-            .whereField("status", isEqualTo: "active")
+            .whereField("status", isEqualTo: SubscriptionStatus.active.rawValue)
             .getDocuments()
-        
-        let subscriptions = snapshot.documents.compactMap { doc -> ActiveSubscription? in
-            try? doc.data(as: ActiveSubscription.self)
-        }
-        
-        self.mySubscriptions = subscriptions
-        return subscriptions
+
+        let subs = snapshot.documents.compactMap { try? $0.data(as: ActiveSubscription.self) }
+        mySubsFetchedAt = Date()
+        await MainActor.run { mySubscriptions = subs }
+        return subs
     }
-    
-    // MARK: - Fetch My Subscribers (as creator)
-    
-    @MainActor
-    func fetchMySubscribers(creatorID: String) async throws -> [SubscriberInfo] {
-        let snapshot = try await db.collection(Collections.subscriptions)
+
+    // MARK: - Is Subscribed
+
+    func isSubscribed(subscriberID: String, creatorID: String) async throws -> Bool {
+        guard Auth.auth().currentUser != nil else { return false }
+
+        if let cached = isSubscribedCache[creatorID],
+           Date().timeIntervalSince(cached.fetchedAt) < subsTTL {
+            return cached.value
+        }
+
+        let subID = "\(subscriberID)_\(creatorID)"
+        let doc = try await subsCollection.document(subID).getDocument()
+        let value = doc.exists &&
+            (doc.data()?["status"] as? String) == SubscriptionStatus.active.rawValue
+
+        isSubscribedCache[creatorID] = (value, Date())
+        return value
+    }
+
+
+
+    // MARK: - Fetch My Subscribers (Creator Side)
+    // CACHING: 5min TTL — same as mySubscriptions
+    @discardableResult
+    func fetchMySubscribers(creatorID: String) async throws -> [ActiveSubscription] {
+        guard Auth.auth().currentUser != nil else { return [] }
+
+        if let fetched = mySubscribersFetchedAt,
+           Date().timeIntervalSince(fetched) < subsTTL,
+           !mySubscribers.isEmpty { return mySubscribers }
+
+        let snapshot = try await subsCollection
             .whereField("creatorID", isEqualTo: creatorID)
-            .whereField("status", isEqualTo: "active")
-            .order(by: "startedAt", descending: true)
+            .whereField("status", isEqualTo: SubscriptionStatus.active.rawValue)
             .getDocuments()
-        
-        // Would need to join with user data for full info
-        // Simplified version:
-        var subscribers: [SubscriberInfo] = []
-        
-        for doc in snapshot.documents {
-            if let sub = try? doc.data(as: ActiveSubscription.self) {
-                let info = SubscriberInfo(
-                    id: sub.id,
-                    subscriberID: sub.subscriberID,
-                    username: "", // Fetch separately
-                    displayName: "", // Fetch separately
-                    profileImageURL: nil,
-                    tier: sub.tier,
-                    subscribedAt: sub.startedAt,
-                    totalPaid: sub.coinsPaid * (sub.renewalCount + 1),
-                    renewalCount: sub.renewalCount
-                )
-                subscribers.append(info)
-            }
+
+        let subs = snapshot.documents.compactMap { try? $0.data(as: ActiveSubscription.self) }
+        mySubscribersFetchedAt = Date()
+        await MainActor.run { mySubscribers = subs }
+        return subs
+    }
+
+    // MARK: - Developer Bypass
+    // Used by CommunityService to skip subscription gate in dev/debug builds
+    var isDeveloper: Bool {
+        #if DEBUG
+        return (currentUserEmail ?? Auth.auth().currentUser?.email)?.hasSuffix("@stitch.dev") == true
+        #else
+        return false
+        #endif
+    }
+
+    // MARK: - Check Subscription (used by CommunityService)
+    struct SubscriptionCheck {
+        let isSubscribed: Bool
+        let coinsPaid: Int
+        let coinTier: CoinPriceTier?
+        let grantedPerks: [SubscriptionPerk]
+
+        var hasNoAds: Bool {
+            grantedPerks.contains(.noAds)
         }
         
-        self.mySubscribers = subscribers
-        return subscribers
+        var hasCommunityAccess: Bool {
+            grantedPerks.contains(.communityAccess)
+        }
     }
-    
-    // MARK: - Get Hype Boost for Engagement
-    
-    func getHypeBoost(userID: String, creatorID: String) async throws -> Double {
-        if isDeveloper { return SubscriptionTier.superFan.hypeBoost }
-        let result = try await checkSubscription(subscriberID: userID, creatorID: creatorID)
-        return result.hypeBoost
+
+    func checkSubscription(subscriberID: String, creatorID: String) async throws -> SubscriptionCheck {
+        guard Auth.auth().currentUser != nil else {
+            return SubscriptionCheck(isSubscribed: false, coinsPaid: 0, coinTier: nil, grantedPerks: [])
+        }
+        let subID = "\(subscriberID)_\(creatorID)"
+        let doc = try await subsCollection.document(subID).getDocument()
+        guard doc.exists,
+              let data = doc.data(),
+              (data["status"] as? String) == SubscriptionStatus.active.rawValue else {
+            return SubscriptionCheck(isSubscribed: false, coinsPaid: 0, coinTier: nil, grantedPerks: [])
+        }
+        let coinsPaid = data["coinsPaid"] as? Int ?? 0
+        let tierRaw = data["coinTier"] as? Int ?? 0
+        let coinTier = CoinPriceTier(rawValue: tierRaw)
+        
+        // Read stamped perks — fall back to platform defaults for legacy subs
+        let perks: [SubscriptionPerk]
+        if let rawPerks = data["grantedPerks"] as? [String], !rawPerks.isEmpty {
+            perks = rawPerks.compactMap { SubscriptionPerk(rawValue: $0) }
+        } else if let tier = coinTier {
+            perks = SubscriptionPerks.perks(for: tier)
+        } else {
+            perks = []
+        }
+        
+        isSubscribedCache[creatorID] = (true, Date())
+        return SubscriptionCheck(isSubscribed: true, coinsPaid: coinsPaid, coinTier: coinTier, grantedPerks: perks)
     }
-    
-    // MARK: - Check Perk Access
-    
-    func hasPerk(_ perk: SubscriptionPerk, userID: String, creatorID: String) async throws -> Bool {
-        if isDeveloper { return true }
-        let result = try await checkSubscription(subscriberID: userID, creatorID: creatorID)
-        return result.perks.contains(perk)
+
+    // MARK: - Cache Invalidation
+
+    func invalidatePlanCache(creatorID: String) {
+        creatorPlanCache.removeValue(forKey: creatorID)
     }
-    
-    // MARK: - Clear Cache
-    
-    func clearCache() {
-        subscriptionCache.removeAll()
-    }
-    
-    func clearCache(for subscriberID: String, creatorID: String) {
-        subscriptionCache.removeValue(forKey: "\(subscriberID)_\(creatorID)")
+
+    func invalidateAll() {
+        creatorPlanCache.removeAll()
+        isSubscribedCache.removeAll()
+        mySubsFetchedAt = nil
+        mySubscribersFetchedAt = nil
     }
 }
 
 // MARK: - Errors
 
 enum SubscriptionError: LocalizedError {
-    case subscriptionsNotEnabled
-    case invalidPrice
+    case planNotFound
     case alreadySubscribed
-    case notSubscribed
+    case priceCooldownActive(daysLeft: Int)
     case insufficientCoins
-    
+
     var errorDescription: String? {
         switch self {
-        case .subscriptionsNotEnabled:
-            return "This creator hasn't enabled subscriptions"
-        case .invalidPrice:
-            return "Invalid subscription price"
-        case .alreadySubscribed:
-            return "You're already subscribed"
-        case .notSubscribed:
-            return "You're not subscribed to this creator"
-        case .insufficientCoins:
-            return "Not enough Hype Coins"
+        case .planNotFound:               return "Subscription plan not found."
+        case .alreadySubscribed:          return "You are already subscribed."
+        case .priceCooldownActive(let d): return "Price locked for \(d) more days."
+        case .insufficientCoins:          return "Not enough coins."
         }
     }
 }

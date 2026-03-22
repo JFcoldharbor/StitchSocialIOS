@@ -59,35 +59,51 @@ struct FloatingIcon: View {
     }
     
     // MARK: - 3D Icon with Depth
-    
+
     private var iconWithDepth: some View {
         ZStack {
-            // Shadow layers for depth
-            ForEach(0..<3, id: \.self) { layer in
-                Image(systemName: iconSymbol)
-                    .font(.system(size: iconSize, weight: .bold))
-                    .foregroundStyle(shadowGradient(layer: layer))
-                    .scaleEffect(scale * (1.0 - Double(layer) * 0.05))
-                    .offset(
-                        x: CGFloat(layer) * 2,
-                        y: CGFloat(layer) * 2
-                    )
-                    .opacity(0.3 - Double(layer) * 0.1)
-            }
-            
-            // Main icon with gradient and glow
-            Image(systemName: iconSymbol)
-                .font(.system(size: iconSize, weight: .bold))
-                .foregroundStyle(mainGradient)
-                .scaleEffect(scale)
-                .rotation3DEffect(
-                    .degrees(rotationY),
-                    axis: (x: 0, y: 1, z: 0)
-                )
-                .rotationEffect(.degrees(rotation))
-                .shadow(color: glowColor, radius: 8, x: 0, y: 0)
-                .shadow(color: shadowColor, radius: 4, x: 2, y: 2)
+            shadowLayers
+            mainIcon
         }
+    }
+
+    private var shadowLayers: some View {
+        let c = shadowBaseColors
+        return ZStack {
+            shadowLayer(index: 0, colors: c)
+            shadowLayer(index: 1, colors: c)
+            shadowLayer(index: 2, colors: c)
+        }
+    }
+
+    private var shadowBaseColors: [Color] {
+        switch iconType {
+        case .hype:         return [.black.opacity(0.8), .black.opacity(0.6)]
+        case .cool:         return [.black.opacity(0.6), .blue.opacity(0.4)]
+        case .threadNavigator: return [.black.opacity(0.7), .cyan.opacity(0.3)]
+        case .tip:          return [StitchColors.tipShadowDark.opacity(0.8), StitchColors.tipShadowDeep.opacity(0.5)]
+        }
+    }
+
+    private func shadowLayer(index: Int, colors: [Color]) -> some View {
+        let gradient = LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+        return Image(systemName: iconSymbol)
+            .font(.system(size: iconSize, weight: .bold))
+            .foregroundStyle(gradient)
+            .scaleEffect(scale * (1.0 - Double(index) * 0.05))
+            .offset(x: CGFloat(index) * 2, y: CGFloat(index) * 2)
+            .opacity(0.3 - Double(index) * 0.1)
+    }
+
+    private var mainIcon: some View {
+        Image(systemName: iconSymbol)
+            .font(.system(size: iconSize, weight: .bold))
+            .foregroundStyle(mainGradient)
+            .scaleEffect(scale)
+            .rotation3DEffect(.degrees(rotationY), axis: (x: 0, y: 1, z: 0))
+            .rotationEffect(.degrees(rotation))
+            .shadow(color: glowColor, radius: 8, x: 0, y: 0)
+            .shadow(color: shadowColor, radius: 4, x: 2, y: 2)
     }
     
     // MARK: - Visual Properties
@@ -122,6 +138,14 @@ struct FloatingIcon: View {
             }
         case .threadNavigator:
             return "film.stack"
+        case .tip:
+            switch animationType {
+            case .founderExplosion: return "crown.fill"
+            case .tierBoost:        return "dollarsign.circle.fill"
+            case .milestone:        return "star.circle.fill"
+            case .standard:         return "circle.fill"   // gold coin via gradient
+            case .threadNavigator:  return "circle.fill"
+            }
         }
     }
     
@@ -210,27 +234,27 @@ struct FloatingIcon: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
+        case .tip:
+            switch animationType {
+            case .founderExplosion:
+                return LinearGradient(
+                    colors: [Color(red:1,green:0.99,blue:0.88), StitchColors.tipGold, .orange, StitchColors.tipGoldDark, .black],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+            case .tierBoost:
+                return LinearGradient(
+                    colors: [StitchColors.tipGoldLight, StitchColors.tipGold, .orange],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+            default:
+                return LinearGradient(
+                    colors: [StitchColors.tipGoldLight, StitchColors.tipGold, StitchColors.tipGoldDark],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
         }
     }
-    
-    private func shadowGradient(layer: Int) -> LinearGradient {
-        let baseColors: [Color]
-        switch iconType {
-        case .hype:
-            baseColors = [.black.opacity(0.8), .black.opacity(0.6)]
-        case .cool:
-            baseColors = [.black.opacity(0.6), .blue.opacity(0.4)]
-        case .threadNavigator:
-            baseColors = [.black.opacity(0.7), .cyan.opacity(0.3)]
-        }
-        
-        return LinearGradient(
-            colors: baseColors,
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-    
+
     private var tierColors: [Color] {
         switch tier {
         case .founder: return [.purple, .yellow, .orange]
@@ -266,6 +290,8 @@ struct FloatingIcon: View {
             }
         case .threadNavigator:
             return .cyan
+        case .tip:
+            return StitchColors.tipGold
         }
     }
     
@@ -274,6 +300,7 @@ struct FloatingIcon: View {
         case .hype: return .black.opacity(0.6)
         case .cool: return .blue.opacity(0.4)
         case .threadNavigator: return .cyan.opacity(0.3)
+        case .tip: return StitchColors.tipShadowDark.opacity(0.5)
         }
     }
     
@@ -340,7 +367,7 @@ struct FloatingIcon: View {
         }
         
         withAnimation(.linear(duration: animationDuration)) {
-            rotation = iconType == .hype ? 360 : -360
+            rotation = (iconType == .hype || iconType == .tip) ? 360 : -360
         }
         
         withAnimation(.easeInOut(duration: 1.5).repeatCount(2, autoreverses: true)) {
@@ -362,6 +389,7 @@ enum FloatingIconType {
     case hype              // Flames and fire-related icons
     case cool              // Snowflakes and ice-related icons
     case threadNavigator   // Thread navigation indicator
+    case tip               // Gold coin tip icons
 }
 
 // MARK: - Animation Types
@@ -472,6 +500,26 @@ class FloatingIconManager: ObservableObject {
         }
     }
     
+    /// Spawn gold coin icon for tip engagement
+    func spawnTipIcon(from position: CGPoint, userTier: UserTier, isLongPress: Bool = false) {
+        if isLongPress {
+            spawnMultipleIcons(
+                from: position,
+                count: 3,
+                iconType: .tip,
+                animationType: .tierBoost,
+                userTier: userTier
+            )
+        } else {
+            spawnIcon(
+                from: position,
+                iconType: .tip,
+                animationType: .standard,
+                userTier: userTier
+            )
+        }
+    }
+
     /// Spawn icon for cool engagement
     func spawnCoolIcon(from position: CGPoint, userTier: UserTier, isFirstFounderTap: Bool = false) {
         let animationType: IconAnimationType

@@ -35,6 +35,8 @@ struct SettingsView: View {
     @State private var showingCommunitySettings = false
     @State private var showingPrivacySettings = false
     @State private var showingFriendSuggestions = false
+    @State private var showingBusinessAnalytics = false
+    @State private var showingBusinessCampaigns = false
     
     // Preferences
     @State private var isHapticEnabled = UserDefaults.standard.bool(forKey: "hapticFeedbackEnabled")
@@ -49,7 +51,11 @@ struct SettingsView: View {
     private var isCreator: Bool {
         if SubscriptionService.shared.isDeveloper { return true }
         guard let user = currentUser else { return false }
-        return AdRevenueShare.canAccessAds(tier: user.tier)
+        return AdRevenueShare.canAccessAdMarketplace(tier: user.tier)
+    }
+    
+    private var isBusiness: Bool {
+        currentUser?.isBusiness ?? false
     }
     
     private var coinBalance: Int {
@@ -69,16 +75,25 @@ struct SettingsView: View {
                     // Wallet Section
                     walletSection
                     
-                    // Creator Section (Influencer+)
-                    if isCreator {
+                    // Business-only sections
+                    if isBusiness {
+                        businessSection
+                    }
+                    
+                    // Creator Section (Influencer+ personal only)
+                    if !isBusiness && isCreator {
                         creatorSection
                     }
                     
-                    // Subscriptions Section
-                    subscriptionsSection
+                    // Subscriptions Section (personal only)
+                    if !isBusiness {
+                        subscriptionsSection
+                    }
                     
-                    // Social Section
-                    socialSection
+                    // Social Section (personal only)
+                    if !isBusiness {
+                        socialSection
+                    }
                     
                     // Preferences Section
                     preferencesSection
@@ -177,6 +192,19 @@ struct SettingsView: View {
                 )
             }
         }
+        .sheet(isPresented: $showingSubscriptionSettings) {
+            if let user = currentUser {
+                CreatorPricingSettingsView(
+                    creatorID: user.id,
+                    creatorTier: user.tier
+                )
+            }
+        }
+        .sheet(isPresented: $showingMySubscribers) {
+            if let user = currentUser {
+                MySubscribersView(creatorID: user.id)
+            }
+        }
     }
     
     // MARK: - Profile Header
@@ -191,39 +219,89 @@ struct SettingsView: View {
                     Circle()
                         .fill(Color.gray.opacity(0.3))
                         .overlay(
-                            Image(systemName: "person.fill")
+                            Image(systemName: user.isBusiness ? "building.2.fill" : "person.fill")
                                 .font(.system(size: 30))
                                 .foregroundColor(.gray)
                         )
                 }
                 .frame(width: 80, height: 80)
                 .clipShape(Circle())
+                .overlay(
+                    // Verified business badge (teal gradient)
+                    Group {
+                        if user.isBusiness, let biz = user.businessProfile, biz.isVerifiedBusiness {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(size: 22))
+                                .foregroundStyle(StitchColors.businessGradient)
+                                .background(Circle().fill(Color.black).frame(width: 20, height: 20))
+                                .offset(x: 28, y: 28)
+                        }
+                    }
+                )
                 
                 // Name & Username
                 VStack(spacing: 4) {
-                    Text(user.displayName)
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
+                    HStack(spacing: 6) {
+                        Text(user.displayName)
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                        
+                        if user.isBusiness {
+                            Image(systemName: "building.2.fill")
+                                .font(.caption)
+                                .foregroundColor(StitchColors.tierBusiness)
+                        }
+                    }
                     
                     Text("@\(user.username)")
                         .font(.subheadline)
                         .foregroundColor(.gray)
                 }
                 
-                // Tier Badge
-                HStack(spacing: 6) {
-                    Image(systemName: "star.fill")
-                        .font(.caption)
-                    Text(user.tier.displayName)
-                        .font(.caption)
-                        .fontWeight(.semibold)
+                // Business: category + website. Personal: tier badge
+                if user.isBusiness, let biz = user.businessProfile {
+                    VStack(spacing: 6) {
+                        Text(biz.categoryDisplay)
+                            .font(.caption)
+                            .foregroundColor(StitchColors.tierBusiness)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(
+                                LinearGradient(
+                                    colors: StitchColors.businessGradientColors.map { $0.opacity(0.15) },
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .cornerRadius(12)
+                        
+                        if let url = biz.websiteURL, !url.isEmpty {
+                            Link(destination: URL(string: url) ?? URL(string: "https://stitchsocial.me")!) {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "link")
+                                        .font(.caption2)
+                                    Text(url.replacingOccurrences(of: "https://", with: ""))
+                                        .font(.caption)
+                                }
+                                .foregroundColor(.blue)
+                            }
+                        }
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                        Text(user.tier.displayName)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundColor(.yellow)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.yellow.opacity(0.15))
+                    .cornerRadius(12)
                 }
-                .foregroundColor(.yellow)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(Color.yellow.opacity(0.15))
-                .cornerRadius(12)
             }
         }
         .frame(maxWidth: .infinity)
@@ -299,6 +377,83 @@ struct SettingsView: View {
         }
     }
     
+    // MARK: - Business Section
+    
+    private var businessSection: some View {
+        SettingsSection(title: "BUSINESS", icon: "building.2.fill", iconColor: StitchColors.tierBusiness) {
+            // Analytics Dashboard
+            SettingsRow(
+                icon: "chart.bar.fill",
+                title: "Analytics",
+                subtitle: "Impressions, reach & performance",
+                iconColor: .cyan
+            ) {
+                showingBusinessAnalytics = true
+            }
+            
+            // My Campaigns
+            SettingsRow(
+                icon: "megaphone.fill",
+                title: "My Campaigns",
+                subtitle: "Create & manage ad campaigns",
+                iconColor: .orange
+            ) {
+                showingBusinessCampaigns = true
+            }
+            
+            // Ad Spend Summary
+            SettingsRow(
+                icon: "creditcard.fill",
+                title: "Ad Spend",
+                subtitle: "Budget & billing overview",
+                iconColor: .yellow
+            ) {
+                showingBusinessAnalytics = true
+            }
+            
+            // Business Profile Settings
+            SettingsRow(
+                icon: "pencil.circle.fill",
+                title: "Edit Business Profile",
+                subtitle: "Brand name, category & website",
+                iconColor: .purple
+            ) {
+                showingManageAccount = true
+            }
+            
+            // Quick Stats Card
+            if let user = currentUser, user.isBusiness {
+                VStack(spacing: 12) {
+                    HStack {
+                        businessStatCard(label: "Campaigns", value: "—", color: .orange)
+                        businessStatCard(label: "Impressions", value: "—", color: .cyan)
+                    }
+                    HStack {
+                        businessStatCard(label: "Total Spend", value: "—", color: .yellow)
+                        businessStatCard(label: "Avg CPM", value: "—", color: .green)
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+    
+    private func businessStatCard(label: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.gray)
+            Text(value)
+                .font(.title3)
+                .fontWeight(.bold)
+                .foregroundColor(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(10)
+    }
+    
     // MARK: - Creator Section
     
     private var creatorSection: some View {
@@ -327,7 +482,7 @@ struct SettingsView: View {
             SettingsRow(
                 icon: "gearshape.fill",
                 title: "Subscription Settings",
-                subtitle: "Set prices & tiers",
+                subtitle: "Set price & manage subscribers",
                 iconColor: .orange
             ) {
                 showingSubscriptionSettings = true

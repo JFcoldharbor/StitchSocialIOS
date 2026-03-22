@@ -6,7 +6,8 @@
 //  Dependencies: Firebase Firestore, Firebase Storage, FirebaseSchema, SpecialUserEntry, UserTier
 //  Features: CRUD operations, Profile editing, Following system, Auto-follow support, Clout management
 //  UPDATED: Automatic searchableText generation for case-insensitive user search
-//  FIXED: Proper tier detection from SpecialUserEntry instead of forcing topCreator
+//  UPDATED: Badge system wiring — Rookie award at signup, tier badge on advance,
+//           social badge eval on follow, clout badge eval on award
 //
 
 import Foundation
@@ -85,11 +86,17 @@ class UserService: ObservableObject {
             FirebaseSchema.UserDocument.isPrivate: false,
             FirebaseSchema.UserDocument.profileImageURL: profileImageURL as Any,
             FirebaseSchema.UserDocument.createdAt: Timestamp(),
-            FirebaseSchema.UserDocument.updatedAt: Timestamp()
+            FirebaseSchema.UserDocument.updatedAt: Timestamp(),
+            // Badge-tracked counters — incremented atomically, never read before write
+            "totalCoinsGiven": 0,
+            "subscriptionsCount": 0
         ]
         
         try await db.collection(FirebaseSchema.Collections.users).document(id).setData(userData)
-        
+
+        // Award Rookie welcome badge — single batch write, idempotency guarded in BadgeService
+        await BadgeService.shared.awardRookieBadge(userID: id)
+
         let user = BasicUserInfo(
             id: id,
             username: finalUsername,
@@ -296,7 +303,10 @@ class UserService: ObservableObject {
         ], forDocument: followerUserRef)
         
         try await batch.commit()
-        
+
+        // Evaluate social/follower badges for the followee — followerCount just incremented
+        await evaluateBadgesAfterFollow(userID: followingID)
+
         print("USER SERVICE: User \(followerID) followed \(followingID)")
     }
     
@@ -566,8 +576,12 @@ class UserService: ObservableObject {
             try await updateClout(userID: userID, cloutChange: amount)
             print("✅ USER SERVICE: Successfully awarded \(amount) clout to user \(userID)")
             
-            // Check for tier advancement
+            // Check for tier advancement — also fires tier badge inside
             await checkAndAdvanceTier(userID: userID)
+
+            // Evaluate clout/XP/hype engagement badges
+            // Stats fetched inside checkAndAdvanceTier already — reuse via lightweight read
+            await evaluateBadgesAfterClout(userID: userID)
             
         } catch {
             print("❌ USER SERVICE: Failed to award clout to user \(userID): \(error.localizedDescription)")
@@ -586,18 +600,19 @@ class UserService: ObservableObject {
             let currentTierRaw = data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie"
             let currentTier = UserTier(rawValue: currentTierRaw) ?? .rookie
             
-            // Don't change founder/co-founder tiers
-            guard !currentTier.isFounderTier else { return }
+            // Don't change founder/co-founder or business tiers
+            guard !currentTier.isFounderTier && !currentTier.isBusinessTier else { return }
             
+            // Updated clout thresholds (scaled for fast engagement)
             let correctTier: UserTier = {
                 switch currentClout {
-                case 500_000...: return .topCreator
-                case 100_000...: return .legendary
-                case 50_000...: return .partner
-                case 20_000...: return .elite
-                case 15_000...: return .ambassador
-                case 10_000...: return .influencer
-                case 5_000...: return .veteran
+                case 5_000_000...: return .topCreator
+                case 1_000_000...: return .legendary
+                case 500_000...: return .partner
+                case 250_000...: return .elite
+                case 100_000...: return .ambassador
+                case 50_000...: return .influencer
+                case 10_000...: return .veteran
                 case 1_000...: return .rising
                 default: return .rookie
                 }
@@ -608,6 +623,8 @@ class UserService: ObservableObject {
                     FirebaseSchema.UserDocument.updatedAt: Timestamp()
                 ])
                 print("🎉 USER SERVICE: Tier advanced for \(userID): \(currentTier.displayName) -> \(correctTier.displayName) (clout: \(currentClout))")
+                // Award tier badge — zero extra reads, tier value already in hand
+                await BadgeService.shared.evaluateTierBadge(userID: userID, newTierRaw: correctTier.rawValue)
             }
         } catch {
             print("⚠️ USER SERVICE: Tier check failed (non-fatal): \(error.localizedDescription)")
@@ -651,6 +668,51 @@ class UserService: ObservableObject {
     
     // MARK: - Helper Methods
     
+
+    // MARK: - Badge Evaluation Helpers
+
+    /// Called after clout award — reads fresh user doc (already fetched by checkAndAdvanceTier)
+    /// CACHING: one get() shared with tier check path; earnedBadgeCache prevents duplicate awards
+    private func evaluateBadgesAfterClout(userID: String) async {
+        guard let data = try? await db.collection(FirebaseSchema.Collections.users)
+                .document(userID).getDocument().data() else { return }
+        let stats = buildRealUserStats(from: data)
+        let tierRaw = data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie"
+        let xp = data["xp"] as? Int ?? stats.clout  // fall back to clout until xp field added
+        let coinsGiven = data["totalCoinsGiven"] as? Int ?? 0
+        await BadgeService.shared.evaluateAndAwardBadges(
+            userID: userID, stats: stats, tierRaw: tierRaw, xp: xp, coinsGiven: coinsGiven
+        )
+    }
+
+    /// Called after a follow — passes fresh follower count for social badge chain
+    /// CACHING: earnedBadgeCache check in BadgeService prevents duplicate awards
+    private func evaluateBadgesAfterFollow(userID: String) async {
+        guard let data = try? await db.collection(FirebaseSchema.Collections.users)
+                .document(userID).getDocument().data() else { return }
+        let stats = buildRealUserStats(from: data)
+        let tierRaw = data[FirebaseSchema.UserDocument.tier] as? String ?? "rookie"
+        let xp = data["xp"] as? Int ?? stats.clout
+        await BadgeService.shared.evaluateAndAwardBadges(
+            userID: userID, stats: stats, tierRaw: tierRaw, xp: xp
+        )
+    }
+
+    /// Build RealUserStats from a Firestore data dict — no extra reads
+    private func buildRealUserStats(from data: [String: Any]) -> RealUserStats {
+        RealUserStats(
+            followers:       data[FirebaseSchema.UserDocument.followerCount]  as? Int ?? 0,
+            hypes:           data["totalHypesGiven"]  as? Int ?? 0,
+            threads:         data["threadCount"]       as? Int ?? 0,
+            posts:           data["postCount"]         as? Int ?? 0,
+            engagementRate:  data["engagementRate"]    as? Double ?? 0.0,
+            clout:           data[FirebaseSchema.UserDocument.clout] as? Int ?? 0,
+            coinsGiven:      data["totalCoinsGiven"]   as? Int ?? 0,
+            subscriptionsGiven: data["subscriptionsCount"] as? Int ?? 0,
+            subscribersEarned:  data["subscriberCount"]    as? Int ?? 0
+        )
+    }
+
     /// Generate username from email and ID
     private func generateUsername(from email: String, id: String) -> String {
         if !email.isEmpty {
@@ -680,6 +742,18 @@ class UserService: ObservableObject {
         let profileImageURL = data[FirebaseSchema.UserDocument.profileImageURL] as? String
         let createdAt = (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
         
+        // Account type + business profile
+        let accountTypeRaw = data[FirebaseSchema.UserDocument.accountType] as? String ?? "personal"
+        let accountType = AccountType(rawValue: accountTypeRaw) ?? .personal
+        let businessProfile = BusinessProfileBuilder.build(from: data)
+        
+        // Custom revenue share override fields
+        let customSubShare = data[FirebaseSchema.UserDocument.customSubShare] as? Double
+        let customSubShareExpiresAt = (data[FirebaseSchema.UserDocument.customSubShareExpiresAt] as? Timestamp)?.dateValue()
+        let customSubSharePermanent = data[FirebaseSchema.UserDocument.customSubSharePermanent] as? Bool ?? false
+        let referralGoal = data[FirebaseSchema.UserDocument.referralGoal] as? Int
+        let referralCount = data[FirebaseSchema.UserDocument.referralCount] as? Int ?? 0
+        
         return BasicUserInfo(
             id: id,
             username: username,
@@ -690,7 +764,14 @@ class UserService: ObservableObject {
             isVerified: isVerified,
             isPrivate: isPrivate,
             profileImageURL: profileImageURL,
-            createdAt: createdAt
+            createdAt: createdAt,
+            accountType: accountType,
+            businessProfile: businessProfile,
+            customSubShare: customSubShare,
+            customSubShareExpiresAt: customSubShareExpiresAt,
+            customSubSharePermanent: customSubSharePermanent,
+            referralGoal: referralGoal,
+            referralCount: referralCount
         )
     }
 }

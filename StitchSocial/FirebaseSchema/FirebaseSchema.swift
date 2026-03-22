@@ -272,6 +272,23 @@ struct FirebaseSchema {
         static let referralRewardsMaxed = "referralRewardsMaxed"
         static let referralCreatedAt = "referralCreatedAt"
         
+        // CUSTOM REVENUE SHARE (Ambassador Promo / Special Deals)
+        // Overrides tier-based SubscriptionRevenueShare when present + valid
+        static let customSubShare = "customSubShare"                     // Double (0.80 = 80%)
+        static let customSubShareExpiresAt = "customSubShareExpiresAt"   // Timestamp
+        static let customSubShareNote = "customSubShareNote"             // String ("Early Ambassador Promo")
+        static let referralGoal = "referralGoal"                         // Int (100 for ambassadors)
+        static let customSubSharePermanent = "customSubSharePermanent"   // Bool — true if referralGoal met
+        
+        // BUSINESS ACCOUNT FIELDS (only present when accountType == "business")
+        static let accountType = "accountType"                           // "personal" or "business"
+        static let brandName = "brandName"
+        static let websiteURL = "websiteURL"
+        static let businessCategory = "businessCategory"
+        static let brandLogoURL = "brandLogoURL"
+        static let businessDescription = "businessDescription"
+        static let isVerifiedBusiness = "isVerifiedBusiness"
+        
         // Settings fields
         static let notificationSettings = "notificationSettings"
         static let privacySettings = "privacySettings"

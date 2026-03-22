@@ -158,30 +158,93 @@ enum PayoutMethod: String, Codable {
 
 enum SubscriptionRevenueShare {
     
+    /// Tier-based creator share (default, no overrides)
     static func creatorShare(for tier: UserTier) -> Double {
         switch tier {
-        case .rookie: return 0.70
-        case .rising: return 0.75
-        case .veteran: return 0.80
-        case .influencer: return 0.85
-        case .ambassador: return 0.87
-        case .elite: return 0.90
-        case .partner: return 0.92
-        case .legendary: return 0.95
-        case .topCreator: return 0.97
+        case .rookie: return 0.30
+        case .rising: return 0.35
+        case .veteran: return 0.40
+        case .influencer: return 0.50
+        case .ambassador: return 0.65
+        case .elite: return 0.80
+        case .partner: return 0.85
+        case .legendary: return 0.90
+        case .topCreator: return 0.90
         case .founder, .coFounder: return 1.00
+        case .business: return 0.0
         }
+    }
+    
+    /// Override-aware creator share — checks custom share first, then tier table.
+    /// Use this for actual revenue calculations.
+    static func effectiveCreatorShare(
+        tier: UserTier,
+        customSubShare: Double?,
+        customSubShareExpiresAt: Date?,
+        customSubSharePermanent: Bool,
+        referralCount: Int,
+        referralGoal: Int?
+    ) -> Double {
+        guard let custom = customSubShare else {
+            return creatorShare(for: tier)
+        }
+        
+        // If they hit their referral goal → permanent override
+        if let goal = referralGoal, referralCount >= goal {
+            return custom
+        }
+        
+        // If marked permanent (admin set or goal already confirmed)
+        if customSubSharePermanent {
+            return custom
+        }
+        
+        // Check expiration — only expires if they HAVEN'T hit the goal
+        if let expires = customSubShareExpiresAt, Date() >= expires {
+            return creatorShare(for: tier) // Expired, fall back to tier
+        }
+        
+        // Active override, not expired, goal not yet met
+        return custom
+    }
+    
+    /// Convenience: effective share from BasicUserInfo
+    static func effectiveCreatorShare(for user: BasicUserInfo) -> Double {
+        return effectiveCreatorShare(
+            tier: user.tier,
+            customSubShare: user.customSubShare,
+            customSubShareExpiresAt: user.customSubShareExpiresAt,
+            customSubSharePermanent: user.customSubSharePermanent,
+            referralCount: user.referralCount,
+            referralGoal: user.referralGoal
+        )
     }
     
     static func platformShare(for tier: UserTier) -> Double {
         return 1.0 - creatorShare(for: tier)
     }
     
-    /// Calculate cash out amounts
-    static func calculateCashOut(coins: Int, tier: UserTier) -> (creator: Double, platform: Double) {
+    /// Calculate cash out amounts — uses override-aware share
+    static func calculateCashOut(
+        coins: Int,
+        tier: UserTier,
+        customSubShare: Double? = nil,
+        customSubShareExpiresAt: Date? = nil,
+        customSubSharePermanent: Bool = false,
+        referralCount: Int = 0,
+        referralGoal: Int? = nil
+    ) -> (creator: Double, platform: Double) {
         let totalValue = HypeCoinValue.toDollars(coins)
-        let creatorCut = totalValue * creatorShare(for: tier)
-        let platformCut = totalValue * platformShare(for: tier)
+        let share = effectiveCreatorShare(
+            tier: tier,
+            customSubShare: customSubShare,
+            customSubShareExpiresAt: customSubShareExpiresAt,
+            customSubSharePermanent: customSubSharePermanent,
+            referralCount: referralCount,
+            referralGoal: referralGoal
+        )
+        let creatorCut = totalValue * share
+        let platformCut = totalValue * (1.0 - share)
         return (creatorCut, platformCut)
     }
 }

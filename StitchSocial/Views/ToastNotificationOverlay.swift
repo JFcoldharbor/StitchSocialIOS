@@ -132,6 +132,8 @@ extension StitchNotificationType {
         case .goLive: return .red
         case .communityPost: return .cyan
         case .communityXP: return .green
+        case .tip: return Color(red: 1.0, green: 0.84, blue: 0.0)
+        case .subscription: return .purple
         }
     }
     
@@ -148,6 +150,8 @@ extension StitchNotificationType {
         case .goLive: return "video.fill"
         case .communityPost: return "bubble.left.and.bubble.right.fill"
         case .communityXP: return "star.fill"
+        case .tip: return "dollarsign.circle.fill"
+        case .subscription: return "star.circle.fill"
         }
     }
 }
@@ -164,6 +168,8 @@ extension NotificationToast {
         case .system: return 8.0
         case .goLive: return 6.0
         case .communityPost, .communityXP: return 4.0
+        case .tip: return 4.0
+        case .subscription: return 5.0
         }
     }
 }

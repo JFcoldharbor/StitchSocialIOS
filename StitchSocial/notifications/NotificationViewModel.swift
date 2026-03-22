@@ -196,6 +196,10 @@ class NotificationViewModel: ObservableObject {
             filtered = filtered.filter { $0.type == .communityPost || $0.type == .communityXP }
         case .system:
             filtered = filtered.filter { $0.type == .system }
+        case .tips:
+            filtered = filtered.filter { $0.type == .tip }
+        case .subscriptions:
+            filtered = filtered.filter { $0.type == .subscription }
         }
         
         // Convert to display data

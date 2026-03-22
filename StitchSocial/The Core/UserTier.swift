@@ -4,6 +4,7 @@
 //
 //  Created by James Garmon on 7/11/25.
 //  UPDATED: Added ambassador tier for 15k-20k clout range
+//  UPDATED: Added .tip and .subscription to StitchNotificationType + StitchNotificationTab
 //
 
 import Foundation
@@ -17,14 +18,15 @@ enum UserTier: String, CaseIterable, Codable {
     case rising = "rising"
     case veteran = "veteran"
     case influencer = "influencer"
-    case ambassador = "ambassador"      // NEW: 15k-20k range
+    case ambassador = "ambassador"
     case elite = "elite"
     case partner = "partner"
     case legendary = "legendary"
     case topCreator = "top_creator"
     case founder = "founder"
     case coFounder = "co_founder"
-    
+    case business = "business"
+
     var displayName: String {
         switch self {
         case .rookie: return "Rookie"
@@ -38,104 +40,93 @@ enum UserTier: String, CaseIterable, Codable {
         case .topCreator: return "Top Creator"
         case .founder: return "Founder"
         case .coFounder: return "Co-Founder"
+        case .business: return "Business"
         }
     }
-    
+
     var cloutRange: ClosedRange<Int> {
         switch self {
         case .rookie: return 0...999
         case .rising: return 1000...4999
         case .veteran: return 5000...9999
-        case .influencer: return 10000...14999      // ADJUSTED for ambassador
-        case .ambassador: return 15000...19999      // NEW tier
+        case .influencer: return 10000...14999
+        case .ambassador: return 15000...19999
         case .elite: return 20000...49999
         case .partner: return 50000...99999
         case .legendary: return 100000...499999
         case .topCreator: return 500000...Int.max
         case .founder: return 0...Int.max
         case .coFounder: return 0...Int.max
+        case .business: return 0...Int.max
         }
     }
-    
-    // FIXED: Using String badges instead of BadgeType
+
     var crownBadge: String? {
         switch self {
         case .rookie, .rising, .veteran, .elite, .legendary: return nil
+        case .business: return nil
         case .influencer: return "influencer_crown"
-        case .ambassador: return "ambassador_crown"     // NEW badge
+        case .ambassador: return "ambassador_crown"
         case .partner: return "partner_crown"
         case .topCreator: return "top_creator_crown"
         case .founder: return "founder_crown"
         case .coFounder: return "co_founder_crown"
         }
     }
-    
+
     var requiredFollowers: Int {
         switch self {
         case .rookie: return 0
         case .rising: return 1_000
         case .veteran: return 10_000
         case .influencer: return 100_000
-        case .ambassador: return 150_000            // NEW: between influencer and elite
+        case .ambassador: return 150_000
         case .elite: return 250_000
         case .partner: return 750_000
         case .legendary: return 2_000_000
         case .topCreator: return 5_000_000
-        case .founder, .coFounder: return 0 // Special assignment only
+        case .founder, .coFounder: return 0
+        case .business: return 0
         }
     }
-    
-    /// Check if this tier has founder privileges
-    var isFounderTier: Bool {
-        return self == .founder || self == .coFounder
-    }
-    
-    /// Whether this tier has access to AI video analysis (Whisper + GPT)
-    /// Rookie/Rising = manual mode (zero API cost), Veteran+ = AI tone-matching
+
+    var isFounderTier: Bool { self == .founder || self == .coFounder }
+    var isBusinessTier: Bool { self == .business }
+
     var hasAIAnalysis: Bool {
         switch self {
-        case .rookie, .rising:
-            return false
-        default:
-            return true
+        case .rookie, .rising: return false
+        default: return true
         }
     }
-    
-    /// Check if this tier is achievable through normal progression
-    var isAchievableTier: Bool {
-        return !isFounderTier
-    }
-    
-    /// Get the next achievable tier
+
+    var isAchievableTier: Bool { !isFounderTier && !isBusinessTier }
+
     var nextTier: UserTier? {
         switch self {
         case .rookie: return .rising
         case .rising: return .veteran
         case .veteran: return .influencer
-        case .influencer: return .ambassador        // NEW progression
-        case .ambassador: return .elite             // NEW progression
+        case .influencer: return .ambassador
+        case .ambassador: return .elite
         case .elite: return .partner
         case .partner: return .legendary
         case .legendary: return .topCreator
-        case .topCreator: return nil // Max achievable tier
-        case .founder, .coFounder: return nil // Special tiers
+        case .topCreator: return nil
+        case .founder, .coFounder: return nil
+        case .business: return nil
         }
     }
-    
-    /// Calculate progress toward next tier (0.0 to 1.0)
+
     func progressToNext(currentFollowers: Int) -> Double {
         guard let next = nextTier else { return 1.0 }
-        
-        let currentRequired = self.requiredFollowers
-        let nextRequired = next.requiredFollowers
-        let progressRange = nextRequired - currentRequired
-        let currentProgress = currentFollowers - currentRequired
-        
+        let progressRange = next.requiredFollowers - self.requiredFollowers
+        let currentProgress = currentFollowers - self.requiredFollowers
         return max(0.0, min(1.0, Double(currentProgress) / Double(progressRange)))
     }
 }
 
-// MARK: - Notification System Types (ADDED BACK - NEEDED BY SERVICES)
+// MARK: - Notification System Types
 
 /// Primary notification type enum for the Stitch Social app
 enum StitchNotificationType: String, CaseIterable, Codable {
@@ -150,7 +141,9 @@ enum StitchNotificationType: String, CaseIterable, Codable {
     case goLive = "go_live"
     case communityPost = "community_post"
     case communityXP = "community_xp"
-    
+    case tip = "tip"
+    case subscription = "subscription"
+
     var displayName: String {
         switch self {
         case .hype: return "Hype"
@@ -164,9 +157,11 @@ enum StitchNotificationType: String, CaseIterable, Codable {
         case .goLive: return "Live"
         case .communityPost: return "Community"
         case .communityXP: return "XP"
+        case .tip: return "Tip"
+        case .subscription: return "Subscription"
         }
     }
-    
+
     var iconName: String {
         switch self {
         case .hype: return "heart.fill"
@@ -180,9 +175,11 @@ enum StitchNotificationType: String, CaseIterable, Codable {
         case .goLive: return "video.fill"
         case .communityPost: return "bubble.left.and.bubble.right.fill"
         case .communityXP: return "star.fill"
+        case .tip: return "dollarsign.circle.fill"
+        case .subscription: return "star.circle.fill"
         }
     }
-    
+
     var color: Color {
         switch self {
         case .hype: return .red
@@ -196,9 +193,11 @@ enum StitchNotificationType: String, CaseIterable, Codable {
         case .goLive: return .red
         case .communityPost: return .cyan
         case .communityXP: return .green
+        case .tip: return Color(red: 1.0, green: 0.84, blue: 0.0) // Gold
+        case .subscription: return .purple
         }
     }
-    
+
     var actionText: String {
         switch self {
         case .hype: return "hyped your video"
@@ -212,12 +211,15 @@ enum StitchNotificationType: String, CaseIterable, Codable {
         case .goLive: return "is live now"
         case .communityPost: return "posted in community"
         case .communityXP: return "XP earned"
+        case .tip: return "tipped you"
+        case .subscription: return "subscribed to you"
         }
     }
 }
 
+
 /// Core notification document for Firebase
-struct StitchNotification: Identifiable {  // âœ…
+struct StitchNotification: Identifiable {
     let id: String
     let recipientID: String
     let senderID: String
@@ -229,7 +231,7 @@ struct StitchNotification: Identifiable {  // âœ…
     let createdAt: Date
     let readAt: Date?
     let expiresAt: Date?
-    
+
     init(
         id: String = UUID().uuidString,
         recipientID: String,
@@ -237,7 +239,7 @@ struct StitchNotification: Identifiable {  // âœ…
         type: StitchNotificationType,
         title: String,
         message: String,
-        payload: [String: Any] = [:],  // âœ… Changed from [String: String]
+        payload: [String: Any] = [:],
         isRead: Bool = false,
         createdAt: Date = Date(),
         readAt: Date? = nil,
@@ -266,11 +268,11 @@ struct NotificationToast: Codable, Identifiable {
     let senderUsername: String
     let payload: [String: String]
     let createdAt: Date
-    
+
     var color: Color { type.color }
     var iconName: String { type.iconName }
     var senderName: String { senderUsername }
-    
+
     init(
         id: String = UUID().uuidString,
         type: StitchNotificationType,
@@ -292,12 +294,11 @@ struct NotificationToast: Codable, Identifiable {
 
 // MARK: - Content System Types
 
-/// Video content hierarchy - Thread â†’ Child â†’ Stepchild
 enum ContentType: String, CaseIterable, Codable {
-    case thread = "thread"        // Original video that starts conversation
-    case child = "child"          // Direct reply to thread
-    case stepchild = "stepchild"  // Reply to a child (max depth 1)
-    
+    case thread = "thread"
+    case child = "child"
+    case stepchild = "stepchild"
+
     var displayName: String {
         switch self {
         case .thread: return "Thread"
@@ -305,7 +306,7 @@ enum ContentType: String, CaseIterable, Codable {
         case .stepchild: return "Stepchild"
         }
     }
-    
+
     var maxDepth: Int {
         switch self {
         case .thread: return 0
@@ -317,7 +318,6 @@ enum ContentType: String, CaseIterable, Codable {
 
 // MARK: - Authentication States
 
-/// Authentication states for the app
 enum AuthState: String, CaseIterable {
     case unauthenticated = "unauthenticated"
     case authenticating = "authenticating"
@@ -325,7 +325,7 @@ enum AuthState: String, CaseIterable {
     case signingIn = "signing_in"
     case signingOut = "signing_out"
     case error = "error"
-    
+
     var displayName: String {
         switch self {
         case .unauthenticated: return "Not Signed In"
@@ -338,15 +338,14 @@ enum AuthState: String, CaseIterable {
     }
 }
 
-/// Video temperature system (like Reddit hot/rising)
 enum Temperature: String, CaseIterable, Codable {
-    case frozen = "frozen"      // Very low engagement
-    case cold = "cold"          // Low engagement
-    case cool = "cool"          // Below average
-    case warm = "warm"          // Average engagement
-    case hot = "hot"            // High engagement
-    case blazing = "blazing"    // Viral content
-    
+    case frozen = "frozen"
+    case cold = "cold"
+    case cool = "cool"
+    case warm = "warm"
+    case hot = "hot"
+    case blazing = "blazing"
+
     var displayName: String {
         switch self {
         case .frozen: return "Frozen"
@@ -357,7 +356,7 @@ enum Temperature: String, CaseIterable, Codable {
         case .blazing: return "Blazing"
         }
     }
-    
+
     var color: Color {
         switch self {
         case .frozen: return .blue
@@ -368,7 +367,7 @@ enum Temperature: String, CaseIterable, Codable {
         case .blazing: return .red
         }
     }
-    
+
     var threshold: Double {
         switch self {
         case .frozen: return 0.0
@@ -383,14 +382,13 @@ enum Temperature: String, CaseIterable, Codable {
 
 // MARK: - App State Types
 
-/// Main app navigation states
 enum AppTab: String, CaseIterable {
     case home = "home"
     case discovery = "discovery"
     case recording = "recording"
     case progression = "progression"
     case notifications = "notifications"
-    
+
     var displayName: String {
         switch self {
         case .home: return "Home"
@@ -400,7 +398,7 @@ enum AppTab: String, CaseIterable {
         case .notifications: return "Notifications"
         }
     }
-    
+
     var systemImage: String {
         switch self {
         case .home: return "house.fill"
@@ -412,7 +410,6 @@ enum AppTab: String, CaseIterable {
     }
 }
 
-/// Recording states
 enum RecordingState: String, CaseIterable {
     case idle = "idle"
     case recording = "recording"
@@ -420,7 +417,7 @@ enum RecordingState: String, CaseIterable {
     case processing = "processing"
     case complete = "complete"
     case error = "error"
-    
+
     var displayName: String {
         switch self {
         case .idle: return "Ready"
@@ -435,17 +432,9 @@ enum RecordingState: String, CaseIterable {
 
 // MARK: - Cache System Types
 
-/// Cache types for different content
 enum CacheType: CaseIterable {
-    case video
-    case image
-    case data
-    case thumbnail
-    case uploadResult
-    case userProfile
-    case threadData
-    case engagement
-    
+    case video, image, data, thumbnail, uploadResult, userProfile, threadData, engagement
+
     var prefix: String {
         switch self {
         case .video: return "vid"
@@ -462,7 +451,6 @@ enum CacheType: CaseIterable {
 
 // MARK: - Error Types
 
-/// App-wide error types
 enum StitchError: LocalizedError {
     case networkError(String)
     case authenticationError(String)
@@ -471,36 +459,28 @@ enum StitchError: LocalizedError {
     case recordingError(String)
     case processingError(String)
     case unknownError
-    
+
     var errorDescription: String? {
         switch self {
-        case .networkError(let message):
-            return "Network Error: \(message)"
-        case .authenticationError(let message):
-            return "Authentication Error: \(message)"
-        case .validationError(let message):
-            return "Validation Error: \(message)"
-        case .storageError(let message):
-            return "Storage Error: \(message)"
-        case .recordingError(let message):
-            return "Recording Error: \(message)"
-        case .processingError(let message):
-            return "Processing Error: \(message)"
-        case .unknownError:
-            return "An unknown error occurred"
+        case .networkError(let m): return "Network Error: \(m)"
+        case .authenticationError(let m): return "Authentication Error: \(m)"
+        case .validationError(let m): return "Validation Error: \(m)"
+        case .storageError(let m): return "Storage Error: \(m)"
+        case .recordingError(let m): return "Recording Error: \(m)"
+        case .processingError(let m): return "Processing Error: \(m)"
+        case .unknownError: return "An unknown error occurred"
         }
     }
 }
 
 // MARK: - Engagement System Types
 
-/// User starting bonus for new user onboarding and rewards
 enum UserStartingBonus: String, CaseIterable, Codable {
     case earlyAdopter = "early_adopter"
     case betaTester = "beta_tester"
     case newcomer = "newcomer"
     case invited = "invited"
-    
+
     var displayName: String {
         switch self {
         case .earlyAdopter: return "Early Adopter"
@@ -509,7 +489,7 @@ enum UserStartingBonus: String, CaseIterable, Codable {
         case .invited: return "Invited"
         }
     }
-    
+
     var bonusAmount: Double {
         switch self {
         case .earlyAdopter: return 50.0
@@ -518,18 +498,17 @@ enum UserStartingBonus: String, CaseIterable, Codable {
         case .invited: return 25.0
         }
     }
-    
+
     var bonusDuration: TimeInterval {
         switch self {
-        case .earlyAdopter: return 30 * 24 * 60 * 60 // 30 days
-        case .betaTester: return 60 * 24 * 60 * 60 // 60 days
-        case .newcomer: return 7 * 24 * 60 * 60 // 7 days
-        case .invited: return 14 * 24 * 60 * 60 // 14 days
+        case .earlyAdopter: return 30 * 24 * 60 * 60
+        case .betaTester: return 60 * 24 * 60 * 60
+        case .newcomer: return 7 * 24 * 60 * 60
+        case .invited: return 14 * 24 * 60 * 60
         }
     }
 }
 
-/// Hype rating system for dynamic user engagement scoring
 struct HypeRating: Codable {
     let userID: String
     var currentRating: Double
@@ -540,7 +519,7 @@ struct HypeRating: Codable {
     var lastUpdate: Date
     var startingBonus: UserStartingBonus
     var bonusExpiresAt: Date?
-    
+
     init(userID: String, baseRating: Double = 100.0, startingBonus: UserStartingBonus = .newcomer) {
         self.userID = userID
         self.currentRating = baseRating + startingBonus.bonusAmount
@@ -552,64 +531,53 @@ struct HypeRating: Codable {
         self.startingBonus = startingBonus
         self.bonusExpiresAt = Date().addingTimeInterval(startingBonus.bonusDuration)
     }
-    
-    /// Calculate effective rating considering time decay and bonuses
+
     var effectiveRating: Double {
         let now = Date()
         let timeSinceUpdate = now.timeIntervalSince(lastUpdate)
-        let decayFactor = max(0.0, 1.0 - (timeSinceUpdate / (24 * 60 * 60))) // Daily decay
-        
+        let decayFactor = max(0.0, 1.0 - (timeSinceUpdate / (24 * 60 * 60)))
         var rating = baseRating + communityBonus - discoveryPenalty
         rating *= decayFactor
-        
-        // Apply starting bonus if still valid
         if let expiry = bonusExpiresAt, now < expiry {
             rating += startingBonus.bonusAmount
         }
-        
         return max(0.0, rating)
     }
 }
 
 // MARK: - Creation Mode Types
 
-/// Creation flow modes
 enum CreationMode: Codable, Hashable {
     case newThread
     case replyToThread(threadID: String)
     case respondToChild(childID: String, threadID: String)
-    
+
     var displayTitle: String {
         switch self {
-        case .newThread:
-            return "New Thread"
-        case .replyToThread:
-            return "Reply to Thread"
-        case .respondToChild:
-            return "Respond to Child"
+        case .newThread: return "New Thread"
+        case .replyToThread: return "Reply to Thread"
+        case .respondToChild: return "Respond to Child"
         }
     }
-    
+
     var contentType: ContentType {
         switch self {
-        case .newThread:
-            return .thread
-        case .replyToThread:
-            return .child
-        case .respondToChild:
-            return .stepchild
+        case .newThread: return .thread
+        case .replyToThread: return .child
+        case .respondToChild: return .stepchild
         }
     }
 }
 
-/// User interaction types
+// MARK: - User Interaction Types
+
 enum InteractionType: String, CaseIterable, Codable {
-    case hype = "hype"        // Like/upvote
-    case cool = "cool"        // Dislike/downvote
-    case reply = "reply"      // Video response
-    case share = "share"      // External sharing
-    case view = "view"        // Watch video
-    
+    case hype = "hype"
+    case cool = "cool"
+    case reply = "reply"
+    case share = "share"
+    case view = "view"
+
     var displayName: String {
         switch self {
         case .hype: return "Hype"
@@ -619,7 +587,7 @@ enum InteractionType: String, CaseIterable, Codable {
         case .view: return "View"
         }
     }
-    
+
     var pointValue: Int {
         switch self {
         case .hype: return 10
@@ -633,12 +601,11 @@ enum InteractionType: String, CaseIterable, Codable {
 
 // MARK: - Video System Types
 
-/// Video quality settings
 enum RecordingQuality: String, CaseIterable, Codable {
     case standard = "standard"
     case high = "high"
     case premium = "premium"
-    
+
     var displayName: String {
         switch self {
         case .standard: return "Standard"
@@ -646,7 +613,7 @@ enum RecordingQuality: String, CaseIterable, Codable {
         case .premium: return "Premium"
         }
     }
-    
+
     var resolution: CGSize {
         switch self {
         case .standard: return CGSize(width: 720, height: 1280)
@@ -654,19 +621,18 @@ enum RecordingQuality: String, CaseIterable, Codable {
         case .premium: return CGSize(width: 1440, height: 2560)
         }
     }
-    
+
     var bitrate: Int {
         switch self {
-        case .standard: return 2_000_000  // 2 Mbps
-        case .high: return 5_000_000      // 5 Mbps
-        case .premium: return 10_000_000  // 10 Mbps
+        case .standard: return 2_000_000
+        case .high: return 5_000_000
+        case .premium: return 10_000_000
         }
     }
 }
 
-// MARK: - User Stats for Badge/Tier System
+// MARK: - User Stats
 
-/// User statistics for tier calculation and badge awards
 struct RealUserStats: Codable, Hashable {
     let followers: Int
     let hypes: Int
@@ -674,20 +640,39 @@ struct RealUserStats: Codable, Hashable {
     let posts: Int
     let engagementRate: Double
     let clout: Int
-    
-    init(followers: Int = 0, hypes: Int = 0, threads: Int = 0, posts: Int = 0, engagementRate: Double = 0.0, clout: Int = 0) {
-        self.followers = followers
-        self.hypes = hypes
-        self.threads = threads
-        self.posts = posts
-        self.engagementRate = engagementRate
-        self.clout = clout
+    // CACHING: Read once from user doc, passed into BadgeService — zero extra reads
+    let coinsGiven: Int
+    let subscriptionsGiven: Int
+    let subscribersEarned: Int
+
+    init(
+        followers: Int = 0, hypes: Int = 0, threads: Int = 0, posts: Int = 0,
+        engagementRate: Double = 0.0, clout: Int = 0, coinsGiven: Int = 0,
+        subscriptionsGiven: Int = 0, subscribersEarned: Int = 0
+    ) {
+        self.followers = followers; self.hypes = hypes; self.threads = threads
+        self.posts = posts; self.engagementRate = engagementRate; self.clout = clout
+        self.coinsGiven = coinsGiven; self.subscriptionsGiven = subscriptionsGiven
+        self.subscribersEarned = subscribersEarned
+    }
+}
+
+// MARK: - Account Type
+
+enum AccountType: String, Codable, Hashable {
+    case personal = "personal"
+    case business = "business"
+
+    var displayName: String {
+        switch self {
+        case .personal: return "Personal"
+        case .business: return "Business"
+        }
     }
 }
 
 // MARK: - Basic Data Structures
 
-/// Simple user information - FIXED: Added bio and isPrivate fields to support ProfileViewModel
 struct BasicUserInfo: Codable, Hashable {
     let id: String
     let username: String
@@ -699,22 +684,60 @@ struct BasicUserInfo: Codable, Hashable {
     let isPrivate: Bool
     let profileImageURL: String?
     let createdAt: Date
+    let accountType: AccountType
+    let businessProfile: BusinessProfile?
     
-    init(id: String, username: String, displayName: String, bio: String = "", tier: UserTier, clout: Int, isVerified: Bool = false, isPrivate: Bool = false, profileImageURL: String? = nil, createdAt: Date = Date()) {
-        self.id = id
-        self.username = username
-        self.displayName = displayName
-        self.bio = bio
-        self.tier = tier
-        self.clout = clout
-        self.isVerified = isVerified
-        self.isPrivate = isPrivate
-        self.profileImageURL = profileImageURL
-        self.createdAt = createdAt
+    // Custom revenue share override (Ambassador Promo / Special Deals)
+    let customSubShare: Double?
+    let customSubShareExpiresAt: Date?
+    let customSubSharePermanent: Bool
+    let referralGoal: Int?
+    let referralCount: Int
+
+    var isBusiness: Bool { accountType == .business }
+    
+    /// Effective sub share — checks custom override before tier table
+    var effectiveSubShare: Double {
+        guard let custom = customSubShare else {
+            return SubscriptionRevenueShare.creatorShare(for: tier)
+        }
+        // Permanent (hit referral goal) — always use custom
+        if customSubSharePermanent { return custom }
+        // Check expiration
+        if let expires = customSubShareExpiresAt, Date() >= expires {
+            return SubscriptionRevenueShare.creatorShare(for: tier)
+        }
+        return custom
+    }
+    
+    /// Whether this user has an active custom share override
+    var hasActiveCustomShare: Bool {
+        guard customSubShare != nil else { return false }
+        if customSubSharePermanent { return true }
+        if let expires = customSubShareExpiresAt { return Date() < expires }
+        return true
+    }
+
+    init(
+        id: String, username: String, displayName: String, bio: String = "",
+        tier: UserTier, clout: Int, isVerified: Bool = false, isPrivate: Bool = false,
+        profileImageURL: String? = nil, createdAt: Date = Date(),
+        accountType: AccountType = .personal, businessProfile: BusinessProfile? = nil,
+        customSubShare: Double? = nil, customSubShareExpiresAt: Date? = nil,
+        customSubSharePermanent: Bool = false, referralGoal: Int? = nil, referralCount: Int = 0
+    ) {
+        self.id = id; self.username = username; self.displayName = displayName
+        self.bio = bio; self.tier = tier; self.clout = clout
+        self.isVerified = isVerified; self.isPrivate = isPrivate
+        self.profileImageURL = profileImageURL; self.createdAt = createdAt
+        self.accountType = accountType; self.businessProfile = businessProfile
+        self.customSubShare = customSubShare
+        self.customSubShareExpiresAt = customSubShareExpiresAt
+        self.customSubSharePermanent = customSubSharePermanent
+        self.referralGoal = referralGoal; self.referralCount = referralCount
     }
 }
 
-/// Basic video information
 struct BasicVideoInfo: Codable, Hashable {
     let id: String
     let title: String
@@ -726,18 +749,15 @@ struct BasicVideoInfo: Codable, Hashable {
     let temperature: Temperature
 }
 
-/// Engagement metrics
 struct EngagementMetrics: Codable, Hashable {
     let hypeCount: Int
     let coolCount: Int
     let replyCount: Int
     let shareCount: Int
     let viewCount: Int
-    
-    var netScore: Int {
-        return hypeCount - coolCount
-    }
-    
+
+    var netScore: Int { hypeCount - coolCount }
+
     var engagementRatio: Double {
         let total = hypeCount + coolCount
         return total > 0 ? Double(hypeCount) / Double(total) : 0.0
@@ -746,14 +766,13 @@ struct EngagementMetrics: Codable, Hashable {
 
 // MARK: - Video Processing Types
 
-/// Video processing states
 enum ProcessingState: String, Codable {
     case pending = "pending"
     case processing = "processing"
     case completed = "completed"
     case failed = "failed"
     case cancelled = "cancelled"
-    
+
     var displayName: String {
         switch self {
         case .pending: return "Pending"
@@ -765,7 +784,6 @@ enum ProcessingState: String, Codable {
     }
 }
 
-/// Video upload metadata
 struct MyVideoUploadMetadata: Codable {
     let originalSize: Int64
     let processedSize: Int64?
@@ -775,23 +793,21 @@ struct MyVideoUploadMetadata: Codable {
     let processingTime: TimeInterval?
     let uploadStarted: Date
     let uploadCompleted: Date?
-    
+
     var compressionPercentage: Double {
         guard let processedSize = processedSize else { return 0 }
-        let ratio = 1.0 - (Double(processedSize) / Double(originalSize))
-        return max(0, min(100, ratio * 100))
+        return max(0, min(100, (1.0 - Double(processedSize) / Double(originalSize)) * 100))
     }
 }
 
 // MARK: - Cache System Types Extended
 
-/// Cache policy for different content types
 enum CachePolicy: String, Codable {
-    case aggressive = "aggressive"    // Cache everything
-    case moderate = "moderate"        // Cache frequently accessed
-    case minimal = "minimal"          // Cache only critical items
-    case disabled = "disabled"        // No caching
-    
+    case aggressive = "aggressive"
+    case moderate = "moderate"
+    case minimal = "minimal"
+    case disabled = "disabled"
+
     var maxItems: Int {
         switch self {
         case .aggressive: return 1000
@@ -800,12 +816,12 @@ enum CachePolicy: String, Codable {
         case .disabled: return 0
         }
     }
-    
+
     var ttlSeconds: TimeInterval {
         switch self {
-        case .aggressive: return 86400 // 24 hours
-        case .moderate: return 43200   // 12 hours
-        case .minimal: return 21600    // 6 hours
+        case .aggressive: return 86400
+        case .moderate: return 43200
+        case .minimal: return 21600
         case .disabled: return 0
         }
     }

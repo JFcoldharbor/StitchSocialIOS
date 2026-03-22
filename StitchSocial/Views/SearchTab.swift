@@ -832,6 +832,7 @@ struct ModernUserRow: View {
         case .veteran: return [.blue, .cyan]
         case .rising: return [.green, .yellow]
         case .rookie: return [.gray, .white]
+        case .business: return StitchColors.businessGradientColors
         }
     }
     

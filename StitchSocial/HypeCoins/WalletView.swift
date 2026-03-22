@@ -86,22 +86,8 @@ struct WalletView: View {
     
     private var balanceHeader: some View {
         VStack(spacing: 8) {
-            // Coin icon
-            ZStack {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [.yellow, .orange],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 60, height: 60)
-                
-                Text("🔥")
-                    .font(.system(size: 30))
-            }
-            .padding(.top, 20)
+            HypeCoinView(size: 90)
+                .padding(.top, 20)
             
             // Balance
             Text("\(coinService.balance?.availableCoins ?? 0)")
@@ -111,13 +97,6 @@ struct WalletView: View {
             Text("Hype Coins")
                 .font(.subheadline)
                 .foregroundColor(.gray)
-            
-            // Cash value
-            if let balance = coinService.balance {
-                Text("≈ $\(String(format: "%.2f", balance.cashValue))")
-                    .font(.caption)
-                    .foregroundColor(.green)
-            }
             
             // Pending coins
             if let pending = coinService.balance?.pendingCoins, pending > 0 {
@@ -397,7 +376,7 @@ struct CoinPackageDisplayCard: View {
             // Coin amount
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
-                    Text("🔥")
+                    HypeCoinView(size: 28)
                     Text("\(package.coins)")
                         .font(.title3)
                         .fontWeight(.bold)
@@ -407,9 +386,6 @@ struct CoinPackageDisplayCard: View {
                         .foregroundColor(.gray)
                 }
                 
-                Text("$\(String(format: "%.2f", package.cashValue)) value")
-                    .font(.caption)
-                    .foregroundColor(.green)
             }
             
             Spacer()
@@ -465,171 +441,4 @@ struct TransactionRow: View {
 
 // MARK: - Cash Out Sheet
 
-struct CashOutSheet: View {
-    let userID: String
-    let userTier: UserTier
-    let availableCoins: Int
-    
-    @Environment(\.dismiss) private var dismiss
-    
-    @State private var cashOutAmount: String = ""
-    @State private var isProcessing = false
-    @State private var showingSuccess = false
-    @State private var errorMessage: String?
-    @State private var showingError = false
-    
-    private var coinAmount: Int {
-        Int(cashOutAmount) ?? 0
-    }
-    
-    private var creatorAmount: Double {
-        let (creator, _) = SubscriptionRevenueShare.calculateCashOut(coins: coinAmount, tier: userTier)
-        return creator
-    }
-    
-    private var isValid: Bool {
-        coinAmount >= CashOutLimits.minimumCoins && coinAmount <= availableCoins
-    }
-    
-    var body: some View {
-        NavigationView {
-            ZStack {
-                Color.black.ignoresSafeArea()
-                
-                VStack(spacing: 24) {
-                    // Available balance
-                    VStack(spacing: 4) {
-                        Text("Available")
-                            .font(.subheadline)
-                            .foregroundColor(.gray)
-                        
-                        Text("\(availableCoins) coins")
-                            .font(.title)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
-                    }
-                    .padding(.top, 20)
-                    
-                    // Amount input
-                    VStack(spacing: 8) {
-                        TextField("Enter amount", text: $cashOutAmount)
-                            .keyboardType(.numberPad)
-                            .font(.system(size: 32, weight: .bold))
-                            .foregroundColor(.white)
-                            .multilineTextAlignment(.center)
-                            .padding()
-                            .background(Color.gray.opacity(0.15))
-                            .cornerRadius(12)
-                        
-                        Text("Minimum: \(CashOutLimits.minimumCoins) coins")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                    }
-                    .padding(.horizontal)
-                    
-                    // Breakdown
-                    if coinAmount > 0 {
-                        VStack(spacing: 12) {
-                            HStack {
-                                Text("Your tier")
-                                Spacer()
-                                Text(userTier.displayName)
-                                    .foregroundColor(.purple)
-                            }
-                            
-                            HStack {
-                                Text("Your share")
-                                Spacer()
-                                Text("\(Int(SubscriptionRevenueShare.creatorShare(for: userTier) * 100))%")
-                                    .foregroundColor(.green)
-                            }
-                            
-                            Divider().background(Color.gray)
-                            
-                            HStack {
-                                Text("You'll receive")
-                                    .fontWeight(.semibold)
-                                Spacer()
-                                Text("$\(String(format: "%.2f", creatorAmount))")
-                                    .font(.title2)
-                                    .fontWeight(.bold)
-                                    .foregroundColor(.green)
-                            }
-                        }
-                        .padding()
-                        .background(Color.gray.opacity(0.15))
-                        .cornerRadius(12)
-                        .padding(.horizontal)
-                    }
-                    
-                    Spacer()
-                    
-                    // Cash out button
-                    Button(action: processCashOut) {
-                        HStack {
-                            if isProcessing {
-                                ProgressView()
-                                    .tint(.black)
-                            } else {
-                                Text("Cash Out")
-                                    .fontWeight(.bold)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(isValid ? Color.green : Color.gray)
-                        .foregroundColor(isValid ? .black : .gray)
-                        .cornerRadius(12)
-                    }
-                    .disabled(!isValid || isProcessing)
-                    .padding(.horizontal)
-                    .padding(.bottom, 20)
-                }
-            }
-            .navigationTitle("Cash Out")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundColor(.gray)
-                }
-            }
-        }
-        .alert("Error", isPresented: $showingError) {
-            Button("OK") { }
-        } message: {
-            Text(errorMessage ?? "An error occurred")
-        }
-        .alert("Success!", isPresented: $showingSuccess) {
-            Button("Done") { dismiss() }
-        } message: {
-            Text("Cash out request submitted. You'll receive $\(String(format: "%.2f", creatorAmount)) within 3-5 business days.")
-        }
-    }
-    
-    private func processCashOut() {
-        isProcessing = true
-        
-        Task {
-            do {
-                _ = try await HypeCoinService.shared.requestCashOut(
-                    userID: userID,
-                    amount: coinAmount,
-                    tier: userTier,
-                    payoutMethod: .bankTransfer
-                )
-                
-                await MainActor.run {
-                    isProcessing = false
-                    showingSuccess = true
-                }
-            } catch {
-                await MainActor.run {
-                    errorMessage = error.localizedDescription
-                    showingError = true
-                    isProcessing = false
-                }
-            }
-        }
-    }
-}
+// CashOutSheet moved to CashOutView.swift

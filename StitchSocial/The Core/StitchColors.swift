@@ -109,6 +109,21 @@ struct StitchColors {
     /// Co-Founder tier color
     static let tierCoFounder = Color(red: 0.9, green: 0.7, blue: 0.3) // Light Gold
     
+    /// Business tier color (flat fallback — use businessGradient where gradients are supported)
+    static let tierBusiness = Color(red: 0.0, green: 0.75, blue: 0.85) // Teal
+    
+    /// Business gradient — teal to blue metallic shift
+    static let businessGradientColors: [Color] = [
+        Color(red: 0.0, green: 0.75, blue: 0.85),  // Teal
+        Color(red: 0.2, green: 0.4, blue: 0.9)      // Blue
+    ]
+    
+    static let businessGradient = LinearGradient(
+        colors: businessGradientColors,
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+    
     // MARK: - Temperature Colors
     
     /// Frozen temperature
@@ -217,6 +232,7 @@ extension StitchColors {
         case "top_creator", "topcreator": return tierTopCreator
         case "founder": return tierFounder
         case "co_founder", "cofounder": return tierCoFounder
+        case "business": return tierBusiness
         default: return tierRookie
         }
     }
@@ -351,6 +367,13 @@ extension StitchColors {
 
 extension StitchColors {
     
+    /// Gold coin colors for tip system
+    static let tipGoldLight  = Color(red: 1.00, green: 0.96, blue: 0.63) // #FFF5A0
+    static let tipGold       = Color(red: 1.00, green: 0.84, blue: 0.00) // #FFD700
+    static let tipGoldDark   = Color(red: 0.80, green: 0.53, blue: 0.00) // #CC8800
+    static let tipShadowDark = Color(red: 0.67, green: 0.33, blue: 0.00) // #AA5500
+    static let tipShadowDeep = Color(red: 0.48, green: 0.27, blue: 0.00) // #7A4400
+
     /// High contrast version of primary color for accessibility
     static let primaryHighContrast = Color(red: 0.0, green: 0.4, blue: 0.8)
     

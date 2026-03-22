@@ -1535,6 +1535,7 @@ class VideoService: ObservableObject {
         case .legendary: tierMultiplier = 4.0
         case .topCreator: tierMultiplier = 5.0
         case .founder, .coFounder: tierMultiplier = 6.0
+        case .business: tierMultiplier = 1.0
         }
         
         let timeFactor = ageInHours < 24 ? 1.0 : max(0.5, 1.0 - (ageInHours - 24) / 168)
@@ -1575,6 +1576,7 @@ class VideoService: ObservableObject {
         case .legendary: return 480      // 8 minutes
         case .topCreator: return 600     // 10 minutes
         case .founder, .coFounder: return 900  // 15 minutes (technical limit)
+        case .business: return 60                // 1 minute — ads are short
         }
     }
     

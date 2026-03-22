@@ -492,6 +492,7 @@ struct SmartTaggedUserRow: View {
         case .veteran: return .blue
         case .rising: return .green
         case .rookie: return .gray
+        case .business: return .green
         }
     }
 }
@@ -638,6 +639,7 @@ struct TaggedUserRow: View {
         case .rising: return "arrow.up.circle.fill"
         case .rookie: return "person.circle.fill"
         case .ambassador: return "sparkles"
+        case .business: return "business.fill"
         }
     }
     
@@ -653,6 +655,7 @@ struct TaggedUserRow: View {
         case .rising: return .green
         case .rookie: return .gray
         case .ambassador: return .indigo
+        case .business: return .green
         }
     }
 }

@@ -78,6 +78,7 @@ struct UserProgressionCalculator {
         case .topCreator: return 9        // ADJUSTED from 8
         case .founder: return 10          // ADJUSTED from 9
         case .coFounder: return 11        // ADJUSTED from 10
+        case .business: return 12
         }
     }
     

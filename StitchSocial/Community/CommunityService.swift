@@ -3,7 +3,7 @@
 //  StitchSocial
 //
 //  Layer 5: Services - Community CRUD, Membership, Tier Gating
-//  Dependencies: CommunityTypes (Layer 1), UserTier (Layer 1), SubscriptionTier (Layer 1)
+//  Dependencies: CommunityTypes (Layer 1), UserTier (Layer 1)
 //  Features: Create/fetch communities, join/leave, membership checks, community list
 //
 //  CACHING STRATEGY:
@@ -14,12 +14,15 @@
 //  All caches clear on logout. Add to CachingOptimization.swift.
 //
 //  BATCHING NOTES:
-//  - fetchMyCommunities uses a single query with subscriberID filter, not N reads
+//  - fetchMyCommunities uses collectionGroup query on 'members' (1 read for all user memberships)
+//    then batched 'in' queries (max 30) for community docs — source of truth is membership, not subscriptions
 //  - Community member count uses FieldValue.increment, not read-then-write
 //  - Membership creation batches community doc update + member doc write in one batch
+//  - Firestore index required: collectionGroup 'members', field 'userID' ASC + 'isBanned' ASC
 //
 
 import Foundation
+import FirebaseAuth
 import FirebaseFirestore
 
 class CommunityService: ObservableObject {
@@ -107,8 +110,7 @@ class CommunityService: ObservableObject {
                 userID: userID,
                 communityID: creatorID,
                 username: username,
-                displayName: displayName,
-                subscriptionTier: .supporter
+                displayName: displayName
             )
             
             let batch = db.batch()
@@ -160,13 +162,32 @@ class CommunityService: ObservableObject {
             description: description
         )
         
-        try existingRef.setData(from: community)
+        var ownerMembership = CommunityMembership(
+            userID: creatorID,
+            communityID: creatorID,
+            username: creatorUsername,
+            displayName: creatorDisplayName
+        )
+        ownerMembership.isOwner = true
+        ownerMembership.isModerator = true
+        ownerMembership.level = 1000
+        
+        let batch = db.batch()
+        try batch.setData(from: community, forDocument: existingRef)
+        let memberRef = existingRef.collection(Collections.members).document(creatorID)
+        try batch.setData(from: ownerMembership, forDocument: memberRef)
+        try await batch.commit()
         
         // Cache it
         communityCache[creatorID] = CachedItem(value: community, cachedAt: Date(), ttl: communityTTL)
+        let cacheKey = "\(creatorID)_\(creatorID)"
+        membershipCache[cacheKey] = CachedItem(value: ownerMembership, cachedAt: Date(), ttl: membershipTTL)
+        isMemberCache[cacheKey] = CachedItem(value: true, cachedAt: Date(), ttl: membershipTTL)
+        communityListCache = nil
         self.currentCommunity = community
+        self.currentMembership = ownerMembership
         
-        print("✅ COMMUNITY: Created for \(creatorUsername)")
+        print("✅ COMMUNITY: Created for \(creatorUsername), owner membership added")
         return community
     }
     
@@ -203,11 +224,29 @@ class CommunityService: ObservableObject {
             )
             community.isActive = false  // Inactive until creator activates
             
-            try existingRef.setData(from: community)
+            var ownerMembership = CommunityMembership(
+                userID: creatorID,
+                communityID: creatorID,
+                username: creatorUsername,
+                displayName: creatorDisplayName
+            )
+            ownerMembership.isOwner = true
+            ownerMembership.isModerator = true
+            ownerMembership.level = 1000
+            
+            let batch = db.batch()
+            try batch.setData(from: community, forDocument: existingRef)
+            let memberRef = existingRef.collection(Collections.members).document(creatorID)
+            try batch.setData(from: ownerMembership, forDocument: memberRef)
+            try await batch.commit()
             
             communityCache[creatorID] = CachedItem(value: community, cachedAt: Date(), ttl: communityTTL)
+            let cacheKey = "\(creatorID)_\(creatorID)"
+            membershipCache[cacheKey] = CachedItem(value: ownerMembership, cachedAt: Date(), ttl: membershipTTL)
+            isMemberCache[cacheKey] = CachedItem(value: true, cachedAt: Date(), ttl: membershipTTL)
+            communityListCache = nil
             
-            print("✅ COMMUNITY: Auto-created (inactive) for \(creatorUsername) on tier-up to \(creatorTier.displayName)")
+            print("✅ COMMUNITY: Auto-created (inactive) for \(creatorUsername), owner membership added")
         } catch {
             print("⚠️ COMMUNITY: Auto-create failed for \(creatorUsername): \(error.localizedDescription)")
         }
@@ -269,6 +308,7 @@ class CommunityService: ObservableObject {
     
     /// Returns community if it exists (active or not) — for creator settings
     func fetchCommunityStatus(creatorID: String) async throws -> CommunityStatus {
+        guard Auth.auth().currentUser != nil else { return .notCreated }
         let doc = try await db.collection(Collections.communities)
             .document(creatorID)
             .getDocument()
@@ -283,6 +323,7 @@ class CommunityService: ObservableObject {
     // MARK: - Fetch Community
     
     func fetchCommunity(creatorID: String) async throws -> Community? {
+        guard Auth.auth().currentUser != nil else { return nil }
         // Check cache first
         if let cached = communityCache[creatorID], !cached.isExpired {
             return cached.value
@@ -343,25 +384,24 @@ class CommunityService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
-        // Determine subscription tier — developers bypass subscription check
-        var tier: SubscriptionTier = .superFan
+        // Verify subscription — developers bypass
+        var coinsPaid = 0
         
         if !SubscriptionService.shared.isDeveloper {
-            // Verify active subscription exists
             let subCheck = try await subscriptionService.checkSubscription(
                 subscriberID: userID,
                 creatorID: creatorID
             )
             
-            guard subCheck.isSubscribed, let subTier = subCheck.tier else {
+            guard subCheck.isSubscribed else {
                 throw CommunityError.subscriptionRequired
             }
-            tier = subTier
+            coinsPaid = subCheck.coinsPaid
         }
         
-        // Verify community exists
+        // Verify community exists — creator can access their own even if inactive
         guard let community = try await fetchCommunity(creatorID: creatorID),
-              community.isActive else {
+              (community.isActive || userID == creatorID) else {
             throw CommunityError.communityNotFound
         }
         
@@ -398,7 +438,7 @@ class CommunityService: ObservableObject {
             communityID: creatorID,
             username: resolvedUsername,
             displayName: resolvedDisplayName,
-            subscriptionTier: tier
+            coinsPaid: coinsPaid
         )
         
         // BATCHED WRITE: membership doc + community member count increment
@@ -513,10 +553,12 @@ class CommunityService: ObservableObject {
         return membership
     }
     
-    // MARK: - Fetch My Communities (Single Query)
+    // MARK: - Fetch My Communities (Member-Based Query)
     
-    /// Uses subscription list to build community list — ONE query, not N reads
+    /// Queries communities the user is actually a member of via collectionGroup.
+    /// This is the source of truth — fixes mismatch between subscriptions and memberships.
     /// CACHING: Full list cached with 5-min TTL
+    /// BATCHING: collectionGroup query = 1 read for all memberships, then batched 'in' queries (max 30) for community docs
     @MainActor
     func fetchMyCommunities(userID: String) async throws -> [CommunityListItem] {
         
@@ -529,15 +571,15 @@ class CommunityService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
-        // Get all active subscriptions (already cached in SubscriptionService)
-        let subscriptions = try await subscriptionService.fetchMySubscriptions(userID: userID)
+        // Query all communities user is a member of — single collectionGroup read
+        let memberSnapshot = try await db.collectionGroup(Collections.members)
+            .whereField("userID", isEqualTo: userID)
+            .whereField("isBanned", isEqualTo: false)
+            .getDocuments()
         
-        // Collect creatorIDs from subscriptions + own community
-        var creatorIDs = subscriptions.map { $0.creatorID }
-        
-        // Always include user's own community (creator sees their own)
-        if !creatorIDs.contains(userID) {
-            creatorIDs.append(userID)
+        // Extract communityIDs from member docs
+        var creatorIDs: [String] = memberSnapshot.documents.compactMap {
+            $0.data()["communityID"] as? String
         }
         
         // Always include official Stitch Social community

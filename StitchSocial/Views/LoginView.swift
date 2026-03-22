@@ -33,6 +33,13 @@ struct LoginView: View {
     @State private var showForgotPasswordAlert: Bool = false
     @State private var forgotPasswordMessage: String = ""
     
+    // MARK: - Business Account State
+    @State private var selectedAccountType: AccountType = .personal
+    @State private var brandName: String = ""
+    @State private var websiteURL: String = ""
+    @State private var selectedBusinessCategory: AdCategory = .other
+    @State private var referralCode: String = ""
+    
     // MARK: - UI State
     @State private var isLoading: Bool = false
     @State private var showingSuccess: Bool = false
@@ -247,25 +254,91 @@ struct LoginView: View {
             
             // Username field (sign up only)
             if currentMode == .signUp {
-                CustomTextField(
-                    title: "Username",
-                    text: $username,
-                    placeholder: "Choose a username",
-                    keyboardType: .default,
-                    isSecure: false,
-                    focusState: $focusedField,
-                    field: .username
-                )
+                // Account Type Picker — locked after signup
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Account Type")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    HStack(spacing: 12) {
+                        accountTypeButton(type: .personal, icon: "person.fill", label: "Personal")
+                        accountTypeButton(type: .business, icon: "building.2.fill", label: "Business")
+                    }
+                }
+                .padding(.bottom, 4)
                 
-                CustomTextField(
-                    title: "Display Name",
-                    text: $displayName,
-                    placeholder: "Your display name",
-                    keyboardType: .default,
-                    isSecure: false,
-                    focusState: $focusedField,
-                    field: .displayName
-                )
+                // Business-specific fields
+                if selectedAccountType == .business {
+                    CustomTextField(
+                        title: "Brand Name",
+                        text: $brandName,
+                        placeholder: "Your company or brand name",
+                        keyboardType: .default,
+                        isSecure: false,
+                        focusState: $focusedField,
+                        field: .username // Reuse field enum
+                    )
+                    
+                    CustomTextField(
+                        title: "Website (optional)",
+                        text: $websiteURL,
+                        placeholder: "https://yourbrand.com",
+                        keyboardType: .URL,
+                        isSecure: false,
+                        focusState: $focusedField,
+                        field: .displayName // Reuse field enum
+                    )
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Business Category")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.8))
+                        
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(AdCategory.allCases, id: \.self) { category in
+                                    Button(action: { selectedBusinessCategory = category }) {
+                                        Text("\(category.icon) \(category.displayName)")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(selectedBusinessCategory == category ? .black : .white.opacity(0.7))
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 8)
+                                            .background(
+                                                selectedBusinessCategory == category
+                                                    ? Color.white
+                                                    : Color.white.opacity(0.1)
+                                            )
+                                            .cornerRadius(20)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.bottom, 4)
+                }
+                
+                // Personal account fields
+                if selectedAccountType == .personal {
+                    CustomTextField(
+                        title: "Username",
+                        text: $username,
+                        placeholder: "Choose a username",
+                        keyboardType: .default,
+                        isSecure: false,
+                        focusState: $focusedField,
+                        field: .username
+                    )
+                    
+                    CustomTextField(
+                        title: "Display Name",
+                        text: $displayName,
+                        placeholder: "Your display name",
+                        keyboardType: .default,
+                        isSecure: false,
+                        focusState: $focusedField,
+                        field: .displayName
+                    )
+                }
             }
             
             // Password field
@@ -317,6 +390,37 @@ struct LoginView: View {
                             .foregroundColor(StitchColors.error)
                         Spacer()
                     }
+                }
+                
+                // Referral Code (optional)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Referral Code (optional)")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    HStack(spacing: 10) {
+                        Image(systemName: "ticket.fill")
+                            .foregroundColor(.purple.opacity(0.6))
+                            .font(.system(size: 14))
+                        
+                        TextField("Enter referral code", text: $referralCode)
+                            .font(.system(size: 15))
+                            .foregroundColor(.white)
+                            .autocapitalization(.allCharacters)
+                            .autocorrectionDisabled()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(Color.white.opacity(0.08))
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(referralCode.isEmpty ? Color.clear : Color.purple.opacity(0.3), lineWidth: 1)
+                    )
+                    
+                    Text("Got a code from a creator? Enter it to connect.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray)
                 }
             }
         }
@@ -570,6 +674,12 @@ struct LoginView: View {
         case .signIn:
             return isValidEmail(email) && password.count >= 6
         case .signUp:
+            if selectedAccountType == .business {
+                return isValidEmail(email) &&
+                       !brandName.isEmpty &&
+                       password.count >= 6 &&
+                       password == confirmPassword
+            }
             return isValidEmail(email) &&
                    !username.isEmpty &&
                    !displayName.isEmpty &&
@@ -592,7 +702,12 @@ struct LoginView: View {
                     try await authService.signUp(
                         email: email,
                         password: password,
-                        displayName: displayName
+                        username: selectedAccountType == .business ? brandName : username,
+                        displayName: selectedAccountType == .business ? brandName : displayName,
+                        accountType: selectedAccountType,
+                        brandName: selectedAccountType == .business ? brandName : nil,
+                        websiteURL: selectedAccountType == .business && !websiteURL.isEmpty ? websiteURL : nil,
+                        businessCategory: selectedAccountType == .business ? selectedBusinessCategory : nil
                     )
                 }
                 
@@ -610,6 +725,22 @@ struct LoginView: View {
                     
                     // Save terms acceptance to Firestore (single batched write)
                     await saveTermsAcceptance(userID: firebaseUser.id)
+                    
+                    // Process referral code if provided
+                    if currentMode == .signUp && !referralCode.trimmingCharacters(in: .whitespaces).isEmpty {
+                        let referralService = ReferralService()
+                        let result = try? await referralService.processReferralSignup(
+                            referralCode: referralCode.trimmingCharacters(in: .whitespaces).uppercased(),
+                            newUserID: firebaseUser.id,
+                            platform: "ios",
+                            sourceType: .manual
+                        )
+                        if let result = result, result.success {
+                            print("🎉 REFERRAL: Code redeemed — referred by \(result.referrerID ?? "unknown")")
+                        } else {
+                            print("⚠️ REFERRAL: Code failed — \(result?.error ?? "unknown error")")
+                        }
+                    }
                     
                     // Auto-join Stitch Social official community
                     await CommunityService.shared.autoJoinOfficialCommunity(
@@ -698,6 +829,30 @@ struct LoginView: View {
         let emailRegex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
         let emailPredicate = NSPredicate(format:"SELF MATCHES %@", emailRegex)
         return emailPredicate.evaluate(with: email)
+    }
+    
+    // MARK: - Account Type Button
+    
+    private func accountTypeButton(type: AccountType, icon: String, label: String) -> some View {
+        Button(action: { selectedAccountType = type }) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.title3)
+                Text(label)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundColor(selectedAccountType == type ? .black : .white.opacity(0.7))
+            .frame(maxWidth: .infinity)
+            .frame(height: 70)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(selectedAccountType == type ? Color.white : Color.white.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(selectedAccountType == type ? Color.white : Color.white.opacity(0.2), lineWidth: 1)
+            )
+        }
     }
 }
 

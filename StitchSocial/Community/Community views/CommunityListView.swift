@@ -76,6 +76,9 @@ struct CommunityListView: View {
             SubscribeToJoinView(
                 userID: userID,
                 creatorID: subscribeCreatorID,
+                creatorTier: subscribeCreatorTier,
+                creatorName: subscribeCreatorName,
+                creatorImageURL: subscribeCreatorImageURL,
                 onSubscribed: {
                     Task {
                         communityService.communityListCache = nil
@@ -351,6 +354,9 @@ struct CommunityListView: View {
     @State private var showingSubscribe = false
     @State private var showingBuyCoins = false
     @State private var subscribeCreatorID = ""
+    @State private var subscribeCreatorTier: UserTier = .rookie
+    @State private var subscribeCreatorName: String = ""
+    @State private var subscribeCreatorImageURL: String? = nil
     
     private func joinByCreatorID() async {
         let creatorID = joinCreatorID.trimmingCharacters(in: .whitespaces)
@@ -394,7 +400,21 @@ struct CommunityListView: View {
     private func handleJoinError(_ error: Error, creatorID: String) {
         if let communityError = error as? CommunityError, communityError == .subscriptionRequired {
             subscribeCreatorID = creatorID
-            showingSubscribe = true
+            // Fetch creator info for subscribe view
+            Task {
+                if let doc = try? await FirebaseConfig.firestore.collection("users").document(creatorID).getDocument(),
+                   let data = doc.data() {
+                    await MainActor.run {
+                        subscribeCreatorName = data["displayName"] as? String ?? "Creator"
+                        subscribeCreatorImageURL = data["profileImageURL"] as? String
+                        let tierRaw = data["tier"] as? String ?? "rookie"
+                        subscribeCreatorTier = UserTier(rawValue: tierRaw) ?? .rookie
+                    }
+                }
+                await MainActor.run {
+                    showingSubscribe = true
+                }
+            }
         } else if error is CoinError {
             showingBuyCoins = true
         } else {

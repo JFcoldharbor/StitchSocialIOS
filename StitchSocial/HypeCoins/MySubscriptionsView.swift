@@ -2,22 +2,16 @@
 //  MySubscriptionsView.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 2/2/26.
+//  View for managing user's active subscriptions to creators.
+//  Shows creator info, days remaining, cycle type, perks, cancel option.
 //
-
-
-//
-//  MySubscriptionsView.swift
-//  StitchSocial
-//
-//  View for managing user's subscriptions to creators
+//  CACHING: Reads from SubscriptionService's mySubsCache (5min TTL).
+//  Creator info fetched per-card — could batch in future if list grows.
 //
 
 import SwiftUI
 
 struct MySubscriptionsView: View {
-    
-    // MARK: - Properties
     
     let userID: String
     
@@ -28,16 +22,13 @@ struct MySubscriptionsView: View {
     @State private var errorMessage: String?
     @State private var showingError = false
     
-    // MARK: - Body
-    
     var body: some View {
         NavigationView {
             ZStack {
                 Color.black.ignoresSafeArea()
                 
                 if isLoading {
-                    ProgressView()
-                        .tint(.white)
+                    ProgressView().tint(.white)
                 } else if subscriptionService.mySubscriptions.isEmpty {
                     emptyState
                 } else {
@@ -135,137 +126,177 @@ struct SubscriptionCard: View {
     let onCancel: () -> Void
     
     @State private var showingCancelConfirm = false
+    @State private var creatorName: String = "Creator"
+    @State private var creatorImageURL: String?
+    
+    /// Perks come from the subscription doc's grantedPerks field
+    private var perks: [SubscriptionPerk] {
+        subscription.perks
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Header
+            // Header — creator info + status
             HStack {
-                // Creator avatar placeholder
-                Circle()
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(width: 50, height: 50)
-                    .overlay(
-                        Image(systemName: "person.fill")
-                            .foregroundColor(.gray)
-                    )
+                AsyncImage(url: URL(string: creatorImageURL ?? "")) { image in
+                    image.resizable().aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Circle()
+                        .fill(Color.gray.opacity(0.3))
+                        .overlay(
+                            Text(String(creatorName.prefix(1)).uppercased())
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.white)
+                        )
+                }
+                .frame(width: 48, height: 48)
+                .clipShape(Circle())
                 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Creator")
+                    Text(creatorName)
                         .font(.headline)
                         .foregroundColor(.white)
                     
-                    // Tier badge
-                    HStack(spacing: 4) {
-                        Image(systemName: subscription.tier == .superFan ? "star.fill" : "star")
-                            .font(.caption)
-                            .foregroundColor(.yellow)
-                        
-                        Text(subscription.tier.displayName)
-                            .font(.caption)
-                            .foregroundColor(.yellow)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(Color.yellow.opacity(0.2))
-                    .cornerRadius(4)
+                    Text("\(subscription.coinsPaid) coins/month")
+                        .font(.caption)
+                        .foregroundColor(.yellow)
                 }
                 
                 Spacer()
                 
-                // Status
+                // Status + days remaining
                 VStack(alignment: .trailing, spacing: 2) {
-                    Circle()
-                        .fill(subscription.isActive ? Color.green : Color.red)
-                        .frame(width: 8, height: 8)
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(subscription.isActive ? Color.green : Color.red)
+                            .frame(width: 6, height: 6)
+                        Text(subscription.isActive ? "Active" : "Expired")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(subscription.isActive ? .green : .red)
+                    }
                     
-                    Text(subscription.isActive ? "Active" : "Expired")
-                        .font(.caption)
-                        .foregroundColor(subscription.isActive ? .green : .red)
+                    if subscription.isActive {
+                        Text("\(subscription.daysRemaining)d left")
+                            .font(.system(size: 11))
+                            .foregroundColor(.gray)
+                    }
                 }
             }
             
-            Divider().background(Color.gray.opacity(0.3))
+            Divider().background(Color.gray.opacity(0.2))
             
-            // Details
+            // Dates row
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Subscribed")
-                        .font(.caption)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Started")
+                        .font(.system(size: 10))
                         .foregroundColor(.gray)
-                    
-                    Text(subscription.startedAt, style: .date)
-                        .font(.subheadline)
+                    Text(subscription.subscribedAt, style: .date)
+                        .font(.system(size: 12))
                         .foregroundColor(.white)
                 }
                 
                 Spacer()
                 
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Renews")
-                        .font(.caption)
+                VStack(alignment: .center, spacing: 2) {
+                    Text("Cycle")
+                        .font(.system(size: 10))
                         .foregroundColor(.gray)
-                    
-                    if subscription.renewalEnabled {
-                        Text(subscription.expiresAt, style: .date)
-                            .font(.subheadline)
+                    Text(subscription.renewalCount == 0 ? "60-day trial" : "30-day")
+                        .font(.system(size: 12))
+                        .foregroundColor(subscription.renewalCount == 0 ? .green : .white)
+                }
+                
+                Spacer()
+                
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Renews")
+                        .font(.system(size: 10))
+                        .foregroundColor(.gray)
+                    if subscription.autoRenew {
+                        Text(subscription.currentPeriodEnd, style: .date)
+                            .font(.system(size: 12))
                             .foregroundColor(.white)
                     } else {
                         Text("Cancelled")
-                            .font(.subheadline)
+                            .font(.system(size: 12))
                             .foregroundColor(.red)
                     }
                 }
             }
             
             // Perks
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Your Perks")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                
-                FlowLayout(spacing: 8) {
-                    ForEach(subscription.tier.perks, id: \.self) { perk in
-                        HStack(spacing: 4) {
-                            Image(systemName: perk.icon)
-                                .font(.caption2)
-                            Text(perk.displayName)
-                                .font(.caption)
+            if !perks.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Your Perks")
+                        .font(.system(size: 11))
+                        .foregroundColor(.gray)
+                    
+                    FlowLayout(spacing: 6) {
+                        ForEach(perks, id: \.self) { perk in
+                            HStack(spacing: 3) {
+                                Image(systemName: perk.icon)
+                                    .font(.system(size: 9))
+                                Text(perk.displayName)
+                                    .font(.system(size: 11))
+                            }
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.cyan.opacity(0.1))
+                            .cornerRadius(6)
                         }
-                        .foregroundColor(.cyan)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.cyan.opacity(0.15))
-                        .cornerRadius(4)
                     }
                 }
             }
             
             // Cancel button
-            if subscription.renewalEnabled {
+            if subscription.autoRenew {
                 Button(action: { showingCancelConfirm = true }) {
                     Text("Cancel Subscription")
-                        .font(.subheadline)
+                        .font(.system(size: 13))
                         .foregroundColor(.red)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
-                        .background(Color.red.opacity(0.15))
+                        .background(Color.red.opacity(0.1))
                         .cornerRadius(8)
                 }
             }
         }
-        .padding()
-        .background(Color.gray.opacity(0.15))
+        .padding(14)
+        .background(Color.gray.opacity(0.1))
         .cornerRadius(16)
+        .task {
+            await loadCreatorInfo()
+        }
         .alert("Cancel Subscription?", isPresented: $showingCancelConfirm) {
             Button("Keep", role: .cancel) { }
             Button("Cancel", role: .destructive) { onCancel() }
         } message: {
-            Text("You'll keep your perks until \(subscription.expiresAt, style: .date)")
+            Text("You'll keep perks until \(subscription.currentPeriodEnd, style: .date)")
+        }
+    }
+    
+    private func loadCreatorInfo() async {
+        do {
+            let doc = try await FirebaseConfig.firestore
+                .collection("users")
+                .document(subscription.creatorID)
+                .getDocument()
+            
+            if let data = doc.data() {
+                await MainActor.run {
+                    creatorName = data["displayName"] as? String ?? "Creator"
+                    creatorImageURL = data["profileImageURL"] as? String
+                }
+            }
+        } catch {
+            print("⚠️ SUB CARD: Failed to load creator info")
         }
     }
 }
 
-// MARK: - Flow Layout (for perks)
+// MARK: - Flow Layout
 
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
@@ -292,13 +323,11 @@ struct FlowLayout: Layout {
         
         for subview in subviews {
             let size = subview.sizeThatFits(.unspecified)
-            
             if currentX + size.width > maxWidth && currentX > 0 {
                 currentX = 0
                 currentY += lineHeight + spacing
                 lineHeight = 0
             }
-            
             positions.append(CGPoint(x: currentX, y: currentY))
             lineHeight = max(lineHeight, size.height)
             currentX += size.width + spacing

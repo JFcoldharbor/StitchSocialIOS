@@ -2,54 +2,90 @@
 //  AdRevenueShare.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 2/2/26.
+//  Ad revenue share configuration and account type definitions.
+//  Dependencies: UserTier (Layer 1)
 //
-
-
+//  UPDATED: All tiers now earn ad revenue (was Influencer+ only).
+//  Revenue shares updated to match new tier structure.
+//  Added AccountType enum for Business vs Personal accounts.
 //
-//  AdModels.swift
-//  StitchSocial
-//
-//  Ad system models for sponsor campaigns and creator partnerships
+//  CACHING NOTE: Revenue share lookups are pure static computations —
+//  no caching needed here. Ad data caching lives in AdService.
 //
 
 import Foundation
 
+// NOTE: AccountType enum is defined in UserTier.swift (Layer 1)
+
 // MARK: - Revenue Share Configuration
 
+/// Ad revenue share split between creator and platform.
+/// All tiers earn ad revenue. Share scales with tier progression.
+/// Business accounts do NOT earn ad rev — they pay into the ad pool.
 enum AdRevenueShare {
+    
+    /// Creator's percentage of ad revenue generated on their content.
+    /// Business accounts always return 0 — they are advertisers, not earners.
     static func creatorShare(for tier: UserTier) -> Double {
         switch tier {
-        case .influencer: return 0.25
-        case .ambassador: return 0.28
-        case .elite: return 0.32
-        case .partner: return 0.35
-        case .legendary: return 0.38
-        case .topCreator: return 0.40
-        case .founder, .coFounder: return 0.50
-        default: return 0.0 // Below influencer = no ads
+        case .rookie:                return 0.10  // 10/90
+        case .rising:                return 0.12  // 12/88
+        case .veteran:               return 0.15  // 15/85
+        case .influencer:            return 0.20  // 20/80
+        case .ambassador:            return 0.35  // 35/65 — big jump, rewards sustained growth
+        case .elite:                 return 0.45  // 45/55
+        case .partner:               return 0.50  // 50/50
+        case .legendary:             return 0.55  // 55/45
+        case .topCreator:            return 0.65  // 65/35 — beats YouTube's flat 55%
+        case .founder, .coFounder:   return 0.65  // Same as Top Creator
+        case .business:              return 0.0   // Business accounts pay ads, don't earn
         }
     }
     
+    /// Platform's percentage of ad revenue.
     static func platformShare(for tier: UserTier) -> Double {
         return 1.0 - creatorShare(for: tier)
     }
     
-    static func canAccessAds(tier: UserTier) -> Bool {
+    /// All personal account tiers can earn ad revenue.
+    /// Business accounts cannot — they are the advertisers.
+    static func canEarnAdRevenue(tier: UserTier, accountType: AccountType) -> Bool {
+        guard accountType == .personal else { return false }
+        return true // All personal tiers earn ad rev now
+    }
+    
+    /// Whether a user can access the ad opportunities marketplace.
+    /// Influencer+ can browse/accept brand partnerships.
+    /// Below Influencer still earns passive ad rev but can't do brand deals.
+    static func canAccessAdMarketplace(tier: UserTier) -> Bool {
         switch tier {
-        case .influencer, .ambassador, .elite, .partner, .legendary, .topCreator, .founder, .coFounder:
+        case .influencer, .ambassador, .elite, .partner,
+             .legendary, .topCreator, .founder, .coFounder:
             return true
         default:
             return false
         }
     }
+    
+    /// Whether a business account can create ad campaigns.
+    static func canCreateCampaigns(accountType: AccountType) -> Bool {
+        return accountType == .business
+    }
+    
+    // MARK: - Deprecated Compatibility
+    
+    /// Legacy accessor — use canAccessAdMarketplace or canEarnAdRevenue instead.
+    @available(*, deprecated, renamed: "canAccessAdMarketplace")
+    static func canAccessAds(tier: UserTier) -> Bool {
+        return canAccessAdMarketplace(tier: tier)
+    }
 }
 
-// MARK: - Ad Campaign (Created by Sponsors)
+// MARK: - Ad Campaign (Created by Business Accounts)
 
 struct AdCampaign: Codable, Identifiable, Hashable {
     let id: String
-    let brandID: String
+    let brandID: String              // Business account userID
     let brandName: String
     let brandLogoURL: String?
     let title: String
@@ -60,7 +96,7 @@ struct AdCampaign: Codable, Identifiable, Hashable {
     let budgetMin: Double
     let budgetMax: Double
     let paymentModel: AdPaymentModel
-    let cpmRate: Double?
+    let cpmRate: Double?             // Cost per 1,000 impressions
     let cpaRate: Double?
     let flatFee: Double?
     let requirements: CreatorRequirements
@@ -75,7 +111,7 @@ struct AdCampaign: Codable, Identifiable, Hashable {
     }
 }
 
-// MARK: - Creator Requirements (Set by Sponsors)
+// MARK: - Creator Requirements (Set by Business in Campaign)
 
 struct CreatorRequirements: Codable, Hashable {
     let minimumTier: UserTier
@@ -88,6 +124,7 @@ struct CreatorRequirements: Codable, Hashable {
     let requiredHashtags: [String]?
     let preferredCategories: [AdCategory]?
     
+    /// Default requirements — platform auto-matches, business sets criteria
     static let `default` = CreatorRequirements(
         minimumTier: .influencer,
         minimumStitchers: nil,
@@ -101,13 +138,13 @@ struct CreatorRequirements: Codable, Hashable {
     )
 }
 
-// MARK: - Ad Opportunity (Matched to Creator)
+// MARK: - Ad Opportunity (Auto-Matched to Creator)
 
 struct AdOpportunity: Codable, Identifiable, Hashable {
     let id: String
     let campaign: AdCampaign
     let creatorID: String
-    let matchScore: Int // 0-100
+    let matchScore: Int              // 0-100, computed by matching algorithm
     let status: AdOpportunityStatus
     let estimatedEarnings: Double?
     let createdAt: Date
@@ -144,7 +181,7 @@ struct AdPlacement: Codable, Identifiable, Hashable {
     let id: String
     let partnershipID: String
     let threadID: String
-    let position: Int // Always 2 for now
+    let position: Int                // Insertion point in thread
     let impressions: Int
     let earnings: Double
     let placedAt: Date
@@ -163,6 +200,21 @@ struct CreatorAdStats: Codable {
     let lastPayoutAmount: Double?
 }
 
+// MARK: - Business Ad Stats (Dashboard)
+
+/// Stats shown on the Business account dashboard.
+/// Firestore: business_ad_stats/{businessUserID}
+struct BusinessAdStats: Codable {
+    let businessID: String
+    let totalCampaigns: Int
+    let activeCampaigns: Int
+    let totalSpend: Double
+    let totalImpressions: Int
+    let totalClicks: Int
+    let averageCPM: Double
+    let lastCampaignDate: Date?
+}
+
 // MARK: - Enums
 
 enum AdCategory: String, Codable, CaseIterable, Hashable {
@@ -178,10 +230,15 @@ enum AdCategory: String, Codable, CaseIterable, Hashable {
     case entertainment = "entertainment"
     case sports = "sports"
     case music = "music"
+    case realEstate = "real_estate"
+    case automotive = "automotive"
     case other = "other"
     
     var displayName: String {
-        rawValue.capitalized
+        switch self {
+        case .realEstate: return "Real Estate"
+        default: return rawValue.capitalized
+        }
     }
     
     var icon: String {
@@ -198,13 +255,15 @@ enum AdCategory: String, Codable, CaseIterable, Hashable {
         case .entertainment: return "🎬"
         case .sports: return "⚽"
         case .music: return "🎵"
+        case .realEstate: return "🏠"
+        case .automotive: return "🚗"
         case .other: return "📦"
         }
     }
 }
 
 enum AdPaymentModel: String, Codable, Hashable {
-    case cpm = "cpm"           // Per 1000 views
+    case cpm = "cpm"           // Per 1000 impressions — primary model
     case cpa = "cpa"           // Per engagement action
     case flat = "flat"         // Flat campaign fee
     case hybrid = "hybrid"     // Combination

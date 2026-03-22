@@ -74,6 +74,9 @@ struct StitchSocialApp: App {
                     }
                     #endif
                     
+                    // Wire TipService with shared NotificationService
+                    TipService.shared.configure(notificationService: notificationService)
+
                     // Initialize memory management
                     initializeMemoryManagement()
                     
@@ -99,12 +102,13 @@ struct StitchSocialApp: App {
                     // Auto-follow handled by Cloud Function #24 (onUserCreated) — no client-side backfill needed
                     
                     // Post-login setup for returning users
+                    // Force token refresh before any Firestore calls — prevents
+                    // "Missing or insufficient permissions" on badges/subs/plans listeners
+                    // that fire before Firestore receives the auth token.
                     Task {
                         if let user = Auth.auth().currentUser {
-                            // Developer email bypass
+                            _ = try? await user.getIDToken(forcingRefresh: true)
                             SubscriptionService.shared.setCurrentUserEmail(user.email)
-                            
-                            // Auto-join official community (cached — no-op if already member)
                             await CommunityService.shared.autoJoinOfficialCommunity(
                                 userID: user.uid,
                                 username: user.displayName ?? "user_\(user.uid.prefix(6))",
@@ -397,6 +401,8 @@ extension StitchNotificationType {
         case .goLive: return .red
         case .communityPost: return .cyan
         case .communityXP: return .green
+        case .tip: return Color(red: 1.0, green: 0.84, blue: 0.0)
+        case .subscription: return .purple
         }
     }
     
@@ -413,6 +419,8 @@ extension StitchNotificationType {
         case .goLive: return "video.fill"
         case .communityPost: return "bubble.left.and.bubble.right.fill"
         case .communityXP: return "star.fill"
+        case .tip: return "dollarsign.circle.fill"
+        case .subscription: return "star.circle.fill"
         }
     }
 }
@@ -427,6 +435,8 @@ extension NotificationToast {
         case .goLive: return 6.0
         case .communityPost, .communityXP: return 4.0
         case .system: return 8.0
+        case .tip: return 4.0
+        case .subscription: return 5.0
         }
     }
 }

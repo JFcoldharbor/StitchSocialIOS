@@ -3,7 +3,7 @@
 //  StitchSocial
 //
 //  Layer 1: Foundation - Community System Data Models
-//  Dependencies: UserTier (Layer 1), SubscriptionTier (Layer 1) ONLY
+//  Dependencies: UserTier (Layer 1) ONLY
 //  Features: Community, membership, posts, XP, badges, DMs, global XP
 //
 //  CACHING NOTES:
@@ -90,10 +90,11 @@ struct CommunityMembership: Codable, Identifiable, Hashable {
     let communityID: String             // Same as creatorID
     let username: String
     let displayName: String
-    var subscriptionTier: SubscriptionTier
+    var coinsPaid: Int                  // Coins paid for subscription (replaces SubscriptionTier)
     var localXP: Int
     var level: Int
     var earnedBadgeIDs: [String]        // Badge definition IDs earned
+    var isOwner: Bool                   // True only for the creator of the community
     var isModerator: Bool
     var isBanned: Bool
     var lastActiveAt: Date
@@ -111,17 +112,18 @@ struct CommunityMembership: Codable, Identifiable, Hashable {
         communityID: String,
         username: String,
         displayName: String,
-        subscriptionTier: SubscriptionTier
+        coinsPaid: Int = 0
     ) {
         self.id = userID
         self.userID = userID
         self.communityID = communityID
         self.username = username
         self.displayName = displayName
-        self.subscriptionTier = subscriptionTier
+        self.coinsPaid = coinsPaid
         self.localXP = 0
         self.level = 1
         self.earnedBadgeIDs = []
+        self.isOwner = false
         self.isModerator = false
         self.isBanned = false
         self.lastActiveAt = Date()

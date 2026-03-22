@@ -656,6 +656,7 @@ private func tierColor(for tier: UserTier) -> Color {
     case .legendary: return .red
     case .topCreator: return .yellow
     case .founder, .coFounder: return .cyan
+    case .business: return .green
     }
 }
 

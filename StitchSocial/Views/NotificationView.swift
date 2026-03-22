@@ -25,17 +25,21 @@ enum StitchNotificationTab: String, CaseIterable {
     case live = "live"
     case community = "community"
     case system = "system"
+    case tips = "tips"
+    case subscriptions = "subscriptions"
     
     var displayName: String {
         switch self {
-        case .all: return "All"
-        case .unread: return "Unread"
-        case .hypes: return "Hypes"
-        case .follows: return "Follows"
-        case .replies: return "Replies"
-        case .live: return "Live"
-        case .community: return "Community"
-        case .system: return "System"
+        case .all:           return "All"
+        case .unread:        return "Unread"
+        case .hypes:         return "Hypes"
+        case .follows:       return "Follows"
+        case .replies:       return "Replies"
+        case .live:          return "Live"
+        case .community:     return "Community"
+        case .system:        return "System"
+        case .tips:          return "Tips"
+        case .subscriptions: return "Subs"
         }
     }
 }
@@ -508,6 +512,8 @@ struct NotificationView: View {
         case .live: return "video.fill"
         case .community: return "person.3.fill"
         case .system: return "info.circle"
+        case .tips: return "dollarsign.circle.fill"
+        case .subscriptions: return "star.circle.fill"
         }
     }
     
@@ -521,6 +527,8 @@ struct NotificationView: View {
         case .live: return "Live stream notifications will appear here."
         case .community: return "Community activity will show up here."
         case .system: return "System notifications will appear here."
+        case .tips: return "No tips yet. Share great content!"
+        case .subscriptions: return "No subscriptions yet."
         }
     }
     

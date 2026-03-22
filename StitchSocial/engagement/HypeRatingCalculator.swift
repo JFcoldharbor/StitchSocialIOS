@@ -316,6 +316,7 @@ struct HypeRatingCalculator {
         case .topCreator: return 3.0
         case .founder: return 4.0
         case .coFounder: return 5.0
+        case .business: return 1.0  // Business accounts — neutral multiplier
         }
     }
     
@@ -461,6 +462,7 @@ struct HypeRatingCalculator {
         case .topCreator: return 1.0
         case .founder: return 1.0
         case .coFounder: return 1.0
+        case .business: return 0.5  // Business — moderate credibility
         }
     }
     

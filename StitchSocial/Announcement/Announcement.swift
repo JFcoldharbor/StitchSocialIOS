@@ -55,13 +55,28 @@ struct Announcement: Identifiable, Codable, Hashable {
     var isCurrentlyActive: Bool {
         let now = Date()
         let afterStart = now >= startDate
-        let beforeEnd = endDate == nil || now <= endDate!
+        
+        // If endDate is set, respect it
+        // If endDate is nil, auto-expire after 30 days from startDate
+        let effectiveEnd: Date
+        if let endDate = endDate {
+            effectiveEnd = endDate
+        } else {
+            effectiveEnd = Calendar.current.date(byAdding: .day, value: 30, to: startDate) ?? startDate
+        }
+        
+        let beforeEnd = now <= effectiveEnd
         return isActive && afterStart && beforeEnd
     }
     
     var isExpired: Bool {
-        guard let endDate = endDate else { return false }
-        return Date() > endDate
+        let effectiveEnd: Date
+        if let endDate = endDate {
+            effectiveEnd = endDate
+        } else {
+            effectiveEnd = Calendar.current.date(byAdding: .day, value: 30, to: startDate) ?? startDate
+        }
+        return Date() > effectiveEnd
     }
     
     var isRepeating: Bool {
@@ -377,7 +392,16 @@ class AnnouncementService: ObservableObject {
                 
                 // Check if still active (not expired)
                 guard announcement.isCurrentlyActive else {
-                    print("📢 FETCH: ⏭️ Skipping '\(announcement.title)' - not currently active")
+                    print("📢 FETCH: ⏭️ Skipping '\(announcement.title)' - not currently active/expired")
+                    continue
+                }
+                
+                // Skip announcements that ended before this user joined
+                // accountAge is in days — if announcement started more than accountAge days ago
+                // and has expired, this user should never see it
+                let announcementAgeDays = Calendar.current.dateComponents([.day], from: announcement.startDate, to: Date()).day ?? 0
+                if announcementAgeDays > accountAge && announcement.isExpired {
+                    print("📢 FETCH: ⏭️ Skipping '\(announcement.title)' - user joined after announcement ended")
                     continue
                 }
                 

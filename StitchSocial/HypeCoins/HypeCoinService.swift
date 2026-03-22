@@ -219,7 +219,12 @@ class HypeCoinService: ObservableObject {
         userID: String,
         amount: Int,
         tier: UserTier,
-        payoutMethod: PayoutMethod
+        payoutMethod: PayoutMethod,
+        customSubShare: Double? = nil,
+        customSubShareExpiresAt: Date? = nil,
+        customSubSharePermanent: Bool = false,
+        referralCount: Int = 0,
+        referralGoal: Int? = nil
     ) async throws -> CashOutRequest {
         
         // Validate minimum
@@ -233,11 +238,36 @@ class HypeCoinService: ObservableObject {
             throw CoinError.insufficientBalance
         }
         
-        // Calculate split
-        let (creatorAmount, platformAmount) = SubscriptionRevenueShare.calculateCashOut(
-            coins: amount,
-            tier: tier
+        // Auto-fetch custom share fields if not provided — 1 read, saves caller from needing user doc
+        var resolvedCustomShare = customSubShare
+        var resolvedExpiresAt = customSubShareExpiresAt
+        var resolvedPermanent = customSubSharePermanent
+        var resolvedRefCount = referralCount
+        var resolvedRefGoal = referralGoal
+        
+        if customSubShare == nil {
+            let userDoc = try? await db.collection("users").document(userID).getDocument()
+            if let data = userDoc?.data() {
+                resolvedCustomShare = data["customSubShare"] as? Double
+                resolvedExpiresAt = (data["customSubShareExpiresAt"] as? Timestamp)?.dateValue()
+                resolvedPermanent = data["customSubSharePermanent"] as? Bool ?? false
+                resolvedRefCount = data["referralCount"] as? Int ?? 0
+                resolvedRefGoal = data["referralGoal"] as? Int
+            }
+        }
+        
+        // Calculate split — uses custom override if active
+        let effectiveShare = SubscriptionRevenueShare.effectiveCreatorShare(
+            tier: tier,
+            customSubShare: resolvedCustomShare,
+            customSubShareExpiresAt: resolvedExpiresAt,
+            customSubSharePermanent: resolvedPermanent,
+            referralCount: resolvedRefCount,
+            referralGoal: resolvedRefGoal
         )
+        let totalValue = HypeCoinValue.toDollars(amount)
+        let creatorAmount = totalValue * effectiveShare
+        let platformAmount = totalValue * (1.0 - effectiveShare)
         
         // Create request
         let request = CashOutRequest(
@@ -245,7 +275,7 @@ class HypeCoinService: ObservableObject {
             userID: userID,
             coinAmount: amount,
             userTier: tier,
-            creatorPercentage: SubscriptionRevenueShare.creatorShare(for: tier),
+            creatorPercentage: effectiveShare,
             creatorAmount: creatorAmount,
             platformAmount: platformAmount,
             status: .pending,
@@ -276,7 +306,7 @@ class HypeCoinService: ObservableObject {
             balanceAfter: balance.availableCoins - amount,
             relatedUserID: nil,
             relatedSubscriptionID: nil,
-            description: "Cash out: $\(String(format: "%.2f", creatorAmount)) (\(Int(SubscriptionRevenueShare.creatorShare(for: tier) * 100))%)",
+            description: "Cash out: $\(String(format: "%.2f", creatorAmount)) (\(Int(effectiveShare * 100))%)",
             createdAt: Date()
         )
         

@@ -88,6 +88,12 @@ class ProfileViewModel: ObservableObject {
     
     @Published var animationController: ProfileAnimationController
     
+    // MARK: - Badge State
+    // CACHING: BadgeService uses a single Firestore snapshot listener per user.
+    // No repeated reads — all badge data served from in-memory cache after first load.
+    @Published var signalStats: SignalStats? = nil
+    private var loadedBadgeUserID: String?
+
     // MARK: - Caching for Performance
     private var cachedUserProfile: BasicUserInfo?
     private var profileCacheTime: Date?
@@ -161,6 +167,10 @@ class ProfileViewModel: ObservableObject {
     // MARK: - Deinitialization
     
     deinit {
+        let uid = loadedBadgeUserID
+        Task { @MainActor in
+            if let uid { BadgeService.shared.stopListening(userID: uid) }
+        }
         cleanupNotificationObservers()
         print("PROFILE VIEWMODEL: Deinitializing with proper cleanup")
     }
@@ -240,6 +250,10 @@ class ProfileViewModel: ObservableObject {
                 // Cache for future instant loads
                 cacheProfile(userProfile)
                 
+                // Start badge listener — single snapshot listener, no repeated reads
+                BadgeService.shared.listenForBadges(userID: userID)
+                loadedBadgeUserID = userID
+                
                 // Load extended profile data (bio, privacy settings)
                 await loadExtendedProfileData(userID: userID)
                 
@@ -275,6 +289,19 @@ class ProfileViewModel: ObservableObject {
                     self.isUserPrivate = extendedProfile.isPrivate
                 }
                 print("PROFILE EXTENDED: Loaded bio and privacy settings")
+            }
+            // Decode signalStats from user doc — sourced from existing read, zero extra cost
+            let db = Firestore.firestore(database: Config.Firebase.databaseName)
+            let snap = try await db.collection(FirebaseSchema.Collections.users).document(userID).getDocument()
+            if let sd = snap.data()?["signalStats"] as? [String: Any] {
+                await MainActor.run {
+                    self.signalStats = SignalStats(
+                        totalInfluencerHypes:  sd["totalInfluencerHypes"]  as? Int ?? 0,
+                        peakSinglePostSignals: sd["peakSinglePostSignals"] as? Int ?? 0,
+                        distinctTierCount:     sd["distinctTierCount"]     as? Int ?? 0,
+                        founderHypeCount:      sd["founderHypeCount"]      as? Int ?? 0
+                    )
+                }
             }
         } catch {
             print("PROFILE EXTENDED ERROR: Failed to load extended data - \(error.localizedDescription)")

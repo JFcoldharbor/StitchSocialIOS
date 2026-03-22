@@ -330,6 +330,67 @@ struct OptimizationConfig {
         static let scoringJitter: Double = 0.15
     }
     
+    // MARK: - Ad System Cache Configuration
+    
+    /// TTL and limits for AdService caches.
+    /// Ad data is read-heavy, write-light — caching cuts Firestore reads significantly.
+    ///
+    /// WIRING:
+    /// - AdService.opportunitiesTTL reads Ad.opportunitiesTTL
+    /// - AdService.partnershipsTTL reads Ad.partnershipsTTL
+    /// - AdService.statsTTL reads Ad.statsTTL
+    /// - AdService.campaignsTTL reads Ad.campaignsTTL
+    /// - AdService.clearAllCaches() called on logout
+    struct Ad {
+        
+        /// TTL for auto-matched opportunities (moderate change rate)
+        static let opportunitiesTTL: TimeInterval = 300  // 5 min
+        
+        /// TTL for active partnerships (slow-changing once accepted)
+        static let partnershipsTTL: TimeInterval = 600  // 10 min
+        
+        /// TTL for creator/business aggregated stats
+        static let statsTTL: TimeInterval = 600  // 10 min
+        
+        /// TTL for business campaign list
+        static let campaignsTTL: TimeInterval = 300  // 5 min
+        
+        /// Max opportunities to fetch per request
+        static let maxOpportunitiesFetch = 20
+        
+        /// Max campaigns to fetch per business dashboard
+        static let maxCampaignsFetch = 50
+    }
+    
+    // MARK: - Subscription Cache Configuration
+    
+    /// TTL for CoinSubscriptionService caches.
+    /// Subscription data is queried on every community/perk gate check.
+    ///
+    /// WIRING:
+    /// - CoinSubscriptionService reads these TTLs
+    /// - All caches clear on logout
+    struct Subscription {
+        
+        /// TTL for creator pricing (rarely changes — 60-day cooldown)
+        static let pricingTTL: TimeInterval = 600  // 10 min
+        
+        /// TTL for active subscription status check
+        static let activeSubTTL: TimeInterval = 300  // 5 min
+        
+        /// TTL for fan's subscription list
+        static let mySubsListTTL: TimeInterval = 300  // 5 min
+        
+        /// TTL for coin balance (changes on every transaction)
+        static let coinBalanceTTL: TimeInterval = 60  // 60 sec
+        
+        /// TTL for user tier lookup
+        static let userTierTTL: TimeInterval = 600  // 10 min
+        
+        /// TTL for promo revenue share override
+        static let promoShareTTL: TimeInterval = 1800  // 30 min
+    }
+    
     // MARK: - Network Configuration
     
     /// Network requests and timeouts

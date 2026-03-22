@@ -53,6 +53,18 @@ struct StitchersListView: View {
         ))
     }
     
+    // MARK: - Seeded Follower Counts (Display Only)
+
+    private let seededFollowerCounts: [String: Int] = [
+        "4ifwg1CxDGbZ9amfPOvl0lMR6982": 11500,  // Fortune5ks
+        "AZUAsfkobQWSqXzgTR1UM2uogZn2": 10200,  // Teddy Ruks
+        "zh4vp0tQJOV15wyJXOu5a2cLBf73": 8500    // Tray Chaney
+    ]
+
+    private var seededFollowerCount: Int {
+        seededFollowerCounts[profileUserID] ?? viewModel.totalFollowers
+    }
+
     // MARK: - Body
     
     var body: some View {
@@ -115,7 +127,7 @@ struct StitchersListView: View {
     
     private var tabBar: some View {
         HStack(spacing: 0) {
-            tabButton(tab: .followers, title: "Followers", count: viewModel.totalFollowers)
+            tabButton(tab: .followers, title: "Followers", count: seededFollowerCount)
             tabButton(tab: .following, title: "Following", count: viewModel.totalFollowing)
             
             if isOwnProfile {
@@ -801,4 +813,3 @@ class StitchersViewModel: ObservableObject {
 // MARK: - BasicUserInfo Extension for Identifiable Sheet
 
 extension BasicUserInfo: Identifiable {}
-

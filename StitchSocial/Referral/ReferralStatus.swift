@@ -265,16 +265,35 @@ class ReferralService: ObservableObject {
                 
                 // Write 1: Update referrer's stats
                 let referrerRef = self.db.collection(FirebaseSchema.Collections.users).document(referrerID)
-                transaction.updateData([
-                    FirebaseSchema.UserDocument.referralCount: currentReferralCount + 1,
+                
+                // Check if this referral meets the ambassador promo goal
+                let newReferralCount = currentReferralCount + 1
+                let referralGoal = referrerData[FirebaseSchema.UserDocument.referralGoal] as? Int
+                let customSubShare = referrerData[FirebaseSchema.UserDocument.customSubShare] as? Double
+                let alreadyPermanent = referrerData[FirebaseSchema.UserDocument.customSubSharePermanent] as? Bool ?? false
+                
+                // If they have a custom share + goal, and this referral meets it → lock it in permanently
+                let shouldMarkPermanent = !alreadyPermanent
+                    && customSubShare != nil
+                    && referralGoal != nil
+                    && newReferralCount >= (referralGoal ?? Int.max)
+                
+                var referrerUpdate: [String: Any] = [
+                    FirebaseSchema.UserDocument.referralCount: newReferralCount,
                     FirebaseSchema.UserDocument.referralCloutEarned: newCloutEarned,
                     FirebaseSchema.UserDocument.clout: currentClout + cloutToAward,
                     FirebaseSchema.UserDocument.hypeRatingBonus: newHypeBonus,
                     FirebaseSchema.UserDocument.referralRewardsMaxed: newCloutEarned >= self.maxCloutFromReferrals,
                     FirebaseSchema.UserDocument.updatedAt: Timestamp(),
-                    // Increment follower count for referrer
                     FirebaseSchema.UserDocument.followerCount: FieldValue.increment(Int64(1))
-                ], forDocument: referrerRef)
+                ]
+                
+                if shouldMarkPermanent {
+                    referrerUpdate[FirebaseSchema.UserDocument.customSubSharePermanent] = true
+                    print("🏆 REFERRAL: Ambassador \(referrerID) hit \(newReferralCount)/\(referralGoal ?? 0) referrals — 80/20 locked permanently!")
+                }
+                
+                transaction.updateData(referrerUpdate, forDocument: referrerRef)
                 
                 // Write 2: Update new user with referrer info
                 let newUserRef = self.db.collection(FirebaseSchema.Collections.users).document(newUserID)

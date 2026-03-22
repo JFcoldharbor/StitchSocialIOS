@@ -510,6 +510,7 @@ class VideoEngagementService: ObservableObject {
         case .legendary: return 250
         case .topCreator: return 500
         case .founder, .coFounder: return 1000
+        case .business: return 1  // Business accounts give minimal clout
         }
     }
     

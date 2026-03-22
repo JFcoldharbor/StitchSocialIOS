@@ -45,6 +45,7 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         coolCount: Int,
         replyCount: Int,
         shareCount: Int,
+        tipCount: Int = 0,
         temperature: String,
         qualityScore: Int,
         engagementRatio: Double,
@@ -86,6 +87,7 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         self.coolCount = coolCount
         self.replyCount = replyCount
         self.shareCount = shareCount
+        self.tipCount = tipCount
         self.temperature = temperature
         self.qualityScore = qualityScore
         self.engagementRatio = engagementRatio
@@ -126,6 +128,7 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     let hypeCount: Int
     let coolCount: Int
     let replyCount: Int
+    let tipCount: Int
     let shareCount: Int
     
     // MARK: - Quality & Performance (Like Reddit's Scoring)
@@ -609,6 +612,7 @@ extension CoreVideoMetadata {
             coolCount: newCoolCount,
             replyCount: newReplyCount,
             shareCount: newShareCount,
+            tipCount: tipCount,
             temperature: newTemperature,
             qualityScore: qualityScore,
             engagementRatio: newEngagementRatio,

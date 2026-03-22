@@ -35,6 +35,7 @@ struct ProfileView: View {
     @State private var showingSettings = false
     @State private var showingEditProfile = false
     @State private var showingAdOpportunities = false
+    @State private var showingSubscribe = false
     
     // MARK: - Video Player State
     
@@ -88,6 +89,9 @@ struct ProfileView: View {
     @State private var selectedDraft: CollectionDraft?
     @State private var showingAllCollections = false
     @State private var collectionError: String?
+    
+    // MARK: - Badge Navigation State
+    
     
     // MARK: - Initialization
     
@@ -192,6 +196,9 @@ struct ProfileView: View {
                 AdOpportunitiesView(user: user)
                     .preferredColorScheme(.dark)
             }
+        }
+        .sheet(isPresented: $showingSubscribe) {
+            subscribeSheet
         }
         // FIXED: Use item-based fullScreenCover to avoid race condition
         .fullScreenCover(item: $videoPresentation) { presentation in
@@ -303,6 +310,7 @@ struct ProfileView: View {
                 VStack(spacing: 0) {
                     optimizedProfileHeader(user: user)
                     collectionsRow
+                    badgesPreviewRow(user: user)
                     tabBarSection
                     videoGridSection
                 }
@@ -320,6 +328,35 @@ struct ProfileView: View {
         }
     }
     
+    // MARK: - Badges Preview Row
+
+    @ViewBuilder
+    private func badgesPreviewRow(user: BasicUserInfo) -> some View {
+        if !user.isBusiness {
+            // BasicUserInfo carries no followers/hypes/xp fields.
+            // Use viewModel.totalFollowersCount for followers; clout proxies XP
+            // until a dedicated xp field is added to BasicUserInfo/Firestore.
+            // signalStats defaults empty — Cloud Function will write signalStats
+            // map to user doc once fan-out is wired (zero extra read when ready).
+            let stats = RealUserStats(
+                followers: viewModel.totalFollowersCount,
+                hypes: 0,
+                threads: 0,
+                posts: viewModel.userVideos.count,
+                engagementRate: 0,
+                clout: user.clout
+            )
+            ProfileBadgePreviewRow(
+                userID: user.id,
+                isOwner: viewModel.isOwnProfile,
+                stats: stats,
+                xp: user.clout,
+                tierRaw: user.tier.rawValue,
+                signalStats: viewModel.signalStats ?? SignalStats()
+            )
+        }
+    }
+
     // MARK: - Collections Row
     
     @ViewBuilder
@@ -425,7 +462,13 @@ struct ProfileView: View {
     private func optimizedProfileHeader(user: BasicUserInfo) -> some View {
         VStack(spacing: 20) {
             HStack(spacing: 16) {
-                enhancedProfileImage(user: user)
+                SupporterRingView(
+                    imageURL: URL(string: user.profileImageURL ?? ""),
+                    userInitials: String(user.displayName.prefix(1)).uppercased(),
+                    tierColor: getTierColors(user.tier).first ?? .gray,
+                    size: 80,
+                    userID: user.id
+                )
                 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
@@ -439,13 +482,53 @@ struct ProfileView: View {
                                 .font(.title3)
                                 .foregroundColor(.red)
                         }
+                        
+                        // Verified business badge (teal gradient accent)
+                        if user.isBusiness {
+                            if let biz = user.businessProfile, biz.isVerifiedBusiness {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(StitchColors.businessGradient)
+                            } else {
+                                Image(systemName: "building.2.fill")
+                                    .font(.caption)
+                                    .foregroundColor(StitchColors.tierBusiness.opacity(0.7))
+                            }
+                        }
                     }
                     
                     Text("@\(user.username)")
                         .font(.subheadline)
                         .foregroundColor(.gray)
                     
-                    tierBadge(user: user)
+                    // Business: show category + website. Personal: show tier badge
+                    if user.isBusiness, let biz = user.businessProfile {
+                        HStack(spacing: 6) {
+                            Text(biz.categoryDisplay)
+                                .font(.caption)
+                                .foregroundColor(StitchColors.tierBusiness)
+                            
+                            if let url = biz.websiteURL, !url.isEmpty {
+                                Text("•")
+                                    .foregroundColor(.gray)
+                                Link(url.replacingOccurrences(of: "https://", with: ""), destination: URL(string: url) ?? URL(string: "https://stitchsocial.me")!)
+                                    .font(.caption)
+                                    .foregroundColor(StitchColors.businessGradientColors.last ?? .blue)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(
+                            LinearGradient(
+                                colors: StitchColors.businessGradientColors.map { $0.opacity(0.15) },
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .cornerRadius(8)
+                    } else {
+                        tierBadge(user: user)
+                    }
                 }
                 
                 Spacer()
@@ -455,17 +538,38 @@ struct ProfileView: View {
             if shouldShowBio(user: user) {
                 VStack(alignment: .leading, spacing: 8) {
                     bioSection(user: user)
+                    
+                    // Business: website link below bio
+                    if user.isBusiness, let biz = user.businessProfile,
+                       let url = biz.websiteURL, !url.isEmpty {
+                        Link(destination: URL(string: url) ?? URL(string: "https://stitchsocial.me")!) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "link")
+                                    .font(.caption2)
+                                Text(url.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.blue)
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
             }
             
-            VStack(spacing: 12) {
-                hypeMeterSection(user: user)
+            // Business: clout + stitchers (no hype meter)
+            // Personal: hype meter + full stats
+            if user.isBusiness {
+                businessStatsRow(user: user)
+            } else {
+                VStack(spacing: 12) {
+                    hypeMeterSection(user: user)
+                }
+                .padding(.horizontal, 20)
+                
+                statsRow(user: user)
             }
-            .padding(.horizontal, 20)
             
-            statsRow(user: user)
             actionButtonsRow(user: user)
         }
         .padding(.vertical, 20)
@@ -646,6 +750,28 @@ struct ProfileView: View {
         .cornerRadius(10)
     }
     
+    // MARK: - Business Stats Row
+    
+    private func businessStatsRow(user: BasicUserInfo) -> some View {
+        HStack(spacing: 30) {
+            statItem(title: "Videos", value: "\(viewModel.userVideos.count + viewModel.pinnedVideos.count)")
+            
+            Button(action: {
+                Task {
+                    await viewModel.loadFollowers()
+                    await viewModel.loadFollowing()
+                }
+                showingFollowersList = true
+            }) {
+                statItem(title: "Stitchers", value: displayFollowerCount(for: user.id))
+            }
+            .buttonStyle(PlainButtonStyle())
+            
+            statItem(title: "Clout", value: viewModel.formatClout(user.clout))
+        }
+        .padding(.horizontal, 20)
+    }
+    
     // MARK: - Stats Row
     
     private func statsRow(user: BasicUserInfo) -> some View {
@@ -659,7 +785,7 @@ struct ProfileView: View {
                 }
                 showingFollowersList = true
             }) {
-                statItem(title: "Stitchers", value: "\(viewModel.totalFollowersCount)")
+                statItem(title: "Stitchers", value: displayFollowerCount(for: user.id))
             }
             .buttonStyle(PlainButtonStyle())
             
@@ -668,6 +794,22 @@ struct ProfileView: View {
         .padding(.horizontal, 20)
     }
     
+    // MARK: - Seeded Follower Counts (Display Only)
+
+    private let seededFollowerCounts: [String: Int] = [
+        "4ifwg1CxDGbZ9amfPOvl0lMR6982": 11500,  // Fortune5ks
+        "AZUAsfkobQWSqXzgTR1UM2uogZn2": 10200,  // Teddy Ruks
+        "zh4vp0tQJOV15wyJXOu5a2cLBf73": 8500    // Tray Chaney
+    ]
+
+    private func displayFollowerCount(for userID: String) -> String {
+        let count = seededFollowerCounts[userID] ?? viewModel.totalFollowersCount
+        if count >= 1000 {
+            return String(format: "%.1fK", Double(count) / 1000)
+        }
+        return "\(count)"
+    }
+
     private func statItem(title: String, value: String) -> some View {
         VStack(spacing: 2) {
             Text(value)
@@ -696,8 +838,8 @@ struct ProfileView: View {
                         .cornerRadius(8)
                 }
                 
-                // Ad Opportunities Button (Influencer+ only)
-                if AdRevenueShare.canAccessAds(tier: user.tier) {
+                // Ad Opportunities Button (Influencer+ personal only)
+                if !user.isBusiness && AdRevenueShare.canAccessAdMarketplace(tier: user.tier) {
                     Button(action: { showingAdOpportunities = true }) {
                         ZStack {
                             Image(systemName: "dollarsign.circle.fill")
@@ -710,6 +852,29 @@ struct ProfileView: View {
                                 colors: [.green, .green.opacity(0.7)],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
+                            )
+                        )
+                        .cornerRadius(8)
+                    }
+                }
+                
+                // Business: Advertise button to promote a video
+                if user.isBusiness {
+                    Button(action: { /* TODO: showingCreateCampaign = true */ }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "megaphone.fill")
+                                .font(.system(size: 12))
+                            Text("Advertise")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .frame(height: 32)
+                        .padding(.horizontal, 12)
+                        .background(
+                            LinearGradient(
+                                colors: StitchColors.businessGradientColors,
+                                startPoint: .leading,
+                                endPoint: .trailing
                             )
                         )
                         .cornerRadius(8)
@@ -752,14 +917,17 @@ struct ProfileView: View {
                 }
                 .disabled(isLoadingFollow)
                 
-                Button(action: { /* Future implementation */ }) {
-                    Text("Subscribe")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 32)
-                        .background(Color.gray.opacity(0.8))
-                        .cornerRadius(8)
+                // Subscribe — personal creators only
+                if !user.isBusiness {
+                    Button(action: { showingSubscribe = true }) {
+                        Text("Subscribe")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 32)
+                            .background(Color.gray.opacity(0.8))
+                            .cornerRadius(8)
+                    }
                 }
             }
         }
@@ -973,6 +1141,20 @@ struct ProfileView: View {
         }
     }
     
+    @ViewBuilder
+    private var subscribeSheet: some View {
+        if let user = viewModel.currentUser, !viewModel.isOwnProfile {
+            SubscribeToJoinView(
+                userID: authService.currentUser?.id ?? "",
+                creatorID: user.id,
+                creatorTier: user.tier,
+                creatorName: user.displayName,
+                creatorImageURL: user.profileImageURL
+            )
+            .preferredColorScheme(.dark)
+        }
+    }
+    
     // MARK: - Helper Functions
     
     private func shouldShowBio(user: BasicUserInfo) -> Bool {
@@ -1126,6 +1308,7 @@ struct ProfileView: View {
         case .influencer: return [.pink, .purple]
         case .rising: return [.cyan, .blue]
         case .rookie: return [.gray, .white]
+        case .business: return StitchColors.businessGradientColors
         default: return [.gray, .white]
         }
     }
@@ -1138,6 +1321,7 @@ struct ProfileView: View {
         case .influencer: return "megaphone.fill"
         case .rising: return "arrow.up.circle.fill"
         case .rookie: return "person.circle.fill"
+        case .business: return "building.2.fill"
         default: return "person.circle"
         }
     }
@@ -1300,7 +1484,7 @@ extension UserTier {
         switch self {
         case .ambassador, .elite, .partner, .legendary, .topCreator, .founder, .coFounder:
             return true
-        case .rookie, .rising, .veteran, .influencer:
+        case .rookie, .rising, .veteran, .influencer, .business:
             return false
         }
     }

@@ -314,14 +314,15 @@ struct ContextualVideoOverlay: View {
                     }
                     .frame(maxWidth: .infinity)
                     
-                    // Hype button
+                    // Swappable Hype / Tip slot (carousel)
                     VStack(spacing: 2) {
-                        ProgressiveHypeButton(
+                        SwappableEngagementButton(
                             videoID: video.id,
                             creatorID: video.creatorID,
                             currentHypeCount: videoEngagement?.hypeCount ?? 0,
                             currentUserID: currentUserID ?? "",
                             userTier: authService.currentUser?.tier ?? .rookie,
+                            currentTipCount: video.tipCount,
                             engagementManager: engagementManager,
                             iconManager: floatingIconManager
                         )
@@ -670,6 +671,10 @@ struct ContextualVideoOverlay: View {
             setupNotificationObservers()
             Self.clearExpiredCache()
             lazyLoadThreadData()
+            // Load coin balance once for tip button (cached in TipService, no repeated reads)
+            if let uid = currentUserID {
+                Task { await TipService.shared.loadBalance(userID: uid) }
+            }
         }
         .onDisappear {
             removeNotificationObservers()
@@ -915,13 +920,16 @@ struct ContextualVideoOverlay: View {
                 }
                 .frame(maxWidth: .infinity)
                 
+                // MARK: Swappable Hype / Tip slot
+                // Swipe UP on this button to switch to Tip mode, DOWN to return to Hype.
                 VStack(spacing: 4) {
-                    ProgressiveHypeButton(
+                    SwappableEngagementButton(
                         videoID: video.id,
                         creatorID: video.creatorID,
                         currentHypeCount: videoEngagement?.hypeCount ?? 0,
                         currentUserID: currentUserID ?? "",
                         userTier: authService.currentUser?.tier ?? .rookie,
+                        currentTipCount: video.tipCount,
                         engagementManager: engagementManager,
                         iconManager: floatingIconManager
                     )
