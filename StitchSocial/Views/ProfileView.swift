@@ -89,6 +89,7 @@ struct ProfileView: View {
     @State private var selectedDraft: CollectionDraft?
     @State private var showingAllCollections = false
     @State private var collectionError: String?
+    @State private var showingShowList = false
     
     // MARK: - Badge Navigation State
     
@@ -300,6 +301,19 @@ struct ProfileView: View {
         } message: {
             Text(collectionError ?? "")
         }
+        // My Shows Sheet (Show → Season → Episode → EpisodeEditor)
+        .sheet(isPresented: $showingShowList) {
+            if let user = viewModel.currentUser {
+                ShowListView(
+                    userID: user.id,
+                    username: user.username,
+                    onDismiss: {
+                        showingShowList = false
+                        Task { await loadCollections() }
+                    }
+                )
+            }
+        }
     }
 
     // MARK: - Profile Content
@@ -362,37 +376,63 @@ struct ProfileView: View {
     @ViewBuilder
     private var collectionsRow: some View {
         if let user = viewModel.currentUser {
-            ProfileCollectionsRow(
-                collections: userCollections,
-                drafts: viewModel.isOwnProfile ? userDrafts : [],
-                isOwnProfile: viewModel.isOwnProfile,
-                isEligible: user.tier.isAmbassadorOrHigher,
-                onAddTap: {
-                    if userDrafts.count >= 10 {
-                        collectionError = "You've reached the maximum of 10 drafts. Please delete some drafts first."
-                    } else {
-                        selectedDraft = nil
-                        showingCollectionComposer = true
+            VStack(spacing: 0) {
+                // My Shows button — Show → Season → Episode hierarchy
+                if viewModel.isOwnProfile && user.tier.isAmbassadorOrHigher {
+                    HStack {
+                        Spacer()
+                        Button {
+                            showingShowList = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "film.stack")
+                                    .font(.system(size: 11))
+                                Text("My Shows")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundColor(.pink)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            .background(Color.pink.opacity(0.1))
+                            .cornerRadius(8)
+                        }
                     }
-                },
-                onCollectionTap: { collection in
-                    selectedCollection = collection
-                    showingCollectionPlayer = true
-                },
-                onDraftTap: { draft in
-                    selectedDraft = draft
-                    showingCollectionComposer = true
-                },
-                onDraftDelete: { draft in
-                    deleteDraft(draft)
-                },
-                onCollectionDelete: { collection in
-                    deleteCollection(collection)
-                },
-                onSeeAllTap: {
-                    showingAllCollections = true
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 6)
                 }
-            )
+                
+                ProfileCollectionsRow(
+                    collections: userCollections,
+                    drafts: viewModel.isOwnProfile ? userDrafts : [],
+                    isOwnProfile: viewModel.isOwnProfile,
+                    isEligible: user.tier.isAmbassadorOrHigher,
+                    onAddTap: {
+                        if userDrafts.count >= 10 {
+                            collectionError = "You've reached the maximum of 10 drafts. Please delete some drafts first."
+                        } else {
+                            selectedDraft = nil
+                            showingCollectionComposer = true
+                        }
+                    },
+                    onCollectionTap: { collection in
+                        selectedCollection = collection
+                        showingCollectionPlayer = true
+                    },
+                    onDraftTap: { draft in
+                        selectedDraft = draft
+                        showingCollectionComposer = true
+                    },
+                    onDraftDelete: { draft in
+                        deleteDraft(draft)
+                    },
+                    onCollectionDelete: { collection in
+                        deleteCollection(collection)
+                    },
+                    onSeeAllTap: {
+                        showingAllCollections = true
+                    }
+                )
+            }
         }
     }
     

@@ -599,83 +599,71 @@ class VideoCoordinator: ObservableObject {
         }
     }
     
+    // MARK: - Proximity-Based Stitch Notifications
+    //
+    // Rules:
+    //   stitchToThread / continueThread  → horizontal notification:
+    //     - Thread creator (depth 0) always notified
+    //     - Existing depth-1 participants notified (they're in the conversation)
+    //     - Depth 2+ not notified (stepchild spam)
+    //
+    //   replyToVideo / spinOffFrom       → reply notification only to direct target.
+    //     VideoService.createChildReply already handles this, so we skip here.
+    //
+    // CACHING: videoService.getDepth1ParticipantIDs caches depth-1 IDs per threadID (10 min TTL).
+    //   Cost: 1 targeted Firestore query (depth==1 filter) instead of full thread scan.
+
     private func sendStitchNotifications(
         createdVideo: CoreVideoMetadata,
         recordingContext: RecordingContext,
         creatorUserID: String
     ) async {
-        // Extract threadID and parentVideoID from any thread-related context
-        var threadID: String?
-        var parentVideoID: String?
-        
         switch recordingContext {
-        case .stitchToThread(let tid, _):
-            threadID = tid
-            parentVideoID = tid
-        case .replyToVideo(let vid, _):
-            parentVideoID = vid
-        case .continueThread(let tid, _):
-            threadID = tid
-            parentVideoID = tid
-        case .spinOffFrom(let vid, let tid, _):
-            parentVideoID = vid
-            threadID = tid
-        case .newThread:
-            return // No notifications for new threads
-        }
-        
-        guard let parentID = parentVideoID else { return }
-        
-        do {
-            let parentVideo = try await videoService.getVideo(id: parentID)
-            
-            // Resolve threadID: use parent's threadID if we don't have one
-            let resolvedThreadID = threadID ?? parentVideo.threadID ?? parentID
-            
-            // Collect all thread participants and tagged users in ONE query
-            // Cost: 1 Firestore read (getThreadVideos) instead of N reads walking chain
-            var allCreatorIDs: Set<String> = []
-            var allTaggedIDs: Set<String> = []
-            let originalCreatorID = parentVideo.creatorID
-            
-            // Fetch all videos in this thread
-            let threadVideos = try await videoService.getThreadVideos(threadID: resolvedThreadID)
-            
-            for video in threadVideos {
-                // Collect every creator who participated in the thread
-                if video.creatorID != creatorUserID {
-                    allCreatorIDs.insert(video.creatorID)
+        case .newThread, .replyToVideo, .spinOffFrom:
+            // replyToVideo: VideoService.createChildReply already sent the reply notification.
+            // spinOffFrom: no horizontal thread notification — it's a new thread.
+            // newThread: nothing to notify.
+            return
+
+        case .stitchToThread(let threadID, let threadInfo),
+             .continueThread(let threadID, let threadInfo):
+
+            let originalCreatorID = threadInfo.creatorID
+
+            do {
+                // 1. Always notify thread creator
+                if originalCreatorID != creatorUserID {
+                    try await notificationService.sendStitchNotification(
+                        videoID: createdVideo.id,
+                        videoTitle: createdVideo.title,
+                        originalCreatorID: originalCreatorID,
+                        parentCreatorID: "",
+                        threadUserIDs: []
+                    )
+                    print("✅ STITCH: Notified thread creator \(originalCreatorID)")
                 }
-                // Collect tagged users from ALL videos in the thread
-                for taggedID in video.taggedUserIDs {
-                    if taggedID != creatorUserID {
-                        allTaggedIDs.insert(taggedID)
-                    }
+
+                // 2. Notify depth-1 horizontal participants (targeted query, cached)
+                // CACHING: getDepth1ParticipantIDs uses 10-min in-memory cache — 1 read max per thread.
+                let horizontalParticipants = try await videoService.getDepth1ParticipantIDs(
+                    threadID: threadID,
+                    excludingUserIDs: [creatorUserID, originalCreatorID]
+                )
+
+                if !horizontalParticipants.isEmpty {
+                    try await notificationService.sendStitchNotification(
+                        videoID: createdVideo.id,
+                        videoTitle: createdVideo.title,
+                        originalCreatorID: "",
+                        parentCreatorID: "",
+                        threadUserIDs: Array(horizontalParticipants)
+                    )
+                    print("✅ STITCH: Notified \(horizontalParticipants.count) depth-1 participants in thread \(threadID)")
                 }
+
+            } catch {
+                print("⚠️ STITCH: Notification failed for thread \(threadID) - \(error)")
             }
-            
-            // Also include tagged users on the new video itself
-            for taggedID in createdVideo.taggedUserIDs {
-                if taggedID != creatorUserID {
-                    allTaggedIDs.insert(taggedID)
-                }
-            }
-            
-            // Merge tagged users into the thread participant list
-            // Cloud Function #10 also checks tagged users on the videoID,
-            // but we pass the full set here for thread-wide coverage
-            let threadUserIDs = Array(allCreatorIDs.union(allTaggedIDs))
-            
-            try await notificationService.sendStitchNotification(
-                videoID: createdVideo.id,
-                videoTitle: createdVideo.title,
-                originalCreatorID: originalCreatorID,
-                parentCreatorID: parentVideo.creatorID,
-                threadUserIDs: threadUserIDs
-            )
-            print("✅ STITCH: Notified \(threadUserIDs.count) thread participants + original creator")
-        } catch {
-            print("⚠️ STITCH: Notification failed - \(error)")
         }
     }
     

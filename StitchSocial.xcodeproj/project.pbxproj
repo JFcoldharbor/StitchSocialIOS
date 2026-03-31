@@ -50,6 +50,11 @@
 			path = StitchSocial;
 			sourceTree = "<group>";
 		};
+		6774304F2F6F8383007339B3 /* Filter */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Filter;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -84,6 +89,7 @@
 		676A0E202E50E40600709431 = {
 			isa = PBXGroup;
 			children = (
+				6774304F2F6F8383007339B3 /* Filter */,
 				676A0E2B2E50E40600709431 /* StitchSocial */,
 				676A0E2A2E50E40600709431 /* Products */,
 			);
@@ -114,6 +120,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				676A0E2B2E50E40600709431 /* StitchSocial */,
+				6774304F2F6F8383007339B3 /* Filter */,
 			);
 			name = StitchSocial;
 			packageProductDependencies = (

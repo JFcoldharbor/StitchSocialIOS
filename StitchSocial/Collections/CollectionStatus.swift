@@ -1,20 +1,13 @@
 //
-//  CollectionStatus.swift
-//  StitchSocial
-//
-//  Created by James Garmon on 12/10/25.
-//
-
-
-//
-//  CoreCollectionMetadata.swift
+//  CollectionStatus.swift (UPDATED)
 //  StitchSocial
 //
 //  Layer 1: Foundation - Core Collection Data Models
-//  Dependencies: Foundation only
-//  Single source of truth for video collections (Instagram Stories/Highlights style)
-//  Handles collection lifecycle, visibility, and aggregate engagement metrics
-//  CREATED: Collections feature for long-form segmented content
+//  Dependencies: Foundation, SwiftUI, Show.swift (ShowFormat)
+//  Single source of truth for video collections
+//  UPDATED: Added show hierarchy fields (showId, seasonId, episodeNumber, format)
+//  UPDATED: Added upload pipeline metadata (compressed, splitIntoFiles, file sizes)
+//  UPDATED: Added AdSlot model for mid-roll ad placement
 //
 
 import Foundation
@@ -22,13 +15,12 @@ import SwiftUI
 
 // MARK: - Collection Status
 
-/// Lifecycle status of a video collection
 enum CollectionStatus: String, CaseIterable, Codable {
-    case draft = "draft"              // Being created, not visible to others
-    case processing = "processing"    // Segments uploading/processing
-    case published = "published"      // Live and visible
-    case archived = "archived"        // Hidden but not deleted
-    case deleted = "deleted"          // Soft deleted
+    case draft = "draft"
+    case processing = "processing"
+    case published = "published"
+    case archived = "archived"
+    case deleted = "deleted"
     
     var displayName: String {
         switch self {
@@ -40,13 +32,8 @@ enum CollectionStatus: String, CaseIterable, Codable {
         }
     }
     
-    var isVisible: Bool {
-        return self == .published
-    }
-    
-    var isEditable: Bool {
-        return self == .draft || self == .processing
-    }
+    var isVisible: Bool { self == .published }
+    var isEditable: Bool { self == .draft || self == .processing }
     
     var iconName: String {
         switch self {
@@ -61,11 +48,10 @@ enum CollectionStatus: String, CaseIterable, Codable {
 
 // MARK: - Collection Visibility
 
-/// Visibility settings for a collection
 enum CollectionVisibility: String, CaseIterable, Codable {
-    case publicVisible = "public"     // Anyone can see
-    case followers = "followers"       // Only followers can see
-    case privateOnly = "private"       // Only creator can see
+    case publicVisible = "public"
+    case followers = "followers"
+    case privateOnly = "private"
     
     var displayName: String {
         switch self {
@@ -94,16 +80,14 @@ enum CollectionVisibility: String, CaseIterable, Codable {
 
 // MARK: - Collection Content Type
 
-/// What kind of content this collection represents
-/// Drives discovery routing, player behavior, and reply rules
 enum CollectionContentType: String, CaseIterable, Codable {
-    case standard = "standard"          // Default collection
-    case podcast = "podcast"            // Video podcast — long interviews, talk shows
-    case shortFilm = "shortFilm"        // Short films, skits, narrative content
-    case interview = "interview"        // Interviews, Q&A sessions
-    case series = "series"              // Recurring episodic content
-    case documentary = "documentary"    // Documentary-style long-form
-    case tutorial = "tutorial"          // Educational/how-to content
+    case standard = "standard"
+    case podcast = "podcast"
+    case shortFilm = "shortFilm"
+    case interview = "interview"
+    case series = "series"
+    case documentary = "documentary"
+    case tutorial = "tutorial"
     
     var displayName: String {
         switch self {
@@ -129,8 +113,6 @@ enum CollectionContentType: String, CaseIterable, Codable {
         }
     }
     
-    /// Whether video stitch replies are allowed (insert into chain)
-    /// Podcasts, films, documentaries play uninterrupted — replies exist but don't stitch
     var allowsStitchReplies: Bool {
         switch self {
         case .standard, .tutorial: return true
@@ -139,10 +121,31 @@ enum CollectionContentType: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - Ad Slot (NEW — mid-roll ad placement from EpisodeEditor.jsx)
+
+/// Ad placement marker within a collection (episode).
+/// Stored on the episode/collection doc, not on individual segments.
+/// Immutable after publish — caches with episode data, no extra reads.
+struct AdSlot: Codable, Hashable {
+    /// Which segment this ad plays AFTER (0-based index)
+    let afterSegmentIndex: Int
+    
+    /// Time in the original video where this ad inserts (trimmer UI reference)
+    let insertAfterTime: TimeInterval
+    
+    /// Ad type — "standard", "sponsored", "house"
+    let type: String
+    
+    /// How long this ad slot is (seconds)
+    let durationSeconds: TimeInterval
+}
+
 // MARK: - Video Collection
 
-/// Core data model for a video collection (Instagram Stories/Highlights style)
-/// Contains ordered segments, aggregate metrics, and collection settings
+/// Core data model for a video collection (episode).
+/// 1 Collection = 1 Episode. Contains ordered segments, aggregate metrics, and settings.
+/// Firestore path (standalone): videoCollections/{collectionId}
+/// Firestore path (show hierarchy): shows/{showId}/seasons/{seasonId}/episodes/{episodeId}
 struct VideoCollection: Identifiable, Codable, Hashable {
     
     // MARK: - Core Identity
@@ -156,13 +159,8 @@ struct VideoCollection: Identifiable, Codable, Hashable {
     
     // MARK: - Segment Management
     
-    /// Ordered array of segment video IDs
     let segmentIDs: [String]
-    
-    /// Total number of segments (cached for quick access)
     let segmentCount: Int
-    
-    /// Total duration of all segments combined (seconds)
     let totalDuration: TimeInterval
     
     // MARK: - Status & Settings
@@ -170,14 +168,26 @@ struct VideoCollection: Identifiable, Codable, Hashable {
     let status: CollectionStatus
     let visibility: CollectionVisibility
     let allowReplies: Bool
-    
-    /// What kind of content — drives discovery lane and reply behavior
     let contentType: CollectionContentType
-    
-    /// Whether video replies can stitch into the segment chain.
-    /// false = replies exist as standard video comments but don't break playback.
-    /// Defaults from contentType.allowsStitchReplies but can be overridden.
     let allowStitchReplies: Bool
+    
+    // MARK: - Show Hierarchy (NEW — links episode to show/season)
+    
+    let showId: String?              // Parent show ID (nil for standalone collections)
+    let seasonId: String?            // Parent season ID (nil for standalone collections)
+    let episodeNumber: Int?          // Episode number within the season (1-based)
+    let format: ShowFormat?          // Inherited from show (vertical/widescreen)
+    
+    // MARK: - Upload Pipeline Metadata (NEW — from EpisodeEditor.jsx)
+    
+    let compressed: Bool             // Whether video was compressed before splitting
+    let splitIntoFiles: Bool         // Whether episode was split into individual segment files
+    let originalFileSizeMB: Double?  // Original upload file size
+    let compressedFileSizeMB: Double? // Compressed file size (if compressed)
+    
+    // MARK: - Ad Slots (NEW — mid-roll ad placement)
+    
+    let adSlots: [AdSlot]?           // Ad insertion points between segments
     
     // MARK: - Timestamps
     
@@ -210,9 +220,22 @@ struct VideoCollection: Identifiable, Codable, Hashable {
         allowReplies: Bool = true,
         contentType: CollectionContentType = .standard,
         allowStitchReplies: Bool? = nil,
+        // Show hierarchy (NEW — defaults nil for backwards compat)
+        showId: String? = nil,
+        seasonId: String? = nil,
+        episodeNumber: Int? = nil,
+        format: ShowFormat? = nil,
+        // Upload pipeline (NEW — defaults for backwards compat)
+        compressed: Bool = false,
+        splitIntoFiles: Bool = false,
+        originalFileSizeMB: Double? = nil,
+        compressedFileSizeMB: Double? = nil,
+        adSlots: [AdSlot]? = nil,
+        // Timestamps
         publishedAt: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
+        // Engagement
         totalViews: Int = 0,
         totalHypes: Int = 0,
         totalCools: Int = 0,
@@ -233,9 +256,22 @@ struct VideoCollection: Identifiable, Codable, Hashable {
         self.allowReplies = allowReplies
         self.contentType = contentType
         self.allowStitchReplies = allowStitchReplies ?? contentType.allowsStitchReplies
+        // Show hierarchy
+        self.showId = showId
+        self.seasonId = seasonId
+        self.episodeNumber = episodeNumber
+        self.format = format
+        // Upload pipeline
+        self.compressed = compressed
+        self.splitIntoFiles = splitIntoFiles
+        self.originalFileSizeMB = originalFileSizeMB
+        self.compressedFileSizeMB = compressedFileSizeMB
+        self.adSlots = adSlots
+        // Timestamps
         self.publishedAt = publishedAt
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        // Engagement
         self.totalViews = totalViews
         self.totalHypes = totalHypes
         self.totalCools = totalCools
@@ -245,103 +281,69 @@ struct VideoCollection: Identifiable, Codable, Hashable {
     
     // MARK: - Computed Properties
     
-    /// True if collection is published and visible
-    var isPublished: Bool {
-        return status == .published
-    }
+    var isPublished: Bool { status == .published }
     
-    /// True if collection is still being created
-    var isDraft: Bool {
-        return status == .draft || status == .processing
-    }
+    var isDraft: Bool { status == .draft }
     
-    /// True if collection has minimum required segments (2+)
-    var hasMinimumSegments: Bool {
-        return segmentCount >= 2
-    }
+    var netScore: Int { totalHypes - totalCools }
     
-    /// True if collection can be published
-    var canPublish: Bool {
-        return hasMinimumSegments && !title.isEmpty && status == .draft
-    }
+    var isPartOfShow: Bool { showId != nil }
     
-    /// Formatted total duration (e.g., "12:34" or "1:02:34")
-    var formattedTotalDuration: String {
-        let hours = Int(totalDuration) / 3600
-        let minutes = (Int(totalDuration) % 3600) / 60
-        let seconds = Int(totalDuration) % 60
-        
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            return String(format: "%d:%02d", minutes, seconds)
+    var isStandalone: Bool { showId == nil }
+    
+    var episodeDisplayTitle: String {
+        if let num = episodeNumber {
+            return title.isEmpty ? "Episode \(num)" : "Ep \(num): \(title)"
         }
+        return title.isEmpty ? "Untitled" : title
     }
     
-    /// Average segment duration
+    var formattedTotalDuration: String {
+        let minutes = Int(totalDuration) / 60
+        let seconds = Int(totalDuration) % 60
+        if minutes >= 60 {
+            let hours = minutes / 60
+            let mins = minutes % 60
+            return String(format: "%d:%02d:%02d", hours, mins, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+    
+    var summaryText: String {
+        "\(segmentCount) segments · \(formattedTotalDuration)"
+    }
+    
     var averageSegmentDuration: TimeInterval {
         guard segmentCount > 0 else { return 0 }
         return totalDuration / Double(segmentCount)
     }
     
-    /// Net engagement score (hypes - cools)
-    var netScore: Int {
-        return totalHypes - totalCools
-    }
-    
-    /// Total engagement interactions
     var totalEngagement: Int {
-        return totalHypes + totalCools + totalReplies + totalShares
+        totalViews + totalHypes + totalCools + totalReplies + totalShares
     }
     
-    /// Engagement ratio (hypes / total hypes+cools)
-    var engagementRatio: Double {
+    var engagementHealth: Double {
         let total = totalHypes + totalCools
         return total > 0 ? Double(totalHypes) / Double(total) : 0.5
     }
     
-    /// Views to engagement ratio
-    var viewEngagementRatio: Double {
-        return totalViews > 0 ? Double(totalEngagement) / Double(totalViews) : 0.0
+    var compressionSavings: Double? {
+        guard let original = originalFileSizeMB, let compressed = compressedFileSizeMB, original > 0 else {
+            return nil
+        }
+        return (1.0 - compressed / original) * 100.0
     }
     
-    /// Age since creation in hours
-    var ageInHours: Double {
-        return Date().timeIntervalSince(createdAt) / 3600.0
-    }
+    // MARK: - Hashable
     
-    /// Age since publication in hours (nil if not published)
-    var publishedAgeInHours: Double? {
-        guard let publishedAt = publishedAt else { return nil }
-        return Date().timeIntervalSince(publishedAt) / 3600.0
-    }
-    
-    /// Display string for segment count
-    var segmentCountDisplay: String {
-        return segmentCount == 1 ? "1 segment" : "\(segmentCount) segments"
-    }
-    
-    /// Short summary for display
-    var summaryText: String {
-        return "\(segmentCountDisplay) • \(formattedTotalDuration)"
-    }
-    
-    // MARK: - Hashable & Equatable
-    
-    static func == (lhs: VideoCollection, rhs: VideoCollection) -> Bool {
-        return lhs.id == rhs.id
-    }
-    
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-    }
+    static func == (lhs: VideoCollection, rhs: VideoCollection) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 // MARK: - Factory Methods
 
 extension VideoCollection {
     
-    /// Creates a new empty collection draft
     static func newDraft(
         title: String,
         description: String = "",
@@ -349,30 +351,24 @@ extension VideoCollection {
         creatorName: String,
         visibility: CollectionVisibility = .publicVisible,
         allowReplies: Bool = true,
-        contentType: CollectionContentType = .standard
+        contentType: CollectionContentType = .standard,
+        showId: String? = nil,
+        seasonId: String? = nil,
+        episodeNumber: Int? = nil,
+        format: ShowFormat? = nil
     ) -> VideoCollection {
         return VideoCollection(
-            id: UUID().uuidString,
             title: title,
             description: description,
             creatorID: creatorID,
             creatorName: creatorName,
-            coverImageURL: nil,
-            segmentIDs: [],
-            segmentCount: 0,
-            totalDuration: 0,
-            status: .draft,
             visibility: visibility,
             allowReplies: allowReplies,
             contentType: contentType,
-            publishedAt: nil,
-            createdAt: Date(),
-            updatedAt: Date(),
-            totalViews: 0,
-            totalHypes: 0,
-            totalCools: 0,
-            totalReplies: 0,
-            totalShares: 0
+            showId: showId,
+            seasonId: seasonId,
+            episodeNumber: episodeNumber,
+            format: format
         )
     }
 }
@@ -381,66 +377,44 @@ extension VideoCollection {
 
 extension VideoCollection {
     
-    /// Creates a copy with updated segments
     func withUpdatedSegments(
         segmentIDs: [String],
         totalDuration: TimeInterval
     ) -> VideoCollection {
         return VideoCollection(
-            id: id,
-            title: title,
-            description: description,
-            creatorID: creatorID,
-            creatorName: creatorName,
-            coverImageURL: coverImageURL,
-            segmentIDs: segmentIDs,
-            segmentCount: segmentIDs.count,
-            totalDuration: totalDuration,
-            status: status,
-            visibility: visibility,
-            allowReplies: allowReplies,
-            contentType: contentType,
-            allowStitchReplies: allowStitchReplies,
-            publishedAt: publishedAt,
-            createdAt: createdAt,
-            updatedAt: Date(),
-            totalViews: totalViews,
-            totalHypes: totalHypes,
-            totalCools: totalCools,
-            totalReplies: totalReplies,
-            totalShares: totalShares
+            id: id, title: title, description: description,
+            creatorID: creatorID, creatorName: creatorName, coverImageURL: coverImageURL,
+            segmentIDs: segmentIDs, segmentCount: segmentIDs.count, totalDuration: totalDuration,
+            status: status, visibility: visibility, allowReplies: allowReplies,
+            contentType: contentType, allowStitchReplies: allowStitchReplies,
+            showId: showId, seasonId: seasonId, episodeNumber: episodeNumber, format: format,
+            compressed: compressed, splitIntoFiles: splitIntoFiles,
+            originalFileSizeMB: originalFileSizeMB, compressedFileSizeMB: compressedFileSizeMB,
+            adSlots: adSlots,
+            publishedAt: publishedAt, createdAt: createdAt, updatedAt: Date(),
+            totalViews: totalViews, totalHypes: totalHypes, totalCools: totalCools,
+            totalReplies: totalReplies, totalShares: totalShares
         )
     }
     
-    /// Creates a copy with updated status
     func withStatus(_ newStatus: CollectionStatus) -> VideoCollection {
         return VideoCollection(
-            id: id,
-            title: title,
-            description: description,
-            creatorID: creatorID,
-            creatorName: creatorName,
-            coverImageURL: coverImageURL,
-            segmentIDs: segmentIDs,
-            segmentCount: segmentCount,
-            totalDuration: totalDuration,
-            status: newStatus,
-            visibility: visibility,
-            allowReplies: allowReplies,
-            contentType: contentType,
-            allowStitchReplies: allowStitchReplies,
+            id: id, title: title, description: description,
+            creatorID: creatorID, creatorName: creatorName, coverImageURL: coverImageURL,
+            segmentIDs: segmentIDs, segmentCount: segmentCount, totalDuration: totalDuration,
+            status: newStatus, visibility: visibility, allowReplies: allowReplies,
+            contentType: contentType, allowStitchReplies: allowStitchReplies,
+            showId: showId, seasonId: seasonId, episodeNumber: episodeNumber, format: format,
+            compressed: compressed, splitIntoFiles: splitIntoFiles,
+            originalFileSizeMB: originalFileSizeMB, compressedFileSizeMB: compressedFileSizeMB,
+            adSlots: adSlots,
             publishedAt: newStatus == .published ? Date() : publishedAt,
-            createdAt: createdAt,
-            updatedAt: Date(),
-            totalViews: totalViews,
-            totalHypes: totalHypes,
-            totalCools: totalCools,
-            totalReplies: totalReplies,
-            totalShares: totalShares
+            createdAt: createdAt, updatedAt: Date(),
+            totalViews: totalViews, totalHypes: totalHypes, totalCools: totalCools,
+            totalReplies: totalReplies, totalShares: totalShares
         )
     }
     
-    /// Creates a copy with updated metadata
     func withUpdatedMetadata(
         title: String? = nil,
         description: String? = nil,
@@ -451,32 +425,24 @@ extension VideoCollection {
         allowStitchReplies: Bool? = nil
     ) -> VideoCollection {
         return VideoCollection(
-            id: id,
-            title: title ?? self.title,
-            description: description ?? self.description,
-            creatorID: creatorID,
-            creatorName: creatorName,
+            id: id, title: title ?? self.title, description: description ?? self.description,
+            creatorID: creatorID, creatorName: creatorName,
             coverImageURL: coverImageURL ?? self.coverImageURL,
-            segmentIDs: segmentIDs,
-            segmentCount: segmentCount,
-            totalDuration: totalDuration,
-            status: status,
-            visibility: visibility ?? self.visibility,
+            segmentIDs: segmentIDs, segmentCount: segmentCount, totalDuration: totalDuration,
+            status: status, visibility: visibility ?? self.visibility,
             allowReplies: allowReplies ?? self.allowReplies,
             contentType: contentType ?? self.contentType,
             allowStitchReplies: allowStitchReplies ?? self.allowStitchReplies,
-            publishedAt: publishedAt,
-            createdAt: createdAt,
-            updatedAt: Date(),
-            totalViews: totalViews,
-            totalHypes: totalHypes,
-            totalCools: totalCools,
-            totalReplies: totalReplies,
-            totalShares: totalShares
+            showId: showId, seasonId: seasonId, episodeNumber: episodeNumber, format: format,
+            compressed: compressed, splitIntoFiles: splitIntoFiles,
+            originalFileSizeMB: originalFileSizeMB, compressedFileSizeMB: compressedFileSizeMB,
+            adSlots: adSlots,
+            publishedAt: publishedAt, createdAt: createdAt, updatedAt: Date(),
+            totalViews: totalViews, totalHypes: totalHypes, totalCools: totalCools,
+            totalReplies: totalReplies, totalShares: totalShares
         )
     }
     
-    /// Creates a copy with updated engagement metrics
     func withUpdatedEngagement(
         totalViews: Int? = nil,
         totalHypes: Int? = nil,
@@ -485,28 +451,42 @@ extension VideoCollection {
         totalShares: Int? = nil
     ) -> VideoCollection {
         return VideoCollection(
-            id: id,
-            title: title,
-            description: description,
-            creatorID: creatorID,
-            creatorName: creatorName,
-            coverImageURL: coverImageURL,
-            segmentIDs: segmentIDs,
-            segmentCount: segmentCount,
-            totalDuration: totalDuration,
-            status: status,
-            visibility: visibility,
-            allowReplies: allowReplies,
-            contentType: contentType,
-            allowStitchReplies: allowStitchReplies,
-            publishedAt: publishedAt,
-            createdAt: createdAt,
-            updatedAt: Date(),
-            totalViews: totalViews ?? self.totalViews,
-            totalHypes: totalHypes ?? self.totalHypes,
-            totalCools: totalCools ?? self.totalCools,
-            totalReplies: totalReplies ?? self.totalReplies,
+            id: id, title: title, description: description,
+            creatorID: creatorID, creatorName: creatorName, coverImageURL: coverImageURL,
+            segmentIDs: segmentIDs, segmentCount: segmentCount, totalDuration: totalDuration,
+            status: status, visibility: visibility, allowReplies: allowReplies,
+            contentType: contentType, allowStitchReplies: allowStitchReplies,
+            showId: showId, seasonId: seasonId, episodeNumber: episodeNumber, format: format,
+            compressed: compressed, splitIntoFiles: splitIntoFiles,
+            originalFileSizeMB: originalFileSizeMB, compressedFileSizeMB: compressedFileSizeMB,
+            adSlots: adSlots,
+            publishedAt: publishedAt, createdAt: createdAt, updatedAt: Date(),
+            totalViews: totalViews ?? self.totalViews, totalHypes: totalHypes ?? self.totalHypes,
+            totalCools: totalCools ?? self.totalCools, totalReplies: totalReplies ?? self.totalReplies,
             totalShares: totalShares ?? self.totalShares
+        )
+    }
+    
+    func withUploadPipelineData(
+        compressed: Bool,
+        splitIntoFiles: Bool,
+        originalFileSizeMB: Double,
+        compressedFileSizeMB: Double?,
+        adSlots: [AdSlot]?
+    ) -> VideoCollection {
+        return VideoCollection(
+            id: id, title: title, description: description,
+            creatorID: creatorID, creatorName: creatorName, coverImageURL: coverImageURL,
+            segmentIDs: segmentIDs, segmentCount: segmentCount, totalDuration: totalDuration,
+            status: status, visibility: visibility, allowReplies: allowReplies,
+            contentType: contentType, allowStitchReplies: allowStitchReplies,
+            showId: showId, seasonId: seasonId, episodeNumber: episodeNumber, format: format,
+            compressed: compressed, splitIntoFiles: splitIntoFiles,
+            originalFileSizeMB: originalFileSizeMB, compressedFileSizeMB: compressedFileSizeMB,
+            adSlots: adSlots,
+            publishedAt: publishedAt, createdAt: createdAt, updatedAt: Date(),
+            totalViews: totalViews, totalHypes: totalHypes, totalCools: totalCools,
+            totalReplies: totalReplies, totalShares: totalShares
         )
     }
 }
@@ -515,42 +495,34 @@ extension VideoCollection {
 
 extension VideoCollection {
     
-    /// Validation result for collection
     struct ValidationResult {
         let isValid: Bool
         let errors: [String]
         
         static let valid = ValidationResult(isValid: true, errors: [])
-        
         static func invalid(_ errors: [String]) -> ValidationResult {
             return ValidationResult(isValid: false, errors: errors)
         }
     }
     
-    /// Validates collection for publishing
     func validateForPublishing() -> ValidationResult {
         var errors: [String] = []
         
         if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             errors.append("Title is required")
         }
-        
         if title.count > 100 {
             errors.append("Title must be 100 characters or less")
         }
-        
         if description.count > 500 {
             errors.append("Description must be 500 characters or less")
         }
-        
         if segmentCount < 2 {
             errors.append("Collection must have at least 2 segments")
         }
-        
         if segmentCount > 50 {
             errors.append("Collection cannot have more than 50 segments")
         }
-        
         if status != .draft {
             errors.append("Only draft collections can be published")
         }
@@ -561,7 +533,6 @@ extension VideoCollection {
 
 // MARK: - Segment Info (Lightweight reference)
 
-/// Lightweight segment reference for quick display without loading full video
 struct CollectionSegmentInfo: Identifiable, Codable, Hashable {
     let id: String
     let segmentNumber: Int
@@ -569,16 +540,31 @@ struct CollectionSegmentInfo: Identifiable, Codable, Hashable {
     let thumbnailURL: String?
     let duration: TimeInterval
     let replyCount: Int
+    // NEW — segment time mapping
+    let startTimeSeconds: TimeInterval?
+    let endTimeSeconds: TimeInterval?
+    let fileSizeMB: Double?
     
-    /// Formatted duration string
     var formattedDuration: String {
         let minutes = Int(duration) / 60
         let seconds = Int(duration) % 60
         return String(format: "%d:%02d", minutes, seconds)
     }
     
-    /// Display title (segment number if no title)
     var displayTitle: String {
         return title ?? "Part \(segmentNumber)"
+    }
+    
+    var formattedTimeRange: String? {
+        guard let start = startTimeSeconds, let end = endTimeSeconds else { return nil }
+        let fmtStart = formatTime(start)
+        let fmtEnd = formatTime(end)
+        return "\(fmtStart) → \(fmtEnd)"
+    }
+    
+    private func formatTime(_ seconds: TimeInterval) -> String {
+        let m = Int(seconds) / 60
+        let s = Int(seconds) % 60
+        return String(format: "%d:%02d", m, s)
     }
 }

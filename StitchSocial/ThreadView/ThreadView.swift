@@ -41,6 +41,8 @@ struct ThreadView: View {
     @State private var selectedUserForProfile: String?
     @State private var showingProfileView = false
     @State private var showCollageSelection = false
+    // ONBOARDING: panel frame for ThreadViewOnboardingOverlay spotlight
+    @State private var onboardingPanelFrame: CGRect = .zero
     
     // Pagination
     @State private var currentPage: Int = 0
@@ -132,13 +134,36 @@ struct ThreadView: View {
                                 },
                                 onClose: { dismiss() }
                             )
+                            .overlay(
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: OnboardingThreadPanelFrameKey.self,
+                                        value: geo.frame(in: .global)
+                                    )
+                                }
+                                .allowsHitTesting(false)
+                            )
+                            .onPreferenceChange(OnboardingThreadPanelFrameKey.self) { frame in
+                                onboardingPanelFrame = frame
+                            }
                         }
                     }
                 }
+                // ONBOARDING: threadExplore overlay — 4-step mini-tutorial
+                ThreadViewOnboardingOverlay(panelFrame: onboardingPanelFrame)
             }
         }
         .ignoresSafeArea()
-        .onAppear { loadThreadData() }
+        .onAppear {
+            loadThreadData()
+            // ONBOARDING: advance from threadButton → threadExplore
+            OnboardingState.shared.advance(from: .threadButton)
+        }
+        .onChange(of: currentIndex) { _, _ in
+            // ONBOARDING: user swiped in ThreadView — advance sub-step
+            // We post a notification since ThreadViewOnboardingOverlay owns sub-step state
+            NotificationCenter.default.post(name: .onboardingThreadViewSwiped, object: nil)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openThreadCollage)) { notification in
             // ShareButton's long-press menu posted this — present collage as fullScreenCover
             if let _ = notification.userInfo?["threadData"] as? ThreadData {

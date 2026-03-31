@@ -1,5 +1,5 @@
 //
-//  DiscoveryView.swift (UPDATED)
+//  DiscoveryView.swift
 //  StitchSocial
 //
 //  Enhanced with weighted algorithm + TTL cache integration
@@ -8,573 +8,136 @@
 //  FIXED: loadMoreContent APPENDS to end without reshuffling
 //  NEW: refreshContent invalidates service caches before re-fetching
 //  NEW: Category switches hit TTL cache (0 Firestore reads within 5 min)
+//  UPDATED: DiscoveryViewModel extracted to DiscoveryViewModel.swift
+//  UPDATED: PreferenceKey frame reporters added for SpotlightOnboardingView
+//
+//  ONBOARDING FRAME REPORTERS:
+//  Each spotlight target reports its real CGRect via a PreferenceKey.
+//  ContentView reads these via .onPreferenceChange and passes them into
+//  SpotlightOnboardingView. Zero cost — GeometryReader only runs on layout.
+//    - OnboardingSwipeCardFrameKey    → swipe card area
+//    - OnboardingCommunitiesPillFrameKey → "Communities" pill in category bar
+//    - OnboardingSearchIconFrameKey   → magnifyingglass button in toolbar
+//  Thread/Stitch/Fullscreen button frames are reported from
+//  FullscreenVideoView + ContextualVideoOverlay (wired in those files).
 //
 
 import SwiftUI
 import Foundation
 import FirebaseAuth
 
-// MARK: - Discovery ViewModel with Weighted Algorithm
-
-@MainActor
-class DiscoveryViewModel: ObservableObject {
-    // Published properties
-    @Published var videos: [CoreVideoMetadata] = []
-    @Published var filteredVideos: [CoreVideoMetadata] = []
-    @Published var isLoading = false
-    @Published var currentCategory: DiscoveryCategory = .all
-    @Published var errorMessage: String?
-    
-    // Collection state for podcast/film lanes
-    @Published var discoveryCollections: [VideoCollection] = []
-    @Published var isLoadingCollections = false
-    
-    /// Collections interleaved into the swipe feed — maps video.id to VideoCollection
-    var collectionCardMap: [String: VideoCollection] = [:]
-    
-    // MARK: - Hashtag State
-    @Published var trendingHashtags: [TrendingHashtag] = []
-    @Published var isLoadingHashtags = false
-    @Published var selectedHashtag: TrendingHashtag?
-    @Published var hashtagVideos: [CoreVideoMetadata] = []
-    
-    // Services
-    private let discoveryService = DiscoveryService()
-    private let hashtagService = HashtagService()
-    
-    // MARK: - Load Initial Content (TTL-aware)
-    
-    func loadInitialContent() async {
-        guard !isLoading else { return }
-        
-        isLoading = true
-        defer { isLoading = false }
-        
-        do {
-            print("🎲 DISCOVERY: Loading weighted content")
-            
-            // Load videos and collections in parallel
-            // Service-level TTL cache means these may be instant (0 reads)
-            async let threadsTask = discoveryService.getDeepRandomizedDiscovery(limit: 40)
-            async let collectionsTask = discoveryService.getAllCollectionsDiscovery(limit: 6)
-            
-            let threads = try await threadsTask
-            let swipeCollections = (try? await collectionsTask) ?? []
-            let loadedVideos = threads.map { $0.parentVideo }
-            
-            await MainActor.run {
-                let validVideos = loadedVideos.filter { !$0.id.isEmpty }
-                
-                if validVideos.count < loadedVideos.count {
-                    print("⚠️ DISCOVERY: Filtered out \(loadedVideos.count - validVideos.count) videos with empty IDs")
-                }
-                
-                videos = validVideos
-                applyFilterAndShuffle()
-                interleaveCollections(swipeCollections)
-                errorMessage = nil
-                
-                print("✅ DISCOVERY: Loaded \(filteredVideos.count) weighted videos")
-            }
-        } catch {
-            await MainActor.run {
-                errorMessage = "Failed to load discovery content"
-                print("❌ DISCOVERY: Load failed: \(error)")
-            }
-        }
-    }
-    
-    // MARK: - Load Trending Hashtags
-    
-    func loadTrendingHashtags() async {
-        isLoadingHashtags = true
-        await hashtagService.loadTrendingHashtags(limit: 10)
-        trendingHashtags = hashtagService.trendingHashtags
-        isLoadingHashtags = false
-    }
-    
-    func selectHashtag(_ hashtag: TrendingHashtag) async {
-        selectedHashtag = hashtag
-        isLoading = true
-        
-        do {
-            let result = try await hashtagService.getVideosForHashtag(hashtag.tag, limit: 40)
-            hashtagVideos = result.videos
-            filteredVideos = result.videos
-        } catch {
-            print("❌ DISCOVERY: Failed to load hashtag videos: \(error)")
-        }
-        
-        isLoading = false
-    }
-    
-    func clearHashtagFilter() {
-        selectedHashtag = nil
-        hashtagVideos = []
-        applyFilterAndShuffle()
-    }
-    
-    // MARK: - Load More (APPEND to end, NO reshuffle)
-    
-    func loadMoreContent() async {
-        guard !isLoading else { return }
-        
-        isLoading = true
-        defer { isLoading = false }
-        
-        do {
-            print("📥 DISCOVERY: Loading more content (appending to end)")
-            
-            let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 30)
-            let newVideos = threads.map { $0.parentVideo }
-            
-            await MainActor.run {
-                let validVideos = newVideos.filter { !$0.id.isEmpty }
-                
-                // Append to END — don't reshuffle seen content
-                videos.append(contentsOf: validVideos)
-                filteredVideos.append(contentsOf: validVideos)
-                
-                print("✅ DISCOVERY: Appended \(validVideos.count) videos to end, total: \(filteredVideos.count)")
-            }
-        } catch {
-            print("❌ DISCOVERY: Failed to load more: \(error)")
-        }
-    }
-    
-    // MARK: - Refresh Content (invalidate caches + full reset)
-    
-    func refreshContent() async {
-        // Invalidate service-level caches so we get fresh Firestore data
-        discoveryService.invalidateVideoCaches()
-        
-        videos = []
-        filteredVideos = []
-        await loadInitialContent()
-    }
-    
-    // MARK: - Randomize Content (explicit reshuffle, 0 reads)
-    
-    func randomizeContent() {
-        videos = videos.shuffled()
-        applyFilterAndShuffle()
-        
-        print("🎲 DISCOVERY: Content randomized - \(filteredVideos.count) videos reshuffled")
-    }
-    
-    // MARK: - Category Filtering (TTL cached — tab switch = 0 reads within TTL)
-    
-    func filterBy(category: DiscoveryCategory) async {
-        currentCategory = category
-        
-        guard category.isVideoCategory else { return }
-        
-        isLoading = true
-        defer { isLoading = false }
-        
-        do {
-            let threads: [ThreadData]
-            
-            switch category {
-            case .all:
-                threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 40)
-                
-            case .trending:
-                threads = try await discoveryService.getTrendingDiscovery(limit: 40)
-                
-            case .recent:
-                threads = try await discoveryService.getRecentDiscovery(limit: 40)
-                
-            case .following:
-                threads = try await discoveryService.getFollowingFeed(limit: 40)
-                
-            case .hotHashtags:
-                threads = try await discoveryService.getHotHashtagDiscovery(limit: 40)
-                
-            case .heatCheck:
-                threads = try await discoveryService.getHeatCheckDiscovery(limit: 40)
-                
-            case .undiscovered:
-                threads = try await discoveryService.getUndiscoveredDiscovery(limit: 40)
-                
-            case .longestThreads:
-                threads = try await discoveryService.getLongestThreadsDiscovery(limit: 40)
-                
-            case .spinOffs:
-                threads = try await discoveryService.getSpinOffDiscovery(limit: 40)
-                
-            case .rollTheDice:
-                // Roll the Dice always forces fresh fetch + extra shuffle
-                discoveryService.invalidateVideoCaches()
-                let allThreads = try await discoveryService.getDeepRandomizedDiscovery(limit: 60)
-                threads = allThreads.shuffled()
-                
-            case .communities, .collections, .pymk, .podcasts, .films:
-                return
-            }
-            
-            let loadedVideos = threads.map { $0.parentVideo }
-            
-            await MainActor.run {
-                let validVideos = loadedVideos.filter { !$0.id.isEmpty }
-                videos = validVideos
-                applyFilterAndShuffle()
-                
-                print("📊 DISCOVERY: Applied \(category.displayName) filter - \(filteredVideos.count) videos")
-            }
-            
-        } catch {
-            await MainActor.run {
-                errorMessage = "Failed to load \(category.displayName) content"
-                print("❌ DISCOVERY: Category load failed: \(error)")
-            }
-        }
-    }
-    
-    // MARK: - Collection Loading (Podcasts, Films — cached in service)
-    
-    func loadCollections(for category: DiscoveryCategory) async {
-        isLoadingCollections = true
-        defer { isLoadingCollections = false }
-        
-        do {
-            switch category {
-            case .collections:
-                discoveryCollections = try await discoveryService.getAllCollectionsDiscovery(limit: 30)
-            case .podcasts:
-                discoveryCollections = try await discoveryService.getPodcastDiscovery(limit: 20)
-            case .films:
-                discoveryCollections = try await discoveryService.getFilmsDiscovery(limit: 20)
-            default:
-                break
-            }
-        } catch {
-            discoveryCollections = []
-        }
-    }
-    
-    // MARK: - Filtering and Shuffling
-    
-    private func applyFilterAndShuffle() {
-        let blockedIDs = DiscoveryEngagementTracker.shared.blockedCreatorIDs()
-        let allowedVideos = blockedIDs.isEmpty ? videos : videos.filter { !blockedIDs.contains($0.creatorID) }
-        filteredVideos = diversifyShuffle(videos: allowedVideos)
-    }
-    
-    /// Insert collection placeholder cards into filteredVideos every ~7 items.
-    func interleaveCollections(_ collections: [VideoCollection]) {
-        guard !collections.isEmpty else { return }
-        collectionCardMap.removeAll()
-        
-        var insertOffset = 0
-        for (i, collection) in collections.enumerated() {
-            let placeholderID = "collection_card_\(collection.id)"
-            
-            let placeholder = CoreVideoMetadata(
-                id: placeholderID,
-                title: collection.title,
-                description: "\(collection.segmentCount) parts",
-                videoURL: "",
-                thumbnailURL: collection.coverImageURL ?? "",
-                creatorID: collection.creatorID,
-                creatorName: collection.creatorName,
-                createdAt: collection.publishedAt ?? collection.createdAt,
-                threadID: nil,
-                replyToVideoID: nil,
-                conversationDepth: 0,
-                viewCount: collection.totalViews,
-                hypeCount: collection.totalHypes,
-                coolCount: collection.totalCools,
-                replyCount: collection.totalReplies,
-                shareCount: collection.totalShares,
-                temperature: "neutral",
-                qualityScore: 50,
-                engagementRatio: 0,
-                velocityScore: 0,
-                trendingScore: 0,
-                duration: collection.totalDuration,
-                aspectRatio: 9.0/16.0,
-                fileSize: 0,
-                discoverabilityScore: 0.5,
-                isPromoted: false,
-                lastEngagementAt: nil,
-                collectionID: collection.id,
-                isCollectionSegment: true
-            )
-            
-            collectionCardMap[placeholderID] = collection
-            
-            let insertIndex = min((i + 1) * 7 + insertOffset, filteredVideos.count)
-            filteredVideos.insert(placeholder, at: insertIndex)
-            insertOffset += 1
-        }
-        
-        print("📚 DISCOVERY: Interleaved \(collections.count) collection cards")
-    }
-    
-    /// Shuffle with maximum creator variety
-    private func diversifyShuffle(videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
-        guard videos.count > 1 else { return videos }
-        
-        var creatorBuckets: [String: [CoreVideoMetadata]] = [:]
-        for video in videos {
-            creatorBuckets[video.creatorID, default: []].append(video)
-        }
-        
-        var shuffledBuckets = creatorBuckets.mapValues { $0.shuffled() }
-        
-        var result: [CoreVideoMetadata] = []
-        var recentCreators: [String] = []
-        let maxRecentTracking = 5
-        
-        while !shuffledBuckets.isEmpty {
-            let availableCreators = shuffledBuckets.keys.filter { !recentCreators.contains($0) }
-            
-            let chosenCreatorID: String
-            if !availableCreators.isEmpty {
-                chosenCreatorID = availableCreators.randomElement()!
-            } else {
-                chosenCreatorID = shuffledBuckets.keys.randomElement()!
-                recentCreators.removeAll()
-            }
-            
-            if var creatorVideos = shuffledBuckets[chosenCreatorID], !creatorVideos.isEmpty {
-                let video = creatorVideos.removeFirst()
-                result.append(video)
-                
-                recentCreators.append(chosenCreatorID)
-                if recentCreators.count > maxRecentTracking {
-                    recentCreators.removeFirst()
-                }
-                
-                if creatorVideos.isEmpty {
-                    shuffledBuckets.removeValue(forKey: chosenCreatorID)
-                } else {
-                    shuffledBuckets[chosenCreatorID] = creatorVideos
-                }
-            }
-        }
-        
-        return result
-    }
-}
-
-// MARK: - Discovery Mode & Category
-
-enum DiscoveryMode: String, CaseIterable {
-    case swipe = "swipe"
-    case grid = "grid"
-    
-    var displayName: String {
-        switch self {
-        case .swipe: return "Swipe"
-        case .grid: return "Grid"
-        }
-    }
-    
-    var icon: String {
-        switch self {
-        case .swipe: return "square.stack"
-        case .grid: return "rectangle.grid.2x2"
-        }
-    }
-}
-
-enum DiscoveryCategory: String, CaseIterable {
-    case communities = "communities"
-    case collections = "collections"
-    case all = "all"
-    case trending = "trending"
-    case pymk = "pymk"
-    case hotHashtags = "hotHashtags"
-    case recent = "recent"
-    case heatCheck = "heatCheck"
-    case following = "following"
-    case undiscovered = "undiscovered"
-    case longestThreads = "longestThreads"
-    case spinOffs = "spinOffs"
-    case podcasts = "podcasts"
-    case films = "films"
-    case rollTheDice = "rollTheDice"
-    
-    var displayName: String {
-        switch self {
-        case .communities: return "Communities"
-        case .collections: return "Collections"
-        case .following: return "Following"
-        case .trending: return "Trending"
-        case .pymk: return "PYMK"
-        case .hotHashtags: return "Hot Hashtags"
-        case .all: return "All"
-        case .recent: return "New"
-        case .heatCheck: return "Heat Check"
-        case .undiscovered: return "Undiscovered"
-        case .longestThreads: return "Threads"
-        case .spinOffs: return "Spin-Offs"
-        case .podcasts: return "Podcasts"
-        case .films: return "Films"
-        case .rollTheDice: return "Roll the Dice"
-        }
-    }
-    
-    var icon: String {
-        switch self {
-        case .communities: return "person.3.fill"
-        case .collections: return "rectangle.stack.fill"
-        case .following: return "heart.fill"
-        case .trending: return "flame.fill"
-        case .pymk: return "person.badge.plus"
-        case .hotHashtags: return "number"
-        case .all: return "square.grid.2x2"
-        case .recent: return "sparkles"
-        case .heatCheck: return "thermometer.high"
-        case .undiscovered: return "binoculars.fill"
-        case .longestThreads: return "bubble.left.and.bubble.right.fill"
-        case .spinOffs: return "arrow.triangle.branch"
-        case .podcasts: return "mic.fill"
-        case .films: return "film"
-        case .rollTheDice: return "dice.fill"
-        }
-    }
-    
-    var isVideoCategory: Bool {
-        switch self {
-        case .communities, .collections, .pymk, .podcasts, .films: return false
-        default: return true
-        }
-    }
-    
-    var isCollectionCategory: Bool {
-        return self == .podcasts || self == .films || self == .collections
-    }
-}
-
-// MARK: - Video Presentation Wrapper
-
-struct DiscoveryVideoPresentation: Identifiable, Equatable {
-    let id: String
-    let video: CoreVideoMetadata
-    
-    static func == (lhs: DiscoveryVideoPresentation, rhs: DiscoveryVideoPresentation) -> Bool {
-        lhs.id == rhs.id
-    }
-}
-
-// MARK: - Hashtag Presentation Wrapper
-
-struct DiscoveryHashtagPresentation: Identifiable {
-    let id: String
-    let hashtag: TrendingHashtag
-}
-
-// MARK: - Enhanced DiscoveryView
+// MARK: - DiscoveryView
 
 struct DiscoveryView: View {
+
     // MARK: - State
+
     @StateObject private var viewModel = DiscoveryViewModel()
     @EnvironmentObject private var authService: AuthService
-    
-    // MARK: - Services for Profile Navigation
-    
+
+    // MARK: - Services
+
     private let userService = UserService()
     private let videoService = VideoService()
-    
-    // Observe announcement service to pause videos when announcement shows
+
     @ObservedObject private var announcementService = AnnouncementService.shared
-    
-    // MARK: - Community Services
-    @ObservedObject private var communityService = CommunityService.shared
-    
+    @ObservedObject private var communityService    = CommunityService.shared
+
     @State private var selectedCategory: DiscoveryCategory = .all
-    @State private var discoveryMode: DiscoveryMode = .swipe
+    @State private var discoveryMode:    DiscoveryMode     = .swipe
     @State private var currentSwipeIndex: Int = 0
     @State private var showingSearch = false
-    
+
     // MARK: - Community State
+
     @State private var showingCommunityDetail = false
     @State private var selectedCommunityItem: CommunityListItem?
     @State private var hasUnreadCommunities = false
-    
-    // MARK: - Profile Navigation State
-    
+
+    // MARK: - Profile Navigation
+
     @State private var selectedUserForProfile: String?
     @State private var showingProfileView = false
-    
+
     // Item-based fullscreen presentation
     @State private var videoPresentation: DiscoveryVideoPresentation?
     @EnvironmentObject var muteManager: MuteContextManager
-    
+
     // Hashtag navigation
     @State private var selectedHashtagPresentation: DiscoveryHashtagPresentation?
-    
+
     // MARK: - PYMK State
+
     @State private var showingPYMK = false
-    
+
     // Collection player state
     @State private var showingCollectionPlayer = false
     @State private var selectedCollection: VideoCollection?
-    
+
+    // MARK: - Extracted Body Helpers
+    // Split out to avoid compiler type-check timeout on body
+
+    private var backgroundGradient: some View {
+        LinearGradient(
+            colors: [
+                Color.black,
+                Color.purple.opacity(0.3),
+                Color.pink.opacity(0.2),
+                Color.black
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
+        VStack(spacing: 0) {
+            discoveryToolbar
+            categorySelector
+
+            if selectedCategory == .trending || selectedCategory == .hotHashtags {
+                trendingHashtagsSection
+            }
+
+            if selectedCategory.isVideoCategory, let hashtag = viewModel.selectedHashtag {
+                hashtagFilterBar(hashtag)
+            }
+
+            if selectedCategory == .communities {
+                if let userID = authService.currentUserID {
+                    CommunityListView(userID: userID)
+                }
+            } else if selectedCategory == .pymk {
+                if let userID = authService.currentUserID {
+                    PeopleYouMayKnowView(userID: userID)
+                }
+            } else if selectedCategory.isCollectionCategory {
+                collectionLaneView
+            } else if viewModel.isLoading && viewModel.videos.isEmpty {
+                loadingView
+            } else if let errorMessage = viewModel.errorMessage {
+                errorView(errorMessage)
+            } else {
+                contentView
+            }
+        }
+    }
+
     var body: some View {
         ZStack {
-            // Background Gradient
-            LinearGradient(
-                colors: [
-                    Color.black,
-                    Color.purple.opacity(0.3),
-                    Color.pink.opacity(0.2),
-                    Color.black
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-            
-            VStack(spacing: 0) {
-                // Compact toolbar
-                discoveryToolbar
-                
-                // Category Selector
-                categorySelector
-                
-                // Trending Hashtags
-                if selectedCategory == .trending || selectedCategory == .hotHashtags {
-                    trendingHashtagsSection
-                }
-                
-                // Active hashtag filter indicator
-                if selectedCategory.isVideoCategory, let hashtag = viewModel.selectedHashtag {
-                    hashtagFilterBar(hashtag)
-                }
-                
-                // Content
-                if selectedCategory == .communities {
-                    if let userID = authService.currentUserID {
-                        CommunityListView(userID: userID)
-                    }
-                } else if selectedCategory == .pymk {
-                    if let userID = authService.currentUserID {
-                        PeopleYouMayKnowView(userID: userID)
-                    }
-                } else if selectedCategory.isCollectionCategory {
-                    collectionLaneView
-                } else if viewModel.isLoading && viewModel.videos.isEmpty {
-                    loadingView
-                } else if let errorMessage = viewModel.errorMessage {
-                    errorView(errorMessage)
-                } else {
-                    contentView
-                }
-            }
+            backgroundGradient
+            mainContent
         }
         .task {
             await DiscoveryEngagementTracker.shared.loadPreferences()
-            
+
             if viewModel.filteredVideos.isEmpty {
                 await viewModel.loadInitialContent()
             }
             await viewModel.loadTrendingHashtags()
-            
-            // Check for unread communities
+
             if let userID = authService.currentUserID {
                 if let communities = try? await communityService.fetchMyCommunities(userID: userID) {
                     hasUnreadCommunities = communities.contains { $0.unreadCount > 0 || $0.isCreatorLive }
@@ -599,10 +162,17 @@ struct DiscoveryView: View {
         }
         .onChange(of: announcementService.isShowingAnnouncement) { _, isShowing in
             if isShowing {
-                print("📢 DISCOVERY: Announcement showing - pausing videos")
+                print("📢 DISCOVERY: Announcement showing — pausing videos")
             } else {
-                print("📢 DISCOVERY: Announcement dismissed - can resume videos")
+                print("📢 DISCOVERY: Announcement dismissed — can resume videos")
             }
+        }
+        // MARK: - Onboarding Triggers
+        // swipeCards/swipeToSeed handled via handleSwipeIndexChanged (seed-locking logic).
+        // tapFullscreen handled in FullscreenVideoView.onAppear.
+        // threadButton/stitchButton handled in ContextualVideoOverlay + ThreadView.
+        .onChange(of: currentSwipeIndex) { _, newIndex in
+            OnboardingState.shared.handleSwipeIndexChanged(to: newIndex)
         }
         .sheet(isPresented: $showingProfileView) {
             if let userID = selectedUserForProfile {
@@ -625,75 +195,9 @@ struct DiscoveryView: View {
             }
         }
     }
-    
-    // MARK: - Header View
-    
-    private var headerView: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Discovery")
-                    .font(.title)
-                    .fontWeight(.bold)
-                    .foregroundColor(.white)
-                
-                HStack(spacing: 8) {
-                    Text(selectedCategory == .communities
-                         ? "\(communityService.myCommunities.count) channels"
-                         : "\(viewModel.filteredVideos.count) videos")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
-                    
-                    if viewModel.isLoading {
-                        HStack(spacing: 4) {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                                .progressViewStyle(CircularProgressViewStyle(tint: .cyan))
-                            Text("Loading...")
-                                .font(.caption2)
-                                .foregroundColor(.cyan)
-                        }
-                    }
-                }
-            }
-            
-            Spacer()
-            
-            HStack(spacing: 16) {
-                if selectedCategory.isVideoCategory {
-                    Button {
-                        viewModel.randomizeContent()
-                    } label: {
-                        Image(systemName: "shuffle")
-                            .font(.title2)
-                            .foregroundColor(.cyan)
-                    }
-                    
-                    Button {
-                        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                            discoveryMode = discoveryMode == .grid ? .swipe : .grid
-                        }
-                    } label: {
-                        Image(systemName: discoveryMode.icon)
-                            .font(.title2)
-                            .foregroundColor(discoveryMode == .swipe ? .cyan : .white.opacity(0.7))
-                    }
-                }
-                
-                Button {
-                    showingSearch.toggle()
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.title2)
-                        .foregroundColor(.white.opacity(0.7))
-                }
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 10)
-    }
-    
+
     // MARK: - Discovery Toolbar
-    
+
     private var discoveryToolbar: some View {
         HStack {
             if viewModel.isLoading {
@@ -712,9 +216,9 @@ struct DiscoveryView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.white.opacity(0.5))
             }
-            
+
             Spacer()
-            
+
             HStack(spacing: 18) {
                 if selectedCategory.isVideoCategory {
                     Button {
@@ -724,7 +228,7 @@ struct DiscoveryView: View {
                             .font(.system(size: 18, weight: .medium))
                             .foregroundColor(.cyan)
                     }
-                    
+
                     Button {
                         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                             discoveryMode = discoveryMode == .grid ? .swipe : .grid
@@ -735,7 +239,8 @@ struct DiscoveryView: View {
                             .foregroundColor(discoveryMode == .swipe ? .cyan : .white.opacity(0.6))
                     }
                 }
-                
+
+                // ONBOARDING: search icon frame reported via PreferenceKey
                 Button {
                     showingSearch.toggle()
                 } label: {
@@ -743,15 +248,16 @@ struct DiscoveryView: View {
                         .font(.system(size: 18, weight: .medium))
                         .foregroundColor(.white.opacity(0.6))
                 }
+                .overlay(searchIconFrameReporter.allowsHitTesting(false))
             }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 2)
     }
-    
+
     // MARK: - Category Selector
-    
+
     private var categorySelector: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
@@ -759,9 +265,7 @@ struct DiscoveryView: View {
                     Button {
                         selectedCategory = category
                         if category.isVideoCategory {
-                            Task {
-                                await viewModel.filterBy(category: category)
-                            }
+                            Task { await viewModel.filterBy(category: category) }
                             currentSwipeIndex = 0
                         } else if category == .communities {
                             Task {
@@ -770,18 +274,16 @@ struct DiscoveryView: View {
                                 }
                             }
                         } else if category.isCollectionCategory {
-                            Task {
-                                await viewModel.loadCollections(for: category)
-                            }
+                            Task { await viewModel.loadCollections(for: category) }
                         }
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: category.icon)
                                 .font(.system(size: category == .communities ? 14 : 11, weight: .semibold))
-                            
+
                             Text(category.displayName)
                                 .font(.system(size: 13, weight: selectedCategory == category ? .bold : .medium))
-                            
+
                             if category == .communities && hasUnreadCommunities && selectedCategory != .communities {
                                 Circle()
                                     .fill(Color.pink)
@@ -800,11 +302,17 @@ struct DiscoveryView: View {
                         .overlay(
                             Capsule()
                                 .stroke(
-                                    selectedCategory == category
-                                        ? tabStroke(category)
-                                        : Color.clear,
+                                    selectedCategory == category ? tabStroke(category) : Color.clear,
                                     lineWidth: 1
                                 )
+                        )
+                        .overlay(
+                            Group {
+                                if category == .communities {
+                                    communitiesPillFrameReporter
+                                }
+                            }
+                            .allowsHitTesting(false)
                         )
                     }
                 }
@@ -814,48 +322,48 @@ struct DiscoveryView: View {
         .padding(.top, 8)
         .padding(.bottom, 6)
     }
-    
+
     private func tabForeground(_ category: DiscoveryCategory) -> Color {
         if selectedCategory == category {
             switch category {
             case .communities: return .pink
-            case .pymk: return .cyan
+            case .pymk:        return .cyan
             case .rollTheDice: return .yellow
-            case .heatCheck: return .orange
-            case .podcasts: return .purple
-            case .films: return .indigo
-            default: return .white
+            case .heatCheck:   return .orange
+            case .podcasts:    return .purple
+            case .films:       return .indigo
+            default:           return .white
             }
         }
         return .white.opacity(0.5)
     }
-    
+
     private func tabBackground(_ category: DiscoveryCategory) -> Color {
         switch category {
         case .communities: return Color.pink.opacity(0.15)
-        case .pymk: return Color.cyan.opacity(0.15)
+        case .pymk:        return Color.cyan.opacity(0.15)
         case .rollTheDice: return Color.yellow.opacity(0.15)
-        case .heatCheck: return Color.orange.opacity(0.15)
-        case .podcasts: return Color.purple.opacity(0.15)
-        case .films: return Color.indigo.opacity(0.15)
-        default: return Color.white.opacity(0.12)
+        case .heatCheck:   return Color.orange.opacity(0.15)
+        case .podcasts:    return Color.purple.opacity(0.15)
+        case .films:       return Color.indigo.opacity(0.15)
+        default:           return Color.white.opacity(0.12)
         }
     }
-    
+
     private func tabStroke(_ category: DiscoveryCategory) -> Color {
         switch category {
         case .communities: return Color.pink.opacity(0.4)
-        case .pymk: return Color.cyan.opacity(0.4)
+        case .pymk:        return Color.cyan.opacity(0.4)
         case .rollTheDice: return Color.yellow.opacity(0.4)
-        case .heatCheck: return Color.orange.opacity(0.4)
-        case .podcasts: return Color.purple.opacity(0.4)
-        case .films: return Color.indigo.opacity(0.4)
-        default: return Color.white.opacity(0.2)
+        case .heatCheck:   return Color.orange.opacity(0.4)
+        case .podcasts:    return Color.purple.opacity(0.4)
+        case .films:       return Color.indigo.opacity(0.4)
+        default:           return Color.white.opacity(0.2)
         }
     }
-    
+
     // MARK: - Trending Hashtags Section
-    
+
     private var trendingHashtagsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             if viewModel.isLoadingHashtags {
@@ -871,10 +379,7 @@ struct DiscoveryView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
                         ForEach(viewModel.trendingHashtags) { hashtag in
-                            DiscoveryHashtagChip(
-                                hashtag: hashtag,
-                                isSelected: false
-                            ) {
+                            DiscoveryHashtagChip(hashtag: hashtag, isSelected: false) {
                                 selectedHashtagPresentation = DiscoveryHashtagPresentation(
                                     id: hashtag.id,
                                     hashtag: hashtag
@@ -889,7 +394,7 @@ struct DiscoveryView: View {
         .padding(.vertical, 8)
         .background(Color.black.opacity(0.3))
     }
-    
+
     private func hashtagFilterBar(_ hashtag: TrendingHashtag) -> some View {
         HStack {
             Button {
@@ -898,20 +403,21 @@ struct DiscoveryView: View {
                     hashtag: hashtag
                 )
             } label: {
-                HStack {
-                    Text(hashtag.velocityTier.emoji)
-                    Text("Viewing \(hashtag.displayTag)")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white)
-                    
-                    Text("• \(viewModel.hashtagVideos.count) videos")
-                        .font(.system(size: 13))
-                        .foregroundColor(.gray)
+                HStack(spacing: 6) {
+                    Image(systemName: "number")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(hashtag.tag)
+                        .font(.system(size: 13, weight: .semibold))
                 }
+                .foregroundColor(.pink)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.pink.opacity(0.15))
+                .clipShape(Capsule())
             }
-            
+
             Spacer()
-            
+
             Button {
                 viewModel.clearHashtagFilter()
             } label: {
@@ -919,87 +425,83 @@ struct DiscoveryView: View {
                     .foregroundColor(.gray)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(Color.pink.opacity(0.15))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
-    
+
     // MARK: - Content View
-    
+
     @ViewBuilder
     private var contentView: some View {
         if announcementService.isShowingAnnouncement {
             Color.clear
+        } else if discoveryMode == .swipe {
+            swipeContentView
         } else {
-            switch discoveryMode {
-            case .swipe:
-                ZStack(alignment: .top) {
-                    DiscoverySwipeCards(
-                        videos: viewModel.filteredVideos,
-                        currentIndex: $currentSwipeIndex,
-                        onVideoTap: { video in
-                            if let collection = viewModel.collectionCardMap[video.id] {
-                                selectedCollection = collection
-                                showingCollectionPlayer = true
-                            } else {
-                                videoPresentation = DiscoveryVideoPresentation(
-                                    id: video.id,
-                                    video: video
-                                )
-                            }
-                        },
-                        onNavigateToProfile: { userID in
-                            selectedUserForProfile = userID
-                            showingProfileView = true
-                        },
-                        onNavigateToThread: { _ in },
-                        isFullscreenActive: videoPresentation != nil || showingSearch || selectedHashtagPresentation != nil
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onChange(of: currentSwipeIndex) { _, newValue in
-                        if newValue >= viewModel.filteredVideos.count - 10 {
-                            Task {
-                                await viewModel.loadMoreContent()
-                            }
-                        }
-                    }
-                    
-                    swipeInstructionsIndicator
-                        .padding(.top, 20)
-                }
-                
-            case .grid:
-                DiscoveryGridView(
-                    videos: viewModel.filteredVideos,
-                    onVideoTap: { video in
-                        if let collection = viewModel.collectionCardMap[video.id] {
-                            selectedCollection = collection
-                            showingCollectionPlayer = true
-                        } else {
-                            videoPresentation = DiscoveryVideoPresentation(
-                                id: video.id,
-                                video: video
-                            )
-                        }
-                    },
-                    onLoadMore: {
-                        Task {
-                            await viewModel.loadMoreContent()
-                        }
-                    },
-                    onRefresh: {
-                        Task {
-                            await viewModel.refreshContent()
-                        }
-                    },
-                    isLoadingMore: viewModel.isLoading
-                )
-            }
+            gridContentView
         }
     }
-    
-    // MARK: - Swipe Instructions
-    
+
+    @ViewBuilder
+    private var swipeContentView: some View {
+        ZStack(alignment: .top) {
+            DiscoverySwipeCards(
+                videos: viewModel.filteredVideos,
+                currentIndex: $currentSwipeIndex,
+                onVideoTap: { video in
+                    if let collection = viewModel.collectionCardMap[video.id] {
+                        selectedCollection = collection
+                        showingCollectionPlayer = true
+                    } else {
+                        videoPresentation = DiscoveryVideoPresentation(
+                            id: video.id,
+                            video: video
+                        )
+                    }
+                },
+                onNavigateToProfile: { userID in
+                    selectedUserForProfile = userID
+                    showingProfileView = true
+                },
+                onNavigateToThread: { _ in },
+                isFullscreenActive: videoPresentation != nil || showingSearch || selectedHashtagPresentation != nil
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(swipeCardFrameReporter)
+            .onChange(of: currentSwipeIndex) { _, newValue in
+                if newValue >= viewModel.filteredVideos.count - 10 {
+                    Task { await viewModel.loadMoreContent() }
+                }
+            }
+
+            swipeInstructionsIndicator
+                .padding(.top, 20)
+        }
+    }
+
+    @ViewBuilder
+    private var gridContentView: some View {
+        DiscoveryGridView(
+            videos: viewModel.filteredVideos,
+            onVideoTap: { video in
+                if let collection = viewModel.collectionCardMap[video.id] {
+                    selectedCollection = collection
+                    showingCollectionPlayer = true
+                } else {
+                    videoPresentation = DiscoveryVideoPresentation(
+                        id: video.id,
+                        video: video
+                    )
+                }
+            },
+            onLoadMore: { Task { await viewModel.loadMoreContent() } },
+            onRefresh:  { Task { await viewModel.refreshContent() } },
+            isLoadingMore: viewModel.isLoading
+        )
+    }
+
+    // MARK: - Swipe Instructions Indicator
+
     private var swipeInstructionsIndicator: some View {
         HStack(spacing: 20) {
             HStack(spacing: 6) {
@@ -1009,11 +511,9 @@ struct DiscoveryView: View {
                     .font(.system(size: 13, weight: .medium))
             }
             .foregroundColor(.white.opacity(0.8))
-            
-            Divider()
-                .frame(height: 16)
-                .background(Color.white.opacity(0.3))
-            
+
+            Divider().frame(height: 16).background(Color.white.opacity(0.3))
+
             HStack(spacing: 6) {
                 Image(systemName: "arrow.right")
                     .font(.system(size: 14, weight: .semibold))
@@ -1021,11 +521,9 @@ struct DiscoveryView: View {
                     .font(.system(size: 13, weight: .medium))
             }
             .foregroundColor(.white.opacity(0.8))
-            
-            Divider()
-                .frame(height: 16)
-                .background(Color.white.opacity(0.3))
-            
+
+            Divider().frame(height: 16).background(Color.white.opacity(0.3))
+
             HStack(spacing: 6) {
                 Image(systemName: "hand.tap.fill")
                     .font(.system(size: 14, weight: .semibold))
@@ -1046,9 +544,9 @@ struct DiscoveryView: View {
         )
         .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
     }
-    
+
     // MARK: - Collection Lane View
-    
+
     private var collectionLaneView: some View {
         Group {
             if viewModel.isLoadingCollections && viewModel.discoveryCollections.isEmpty {
@@ -1100,15 +598,15 @@ struct DiscoveryView: View {
             await viewModel.loadCollections(for: selectedCategory)
         }
     }
-    
+
     // MARK: - Collections Grid (2-column)
-    
+
     private var collectionsGridView: some View {
         let columns = [
             GridItem(.flexible(), spacing: 10),
             GridItem(.flexible(), spacing: 10)
         ]
-        
+
         return ScrollView(showsIndicators: false) {
             LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(viewModel.discoveryCollections) { collection in
@@ -1126,15 +624,13 @@ struct DiscoveryView: View {
             Spacer(minLength: 80)
         }
     }
-    
+
     private func collectionGridCard(_ collection: VideoCollection) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .bottomTrailing) {
                 if let coverURL = collection.coverImageURL, let url = URL(string: coverURL) {
                     AsyncImage(url: url) { image in
-                        image
-                            .resizable()
-                            .aspectRatio(9/16, contentMode: .fill)
+                        image.resizable().aspectRatio(9/16, contentMode: .fill)
                     } placeholder: {
                         Rectangle()
                             .fill(Color.white.opacity(0.08))
@@ -1158,12 +654,10 @@ struct DiscoveryView: View {
                         )
                         .cornerRadius(10)
                 }
-                
+
                 HStack(spacing: 3) {
-                    Image(systemName: "play.rectangle.fill")
-                        .font(.system(size: 9))
-                    Text("\(collection.segmentCount)")
-                        .font(.system(size: 10, weight: .bold))
+                    Image(systemName: "play.rectangle.fill").font(.system(size: 9))
+                    Text("\(collection.segmentCount)").font(.system(size: 10, weight: .bold))
                 }
                 .foregroundColor(.white)
                 .padding(.horizontal, 6)
@@ -1172,70 +666,84 @@ struct DiscoveryView: View {
                 .cornerRadius(4)
                 .padding(6)
             }
-            
+
             Text(collection.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.white)
                 .lineLimit(2)
-            
+
             Text(collection.creatorName)
                 .font(.system(size: 11))
                 .foregroundColor(.gray)
                 .lineLimit(1)
         }
     }
-    
-    // MARK: - Loading View
+
+    // MARK: - Loading / Error Views
 
     private var loadingView: some View {
         VStack(spacing: 20) {
             ProgressView()
                 .scaleEffect(1.5)
                 .progressViewStyle(CircularProgressViewStyle(tint: .cyan))
-            
             Text("Discovering amazing content...")
                 .font(.headline)
                 .foregroundColor(.white.opacity(0.8))
-            
             Text("Finding videos from all time periods")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.6))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    
-    // MARK: - Error View
-    
+
     private func errorView(_ message: String) -> some View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 50))
                 .foregroundColor(.yellow)
-            
             Text("Oops!")
-                .font(.title)
-                .fontWeight(.bold)
-                .foregroundColor(.white)
-            
+                .font(.title).fontWeight(.bold).foregroundColor(.white)
             Text(message)
-                .font(.body)
-                .foregroundColor(.white.opacity(0.8))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-            
+                .font(.body).foregroundColor(.white.opacity(0.8))
+                .multilineTextAlignment(.center).padding(.horizontal, 40)
             Button("Try Again") {
-                Task {
-                    await viewModel.loadInitialContent()
-                }
+                Task { await viewModel.loadInitialContent() }
             }
-            .padding(.horizontal, 40)
-            .padding(.vertical, 15)
-            .background(Color.cyan)
-            .foregroundColor(.black)
-            .cornerRadius(25)
-            .fontWeight(.semibold)
+            .padding(.horizontal, 40).padding(.vertical, 15)
+            .background(Color.cyan).foregroundColor(.black)
+            .cornerRadius(25).fontWeight(.semibold)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Onboarding Frame Reporters
+    // Extracted into properties so the compiler can type-check them independently.
+
+    private var swipeCardFrameReporter: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: OnboardingSwipeCardFrameKey.self,
+                value: geo.frame(in: .global)
+            )
+        }
+    }
+
+    private var communitiesPillFrameReporter: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: OnboardingCommunitiesPillFrameKey.self,
+                value: geo.frame(in: .global)
+            )
+        }
+    }
+
+    private var searchIconFrameReporter: some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: OnboardingSearchIconFrameKey.self,
+                value: geo.frame(in: .global)
+            )
+        }
     }
 }
 
@@ -1245,30 +753,25 @@ struct DiscoveryHashtagChip: View {
     let hashtag: TrendingHashtag
     let isSelected: Bool
     let onTap: () -> Void
-    
+
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 5) {
-                Text(hashtag.velocityTier.emoji)
-                    .font(.system(size: 12))
-                
+                Text(hashtag.velocityTier.emoji).font(.system(size: 12))
                 Text(hashtag.displayTag)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(isSelected ? .black : .white)
-                
                 Text("\(hashtag.videoCount)")
                     .font(.system(size: 11))
                     .foregroundColor(isSelected ? .black.opacity(0.7) : .gray)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 12).padding(.vertical, 8)
             .background(
                 isSelected
                     ? AnyShapeStyle(Color.pink)
                     : AnyShapeStyle(LinearGradient(
                         colors: [Color.white.opacity(0.15), Color.white.opacity(0.05)],
-                        startPoint: .top,
-                        endPoint: .bottom
+                        startPoint: .top, endPoint: .bottom
                     ))
             )
             .cornerRadius(16)

@@ -504,6 +504,9 @@ class VideoService: ObservableObject {
             return nil
         }
         
+        // Invalidate participant cache — new participant may have joined
+        invalidateParticipantCache(threadID: threadID)
+
         // Propagate reply count to parent collection if segment
         await propagateToCollection(videoID: parentID, field: "totalReplies", delta: 1)
         
@@ -522,21 +525,48 @@ class VideoService: ObservableObject {
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
         
-        // Ã°Å¸â€â€ NOTIFY PARENT CREATOR OF NEW REPLY
+        // 🔔 PROXIMITY-BASED THREAD NOTIFICATIONS
+        // Rule: thread creator always notified. Depth-1 horizontal participants notified
+        // when a new stitch joins their thread. Depth-2+ not notified (no stepchild spam).
+        // Direct reply target gets a reply notification regardless of depth.
         let parentCreatorID = parentData[FirebaseSchema.VideoDocument.creatorID] as? String
-        if let parentCreatorID = parentCreatorID, parentCreatorID != validatedCreatorID {
-            Task {
-                do {
-                    let notificationService = NotificationService()
+        let capturedThreadID = threadID
+        let capturedTitle = title
+        let capturedDepth = parentDepth
+        Task {
+            do {
+                let notificationService = NotificationService()
+
+                // 1. Direct reply target always gets a reply notification
+                if let parentCreatorID, parentCreatorID != validatedCreatorID {
                     try await notificationService.sendReplyNotification(
                         to: parentCreatorID,
                         videoID: videoID,
-                        videoTitle: title
+                        videoTitle: capturedTitle
                     )
-                    print("Ã¢Å“â€¦ REPLY NOTIFICATION: Sent to parent creator \(parentCreatorID)")
-                } catch {
-                    print("Ã¢Å¡Â Ã¯Â¸Â REPLY NOTIFICATION: Failed - \(error)")
+                    print("✅ REPLY NOTIFICATION: Sent to direct reply target \(parentCreatorID)")
                 }
+
+                // 2. Horizontal participants — only notify for depth-1 stitches on the parent thread.
+                // Stepchild replies (depth 2+) do not trigger horizontal notifications.
+                if capturedDepth == 0 {
+                    let horizontalParticipants = try await getDepth1ParticipantIDs(
+                        threadID: capturedThreadID,
+                        excludingUserIDs: [validatedCreatorID, parentCreatorID ?? ""]
+                    )
+                    if !horizontalParticipants.isEmpty {
+                        try await notificationService.sendStitchNotification(
+                            videoID: videoID,
+                            videoTitle: capturedTitle,
+                            originalCreatorID: parentCreatorID ?? "",
+                            parentCreatorID: "",
+                            threadUserIDs: Array(horizontalParticipants)
+                        )
+                        print("✅ HORIZONTAL STITCH NOTIFICATION: Sent to \(horizontalParticipants.count) depth-1 participants")
+                    }
+                }
+            } catch {
+                print("⚠️ THREAD NOTIFICATION: Failed - \(error)")
             }
         }
         
@@ -1548,6 +1578,88 @@ class VideoService: ObservableObject {
         return .cold
     }
     
+    // MARK: - Thread Participant Cache
+    // CACHING: Caches depth-1 participant IDs per threadID.
+    // Only depth-1 queried — avoids full thread scan, cuts reads significantly on large threads.
+    // TTL: 10 min. Invalidated on every new stitch via invalidateParticipantCache.
+    // BATCHING: Single Firestore query (conversationDepth == 1) instead of loading all videos.
+    // Add to CachingOptimization.md: threadDepth1Cache: [threadID → Set<creatorID>], TTL 10min.
+    private var threadDepth1Cache: [String: (ids: Set<String>, fetchedAt: Date)] = [:]
+    private let participantCacheTTL: TimeInterval = 600 // 10 minutes
+
+    /// Query only depth-1 video creators for a thread — the horizontal participants.
+    /// Single targeted Firestore query. Cached 10 min, invalidated on new stitch.
+    func getDepth1ParticipantIDs(threadID: String, excludingUserIDs: [String]) async throws -> Set<String> {
+        let now = Date()
+        let excludeSet = Set(excludingUserIDs.filter { !$0.isEmpty })
+
+        if let cached = threadDepth1Cache[threadID],
+           now.timeIntervalSince(cached.fetchedAt) < participantCacheTTL {
+            return cached.ids.subtracting(excludeSet)
+        }
+
+        // Single query — depth-1 only, no full thread scan
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: threadID)
+            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 1)
+            .getDocuments()
+
+        let ids = Set(snapshot.documents.compactMap { $0.data()[FirebaseSchema.VideoDocument.creatorID] as? String })
+        threadDepth1Cache[threadID] = (ids: ids, fetchedAt: now)
+        return ids.subtracting(excludeSet)
+    }
+
+    /// Invalidate depth-1 participant cache for a thread (call after any new stitch).
+    func invalidateParticipantCache(threadID: String) {
+        threadDepth1Cache.removeValue(forKey: threadID)
+    }
+
+    /// Notify thread creator + depth-1 participants when someone stitches the parent thread.
+    /// Called from VideoCoordinator for StitchToThread and ContinueThread contexts.
+    func sendStitchNotificationToThread(
+        videoID: String,
+        videoTitle: String,
+        threadID: String,
+        originalCreatorID: String,
+        posterID: String
+    ) {
+        Task {
+            do {
+                let notificationService = NotificationService()
+
+                // Thread creator always notified
+                if !originalCreatorID.isEmpty, originalCreatorID != posterID {
+                    try await notificationService.sendStitchNotification(
+                        videoID: videoID,
+                        videoTitle: videoTitle,
+                        originalCreatorID: originalCreatorID,
+                        parentCreatorID: "",
+                        threadUserIDs: []
+                    )
+                    print("✅ STITCH NOTIFICATION: Sent to thread creator \(originalCreatorID)")
+                }
+
+                // Depth-1 horizontal participants notified
+                let horizontalParticipants = try await getDepth1ParticipantIDs(
+                    threadID: threadID,
+                    excludingUserIDs: [posterID, originalCreatorID]
+                )
+                if !horizontalParticipants.isEmpty {
+                    try await notificationService.sendStitchNotification(
+                        videoID: videoID,
+                        videoTitle: videoTitle,
+                        originalCreatorID: "",
+                        parentCreatorID: "",
+                        threadUserIDs: Array(horizontalParticipants)
+                    )
+                    print("✅ HORIZONTAL STITCH NOTIFICATION: Sent to \(horizontalParticipants.count) participants in thread \(threadID)")
+                }
+            } catch {
+                print("⚠️ STITCH NOTIFICATION: Failed for thread \(threadID) - \(error)")
+            }
+        }
+    }
+
     /// Get user tier
     private func getUserTier(userID: String) async throws -> UserTier {
         do {

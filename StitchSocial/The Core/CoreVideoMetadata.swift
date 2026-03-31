@@ -63,6 +63,14 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         segmentTitle: String? = nil,
         isCollectionSegment: Bool = false,
         replyTimestamp: TimeInterval? = nil,
+        // Segment time mapping (NEW — EpisodeEditor.jsx parity)
+        startTimeSeconds: TimeInterval? = nil,
+        endTimeSeconds: TimeInterval? = nil,
+        fileSizeMB: Double? = nil,
+        uploadStatus: String = "complete",
+        isManualCut: Bool = false,
+        videoWidth: Int? = nil,
+        videoHeight: Int? = nil,
         // Spin-off support
         spinOffFromVideoID: String? = nil,
         spinOffFromThreadID: String? = nil,
@@ -105,6 +113,14 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         self.segmentTitle = segmentTitle
         self.isCollectionSegment = isCollectionSegment
         self.replyTimestamp = replyTimestamp
+        // Segment time mapping (NEW)
+        self.startTimeSeconds = startTimeSeconds
+        self.endTimeSeconds = endTimeSeconds
+        self.fileSizeMB = fileSizeMB
+        self.uploadStatus = uploadStatus
+        self.isManualCut = isManualCut
+        self.videoWidth = videoWidth
+        self.videoHeight = videoHeight
         // Spin-off support
         self.spinOffFromVideoID = spinOffFromVideoID
         self.spinOffFromThreadID = spinOffFromThreadID
@@ -155,6 +171,15 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     var isCollectionSegment: Bool    // True if this video is a collection segment
     var replyTimestamp: TimeInterval? // Timestamp in parent video this reply references
     
+    // MARK: - Segment Time Mapping (NEW — from EpisodeEditor.jsx split pipeline)
+    var startTimeSeconds: TimeInterval?    // Start time in original video
+    var endTimeSeconds: TimeInterval?      // End time in original video
+    var fileSizeMB: Double?                // Individual segment file size in MB
+    var uploadStatus: String               // "pending", "uploading", "processing", "complete", "failed"
+    var isManualCut: Bool                  // Whether creator manually placed this cut point
+    var videoWidth: Int?                   // Pixel width of segment video
+    var videoHeight: Int?                  // Pixel height of segment video
+    
     // MARK: - Spin-off Support
     var spinOffFromVideoID: String?   // The video this thread is a spin-off from
     var spinOffFromThreadID: String?  // The root thread this spin-off came from
@@ -197,7 +222,14 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
         fileSize: Int64 = 0,
         id: String? = nil,
         title: String? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        startTimeSeconds: TimeInterval? = nil,
+        endTimeSeconds: TimeInterval? = nil,
+        fileSizeMB: Double? = nil,
+        uploadStatus: String = "complete",
+        isManualCut: Bool = false,
+        videoWidth: Int? = nil,
+        videoHeight: Int? = nil
     ) -> CoreVideoMetadata {
         let finalID = id ?? segmentID ?? UUID().uuidString
         let finalTitle = title ?? segmentTitle ?? "Part \(segmentNumber)"
@@ -236,6 +268,13 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
             segmentTitle: segmentTitle ?? finalTitle,
             isCollectionSegment: true,
             replyTimestamp: nil,
+            startTimeSeconds: startTimeSeconds,
+            endTimeSeconds: endTimeSeconds,
+            fileSizeMB: fileSizeMB,
+            uploadStatus: uploadStatus,
+            isManualCut: isManualCut,
+            videoWidth: videoWidth,
+            videoHeight: videoHeight,
             hashtags: []
         )
     }
@@ -624,6 +663,13 @@ extension CoreVideoMetadata {
             discoverabilityScore: discoverabilityScore,
             isPromoted: isPromoted,
             lastEngagementAt: Date(),
+            startTimeSeconds: startTimeSeconds,
+            endTimeSeconds: endTimeSeconds,
+            fileSizeMB: fileSizeMB,
+            uploadStatus: uploadStatus,
+            isManualCut: isManualCut,
+            videoWidth: videoWidth,
+            videoHeight: videoHeight,
             spinOffFromVideoID: spinOffFromVideoID,
             spinOffFromThreadID: spinOffFromThreadID,
             spinOffCount: spinOffCount,
@@ -668,6 +714,13 @@ extension CoreVideoMetadata {
             discoverabilityScore: discoverabilityScore ?? self.discoverabilityScore,
             isPromoted: isPromoted ?? self.isPromoted,
             lastEngagementAt: lastEngagementAt,
+            startTimeSeconds: startTimeSeconds,
+            endTimeSeconds: endTimeSeconds,
+            fileSizeMB: fileSizeMB,
+            uploadStatus: uploadStatus,
+            isManualCut: isManualCut,
+            videoWidth: videoWidth,
+            videoHeight: videoHeight,
             spinOffFromVideoID: spinOffFromVideoID,
             spinOffFromThreadID: spinOffFromThreadID,
             spinOffCount: spinOffCount,

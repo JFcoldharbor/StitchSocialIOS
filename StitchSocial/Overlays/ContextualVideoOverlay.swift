@@ -334,13 +334,17 @@ struct ContextualVideoOverlay: View {
                     if canShowReplyOrSpinoff {
                         VStack(spacing: 2) {
                             Button {
+                                NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                                 showingStitchRecording = true
                                 if isStitchBlocked {
                                     onAction?(.reply)
+                                    OnboardingState.shared.advance(from: .stitchButton)
                                 } else if shouldShowSpinoff {
                                     onAction?(.spinOff)
+                                    OnboardingState.shared.advance(from: .stitchButton)
                                 } else {
                                     onAction?(.stitch)
+                                    OnboardingState.shared.advance(from: .stitchButton)
                                 }
                             } label: {
                                 ZStack {
@@ -882,6 +886,7 @@ struct ContextualVideoOverlay: View {
                 VStack(spacing: 4) {
                     Button {
                         NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
+                        OnboardingState.shared.advance(from: .threadButton)
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             showingThreadView = true
                             onAction?(.thread(video.threadID ?? video.id))
@@ -905,7 +910,16 @@ struct ContextualVideoOverlay: View {
                         .foregroundColor(.white.opacity(0.8))
                 }
                 .frame(maxWidth: .infinity)
-                
+                .overlay(
+                    GeometryReader { geo in
+                        Color.clear.preference(
+                            key: OnboardingThreadBtnFrameKey.self,
+                            value: geo.frame(in: .global)
+                        )
+                    }
+                    .allowsHitTesting(false)
+                )
+
                 VStack(spacing: 4) {
                     ProgressiveCoolButton(
                         videoID: video.id,
@@ -940,13 +954,17 @@ struct ContextualVideoOverlay: View {
                 if canShowReplyOrSpinoff {
                     VStack(spacing: 4) {
                         Button {
+                            NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                             showingStitchRecording = true
                             if isStitchBlocked {
                                 onAction?(.reply)
+                                OnboardingState.shared.advance(from: .stitchButton)
                             } else if shouldShowSpinoff {
                                 onAction?(.spinOff)
+                                OnboardingState.shared.advance(from: .stitchButton)
                             } else {
                                 onAction?(.stitch)
+                                OnboardingState.shared.advance(from: .stitchButton)
                             }
                         } label: {
                             ZStack {
@@ -967,6 +985,15 @@ struct ContextualVideoOverlay: View {
                             .foregroundColor(.white.opacity(0.8))
                     }
                     .frame(maxWidth: .infinity)
+                    .overlay(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: OnboardingStitchBtnFrameKey.self,
+                                value: geo.frame(in: .global)
+                            )
+                        }
+                        .allowsHitTesting(false)
+                    )
                 }
             }
             .padding(.horizontal, 12)

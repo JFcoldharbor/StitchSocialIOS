@@ -6,6 +6,12 @@
 //  UPDATED: Added announcement system for platform-wide mandatory content
 //  UPDATED: Added memory debug overlay (DEBUG builds only)
 //  FIXED: Use @EnvironmentObject for authService to share state with parent
+//  UPDATED: Full SpotlightOnboardingView wired — all frame PreferenceKeys
+//
+//  CACHING NOTE:
+//  OnboardingState.shared reads UserDefaults once at init — zero Firestore reads.
+//  All frame states captured via PreferenceKey — zero cost, geometry only.
+//  OnboardingSeedService: 2 Firestore reads ever, then UserDefaults.
 //
 
 import SwiftUI
@@ -28,14 +34,27 @@ struct ContentView: View {
     @State private var errorMessage: String?
     @State private var showingError = false
     
+    // MARK: - Spotlight Onboarding
+    // OnboardingState is a singleton — @ObservedObject picks up published changes.
+    // All spotlight frames captured via PreferenceKey — zero Firestore reads.
+    // Fullscreen/thread/stitch frames reported from FullscreenVideoView +
+    // ContextualVideoOverlay via the same keys (wired in those files).
+    @ObservedObject private var onboardingState = OnboardingState.shared
+    @State private var swipeCardFrame:        CGRect = .zero
+    @State private var fullscreenButtonFrame: CGRect = .zero
+    // threadButtonFrame + stitchButtonFrame removed —
+    // captured inside FullscreenOnboardingOverlay (separate UIWindow)
+    @State private var communitiesPillFrame:  CGRect = .zero
+    @State private var searchIconFrame:       CGRect = .zero
+
     // MARK: - Feed Refresh State
     @State private var homeFeedRefreshTrigger = false
     @State private var showingSuccessMessage = false
     @State private var createdVideoTitle = ""
     
-    // MARK: - Announcement State (NEW)
+    // MARK: - Announcement State
     @ObservedObject private var announcementService = AnnouncementService.shared
-    @State private var currentUserInfo: BasicUserInfo?  // FIXED: Use BasicUserInfo
+    @State private var currentUserInfo: BasicUserInfo?
     
     // MARK: - Debug State
     #if DEBUG
@@ -65,14 +84,13 @@ struct ContentView: View {
             initializeApp()
         }
         .onChange(of: authService.authState) { oldState, newState in
-            print("ðŸ” CONTENTVIEW: Auth state changed from \(oldState) to \(newState)")
+            print("🔐 CONTENTVIEW: Auth state changed from \(oldState) to \(newState)")
             if newState == .unauthenticated {
                 selectedTab = .discovery
                 showingOnboarding = false
                 showingRecording = false
                 currentUserInfo = nil
             } else if newState == .authenticated, let currentUser = authService.currentUser {
-                // Store FCM token now that we have a valid user ID
                 Task {
                     if let token = Messaging.messaging().fcmToken {
                         let db = Firestore.firestore(database: Config.Firebase.databaseName)
@@ -83,15 +101,14 @@ struct ContentView: View {
                                 "platform": "ios",
                                 "isActive": true
                             ], merge: true)
-                            print("ðŸ“± FCM: Token stored for user: \(currentUser.id)")
+                            print("📱 FCM: Token stored for user: \(currentUser.id)")
                         } catch {
-                            print("ðŸ“± FCM: Failed to store token: \(error)")
+                            print("📱 FCM: Failed to store token: \(error)")
                         }
                     } else {
-                        print("ðŸ“± FCM: No token available yet at auth time")
+                        print("📱 FCM: No token available yet at auth time")
                     }
                 }
-                // Check for announcements when user becomes authenticated
                 Task {
                     await checkForAnnouncements(userId: currentUser.id)
                 }
@@ -160,13 +177,11 @@ struct ContentView: View {
     }
     
     private var onboardingView: some View {
+        // Legacy path — kept in case StitchOnboardingView is still needed elsewhere.
+        // The new spotlight flow is layered over mainAppView via onboardingState.
         StitchOnboardingView(
-            onComplete: {
-                completeOnboarding()
-            },
-            onSkip: {
-                completeOnboarding()
-            }
+            onComplete: { completeOnboarding() },
+            onSkip: { completeOnboarding() }
         )
     }
     
@@ -175,11 +190,9 @@ struct ContentView: View {
     private var mainAppView: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
-                // Email verification banner (non-blocking, dismissible)
                 EmailVerificationBanner()
                     .environmentObject(authService)
                 
-                // Tab content
                 Group {
                     switch selectedTab {
                     case .home:
@@ -206,19 +219,55 @@ struct ContentView: View {
                 .frame(maxHeight: .infinity)
             }
             
+            // MARK: Tab Bar — frame captured for spotlight positioning
             CustomDippedTabBar(
                 selectedTab: $selectedTab,
-                onTabSelected: { tab in
-                    handleTabSelection(tab)
-                },
-                onCreateTapped: {
-                    handleCreateAction()
+                onTabSelected: { tab in handleTabSelection(tab) },
+                onCreateTapped: { handleCreateAction() }
+            )
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: OnboardingTabBarFrameKey.self,
+                        value: geo.frame(in: .global)
+                    )
                 }
             )
+            .onPreferenceChange(OnboardingTabBarFrameKey.self)         { _ in }
+            .onPreferenceChange(OnboardingSwipeCardFrameKey.self)       { swipeCardFrame       = $0 }
+            .onPreferenceChange(OnboardingFullscreenBtnFrameKey.self)   { fullscreenButtonFrame = $0 }
+            // Thread + Stitch frames captured inside FullscreenOnboardingOverlay
+            // (fullScreenCover is a separate UIWindow — PreferenceKeys don't bubble up to here)
+            .onPreferenceChange(OnboardingCommunitiesPillFrameKey.self) { communitiesPillFrame  = $0 }
+            .onPreferenceChange(OnboardingSearchIconFrameKey.self)      { searchIconFrame       = $0 }
             
-            // MARK: - Announcement Overlay (NEW - Highest Priority)
+            // MARK: - Announcement Overlay
             announcementOverlay
-            
+
+            // MARK: - Spotlight Onboarding Overlay
+            // zIndex 9000 — below announcements (9999), above everything else.
+            // OnboardingState.shared.shouldShow = UserDefaults-backed, zero reads.
+            if false && onboardingState.shouldShow { // ONBOARDING DISABLED
+                SpotlightOnboardingView(
+                    swipeCardFrame:        swipeCardFrame,
+                    fullscreenButtonFrame: fullscreenButtonFrame,
+                    // thread/stitch frames handled inside FullscreenOnboardingOverlay
+                    threadButtonFrame:     .zero,
+                    stitchButtonFrame:     .zero,
+                    communitiesPillFrame:  communitiesPillFrame,
+                    searchIconFrame:       searchIconFrame,
+                    onOpenCamera: { showingRecording = true },
+                    onComplete: {
+                        // "Not now" / skip — complete without posting
+                        OnboardingState.shared.complete(userID: authService.currentUser?.id)
+                    }
+                )
+                .environmentObject(authService)
+                .zIndex(9000)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.3), value: onboardingState.shouldShow)
+            }
+
             #if DEBUG
             if showMemoryDebug {
                 VStack {
@@ -235,9 +284,7 @@ struct ContentView: View {
             #endif
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        // MARK: - Push Notification Deep Link Handlers
         .onReceive(NotificationCenter.default.publisher(for: .navigateToVideo)) { notification in
-            // Route video notifications through thread view
             if let videoID = notification.userInfo?["videoID"] as? String {
                 pendingTargetVideoID = videoID
                 pendingThreadNav = ThreadNavItem(threadID: videoID)
@@ -245,7 +292,6 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToProfile)) { notification in
             if let userID = notification.userInfo?["userID"] as? String {
-                // TODO: Present profile view when ProfileView init is confirmed
                 selectedTab = .notifications
                 print("👤 NOTIFICATION: Navigate to profile \(userID)")
             }
@@ -282,31 +328,28 @@ struct ContentView: View {
         #if DEBUG
         .onShake {
             showMemoryDebug.toggle()
-            print("ðŸ§  DEBUG: Memory overlay \(showMemoryDebug ? "shown" : "hidden")")
+            print("🧠 DEBUG: Memory overlay \(showMemoryDebug ? "shown" : "hidden")")
         }
         #endif
     }
     
-    // MARK: - Announcement Overlay (NEW)
+    // MARK: - Announcement Overlay
     
     @ViewBuilder
     private var announcementOverlay: some View {
         if announcementService.isShowingAnnouncement,
            let announcement = announcementService.currentAnnouncement {
-            
             AnnouncementOverlayView(
                 announcement: announcement,
                 onComplete: {
-                    print("ðŸ“¢ ANNOUNCEMENT: User completed viewing")
+                    print("📢 ANNOUNCEMENT: User completed viewing")
                     Task {
                         guard let userId = authService.currentUser?.id else { return }
-                        // Mark as completed so it won't show again
                         try? await announcementService.markAsCompleted(
                             userId: userId,
                             announcementId: announcement.id,
                             watchedSeconds: announcement.minimumWatchSeconds
                         )
-                        print("ðŸ“¢ ANNOUNCEMENT: Marked as completed")
                     }
                 },
                 onDismiss: {
@@ -316,11 +359,10 @@ struct ContentView: View {
                             userId: userId,
                             announcementId: announcement.id
                         )
-                        print("ðŸ“¢ ANNOUNCEMENT: User dismissed")
                     }
                 }
             )
-            .id(announcement.id)  // IMPORTANT: Force view refresh when announcement changes
+            .id(announcement.id)
             .environmentObject(videoService)
             .transition(.opacity.combined(with: .scale(scale: 0.95)))
             .zIndex(9999)
@@ -336,6 +378,11 @@ struct ContentView: View {
         showingSuccessMessage = true
         selectedTab = .home
         print("FEED REFRESH: Triggered")
+
+        // ONBOARDING: First video posted — complete onboarding flow
+        if OnboardingState.shared.shouldShow {
+            OnboardingState.shared.complete(userID: authService.currentUser?.id)
+        }
     }
     
     // MARK: - Initialization
@@ -357,10 +404,8 @@ struct ContentView: View {
                 try await checkAuthenticationState()
                 checkOnboardingStatus()
                 
-                // NEW: Check for announcements after auth is confirmed
                 if let currentUser = authService.currentUser {
                     await checkForAnnouncements(userId: currentUser.id)
-                    await HypeRatingService.shared.loadRating()
                 }
                 
                 await MainActor.run {
@@ -373,13 +418,12 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Announcement Check (NEW)
+    // MARK: - Announcement Check
     
     private func checkForAnnouncements(userId: String) async {
         do {
-            // FIXED: Use getUser which returns BasicUserInfo
             guard let userInfo = try await userService.getUser(id: userId) else {
-                print("âš ï¸ ANNOUNCEMENTS: Could not load user info")
+                print("⚠️ ANNOUNCEMENTS: Could not load user info")
                 return
             }
             currentUserInfo = userInfo
@@ -397,10 +441,10 @@ struct ContentView: View {
             )
             
             let pendingCount = AnnouncementService.shared.pendingAnnouncements.count
-            print("ðŸ“¢ ANNOUNCEMENTS: Checked for user \(userId), \(pendingCount) pending")
+            print("📢 ANNOUNCEMENTS: Checked for user \(userId), \(pendingCount) pending")
             
         } catch {
-            print("âš ï¸ ANNOUNCEMENTS: Failed to check - \(error.localizedDescription)")
+            print("⚠️ ANNOUNCEMENTS: Failed to check - \(error.localizedDescription)")
         }
     }
     
@@ -443,11 +487,15 @@ struct ContentView: View {
     }
     
     private func checkOnboardingStatus() {
-        // BYPASSED: Onboarding disabled for now - will replace with spotlight tutorial
-        // let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-        // if !hasCompletedOnboarding && authService.currentUser != nil {
-        //     showingOnboarding = true
-        // }
+        // Spotlight onboarding is driven by OnboardingState (@StateObject above).
+        // OnboardingState reads UserDefaults once at init — if not complete,
+        // shouldShow = true and the overlay appears over mainAppView automatically.
+        // Legacy showingOnboarding kept false to avoid showing old StitchOnboardingView.
+        // ONBOARDING DISABLED — re-enable when seed video is ready
+        // #if DEBUG
+        // OnboardingState.shared.resetForTesting()
+        // #endif
+        OnboardingState.shared.complete()  // silences ALL overlays everywhere
         showingOnboarding = false
     }
     
@@ -522,7 +570,7 @@ struct MemoryDebugOverlay: View {
             }
             
             if let currentID = preloadService.currentlyPlayingVideoID {
-                Text("â–¶ \(currentID.prefix(6))...")
+                Text("▶ \(currentID.prefix(6))...")
                     .font(.system(size: 8, design: .monospaced))
                     .foregroundColor(.green)
             }
@@ -546,9 +594,9 @@ struct MemoryDebugOverlay: View {
     private var pressureText: String {
         switch preloadService.memoryPressureLevel {
         case .normal: return "MEM OK"
-        case .elevated: return "MEM âš ï¸"
-        case .critical: return "MEM ðŸ”¶"
-        case .emergency: return "MEM ðŸ”´"
+        case .elevated: return "MEM ⚠️"
+        case .critical: return "MEM 🟠"
+        case .emergency: return "MEM 🔴"
         }
     }
 }
@@ -585,8 +633,6 @@ extension UIWindow {
     }
 }
 #endif
-
-// MARK: - Preview
 
 // MARK: - Navigation Helper
 

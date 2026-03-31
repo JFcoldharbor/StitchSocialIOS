@@ -119,7 +119,10 @@ struct FullscreenVideoView: View {
             
             // MEMORY: Mark initial video as protected
             preloadService.markAsCurrentlyPlaying(video.id)
-            print("ðŸ§  MEMORY: Marked \(video.id.prefix(8)) as currently playing")
+            print("🧠 MEMORY: Marked \(video.id.prefix(8)) as currently playing")
+
+            // ONBOARDING: User arrived in fullscreen — advance from tapFullscreen
+            OnboardingState.shared.advance(from: .tapHint)
         }
         .onDisappear {
             cleanupAudioSession()
@@ -149,15 +152,19 @@ struct FullscreenVideoView: View {
         return ZStack {
             // Video players
             videoPlayersLayer(geometry: geometry)
-            
-            // ⭐ NEW: Navigation peeks (previous/next video thumbnails on edges)
+
+            // Navigation peeks
             VideoNavigationPeeks(
                 allVideos: allVideos,
                 currentVideoIndex: currentVideoIndex
             )
-            
+
             // UI Overlays
             overlayViews(geometry: geometry)
+
+            // ONBOARDING: Spotlight overlay for thread + stitch button steps
+            // Only renders during those specific steps — zero cost otherwise
+            FullscreenOnboardingOverlay()
         }
         .offset(y: verticalDragOffset)
         .scaleEffect(scale)
@@ -266,19 +273,24 @@ struct FullscreenVideoView: View {
     
     private func handleOverlayAction(_ action: ContextualOverlayAction) {
         print("FULLSCREEN: Overlay action - \(action)")
-        
+
+        // ONBOARDING: Detect thread and stitch taps to advance steps
+        switch action {
+        case .thread:
+            OnboardingState.shared.advance(from: .threadButton)
+        case .stitch, .reply, .spinOff:
+            OnboardingState.shared.advance(from: .stitchButton)
+        default:
+            break
+        }
+
         // CRITICAL: Pause all playback for any action that leads away from current view
-        // This prevents audio overlap when user starts recording or navigates
         let actionString = String(describing: action).lowercased()
-        
-        // Actions that require pausing all videos
         let pauseActions = ["stitch", "reply", "record", "create", "profile", "thread", "navigate", "share"]
-        
         let shouldPause = pauseActions.contains { actionString.contains($0) }
-        
         if shouldPause {
             preloadService.pauseAllPlayback()
-            print("â¸ï¸ FULLSCREEN: Paused all playback for action: \(action)")
+            print("⏸️ FULLSCREEN: Paused all playback for action: \(action)")
         }
     }
     
@@ -805,6 +817,166 @@ struct VideoPlayerComponent: View {
                     .foregroundColor(.white)
                     .font(.subheadline)
             }
+        }
+    }
+}
+
+// MARK: - Button geometry helpers
+// Thread button is always bottom-left quarter of screen.
+// Stitch button is always bottom-right quarter of screen.
+// Both sit in the bottom bar ~83pt tall. We estimate from geometry.size.
+// This avoids PreferenceKey coordinate-space issues caused by transforms.
+
+// MARK: - Button geometry
+// Bottom bar sits at geometry.size.height * 0.92 (from .padding(.bottom, h * 0.08))
+// HStack has .padding(.horizontal, 12), 4 equal columns
+// Each circle is 42×42pt. We spotlight just the circle area, not full column.
+// Thread = col 0, Stitch = col 3.
+
+private func threadButtonRect(in geometry: GeometryProxy) -> CGRect {
+    let w        = geometry.size.width
+    let colW     = (w - 24) / 4          // 4 cols inside h-padding of 12 each side
+    let barBaseY = geometry.size.height * 0.92  // bottom of content
+    let btnSize: CGFloat = 54            // circle 42pt + small breathing room
+    let colMidX  = 12 + colW / 2        // center of col 0
+    return CGRect(
+        x: colMidX - btnSize / 2,
+        y: barBaseY - btnSize - 14,      // sit above label
+        width: btnSize,
+        height: btnSize
+    )
+}
+
+private func stitchButtonRect(in geometry: GeometryProxy) -> CGRect {
+    let w        = geometry.size.width
+    let colW     = (w - 24) / 4
+    let barBaseY = geometry.size.height * 0.92
+    let btnSize: CGFloat = 54
+    let colMidX  = 12 + colW * 3 + colW / 2   // center of col 3
+    return CGRect(
+        x: colMidX - btnSize / 2,
+        y: barBaseY - btnSize - 14,
+        width: btnSize,
+        height: btnSize
+    )
+}
+
+private struct FullscreenOnboardingOverlay: View {
+    @ObservedObject private var onboarding = OnboardingState.shared
+    @State private var tapScale: CGFloat = 1.0
+
+    var body: some View {
+        if onboarding.shouldShow {
+            switch onboarding.currentStep {
+            case .threadButton, .stitchButton:
+                GeometryReader { geometry in
+                    // Use geometry math — no PreferenceKey needed
+                    let targetRect = onboarding.currentStep == .threadButton
+                        ? threadButtonRect(in: geometry)
+                        : stitchButtonRect(in: geometry)
+
+                    ZStack {
+                        // Dim with spotlight cutout over the button
+                        SpotlightCutoutShape(
+                            spotlightRect: targetRect.insetBy(dx: -10, dy: -10),
+                            cornerRadius: 30  // circle
+                        )
+                        .fill(Color.black.opacity(0.72))
+                        .ignoresSafeArea()
+                        .animation(.easeInOut(duration: 0.3),
+                                   value: onboarding.currentStep.rawValue)
+                        .allowsHitTesting(false)
+
+                        // Pulse ring — tight around 54pt circle
+                        Circle()
+                            .stroke(Color.cyan.opacity(0.9), lineWidth: 2.5)
+                            .frame(width: targetRect.width + 10,
+                                   height: targetRect.height + 10)
+                            .position(x: targetRect.midX, y: targetRect.midY)
+                            .modifier(OnboardingPulseModifier())
+                            .allowsHitTesting(false)
+
+                        // Tap pulse circle centered on button
+                        Circle()
+                            .fill(Color.cyan.opacity(0.22))
+                            .frame(width: targetRect.width, height: targetRect.height)
+                            .scaleEffect(tapScale)
+                            .position(x: targetRect.midX, y: targetRect.midY)
+                            .allowsHitTesting(false)
+                            .onAppear { startTapPulse() }
+                            .onChange(of: onboarding.currentStep.rawValue) { _, _ in
+                                startTapPulse()
+                            }
+
+                        // Instruction card — always above the bottom bar
+                        instructionCard(targetRect: targetRect, geometry: geometry)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.3),
+                           value: onboarding.currentStep.rawValue)
+
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func startTapPulse() {
+        tapScale = 1.0
+        withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+            tapScale = 1.5
+        }
+    }
+
+    // MARK: - Instruction Card
+
+    private func instructionCard(
+        targetRect: CGRect,
+        geometry: GeometryProxy
+    ) -> some View {
+        // Card always sits above the bottom bar with arrow pointing down at button
+        let cardBottomY = targetRect.minY - 16
+
+        return VStack {
+            Spacer()
+
+            VStack(spacing: 10) {
+                Image(systemName: "arrowshape.down.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.cyan)
+
+                VStack(spacing: 5) {
+                    Text(onboarding.currentStep == .threadButton
+                         ? "See the conversation"
+                         : "Stitch in")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .multilineTextAlignment(.center)
+
+                    Text(onboarding.currentStep == .threadButton
+                         ? "Tap the Thread button to see everyone who stitched in"
+                         : "Tap the Stitch button to reply with your own video")
+                        .font(.system(size: 13))
+                        .foregroundColor(.white.opacity(0.65))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(2)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color(red: 0.07, green: 0.07, blue: 0.10).opacity(0.97))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .stroke(Color.cyan.opacity(0.18), lineWidth: 1)
+                    )
+            )
+            .padding(.horizontal, 24)
+            .padding(.bottom, geometry.size.height - cardBottomY)
         }
     }
 }

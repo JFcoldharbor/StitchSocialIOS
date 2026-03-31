@@ -115,6 +115,15 @@ struct DiscoverySwipeCards: View {
     }
     
     private func handleDragEnded(value: DragGesture.Value) {
+        // ONBOARDING: block swiping past seed card during tapHint step
+        let ob = OnboardingState.shared
+        if ob.shouldShow && ob.currentStep == .tapHint && currentIndex >= ob.seedIndex {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                resetCardPosition()
+            }
+            return
+        }
+
         let translation = value.translation
         let velocity = value.velocity
         
@@ -175,6 +184,10 @@ struct DiscoverySwipeCards: View {
     }
     
     private func autoAdvanceToNext() {
+        // ONBOARDING: block auto-advance past seed card during tapHint step
+        let ob = OnboardingState.shared
+        if ob.shouldShow && ob.currentStep == .tapHint && currentIndex >= ob.seedIndex { return }
+
         guard !isSwipeInProgress && !isFullscreenActive else { return }
         isSwipeInProgress = true
         
