@@ -82,14 +82,23 @@ struct ProfileView: View {
     @State private var userCollections: [VideoCollection] = []
     @State private var userDrafts: [CollectionDraft] = []
     @State private var isLoadingCollections = false
-    @State private var showingCollectionComposer = false
     @State private var showingCollectionPlayer = false
     @State private var selectedCollection: VideoCollection?
     @EnvironmentObject var muteManager: MuteContextManager
-    @State private var selectedDraft: CollectionDraft?
     @State private var showingAllCollections = false
     @State private var collectionError: String?
-    @State private var showingShowList = false
+    
+    // MARK: - Show State (unified flow)
+    
+    @State private var showingShowEditor = false
+    @State private var showingShowDetail = false
+    @State private var selectedShowId: String?
+    @State private var selectedShowEpisodes: [VideoCollection] = []
+    @State private var editingShow: Show?
+    @State private var editingEpisode: VideoCollection?
+    @State private var editingEpisodeShowId: String = ""
+    @State private var editingEpisodeSeasonId: String = ""
+    @State private var showingEpisodeEditor = false
     
     // MARK: - Badge Navigation State
     
@@ -225,29 +234,51 @@ struct ProfileView: View {
             }
             .preferredColorScheme(.dark)
         }
-        // Collection Composer Sheet
-        .sheet(isPresented: $showingCollectionComposer) {
+        // Show Editor (create new show — replaces old collection composer)
+        .sheet(isPresented: $showingShowEditor) {
             if let user = viewModel.currentUser {
                 NavigationStack {
-                    CollectionComposerSheet(
-                        user: user,
-                        existingDraft: selectedDraft,
-                        onDismiss: {
-                            showingCollectionComposer = false
-                            selectedDraft = nil
+                    ShowEditorView(
+                        show: editingShow ?? Show.newDraft(creatorID: user.id, creatorName: user.username),
+                        isNew: editingShow == nil,
+                        onSave: { _ in
+                            showingShowEditor = false
+                            editingShow = nil
                             Task { await loadCollections() }
+                        },
+                        onDismiss: {
+                            showingShowEditor = false
+                            editingShow = nil
                         }
                     )
                 }
                 .preferredColorScheme(.dark)
             }
         }
-        // Collection Player
+        // Show Detail (viewer taps a show card)
+        .fullScreenCover(isPresented: $showingShowDetail) {
+            if let showId = selectedShowId, let user = viewModel.currentUser {
+                ShowDetailView(
+                    showId: showId,
+                    initialEpisodes: selectedShowEpisodes,
+                    onDismiss: {
+                        showingShowDetail = false
+                        selectedShowId = nil
+                        selectedShowEpisodes = []
+                    },
+                    onPlayEpisode: { episode in
+                        showingShowDetail = false
+                        selectedCollection = episode
+                        showingCollectionPlayer = true
+                    }
+                )
+            }
+        }
         .fullScreenCover(isPresented: $showingCollectionPlayer) {
-            if let collection = selectedCollection, let user = viewModel.currentUser {
+            if let collection = selectedCollection {
                 CollectionPlayerView(
-                    viewModel: CollectionPlayerViewModel(collection: collection, userID: user.id),
-                    coordinator: CollectionCoordinator(userID: user.id, username: user.username),
+                    collection: collection,
+                    startingIndex: 0,
                     onDismiss: {
                         showingCollectionPlayer = false
                         selectedCollection = nil
@@ -255,29 +286,62 @@ struct ProfileView: View {
                 )
             }
         }
+        // Episode Editor (edit existing episode — add segments, change title)
+        .fullScreenCover(isPresented: $showingEpisodeEditor) {
+            if let ep = editingEpisode {
+                EpisodeEditorView(
+                    showId: editingEpisodeShowId,
+                    seasonId: editingEpisodeSeasonId,
+                    episode: ep,
+                    show: nil,
+                    onDismiss: {
+                        showingEpisodeEditor = false
+                        editingEpisode = nil
+                        Task { await loadCollections() }
+                    }
+                )
+            }
+        }
         // All Collections Sheet
         .sheet(isPresented: $showingAllCollections) {
-            if let user = viewModel.currentUser {
-                NavigationStack {
-                    ProfileCollectionsTab(
-                        profileUserID: user.id,
-                        isOwnProfile: viewModel.isOwnProfile,
-                        coordinator: CollectionCoordinator(userID: user.id, username: user.username)
-                    )
-                    .navigationTitle("Collections")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Button("Done") {
-                                showingAllCollections = false
-                                Task { await loadCollections() }
+            NavigationStack {
+                AllCollectionsView(
+                    collections: userCollections,
+                    isOwnProfile: viewModel.isOwnProfile,
+                    onShowTap: { showId in
+                        showingAllCollections = false
+                        selectedShowId = showId
+                        selectedShowEpisodes = userCollections.filter { $0.showId == showId }
+                        showingShowDetail = true
+                    },
+                    onEditShow: { showId in
+                        showingAllCollections = false
+                        Task {
+                            let service = ShowService()
+                            if let show = try? await service.getShow(showId) {
+                                editingShow = show
+                                showingShowEditor = true
                             }
-                            .foregroundColor(.cyan)
                         }
+                    },
+                    onDeleteShow: { showId in
+                        Task {
+                            let service = ShowService()
+                            try? await service.deleteShow(showId)
+                            userCollections.removeAll { $0.showId == showId }
+                        }
+                    },
+                    onCreateShow: {
+                        showingAllCollections = false
+                        editingShow = nil
+                        showingShowEditor = true
+                    },
+                    onDismiss: {
+                        showingAllCollections = false
                     }
-                }
-                .preferredColorScheme(.dark)
+                )
             }
+            .preferredColorScheme(.dark)
         }
         .onChange(of: videoPresentation) { oldValue, newValue in
             print("ðŸ” DEBUG: videoPresentation changed to \(newValue?.id ?? "nil")")
@@ -300,19 +364,6 @@ struct ProfileView: View {
             Button("OK") { collectionError = nil }
         } message: {
             Text(collectionError ?? "")
-        }
-        // My Shows Sheet (Show → Season → Episode → EpisodeEditor)
-        .sheet(isPresented: $showingShowList) {
-            if let user = viewModel.currentUser {
-                ShowListView(
-                    userID: user.id,
-                    username: user.username,
-                    onDismiss: {
-                        showingShowList = false
-                        Task { await loadCollections() }
-                    }
-                )
-            }
         }
     }
 
@@ -376,86 +427,39 @@ struct ProfileView: View {
     @ViewBuilder
     private var collectionsRow: some View {
         if let user = viewModel.currentUser {
-            VStack(spacing: 0) {
-                // My Shows button — Show → Season → Episode hierarchy
-                if viewModel.isOwnProfile && user.tier.isAmbassadorOrHigher {
-                    HStack {
-                        Spacer()
-                        Button {
-                            showingShowList = true
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "film.stack")
-                                    .font(.system(size: 11))
-                                Text("My Shows")
-                                    .font(.system(size: 11, weight: .semibold))
-                            }
-                            .foregroundColor(.pink)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 5)
-                            .background(Color.pink.opacity(0.1))
-                            .cornerRadius(8)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 6)
+            ProfileCollectionsRow(
+                collections: userCollections,
+                drafts: [],  // Drafts handled inside ShowEditor now
+                isOwnProfile: viewModel.isOwnProfile,
+                isEligible: user.tier.isAmbassadorOrHigher,
+                onAddTap: {
+                    // "+" creates a new show
+                    editingShow = nil
+                    showingShowEditor = true
+                },
+                onCollectionTap: { collection in
+                    // Tap a standalone collection → play it
+                    selectedCollection = collection
+                    showingCollectionPlayer = true
+                },
+                onDraftTap: { _ in },
+                onCollectionDelete: { collection in
+                    deleteCollection(collection)
+                },
+                onSeeAllTap: {
+                    showingAllCollections = true
+                },
+                onShowTap: { showId in
+                    // Tap a show card → open ShowDetailView
+                    selectedShowId = showId
+                    selectedShowEpisodes = userCollections.filter { $0.showId == showId }
+                    showingShowDetail = true
                 }
-                
-                ProfileCollectionsRow(
-                    collections: userCollections,
-                    drafts: viewModel.isOwnProfile ? userDrafts : [],
-                    isOwnProfile: viewModel.isOwnProfile,
-                    isEligible: user.tier.isAmbassadorOrHigher,
-                    onAddTap: {
-                        if userDrafts.count >= 10 {
-                            collectionError = "You've reached the maximum of 10 drafts. Please delete some drafts first."
-                        } else {
-                            selectedDraft = nil
-                            showingCollectionComposer = true
-                        }
-                    },
-                    onCollectionTap: { collection in
-                        selectedCollection = collection
-                        showingCollectionPlayer = true
-                    },
-                    onDraftTap: { draft in
-                        selectedDraft = draft
-                        showingCollectionComposer = true
-                    },
-                    onDraftDelete: { draft in
-                        deleteDraft(draft)
-                    },
-                    onCollectionDelete: { collection in
-                        deleteCollection(collection)
-                    },
-                    onSeeAllTap: {
-                        showingAllCollections = true
-                    }
-                )
-            }
+            )
         }
     }
     
-    // MARK: - Draft Deletion
-    
-    private func deleteDraft(_ draft: CollectionDraft) {
-        Task {
-            do {
-                let collectionService = CollectionService()
-                try await collectionService.deleteDraft(draftID: draft.id)
-                
-                // Remove from local array
-                userDrafts.removeAll { $0.id == draft.id }
-                
-                print("ðŸ—‘ï¸ PROFILE: Deleted draft \(draft.id)")
-            } catch {
-                collectionError = "Failed to delete draft: \(error.localizedDescription)"
-                print("âŒ PROFILE: Failed to delete draft: \(error)")
-            }
-        }
-    }
-    
-        // MARK: - Collection Deletion
+    // MARK: - Collection Deletion
     
     private func deleteCollection(_ collection: VideoCollection) {
         Task {
@@ -481,15 +485,41 @@ struct ProfileView: View {
         
         isLoadingCollections = true
         
+        // Auto-wrap orphan collections into shows (idempotent)
+        if viewModel.isOwnProfile {
+            let migrationService = CollectionMigrationService()
+            let creatorName = viewModel.currentUser?.username ?? ""
+            let migrated = await migrationService.migrateOrphanCollections(userID: userID, creatorName: creatorName)
+            if migrated > 0 { ShowService().clearAllCaches() }
+        }
+        
         do {
+            let showService = ShowService()
             let collectionService = CollectionService()
-            userCollections = try await collectionService.getUserCollections(userID: userID)
             
-            if viewModel.isOwnProfile {
-                userDrafts = try await collectionService.loadUserDrafts(creatorID: userID)
+            // Load show episodes directly — bypasses getUserCollections status filter
+            let shows = try await showService.getCreatorShows(creatorID: userID)
+            var showEpisodes: [VideoCollection] = []
+            for show in shows {
+                let eps = try await showService.getAllEpisodes(showId: show.id)
+                showEpisodes.append(contentsOf: eps)
             }
             
-            print("ðŸ“š PROFILE: Loaded \(userCollections.count) collections, \(userDrafts.count) drafts")
+            // Also load any standalone published collections (legacy)
+            let standaloneCollections = try await collectionService.getUserCollections(userID: userID)
+            
+            // Merge: show episodes + standalone (deduped by id)
+            var seen = Set<String>()
+            var merged: [VideoCollection] = []
+            for ep in showEpisodes {
+                if seen.insert(ep.id).inserted { merged.append(ep) }
+            }
+            for col in standaloneCollections {
+                if seen.insert(col.id).inserted { merged.append(col) }
+            }
+            userCollections = merged
+            
+            print("PROFILE: Loaded \(merged.count) total collections (\(showEpisodes.count) from shows)")
         } catch {
             print("âŒ PROFILE: Failed to load collections: \(error)")
         }
@@ -1433,90 +1463,6 @@ struct ProfileView: View {
         }
     }
 }
-
-// MARK: - Collection Composer Sheet Helper
-
-struct CollectionComposerSheet: View {
-    let user: BasicUserInfo
-    let existingDraft: CollectionDraft?
-    let onDismiss: () -> Void
-    
-    @StateObject private var viewModel: CollectionComposerViewModel
-    @StateObject private var coordinator: CollectionCoordinator
-    @State private var isCreating = false
-    @State private var error: String?
-    
-    init(user: BasicUserInfo, existingDraft: CollectionDraft?, onDismiss: @escaping () -> Void) {
-        self.user = user
-        self.existingDraft = existingDraft
-        self.onDismiss = onDismiss
-        
-        let coord = CollectionCoordinator(userID: user.id, username: user.username)
-        _coordinator = StateObject(wrappedValue: coord)
-        
-        if let draft = existingDraft {
-            _viewModel = StateObject(wrappedValue: CollectionComposerViewModel(draft: draft, username: user.username))
-        } else {
-            _viewModel = StateObject(wrappedValue: CollectionComposerViewModel(userID: user.id, username: user.username))
-        }
-    }
-    
-    var body: some View {
-        Group {
-            if isCreating {
-                VStack(spacing: 16) {
-                    ProgressView()
-                        .tint(.white)
-                    Text("Creating collection...")
-                        .foregroundColor(.gray)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-            } else if let error = error {
-                VStack(spacing: 16) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundColor(.orange)
-                    Text(error)
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    Button("Dismiss") { onDismiss() }
-                        .foregroundColor(.cyan)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-            } else if viewModel.draftID != nil || existingDraft != nil {
-                CollectionComposerView(
-                    viewModel: viewModel,
-                    coordinator: coordinator,
-                    onDismiss: onDismiss
-                )
-            } else {
-                Color.black
-            }
-        }
-        .task {
-            // CRITICAL: Link coordinator to viewModel so publish works
-            coordinator.linkComposerViewModel(viewModel)
-            viewModel.uploadCoverImage = { [weak coordinator] data, collectionID in
-                guard let coordinator = coordinator else { throw NSError(domain: "Coordinator", code: -1) }
-                return try await coordinator.uploadCoverPhoto(imageData: data, collectionID: collectionID)
-            }
-            
-            if existingDraft == nil && viewModel.draftID == nil {
-                isCreating = true
-                await viewModel.createNewDraft()
-                isCreating = false
-                
-                if let err = viewModel.errorMessage {
-                    error = err
-                }
-            }
-        }
-    }
-}
-
 // MARK: - UserTier Extension
 
 extension UserTier {

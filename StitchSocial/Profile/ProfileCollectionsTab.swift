@@ -19,31 +19,30 @@
 import SwiftUI
 
 /// Collections tab for user profile view
-/// Shows user's published collections and drafts (if own profile)
+/// Shows user's published collections (if own profile)
 struct ProfileCollectionsTab: View {
     
     // MARK: - Properties
     
     let profileUserID: String
     let isOwnProfile: Bool
-    let coordinator: CollectionCoordinator
+    let onPlay: (VideoCollection) -> Void
     
     // MARK: - State
     
     @StateObject private var viewModel: ProfileCollectionsViewModel
     @State private var displayMode: CollectionDisplayMode = .grid
-    @State private var showDrafts: Bool = false
     
     // MARK: - Initialization
     
     init(
         profileUserID: String,
         isOwnProfile: Bool,
-        coordinator: CollectionCoordinator
+        onPlay: @escaping (VideoCollection) -> Void
     ) {
         self.profileUserID = profileUserID
         self.isOwnProfile = isOwnProfile
-        self.coordinator = coordinator
+        self.onPlay = onPlay
         _viewModel = StateObject(wrappedValue: ProfileCollectionsViewModel(userID: profileUserID))
     }
     
@@ -51,22 +50,20 @@ struct ProfileCollectionsTab: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // Header with toggle
             if !viewModel.collections.isEmpty || isOwnProfile {
                 headerBar
             }
             
-            // Content
             if viewModel.isLoading {
                 loadingView
-            } else if viewModel.collections.isEmpty && viewModel.drafts.isEmpty {
+            } else if viewModel.collections.isEmpty {
                 emptyStateView
             } else {
                 collectionsContent
             }
         }
         .task {
-            await viewModel.load(includesDrafts: isOwnProfile)
+            await viewModel.load(includesDrafts: false)
         }
     }
     
@@ -74,19 +71,8 @@ struct ProfileCollectionsTab: View {
     
     private var headerBar: some View {
         HStack(spacing: 12) {
-            // Drafts toggle (own profile only)
-            if isOwnProfile && !viewModel.drafts.isEmpty {
-                Picker("View", selection: $showDrafts) {
-                    Text("Published").tag(false)
-                    Text("Drafts (\(viewModel.drafts.count))").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 200)
-            }
-            
             Spacer()
             
-            // Display mode toggle
             HStack(spacing: 4) {
                 displayModeButton(mode: .grid, icon: "square.grid.2x2")
                 displayModeButton(mode: .list, icon: "list.bullet")
@@ -94,21 +80,6 @@ struct ProfileCollectionsTab: View {
             .padding(4)
             .background(Color(.secondarySystemBackground))
             .cornerRadius(8)
-            
-            // Create button (own profile only)
-            if isOwnProfile {
-                Button {
-                    coordinator.startNewCollection()
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.body)
-                        .fontWeight(.semibold)
-                        .frame(width: 32, height: 32)
-                        .background(Color.accentColor)
-                        .foregroundColor(.white)
-                        .cornerRadius(8)
-                }
-            }
         }
         .padding(.horizontal)
         .padding(.vertical, 12)
@@ -131,11 +102,7 @@ struct ProfileCollectionsTab: View {
     
     private var collectionsContent: some View {
         ScrollView {
-            if showDrafts && isOwnProfile {
-                draftsSection
-            } else {
-                publishedSection
-            }
+            publishedSection
         }
     }
     
@@ -161,12 +128,10 @@ struct ProfileCollectionsTab: View {
             spacing: 16
         ) {
             ForEach(viewModel.collections) { collection in
-                CollectionRowView(
+                CollectionThumbnailCard(
                     collection: collection,
-                    style: .grid,
-                    onTap: {
-                        coordinator.playCollection(collection)
-                    }
+                    isOwnProfile: isOwnProfile,
+                    onTap: { onPlay(collection) }
                 )
             }
         }
@@ -176,33 +141,10 @@ struct ProfileCollectionsTab: View {
     private var listLayout: some View {
         LazyVStack(spacing: 12) {
             ForEach(viewModel.collections) { collection in
-                CollectionRowView(
+                CollectionThumbnailCard(
                     collection: collection,
-                    style: .compact,
-                    onTap: {
-                        coordinator.playCollection(collection)
-                    }
-                )
-            }
-        }
-        .padding()
-    }
-    
-    // MARK: - Drafts Section
-    
-    private var draftsSection: some View {
-        LazyVStack(spacing: 12) {
-            ForEach(viewModel.drafts, id: \.id) { draft in
-                DraftRowView(
-                    draft: draft,
-                    onTap: {
-                        coordinator.editDraft(draft)
-                    },
-                    onDelete: {
-                        Task {
-                            await viewModel.deleteDraft(draft)
-                        }
-                    }
+                    isOwnProfile: isOwnProfile,
+                    onTap: { onPlay(collection) }
                 )
             }
         }
@@ -233,19 +175,11 @@ struct ProfileCollectionsTab: View {
                 Text("No Collections Yet")
                     .font(.headline)
                 
-                Text("Create your first collection to share multi-part video content")
+                Text("Use the + button on your show to add episodes")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
-                
-                Button {
-                    coordinator.startNewCollection()
-                } label: {
-                    Label("Create Collection", systemImage: "plus.circle.fill")
-                        .font(.headline)
-                }
-                .buttonStyle(.borderedProminent)
             } else {
                 Text("No Collections")
                     .font(.headline)

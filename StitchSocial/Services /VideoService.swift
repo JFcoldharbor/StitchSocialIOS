@@ -677,55 +677,46 @@ class VideoService: ObservableObject {
         )
     }
     
-    /// Get user videos with pagination (EXCLUDES collection segments)
+    /// Get user videos with pagination
     func getUserVideos(
         userID: String,
         limit: Int = 20,
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> PaginatedResult<CoreVideoMetadata> {
         
-        // Fetch more to account for filtered collection segments
-        let fetchLimit = limit + 10
-        
         var query: Query = db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.creatorID, isEqualTo: userID)
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-            .limit(to: fetchLimit)
+            .limit(to: limit)
         
         if let lastDoc = lastDocument {
             query = query.start(afterDocument: lastDoc)
         }
         
         let snapshot = try await query.getDocuments()
-        
-        let allVideos = snapshot.documents.map { document in
+        let videos = snapshot.documents.map { document in
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
-        // Client-side filter: exclude collection segments
-        let filteredVideos = allVideos.filter { video in
-            // Exclude videos that are collection segments
-            return video.collectionID == nil || video.collectionID?.isEmpty == true
-        }
-        
-        // Take only the requested limit
-        let limitedVideos = Array(filteredVideos.prefix(limit))
-        
         return PaginatedResult(
-            items: limitedVideos,
+            items: videos,
             lastDocument: snapshot.documents.last,
-            hasMore: snapshot.documents.count >= fetchLimit
+            hasMore: snapshot.documents.count >= limit
         )
     }
     
     // MARK: - Collection Support
     
-    /// Get all videos belonging to a collection, sorted by segment number
+    /// Get all segments for a collection from subcollection path
+    /// Path: videoCollections/{collectionID}/segments/{segmentID}
     func getVideosByCollection(collectionID: String) async throws -> [CoreVideoMetadata] {
-        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â¡ VIDEO SERVICE: Fetching videos for collection \(collectionID)")
+        print("📡 VIDEO SERVICE: Fetching segments for collection \(collectionID)")
         
-        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
-            .whereField("collectionID", isEqualTo: collectionID)
+        // SUBCOLLECTION read — eliminates cross-collection whereField scan
+        // CACHING: CollectionPlayerView prefetches via VideoDiskCache after first load
+        let snapshot = try await db
+            .collection("videoCollections").document(collectionID)
+            .collection("segments")
             .order(by: "segmentNumber", descending: false)
             .getDocuments()
         
@@ -733,10 +724,9 @@ class VideoService: ObservableObject {
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
-        print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â¡ VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
+        print("✅ VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
         return videos
     }
-    
     /// Get timestamped replies for a video segment (replies that reference specific timestamps)
     /// - Parameter videoID: The video ID (also accepts segmentID)
     func getTimestampedReplies(videoID: String? = nil, segmentID: String? = nil) async throws -> [CoreVideoMetadata] {
@@ -760,7 +750,7 @@ class VideoService: ObservableObject {
         return replies
     }
     
-    /// Get all threads with children for discovery feed (EXCLUDES collection segments)
+    /// Get all threads with children for discovery feed
     func getAllThreadsWithChildren(
         limit: Int = 50,
         lastDocument: DocumentSnapshot? = nil
@@ -769,13 +759,10 @@ class VideoService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
-        // Fetch more to account for filtered collection segments
-        let fetchLimit = limit + 20
-        
         var query = db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-            .limit(to: fetchLimit)
+            .limit(to: limit)
         
         if let lastDoc = lastDocument {
             query = query.start(afterDocument: lastDoc)
@@ -786,31 +773,13 @@ class VideoService: ObservableObject {
         
         for doc in snapshot.documents {
             let video = createCoreVideoMetadata(from: doc.data(), id: doc.documentID)
-            
-            // Skip collection segments - they should only appear in collection player
-            if let collID = video.collectionID, !collID.isEmpty {
-                continue
-            }
-            
             let childVideos = try await getThreadChildren(threadID: video.id)
-            
-            let threadData = ThreadData(
-                id: video.id,
-                parentVideo: video,
-                childVideos: childVideos
-            )
-            threads.append(threadData)
-            
-            // Stop once we have enough threads
-            if threads.count >= limit {
-                break
-            }
+            threads.append(ThreadData(id: video.id, parentVideo: video, childVideos: childVideos))
+            if threads.count >= limit { break }
         }
         
-        let hasMore = snapshot.documents.count >= fetchLimit
-        
         print("VIDEO SERVICE: Discovery feed loaded - \(threads.count) threads")
-        return (threads: threads, lastDocument: snapshot.documents.last, hasMore: hasMore)
+        return (threads: threads, lastDocument: snapshot.documents.last, hasMore: snapshot.documents.count >= limit)
     }
     
     /// Get video analytics

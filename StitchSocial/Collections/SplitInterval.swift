@@ -99,7 +99,7 @@ class AutoSplitEngine: ObservableObject {
     
     // MARK: - Configuration
     
-    let duration: TimeInterval
+    private(set) var duration: TimeInterval
     private let minSegmentDuration: TimeInterval = 2.0
     
     // MARK: - Init
@@ -109,6 +109,14 @@ class AutoSplitEngine: ObservableObject {
         if duration > 0 {
             generateAutoSegments()
         }
+    }
+    
+    /// Update duration after video is picked (since @StateObject can't be replaced)
+    func setDuration(_ newDuration: TimeInterval) {
+        guard newDuration > 0 else { return }
+        duration = newDuration
+        generateAutoSegments()
+        print("📤 AUTO SPLIT: Duration set to \(String(format: "%.1f", newDuration))s, generated \(segments.count) segments")
     }
     
     // MARK: - Auto-Segment Generation
@@ -324,7 +332,7 @@ class AutoSplitEngine: ObservableObject {
         
         let finalAdSlots = adSlots.map { slot -> EditorAdSlot in
             var s = slot
-            s.insertAfterTime = segments[safe: slot.afterSegmentIndex]?.endTime ?? 0
+            s.insertAfterTime = segments[slot.afterSegmentIndex].endTime ?? 0
             return s
         }
         

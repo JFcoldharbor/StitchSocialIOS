@@ -91,11 +91,13 @@ class DiscoveryService: ObservableObject {
     
     // MARK: - Session Tracking
     
-    private var loadedVideoIDs: Set<String> = []
+    /// IDs seen in current scroll session — cleared on resetSession() or when pool exhausted
+    private var sessionSeenIDs: Set<String> = []
     private var allFetchedVideos: [ThreadData] = []
-    private var lastDocument: DocumentSnapshot?
-    private var isDatabaseExhausted: Bool = false
     private var reshuffleIndex: Int = 0
+    
+    // Per-window cursors — each loadMore starts after previous batch end
+    private var cursors: [Int: DocumentSnapshot] = [:] // window index -> last doc
     
     // MARK: - TTL Cache
     
@@ -118,6 +120,17 @@ class DiscoveryService: ObservableObject {
         recentUsersCache = nil
         leaderboardCache = nil
         print("🗑️ DISCOVERY: All caches invalidated")
+    }
+    
+    /// Full session reset — clears caches AND session state.
+    /// Call on refresh, account switch, or pull-to-refresh.
+    func resetSession() {
+        invalidateAllCaches()
+        sessionSeenIDs.removeAll()
+        allFetchedVideos.removeAll()
+        reshuffleIndex = 0
+        cursors.removeAll()
+        print("🔄 DISCOVERY: Session reset — fresh fetch on next load")
     }
     
     /// Clear just video caches (keep collections/users)
@@ -165,125 +178,133 @@ class DiscoveryService: ObservableObject {
     }
     
     // MARK: - Main Discovery Method (Multi-Window Weighted Algorithm)
+    //
+    // FEED STRATEGY:
+    // 1. Pull from 7 time windows in parallel (each maps to a resurfacing bucket)
+    // 2. "Seen" tracking is per-scroll-session only — UserDefaults tracks last seen timestamp
+    // 3. Resurfacing rules: never show again in same session, but resurface after:
+    //    24h, 48h, 72h, 7d, 30d, 60d, 90d — whichever bucket the video falls into
+    // 4. "Cooled" videos excluded permanently (from DiscoveryEngagementTracker)
+    // 5. Within each batch, score by algorithm then creator-diversify
+    // 6. When all videos exhausted in session, reshuffle full pool (never-ending scroll)
     
-    /// Main feed — pulls from MULTIPLE TIME WINDOWS in parallel so the feed
-    /// contains a real mix of recent, mid-range, and older content.
-    ///
-    /// Strategy:
-    ///   Window 1 (40%): Last 3 days   — fresh content
-    ///   Window 2 (30%): 3-14 days     — settling content with engagement signals
-    ///   Window 3 (20%): 14-60 days    — proven content
-    ///   Window 4 (10%): 60+ days      — deep catalog / evergreen
-    ///
-    /// Each window is a SINGLE Firestore query run in parallel (async let).
-    /// Total: 3-4 reads per load instead of 5-10 sequential pages.
-    ///
-    /// CACHING: TTL cache + allFetchedVideos session cache + CachingService.shared.
+    // MARK: - Main Feed
+    //
+    // ARCHITECTURE:
+    // - No TTL cache on main feed — cursor-based pagination drives fresh content
+    // - 7 parallel time windows, each with its own cursor for true pagination
+    // - Window-aware scoring: recency weight varies by window age
+    // - Single shuffle pass at service level (ViewModel does NOT re-shuffle)
+    // - cool/cold temperature + blocked creator filtering
+    // - Never-ending scroll: when all windows exhausted, cursors reset + reshuffle pool
+    
     func getDeepRandomizedDiscovery(limit: Int = 40) async throws -> [ThreadData] {
-        
         isLoading = true
         defer { isLoading = false }
         
-        // Check TTL cache first (0 reads)
-        if let cached = getCachedThreads(for: "all_weighted") {
-            return Array(cached.prefix(limit))
+        let now = Date()
+        let h24  = now.addingTimeInterval(-1   * 24 * 3600)
+        let h48  = now.addingTimeInterval(-2   * 24 * 3600)
+        let h72  = now.addingTimeInterval(-3   * 24 * 3600)
+        let d7   = now.addingTimeInterval(-7   * 24 * 3600)
+        let d30  = now.addingTimeInterval(-30  * 24 * 3600)
+        let d60  = now.addingTimeInterval(-60  * 24 * 3600)
+        let d365 = now.addingTimeInterval(-365 * 24 * 3600)
+        
+        // Fetch 3x target per window — filters (cool, blocked, collection segments)
+        // reduce raw count, so we need buffer to hit targets
+        let w1 = max(6,  Int(Double(limit) * 0.30))  // last 24h   (30%)
+        let w2 = max(5,  Int(Double(limit) * 0.20))  // 24-48h     (20%)
+        let w3 = max(4,  Int(Double(limit) * 0.15))  // 48-72h     (15%)
+        let w4 = max(4,  Int(Double(limit) * 0.12))  // 3-7d       (12%)
+        let w5 = max(3,  Int(Double(limit) * 0.10))  // 7-30d      (10%)
+        let w6 = max(3,  Int(Double(limit) * 0.08))  // 30-60d     ( 8%)
+        let w7 = max(2,  Int(Double(limit) * 0.05))  // 60d-1yr    ( 5%)
+        
+        // All windows fire in parallel — cursors paginate each window independently
+        async let snap1 = fetchTimeWindow(after: h24,  before: now,  sortField: FirebaseSchema.VideoDocument.createdAt, descending: true,  limit: w1 * 3, cursor: cursors[1])
+        async let snap2 = fetchTimeWindow(after: h48,  before: h24,  sortField: FirebaseSchema.VideoDocument.createdAt, descending: true,  limit: w2 * 3, cursor: cursors[2])
+        async let snap3 = fetchTimeWindow(after: h72,  before: h48,  sortField: FirebaseSchema.VideoDocument.createdAt, descending: true,  limit: w3 * 3, cursor: cursors[3])
+        async let snap4 = fetchTimeWindow(after: d7,   before: h72,  sortField: FirebaseSchema.VideoDocument.createdAt, descending: false, limit: w4 * 3, cursor: cursors[4])
+        async let snap5 = fetchTimeWindow(after: d30,  before: d7,   sortField: FirebaseSchema.VideoDocument.createdAt, descending: false, limit: w5 * 3, cursor: cursors[5])
+        async let snap6 = fetchTimeWindow(after: d60,  before: d30,  sortField: FirebaseSchema.VideoDocument.createdAt, descending: false, limit: w6 * 3, cursor: cursors[6])
+        async let snap7 = fetchTimeWindow(after: d365, before: d60,  sortField: FirebaseSchema.VideoDocument.createdAt, descending: false, limit: w7 * 4, cursor: cursors[7])
+        
+        let r1 = (try? await snap1) ?? (docs: [], lastDoc: nil)
+        let r2 = (try? await snap2) ?? (docs: [], lastDoc: nil)
+        let r3 = (try? await snap3) ?? (docs: [], lastDoc: nil)
+        let r4 = (try? await snap4) ?? (docs: [], lastDoc: nil)
+        let r5 = (try? await snap5) ?? (docs: [], lastDoc: nil)
+        let r6 = (try? await snap6) ?? (docs: [], lastDoc: nil)
+        let r7 = (try? await snap7) ?? (docs: [], lastDoc: nil)
+        
+        // Advance cursors — empty windows reset so they cycle from beginning next fetch
+        if let d = r1.lastDoc { cursors[1] = d } else { cursors.removeValue(forKey: 1) }
+        if let d = r2.lastDoc { cursors[2] = d } else { cursors.removeValue(forKey: 2) }
+        if let d = r3.lastDoc { cursors[3] = d } else { cursors.removeValue(forKey: 3) }
+        if let d = r4.lastDoc { cursors[4] = d } else { cursors.removeValue(forKey: 4) }
+        if let d = r5.lastDoc { cursors[5] = d } else { cursors.removeValue(forKey: 5) }
+        if let d = r6.lastDoc { cursors[6] = d } else { cursors.removeValue(forKey: 6) }
+        if let d = r7.lastDoc { cursors[7] = d } else { cursors.removeValue(forKey: 7) }
+        
+        print("🔍 WINDOWS: 24h=\(r1.docs.count) 48h=\(r2.docs.count) 72h=\(r3.docs.count) 7d=\(r4.docs.count) 30d=\(r5.docs.count) 60d=\(r6.docs.count) 1yr=\(r7.docs.count)")
+        
+        let blockedCreators = Set(DiscoveryEngagementTracker.shared.blockedCreatorIDs())
+        var batchSeen = Set<String>()
+        
+        // Parse each window with its recency tier — used for window-aware scoring
+        var newThreads: [(thread: ThreadData, windowTier: Int)] = []
+        newThreads.append(contentsOf: parseDocs(r1.docs, target: w1, tier: 1, batchSeen: &batchSeen, blockedCreators: blockedCreators))
+        newThreads.append(contentsOf: parseDocs(r2.docs, target: w2, tier: 2, batchSeen: &batchSeen, blockedCreators: blockedCreators))
+        newThreads.append(contentsOf: parseDocs(r3.docs, target: w3, tier: 3, batchSeen: &batchSeen, blockedCreators: blockedCreators))
+        newThreads.append(contentsOf: parseDocs(r4.docs, target: w4, tier: 4, batchSeen: &batchSeen, blockedCreators: blockedCreators))
+        newThreads.append(contentsOf: parseDocs(r5.docs, target: w5, tier: 5, batchSeen: &batchSeen, blockedCreators: blockedCreators))
+        newThreads.append(contentsOf: parseDocs(r6.docs, target: w6, tier: 6, batchSeen: &batchSeen, blockedCreators: blockedCreators))
+        newThreads.append(contentsOf: parseDocs(r7.docs, target: w7, tier: 7, batchSeen: &batchSeen, blockedCreators: blockedCreators))
+        
+        // Backfill if all windows came up short (small DB or end of pagination)
+        if newThreads.count < limit / 2 {
+            let fallback = try await fallbackSequentialFetch(limit: limit - newThreads.count, batchSeen: &batchSeen, blockedCreators: blockedCreators)
+            newThreads.append(contentsOf: fallback.map { (thread: $0, windowTier: 4) })
         }
         
-        // If DB exhausted, serve from session cache (0 reads)
-        if isDatabaseExhausted && !allFetchedVideos.isEmpty {
+        // Pool exhausted — reshuffle everything seen so far
+        if newThreads.isEmpty && !allFetchedVideos.isEmpty {
+            print("🔄 DISCOVERY: Windows exhausted — resurfacing full pool with reshuffle")
+            cursors.removeAll() // reset all cursors so windows start fresh
+            sessionSeenIDs.removeAll()
             return getFromReshuffledCache(limit: limit)
         }
         
-        print("🔍 DISCOVERY: Multi-window fetch for \(limit) videos")
-        
-        let now = Date()
-        let threeDaysAgo   = now.addingTimeInterval(-3 * 24 * 3600)
-        let fourteenDaysAgo = now.addingTimeInterval(-14 * 24 * 3600)
-        let sixtyDaysAgo   = now.addingTimeInterval(-60 * 24 * 3600)
-        
-        // How many from each window
-        let recentCount   = Int(ceil(Double(limit) * 0.40))  // 40%
-        let midCount      = Int(ceil(Double(limit) * 0.30))  // 30%
-        let provenCount   = Int(ceil(Double(limit) * 0.20))  // 20%
-        let deepCount     = Int(ceil(Double(limit) * 0.10))  // 10%
-        
-        // Fire all windows in parallel — 4 reads total
-        async let recentSnap = fetchTimeWindow(
-            after: threeDaysAgo, before: now,
-            sortField: FirebaseSchema.VideoDocument.createdAt,
-            descending: true, limit: recentCount + 10
-        )
-        async let midSnap = fetchTimeWindow(
-            after: fourteenDaysAgo, before: threeDaysAgo,
-            sortField: FirebaseSchema.VideoDocument.createdAt,
-            descending: true, limit: midCount + 10
-        )
-        async let provenSnap = fetchTimeWindow(
-            after: sixtyDaysAgo, before: fourteenDaysAgo,
-            sortField: FirebaseSchema.VideoDocument.createdAt,
-            descending: true, limit: provenCount + 10
-        )
-        async let deepSnap = fetchTimeWindow(
-            after: nil, before: sixtyDaysAgo,
-            sortField: FirebaseSchema.VideoDocument.createdAt,
-            descending: true, limit: deepCount + 10
-        )
-        
-        // Collect results
-        let recentDocs  = (try? await recentSnap) ?? []
-        let midDocs     = (try? await midSnap) ?? []
-        let provenDocs  = (try? await provenSnap) ?? []
-        let deepDocs    = (try? await deepSnap) ?? []
-        
-        print("🔍 WINDOWS: recent=\(recentDocs.count) mid=\(midDocs.count) proven=\(provenDocs.count) deep=\(deepDocs.count)")
-        
-        // Parse each window, respecting per-window target counts
-        var newThreads: [ThreadData] = []
-        
-        newThreads.append(contentsOf: parseWindowDocs(recentDocs, target: recentCount))
-        newThreads.append(contentsOf: parseWindowDocs(midDocs, target: midCount))
-        newThreads.append(contentsOf: parseWindowDocs(provenDocs, target: provenCount))
-        newThreads.append(contentsOf: parseWindowDocs(deepDocs, target: deepCount))
-        
-        // If any window returned 0, backfill from windows that had extras
-        if newThreads.count < limit {
-            // Just do a fallback sequential fetch for the remainder
-            let remaining = limit - newThreads.count
-            let fallbackThreads = try await fallbackSequentialFetch(limit: remaining)
-            newThreads.append(contentsOf: fallbackThreads)
-        }
-        
-        // Mark DB exhausted if all windows came up short
-        if recentDocs.isEmpty && midDocs.isEmpty && provenDocs.isEmpty && deepDocs.isEmpty {
-            isDatabaseExhausted = true
-            if newThreads.isEmpty {
-                return getFromReshuffledCache(limit: limit)
+        // Accumulate session pool for reshuffle fallback
+        for item in newThreads {
+            sessionSeenIDs.insert(item.thread.parentVideo.id)
+            if !allFetchedVideos.contains(where: { $0.parentVideo.id == item.thread.parentVideo.id }) {
+                allFetchedVideos.append(item.thread)
             }
         }
         
-        // Score, diversify, cache
-        let scored = applyWeightedScoring(threads: newThreads)
+        // Window-aware score + single creator diversity shuffle
+        let scored = applyWindowAwareScoring(threads: newThreads)
         let diversified = ultraShuffleByCreator(threads: scored)
         
-        cacheThreads(diversified, for: "all_weighted")
+        // Cache in shared service for other views (profile, thread detail)
         cacheThreadsInSharedService(diversified)
         
-        print("✅ DISCOVERY: Returning \(diversified.count) videos from all time periods (total cached: \(allFetchedVideos.count))")
+        print("✅ DISCOVERY: \(diversified.count) videos (pool: \(allFetchedVideos.count))")
         return diversified
     }
     
     // MARK: - Time Window Fetch Helper
     
-    /// Single Firestore query for a time window. Returns raw DocumentSnapshots.
-    /// COST: 1 Firestore read per call.
     private func fetchTimeWindow(
         after: Date?,
         before: Date?,
         sortField: String,
         descending: Bool,
-        limit: Int
-    ) async throws -> [DocumentSnapshot] {
-        
+        limit: Int,
+        cursor: DocumentSnapshot? = nil
+    ) async throws -> (docs: [DocumentSnapshot], lastDoc: DocumentSnapshot?) {
         var query: Query = db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
         
@@ -294,164 +315,128 @@ class DiscoveryService: ObservableObject {
             query = query.whereField(FirebaseSchema.VideoDocument.createdAt, isLessThanOrEqualTo: Timestamp(date: before))
         }
         
-        query = query.order(by: sortField, descending: descending)
-            .limit(to: limit)
+        query = query.order(by: sortField, descending: descending).limit(to: limit)
+        if let cursor = cursor { query = query.start(afterDocument: cursor) }
         
         let snapshot = try await query.getDocuments()
-        return snapshot.documents
+        return (docs: snapshot.documents, lastDoc: snapshot.documents.last)
     }
     
-    /// Parse documents from a time window into ThreadData, skipping duplicates.
-    private func parseWindowDocs(_ docs: [DocumentSnapshot], target: Int) -> [ThreadData] {
-        var threads: [ThreadData] = []
-        
+    /// Parse docs for a window — returns (thread, tier) tuples for window-aware scoring.
+    /// Filters: cool/cold temp, blocked creators, collection segments, batch dupes.
+    private func parseDocs(_ docs: [DocumentSnapshot], target: Int, tier: Int, batchSeen: inout Set<String>, blockedCreators: Set<String>) -> [(thread: ThreadData, windowTier: Int)] {
+        var results: [(thread: ThreadData, windowTier: Int)] = []
         for document in docs {
-            guard threads.count < target else { break }
-            
-            let videoID = document.data()?[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
-            guard !loadedVideoIDs.contains(videoID) else { continue }
-            
-            if document.data()?["isCollectionSegment"] as? Bool == true { continue }
-            
+            guard results.count < target else { break }
+            guard let data = document.data() else { continue }
+            let videoID = data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
+            guard !batchSeen.contains(videoID) else { continue }
+            let temp = (data["temperature"] as? String ?? "").lowercased()
+            if temp == "cool" || temp == "cold" { continue }
+            let creatorID = data["creatorID"] as? String ?? ""
+            if blockedCreators.contains(creatorID) { continue }
+            if let thread = createThreadFromDocument(document) {
+                results.append((thread: thread, windowTier: tier))
+                batchSeen.insert(videoID)
+            }
+        }
+        return results
+    }
+    
+    /// Fallback when windows come up short — full sequential fetch, no cursor.
+    /// Resets session seen so all videos are eligible for recirculation.
+    private func fallbackSequentialFetch(limit: Int, batchSeen: inout Set<String>, blockedCreators: Set<String>) async throws -> [ThreadData] {
+        sessionSeenIDs.removeAll()
+        var threads: [ThreadData] = []
+        let query = db.collection(FirebaseSchema.Collections.videos)
+            .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
+            .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
+            .limit(to: max(limit * 3, 60))
+        let snapshot = try await query.getDocuments()
+        for document in snapshot.documents {
+            guard threads.count < limit else { break }
+            let data = document.data()
+            let videoID = data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
+            guard !batchSeen.contains(videoID) else { continue }
+            let temp = (data["temperature"] as? String ?? "").lowercased()
+            if temp == "cool" || temp == "cold" { continue }
+            let creatorID = data["creatorID"] as? String ?? ""
+            if blockedCreators.contains(creatorID) { continue }
             if let thread = createThreadFromDocument(document) {
                 threads.append(thread)
-                loadedVideoIDs.insert(videoID)
-                allFetchedVideos.append(thread)
+                batchSeen.insert(videoID)
             }
         }
-        
+        print("🔄 DISCOVERY: Fallback fetch returned \(threads.count) videos")
         return threads
     }
     
-    /// Fallback: sequential pagination for when time windows come up short.
-    /// Uses the old cursor-based approach but capped at 2 attempts.
-    private func fallbackSequentialFetch(limit: Int) async throws -> [ThreadData] {
-        var threads: [ThreadData] = []
-        var attempts = 0
-        
-        while threads.count < limit && attempts < 2 {
-            attempts += 1
-            
-            var query = db.collection(FirebaseSchema.Collections.videos)
-                .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
-                .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-                .limit(to: 40)
-            
-            if let cursor = lastDocument {
-                query = query.start(afterDocument: cursor)
-            }
-            
-            let snapshot = try await query.getDocuments()
-            guard !snapshot.documents.isEmpty else { break }
-            
-            lastDocument = snapshot.documents.last
-            
-            for document in snapshot.documents {
-                let videoID = document.data()[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
-                guard !loadedVideoIDs.contains(videoID) else { continue }
-                if document.data()["isCollectionSegment"] as? Bool == true { continue }
-                
-                if let thread = createThreadFromDocument(document) {
-                    threads.append(thread)
-                    loadedVideoIDs.insert(videoID)
-                    allFetchedVideos.append(thread)
-                    if threads.count >= limit { break }
-                }
-            }
-        }
-        
-        return threads
-    }
+    // MARK: - Window-Aware Scoring
+    //
+    // Each tier gets different recency weight:
+    // Tier 1 (last 24h):  recency=1.0 bonus — freshness is the point
+    // Tier 2-3 (24-72h):  recency still high, engagement starting to signal
+    // Tier 4-5 (3-30d):   balanced — engagement + discoverability matter more
+    // Tier 6-7 (30d-1yr): engagement/discoverability carry the weight, recency minimal
+    //
+    // This means a 6-month-old banger can still surface above a mediocre new video.
     
-    // MARK: - Weighted Scoring Algorithm
-    
-    /// Scores each video based on multiple signals, then sorts by score.
-    /// This replaces pure random shuffle with an intelligent feed.
-    ///
-    /// Weights:
-    ///   discoverabilityScore: 40% — already factors quality, temp, velocity, recording source
-    ///   recency:              25% — exponential decay over 7 days
-    ///   temperature:          20% — blazing=1.0, hot=0.8, warm=0.5, neutral=0.2, cool=0.1
-    ///   engagement:           15% — engagementRatio (hype / total reactions)
-    ///
-    /// After scoring, adds controlled randomness (±15%) to prevent stale ordering.
-    private func applyWeightedScoring(threads: [ThreadData]) -> [ThreadData] {
-        guard threads.count > 1 else { return threads }
-        
-        let now = Date()
+    private func applyWindowAwareScoring(threads: [(thread: ThreadData, windowTier: Int)]) -> [ThreadData] {
+        guard threads.count > 1 else { return threads.map { $0.thread } }
         
         let temperatureScores: [String: Double] = [
-            "blazing": 1.0,
-            "hot": 0.8,
-            "warm": 0.5,
-            "neutral": 0.2,
-            "cool": 0.1,
-            "cold": 0.0
+            "blazing": 1.0, "hot": 0.8, "warm": 0.5, "neutral": 0.2, "cool": 0.1, "cold": 0.0
         ]
         
-        struct ScoredThread {
-            let thread: ThreadData
-            let score: Double
-        }
+        // Recency weight per tier — higher tier = older window = less recency weight
+        let recencyWeights: [Int: Double] = [1: 0.35, 2: 0.28, 3: 0.22, 4: 0.15, 5: 0.10, 6: 0.06, 7: 0.04]
+        let engageWeights:  [Int: Double] = [1: 0.10, 2: 0.12, 3: 0.15, 4: 0.20, 5: 0.25, 6: 0.28, 7: 0.30]
+        let discoverWeights:[Int: Double] = [1: 0.35, 2: 0.38, 3: 0.40, 4: 0.42, 5: 0.42, 6: 0.44, 7: 0.44]
+        let tempWeights:    [Int: Double] = [1: 0.20, 2: 0.22, 3: 0.23, 4: 0.23, 5: 0.23, 6: 0.22, 7: 0.22]
         
-        let scored = threads.map { thread -> ScoredThread in
-            let video = thread.parentVideo
+        struct Scored { let thread: ThreadData; let score: Double }
+        
+        let scored = threads.map { item -> Scored in
+            let video = item.thread.parentVideo
+            let tier = item.windowTier
             
-            // 1. Discoverability (0-1, already computed server-side)
-            let discoverability = video.discoverabilityScore
+            let rw = recencyWeights[tier] ?? 0.15
+            let ew = engageWeights[tier]  ?? 0.20
+            let dw = discoverWeights[tier] ?? 0.40
+            let tw = tempWeights[tier]    ?? 0.25
             
-            // 2. Recency — softer decay since we intentionally pull from all time periods.
-            // 1.0 at 0 days, ~0.65 at 7 days, ~0.42 at 14 days, ~0.14 at 30 days
-            let age = now.timeIntervalSince(video.createdAt)
-            let thirtyDays: TimeInterval = 30 * 24 * 60 * 60
-            let recency = exp(-age / thirtyDays * 2.0)
+            // Recency decay: 30-day half-life for all windows
+            // Older windows naturally have lower raw recency, offset by lower rw weight
+            let age = Date().timeIntervalSince(video.createdAt)
+            let recency = exp(-age / (30 * 24 * 3600) * 1.5)
             
-            // 3. Temperature
             let tempScore = temperatureScores[video.temperature.lowercased()] ?? 0.2
+            let engagement = min(1.0, video.engagementRatio)
+            let discoverability = min(1.0, video.discoverabilityScore)
             
-            // 4. Engagement ratio
-            let engagement = video.engagementRatio
-            
-            // Weighted sum
-            let baseScore = (discoverability * 0.40)
-                + (recency * 0.25)
-                + (tempScore * 0.20)
-                + (engagement * 0.15)
-            
-            // Add controlled randomness (±15%) to prevent stale feed
-            let jitter = Double.random(in: -0.15...0.15)
-            let finalScore = max(0, baseScore + jitter)
-            
-            return ScoredThread(thread: thread, score: finalScore)
+            let base = (discoverability * dw) + (recency * rw) + (tempScore * tw) + (engagement * ew)
+            let jitter = Double.random(in: -0.10...0.10) // ±10% randomness
+            return Scored(thread: item.thread, score: max(0, base + jitter))
         }
         
-        // Sort by score descending
-        let sorted = scored.sorted { $0.score > $1.score }
-        return sorted.map { $0.thread }
+        return scored.sorted { $0.score > $1.score }.map { $0.thread }
     }
     
-    // MARK: - Cache Reshuffling (0 reads)
+    // MARK: - Reshuffle Pool (never-ending scroll fallback)
     
     private func getFromReshuffledCache(limit: Int) -> [ThreadData] {
         if reshuffleIndex == 0 {
-            print("🔄 DISCOVERY: Reshuffling all \(allFetchedVideos.count) videos for fresh loop")
-            allFetchedVideos = applyWeightedScoring(threads: allFetchedVideos)
-            allFetchedVideos = ultraShuffleByCreator(threads: allFetchedVideos)
+            print("🔄 DISCOVERY: Reshuffling pool of \(allFetchedVideos.count) videos")
+            // Re-score with tier 4 (balanced weights) and diversify
+            let tiered = allFetchedVideos.map { (thread: $0, windowTier: 4) }
+            let scored = applyWindowAwareScoring(threads: tiered)
+            allFetchedVideos = ultraShuffleByCreator(threads: scored)
         }
-        
-        let startIndex = reshuffleIndex
-        let endIndex = min(reshuffleIndex + limit, allFetchedVideos.count)
-        
-        let batch = Array(allFetchedVideos[startIndex..<endIndex])
-        
-        reshuffleIndex = endIndex
-        
-        if reshuffleIndex >= allFetchedVideos.count {
-            print("🔄 DISCOVERY: Completed full loop, will reshuffle on next fetch")
-            reshuffleIndex = 0
-        }
-        
-        print("✅ DISCOVERY (cache): Returning \(batch.count) videos (position \(startIndex)-\(endIndex) of \(allFetchedVideos.count))")
+        let start = reshuffleIndex
+        let end = min(reshuffleIndex + limit, allFetchedVideos.count)
+        let batch = Array(allFetchedVideos[start..<end])
+        reshuffleIndex = end >= allFetchedVideos.count ? 0 : end
+        print("✅ DISCOVERY (reshuffle): \(batch.count) videos (\(start)-\(end) of \(allFetchedVideos.count))")
         return batch
     }
     
@@ -671,7 +656,7 @@ class DiscoveryService: ObservableObject {
     
     func getDiscoveryParentThreadsOnly(limit: Int = 40, lastDocument: DocumentSnapshot? = nil) async throws -> (threads: [ThreadData], lastDocument: DocumentSnapshot?, hasMore: Bool) {
         let threads = try await getDeepRandomizedDiscovery(limit: limit)
-        return (threads: threads, lastDocument: nil, hasMore: !isDatabaseExhausted || !allFetchedVideos.isEmpty)
+        return (threads: threads, lastDocument: nil, hasMore: true)
     }
     
     // MARK: - Recent Users (Cached 10 min)
@@ -1047,9 +1032,8 @@ class DiscoveryService: ObservableObject {
         let fetchLimit = Int(Double(limit) * 1.5)
         
         let snapshot = try await db.collection("videoCollections")
-            .whereField("status", isEqualTo: "published")
             .whereField("visibility", isEqualTo: "public")
-            .order(by: "publishedAt", descending: true)
+            .order(by: "createdAt", descending: true)
             .limit(to: fetchLimit)
             .getDocuments()
         
@@ -1080,10 +1064,11 @@ class DiscoveryService: ObservableObject {
             return Array(cached.prefix(limit))
         }
         
+        // Query by visibility only — status may vary ("published", "active", etc.)
+        // Order by createdAt (always present) instead of publishedAt (may be null)
         let snapshot = try await db.collection("videoCollections")
-            .whereField("status", isEqualTo: "published")
             .whereField("visibility", isEqualTo: "public")
-            .order(by: "publishedAt", descending: true)
+            .order(by: "createdAt", descending: true)
             .limit(to: limit)
             .getDocuments()
         

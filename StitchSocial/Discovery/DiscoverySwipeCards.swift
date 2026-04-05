@@ -276,53 +276,23 @@ struct DiscoveryCard: View {
         return "Creator"
     }
     
-    /// True when this card represents a collection, not a single video
-    private var isCollectionCard: Bool {
-        video.isCollectionSegment && video.collectionID != nil && video.id.hasPrefix("collection_card_")
-    }
-    
     var body: some View {
         GeometryReader { geometry in
             ZStack {
                 Color.black
-                
-                if isCollectionCard {
-                    // MARK: - Collection Card (static thumbnail, no video player)
-                    collectionCardContent(geometry: geometry)
-                } else {
-                    // MARK: - Regular Video Card
-                    regularCardContent(geometry: geometry)
-                }
+                regularCardContent(geometry: geometry)
             }
         }
         .cornerRadius(16)
-        .overlay(
-            // Glowing ring border for collection cards
-            isCollectionCard ?
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(
-                        LinearGradient(
-                            colors: [.cyan, .purple, .pink, .cyan],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 2.5
-                    )
-                    .shadow(color: .cyan.opacity(0.5), radius: 6)
-                : nil
-        )
         .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
         .onAppear {
-            guard !isCollectionCard else { loadThumbnail(); return }
             loadThumbnail()
             bindVideo()
         }
         .onDisappear {
-            guard !isCollectionCard else { return }
             teardown()
         }
         .onChange(of: video.id) { oldID, newID in
-            guard !isCollectionCard else { cachedThumbnail = nil; loadThumbnail(); return }
             // Card slot got new video data â€” rebind without destroying view
             guard newID != currentVideoID else { return }
             cachedThumbnail = nil
@@ -350,7 +320,6 @@ struct DiscoveryCard: View {
             }
         }
         .onChange(of: shouldAutoPlay) { _, isTop in
-            guard !isCollectionCard else { return }
             if isTop {
                 // Became top card â€” protect FIRST, then play
                 preloadingService.markAsCurrentlyPlaying(video.id)
@@ -446,118 +415,6 @@ struct DiscoveryCard: View {
     }
     
     // MARK: - Collection Card Content (static, no video player)
-    
-    private func collectionCardContent(geometry: GeometryProxy) -> some View {
-        ZStack {
-            // Cover image
-            if let thumb = cachedThumbnail {
-                Image(uiImage: thumb)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
-            } else {
-                Rectangle()
-                    .fill(Color.white.opacity(0.06))
-                    .overlay(
-                        Image(systemName: "rectangle.stack.fill")
-                            .font(.system(size: 40))
-                            .foregroundColor(.gray.opacity(0.3))
-                    )
-            }
-            
-            // Gradient overlay at bottom
-            VStack {
-                // Top-left "Collection" badge
-                HStack {
-                    HStack(spacing: 5) {
-                        Image(systemName: "rectangle.stack.fill")
-                            .font(.system(size: 10, weight: .bold))
-                        Text("Collection")
-                            .font(.system(size: 11, weight: .bold))
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        LinearGradient(
-                            colors: [.cyan.opacity(0.8), .purple.opacity(0.8)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .cornerRadius(8)
-                    .shadow(color: .cyan.opacity(0.6), radius: 8)
-                    
-                    Spacer()
-                    
-                    // Segment count badge
-                    if let desc = Int(video.description.replacingOccurrences(of: " parts", with: "")), desc > 0 {
-                        HStack(spacing: 3) {
-                            Image(systemName: "play.rectangle.fill")
-                                .font(.system(size: 9))
-                            Text("\(desc) parts")
-                                .font(.system(size: 10, weight: .bold))
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.black.opacity(0.7))
-                        .cornerRadius(6)
-                    }
-                }
-                .padding(.top, 14)
-                .padding(.horizontal, 12)
-                
-                Spacer()
-                
-                // Bottom info
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.85)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 120)
-                .overlay(alignment: .bottomLeading) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(video.title)
-                            .font(.system(size: 18, weight: .bold))
-                            .foregroundColor(.white)
-                            .lineLimit(2)
-                        
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(
-                                    LinearGradient(
-                                        colors: [.cyan, .purple],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                )
-                                .frame(width: 6, height: 6)
-                            Text(video.creatorName)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(.white.opacity(0.8))
-                        }
-                        
-                        // Tap to watch prompt
-                        HStack(spacing: 4) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 10))
-                            Text("Tap to watch")
-                                .font(.system(size: 11, weight: .medium))
-                        }
-                        .foregroundColor(.cyan.opacity(0.9))
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 20)
-                }
-            }
-            
-            Color.clear
-                .contentShape(Rectangle())
-        }
-    }
     
     // MARK: - Card Overlay
     

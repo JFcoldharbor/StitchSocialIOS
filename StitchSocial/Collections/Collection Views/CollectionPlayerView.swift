@@ -32,11 +32,14 @@ struct CollectionPlayerView: View {
     @State private var isLoading: Bool = true
     @State private var errorMessage: String?
     @State private var showingThreadView: Bool = false
+    @State private var showOverlay: Bool = true
+    @State private var overlayHideTask: Task<Void, Never>? = nil
     
     // MARK: - Services
     
     @StateObject private var videoService = VideoService()
     @StateObject private var authService = AuthService()
+    @StateObject private var playerCoordinator = SegmentPlayerCoordinator()
     
     // MARK: - Constants
     
@@ -54,18 +57,6 @@ struct CollectionPlayerView: View {
         self.startingIndex = startingIndex
         self.onDismiss = onDismiss
         self._currentSegmentIndex = State(initialValue: startingIndex)
-    }
-    
-    /// Backward compatible initializer matching old CollectionPlayerViewModel pattern
-    init(
-        viewModel: CollectionPlayerViewModel,
-        coordinator: CollectionCoordinator,
-        onDismiss: @escaping () -> Void
-    ) {
-        self.collection = viewModel.collection
-        self.startingIndex = 0
-        self.onDismiss = onDismiss
-        self._currentSegmentIndex = State(initialValue: 0)
     }
     
     // MARK: - Computed Properties
@@ -105,7 +96,7 @@ struct CollectionPlayerView: View {
                     // Collection-specific top bar (segment indicators)
                     collectionTopBar
                     
-                    // Full engagement overlay — hype, cool, reply, share
+                    // Full engagement overlay — auto-hides after 5s, reappears on tap
                     if let segment = currentSegment {
                         ContextualVideoOverlay(
                             video: segment,
@@ -116,6 +107,9 @@ struct CollectionPlayerView: View {
                                 handleOverlayAction(action, for: segment)
                             }
                         )
+                        .opacity(showOverlay ? 1 : 0)
+                        .animation(.easeOut(duration: 0.4), value: showOverlay)
+                        .allowsHitTesting(showOverlay)
                     }
                 }
             }
@@ -123,15 +117,26 @@ struct CollectionPlayerView: View {
         .ignoresSafeArea()
         .statusBarHidden()
         .onAppear {
-            print("📚 COLLECTION PLAYER VIEW: onAppear called for collection \(collection.id)")
-            print("📚 COLLECTION PLAYER VIEW: Collection title: \(collection.title)")
-            print("📚 COLLECTION PLAYER VIEW: Segment count in collection: \(collection.segmentCount)")
             loadSegments()
+            showOverlayBriefly()
         }
         .sheet(isPresented: $showingThreadView) {
             if let segment = currentSegment {
                 ThreadDetailSheet(video: segment)
             }
+        }
+        .onReceive(playerCoordinator.segmentEndSubject) { _ in
+            guard currentSegmentIndex < segments.count - 1 else { return }
+            currentSegmentIndex += 1
+            // Preload segment after next
+            let nextNext = currentSegmentIndex + 1
+            if nextNext < segments.count {
+                Task { await VideoDiskCache.shared.cacheVideo(from: segments[nextNext].videoURL) }
+            }
+        }
+        .onReceive(playerCoordinator.segmentStartSubject) { _ in
+            guard currentSegmentIndex > 0 else { return }
+            currentSegmentIndex -= 1
         }
     }
     
@@ -154,20 +159,26 @@ struct CollectionPlayerView: View {
         }
     }
     
+    // MARK: - Overlay Visibility
+    
+    private func showOverlayBriefly() {
+        showOverlay = true
+        overlayHideTask?.cancel()
+        overlayHideTask = Task {
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.4)) { showOverlay = false }
+            }
+        }
+    }
+    
     // MARK: - Load Segments
     
     private func loadSegments() {
-        print("📚 COLLECTION PLAYER: loadSegments() called")
-        print("📚 COLLECTION PLAYER: Collection ID: \(collection.id)")
-        
         Task {
             do {
-                print("📚 COLLECTION PLAYER: Starting async load for \(collection.id)")
                 let loadedSegments = try await videoService.getVideosByCollection(collectionID: collection.id)
-                
-                print("📚 COLLECTION PLAYER: Got \(loadedSegments.count) segments from service")
-                
-                // Sort by segment number
                 let sortedSegments = loadedSegments.sorted {
                     ($0.segmentNumber ?? 0) < ($1.segmentNumber ?? 0)
                 }
@@ -175,22 +186,25 @@ struct CollectionPlayerView: View {
                 await MainActor.run {
                     self.segments = sortedSegments
                     self.isLoading = false
-                    print("📚 COLLECTION PLAYER: Set \(sortedSegments.count) segments, isLoading = false")
-                    
-                    if let first = sortedSegments.first {
-                        print("📚 COLLECTION PLAYER: First segment URL: \(first.videoURL)")
-                    }
                 }
                 
-                // Prefetch all segment videos to disk cache
-                let urls = sortedSegments.map { $0.videoURL }.filter { !$0.isEmpty }
+                // Preload next 2 segment videos to disk cache
+                let urls = sortedSegments.prefix(3).map { $0.videoURL }.filter { !$0.isEmpty }
                 Task { await VideoDiskCache.shared.prefetchVideos(urls) }
+                
+                // Preload AVPlayer for first + next segment
+                if let first = sortedSegments.first {
+                    let upcoming = Array(sortedSegments.dropFirst().prefix(1))
+                    Task { await VideoPreloadingService.shared.preloadVideos(current: first, upcoming: upcoming) }
+                }
+                
+                // Show overlay briefly on open
+                showOverlayBriefly()
+                
             } catch {
-                print("❌ COLLECTION PLAYER: Error loading segments: \(error)")
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
                     self.isLoading = false
-                    print("❌ COLLECTION PLAYER: Set error message: \(error.localizedDescription)")
                 }
             }
         }
@@ -256,45 +270,45 @@ struct CollectionPlayerView: View {
         ZStack {
             // Show videos stacked for HORIZONTAL swipe effect
             ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
-                if abs(index - currentSegmentIndex) <= 1 { // Only render adjacent segments
+                if abs(index - currentSegmentIndex) <= 1 {
                     segmentView(segment: segment, index: index, geometry: geometry)
-                        .id("\(segment.id)_\(index == currentSegmentIndex)")  // Force rebuild on active change
                 }
             }
         }
-        .gesture(horizontalDragGesture(geometry: geometry))
+        // Drag gesture runs simultaneously so it doesn't block taps
+        .simultaneousGesture(horizontalDragGesture(geometry: geometry))
+        // Single tap — pause/play + show overlay
+        .onTapGesture {
+            playerCoordinator.togglePlayback()
+            showOverlayBriefly()
+        }
+        .gesture(
+            SpatialTapGesture(count: 2)
+                .onEnded { value in
+                    let x = value.location.x
+                    let w = geometry.size.width
+                    if x < w * 0.30 {
+                        playerCoordinator.seekRelative(-10)
+                        print("⏪ DOUBLE TAP: Seek -10s")
+                    } else if x > w * 0.70 {
+                        playerCoordinator.seekRelative(10)
+                        print("⏩ DOUBLE TAP: Seek +10s")
+                    }
+                }
+        )
     }
     
     private func segmentView(segment: CoreVideoMetadata, index: Int, geometry: GeometryProxy) -> some View {
         let offset = calculateHorizontalOffset(for: index, geometry: geometry)
-        let isActive = index == currentSegmentIndex && !isAnimating && !isLoading
-        
-        print("📺 SEGMENT VIEW: Creating view for segment \(index + 1), isActive: \(isActive), videoURL: \(segment.videoURL.prefix(50))...")
+        // isActive = only current index — never toggle during re-renders from isAnimating/isLoading
+        let isActive = index == currentSegmentIndex
         
         return ZStack {
-            // Use inline player instead of VideoPlayerComponent
             CollectionSegmentPlayer(
                 video: segment,
-                isActive: isActive
+                isActive: isActive,
+                coordinator: playerCoordinator
             )
-            
-            // Debug indicator
-            #if DEBUG
-            VStack {
-                Spacer()
-                HStack {
-                    Text("Seg \(index + 1) | Active: \(isActive ? "YES" : "NO")")
-                        .font(.caption2)
-                        .padding(4)
-                        .background(Color.black.opacity(0.7))
-                        .foregroundColor(isActive ? .green : .red)
-                        .cornerRadius(4)
-                    Spacer()
-                }
-                .padding(.leading, 8)
-                .padding(.bottom, 120)
-            }
-            #endif
         }
         .frame(width: geometry.size.width, height: geometry.size.height)
         .offset(x: offset)
@@ -505,12 +519,46 @@ struct ThreadDetailSheet: View {
     }
 }
 
+// MARK: - Segment Player Coordinator
+
+/// Shared coordinator using Combine subjects — does NOT re-render CollectionPlayerView.
+/// PassthroughSubject fires events without triggering @Published parent re-renders.
+class SegmentPlayerCoordinator: ObservableObject {
+    
+    struct SeekCommand {
+        let seconds: Double
+    }
+    
+    // Subjects — fire events without causing parent view re-renders
+    let seekSubject       = PassthroughSubject<SeekCommand, Never>()
+    let playbackSubject   = PassthroughSubject<Void, Never>()
+    let segmentEndSubject = PassthroughSubject<Void, Never>()
+    let segmentStartSubject = PassthroughSubject<Void, Never>()
+    
+    func seekRelative(_ delta: Double) {
+        seekSubject.send(SeekCommand(seconds: delta))
+    }
+    
+    func togglePlayback() {
+        playbackSubject.send()
+    }
+    
+    func didReachEnd() {
+        segmentEndSubject.send()
+    }
+    
+    func didReachStart() {
+        segmentStartSubject.send()
+    }
+}
+
 // MARK: - Collection Segment Player (Self-contained AVPlayer)
 
 /// Simple video player for collection segments
 struct CollectionSegmentPlayer: View {
     let video: CoreVideoMetadata
     let isActive: Bool
+    let coordinator: SegmentPlayerCoordinator
     
     @State private var player: AVPlayer?
     @State private var isLoading = true
@@ -552,8 +600,9 @@ struct CollectionSegmentPlayer: View {
             player?.pause()
             player = nil
         }
-        .onChange(of: isActive) { _, newValue in
-            print("🎬 SEGMENT PLAYER: isActive changed to \(newValue) for \(video.id.prefix(8))")
+        .onChange(of: isActive) { oldValue, newValue in
+            // Only act on genuine transitions, not spurious re-renders
+            guard oldValue != newValue else { return }
             if newValue {
                 player?.seek(to: .zero)
                 player?.play()
@@ -562,6 +611,26 @@ struct CollectionSegmentPlayer: View {
                 player?.pause()
                 print("⏸️ SEGMENT PLAYER: Paused \(video.id.prefix(8))")
             }
+        }
+        .onReceive(coordinator.seekSubject) { command in
+            guard isActive, let player = player else { return }
+            let current = player.currentTime().seconds
+            let duration = player.currentItem?.duration.seconds ?? 0
+            guard duration > 0 else { return }
+            let target = current + command.seconds
+            if target >= duration - 0.5 {
+                coordinator.didReachEnd()
+            } else if target < 0 {
+                coordinator.didReachStart()
+            } else {
+                player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                           toleranceBefore: .zero, toleranceAfter: .zero)
+                print("⏩ SEGMENT PLAYER: Seeked \(command.seconds > 0 ? "+" : "")\(Int(command.seconds))s → \(String(format: "%.1f", target))s")
+            }
+        }
+        .onReceive(coordinator.playbackSubject) { _ in
+            guard isActive, let player = player else { return }
+            if player.rate == 0 { player.play() } else { player.pause() }
         }
     }
     
@@ -619,15 +688,15 @@ struct CollectionSegmentPlayer: View {
             }
             .store(in: &CollectionSegmentPlayer.cancellables)
         
-        // Loop video
+        // When segment ends — advance to next segment via coordinator
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: playerItem,
             queue: .main
         ) { _ in
-            newPlayer.seek(to: .zero)
             if isActive {
-                newPlayer.play()
+                coordinator.didReachEnd()
+                print("⏭️ SEGMENT PLAYER: Reached end, signaling advance for \(video.id.prefix(8))")
             }
         }
         

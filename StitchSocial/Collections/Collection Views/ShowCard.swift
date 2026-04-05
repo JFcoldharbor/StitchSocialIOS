@@ -2,14 +2,6 @@
 //  ShowCard.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 4/2/26.
-//
-
-
-//
-//  ShowCard.swift
-//  StitchSocial
-//
 //  Reusable show card for profile collections row and discovery.
 //  Shows content type badge, title, episode count, mini episode strip.
 //

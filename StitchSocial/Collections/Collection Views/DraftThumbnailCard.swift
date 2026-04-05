@@ -2,14 +2,6 @@
 //  DraftThumbnailCard.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 4/2/26.
-//
-
-
-//
-//  DraftThumbnailCard.swift
-//  StitchSocial
-//
 //  Reusable draft collection thumbnail for profile row.
 //  Gray border, draft indicator, context menu for edit/delete.
 //

@@ -2,14 +2,6 @@
 //  CollectionThumbnailCard.swift
 //  StitchSocial
 //
-//  Created by James Garmon on 4/2/26.
-//
-
-
-//
-//  CollectionThumbnailCard.swift
-//  StitchSocial
-//
 //  Reusable standalone collection thumbnail for profile row.
 //  Cover image, segment count badge, title. Context menu for play/delete.
 //

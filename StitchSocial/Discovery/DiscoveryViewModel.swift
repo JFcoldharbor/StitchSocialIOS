@@ -75,13 +75,10 @@ class DiscoveryViewModel: ObservableObject {
         do {
             print("🎲 DISCOVERY: Loading weighted content")
 
-            // Load videos and collections in parallel
-            // Service-level TTL cache means these may be instant (0 reads)
+            // Load videos only — collections shown in their dedicated tab
             async let threadsTask = discoveryService.getDeepRandomizedDiscovery(limit: 40)
-            async let collectionsTask = discoveryService.getAllCollectionsDiscovery(limit: 6)
 
             let threads = try await threadsTask
-            let swipeCollections = (try? await collectionsTask) ?? []
             let loadedVideos = threads.map { $0.parentVideo }
 
             await MainActor.run {
@@ -92,12 +89,16 @@ class DiscoveryViewModel: ObservableObject {
                 }
 
                 videos = validVideos
-                applyFilterAndShuffle()
-                interleaveCollections(swipeCollections)
+                // Service already shuffled by creator — just apply blocked creator filter
+                applyBlockedCreatorFilter()
                 errorMessage = nil
 
-                print("✅ DISCOVERY: Loaded \(filteredVideos.count) weighted videos")
+                print("✅ DISCOVERY: Loaded \(filteredVideos.count) videos")
             }
+
+            // Prefetch first 10 videos to disk — fire and forget
+            let prefetchURLs = loadedVideos.prefix(10).map { $0.videoURL }.filter { !$0.isEmpty }
+            Task { await VideoDiskCache.shared.prefetchVideos(prefetchURLs) }
 
             // Inject onboarding seed at index 2 after content is ready
             // Read OnboardingState here at the call site — ViewModel stays decoupled
@@ -170,32 +171,34 @@ class DiscoveryViewModel: ObservableObject {
     func clearHashtagFilter() {
         selectedHashtag = nil
         hashtagVideos = []
-        applyFilterAndShuffle()
+        applyBlockedCreatorFilter()
     }
 
     // MARK: - Load More (APPEND to end, NO reshuffle)
 
     func loadMoreContent() async {
         guard !isLoading else { return }
-
         isLoading = true
         defer { isLoading = false }
 
         do {
             print("📥 DISCOVERY: Loading more content (appending to end)")
-
+            // No cache invalidation — cursor-based pagination in service handles fresh content
             let threads = try await discoveryService.getDeepRandomizedDiscovery(limit: 30)
-            let newVideos = threads.map { $0.parentVideo }
+            let newVideos = threads.map { $0.parentVideo }.filter { !$0.id.isEmpty }
 
             await MainActor.run {
-                let validVideos = newVideos.filter { !$0.id.isEmpty }
-
-                // Append to END — don't reshuffle seen content
-                videos.append(contentsOf: validVideos)
-                filteredVideos.append(contentsOf: validVideos)
-
-                print("✅ DISCOVERY: Appended \(validVideos.count) videos, total: \(filteredVideos.count)")
+                let blocked = Set(DiscoveryEngagementTracker.shared.blockedCreatorIDs())
+                let filtered = newVideos.filter { !blocked.contains($0.creatorID) }
+                videos.append(contentsOf: filtered)
+                filteredVideos.append(contentsOf: filtered)
+                print("✅ DISCOVERY: Appended \(filtered.count) videos, total: \(filteredVideos.count)")
             }
+
+            // Prefetch next batch to disk cache — fire and forget
+            let urls = newVideos.prefix(10).map { $0.videoURL }.filter { !$0.isEmpty }
+            Task { await VideoDiskCache.shared.prefetchVideos(urls) }
+
         } catch {
             print("❌ DISCOVERY: Failed to load more: \(error)")
         }
@@ -204,12 +207,10 @@ class DiscoveryViewModel: ObservableObject {
     // MARK: - Refresh Content
 
     func refreshContent() async {
-        // Invalidate service-level caches so we get fresh Firestore data
-        discoveryService.invalidateVideoCaches()
-
+        discoveryService.resetSession()
         videos = []
         filteredVideos = []
-        // Reset seed guard so it re-injects on fresh load
+        collectionCardMap.removeAll()
         seedInjected = false
         await loadInitialContent()
     }
@@ -218,7 +219,7 @@ class DiscoveryViewModel: ObservableObject {
 
     func randomizeContent() {
         videos = videos.shuffled()
-        applyFilterAndShuffle()
+        applyBlockedCreatorFilter()
         print("🎲 DISCOVERY: Content randomized — \(filteredVideos.count) videos reshuffled")
     }
 
@@ -267,7 +268,7 @@ class DiscoveryViewModel: ObservableObject {
             await MainActor.run {
                 let validVideos = loadedVideos.filter { !$0.id.isEmpty }
                 videos = validVideos
-                applyFilterAndShuffle()
+                applyBlockedCreatorFilter()
                 print("📊 DISCOVERY: Applied \(category.displayName) filter — \(filteredVideos.count) videos")
             }
 
@@ -303,109 +304,18 @@ class DiscoveryViewModel: ObservableObject {
 
     // MARK: - Private: Filter + Shuffle
 
-    private func applyFilterAndShuffle() {
-        let blockedIDs = DiscoveryEngagementTracker.shared.blockedCreatorIDs()
-        let allowedVideos = blockedIDs.isEmpty
+    /// Apply blocked creator filter only — service handles scoring + creator shuffle
+    private func applyBlockedCreatorFilter() {
+        let blockedIDs = Set(DiscoveryEngagementTracker.shared.blockedCreatorIDs())
+        filteredVideos = blockedIDs.isEmpty
             ? videos
             : videos.filter { !blockedIDs.contains($0.creatorID) }
-        filteredVideos = diversifyShuffle(videos: allowedVideos)
     }
 
-    /// Insert collection placeholder cards every ~7 items
-    func interleaveCollections(_ collections: [VideoCollection]) {
-        guard !collections.isEmpty else { return }
-        collectionCardMap.removeAll()
+    // Collections are shown in their dedicated tab only — not interleaved in swipe feed
+    // collectionCardMap kept for tap handling on any legacy placeholders still in feed
 
-        var insertOffset = 0
-        for (i, collection) in collections.enumerated() {
-            let placeholderID = "collection_card_\(collection.id)"
 
-            let placeholder = CoreVideoMetadata(
-                id: placeholderID,
-                title: collection.title,
-                description: "\(collection.segmentCount) parts",
-                videoURL: "",
-                thumbnailURL: collection.coverImageURL ?? "",
-                creatorID: collection.creatorID,
-                creatorName: collection.creatorName,
-                createdAt: collection.publishedAt ?? collection.createdAt,
-                threadID: nil,
-                replyToVideoID: nil,
-                conversationDepth: 0,
-                viewCount: collection.totalViews,
-                hypeCount: collection.totalHypes,
-                coolCount: collection.totalCools,
-                replyCount: collection.totalReplies,
-                shareCount: collection.totalShares,
-                temperature: "neutral",
-                qualityScore: 50,
-                engagementRatio: 0,
-                velocityScore: 0,
-                trendingScore: 0,
-                duration: collection.totalDuration,
-                aspectRatio: 9.0/16.0,
-                fileSize: 0,
-                discoverabilityScore: 0.5,
-                isPromoted: false,
-                lastEngagementAt: nil,
-                collectionID: collection.id,
-                isCollectionSegment: true
-            )
-
-            collectionCardMap[placeholderID] = collection
-
-            let insertIndex = min((i + 1) * 7 + insertOffset, filteredVideos.count)
-            filteredVideos.insert(placeholder, at: insertIndex)
-            insertOffset += 1
-        }
-
-        print("📚 DISCOVERY: Interleaved \(collections.count) collection cards")
-    }
-
-    /// Shuffle with maximum creator variety
-    private func diversifyShuffle(videos: [CoreVideoMetadata]) -> [CoreVideoMetadata] {
-        guard videos.count > 1 else { return videos }
-
-        var creatorBuckets: [String: [CoreVideoMetadata]] = [:]
-        for video in videos {
-            creatorBuckets[video.creatorID, default: []].append(video)
-        }
-
-        var shuffledBuckets = creatorBuckets.mapValues { $0.shuffled() }
-        var result: [CoreVideoMetadata] = []
-        var recentCreators: [String] = []
-        let maxRecentTracking = 5
-
-        while !shuffledBuckets.isEmpty {
-            let availableCreators = shuffledBuckets.keys.filter { !recentCreators.contains($0) }
-
-            let chosenCreatorID: String
-            if !availableCreators.isEmpty {
-                chosenCreatorID = availableCreators.randomElement()!
-            } else {
-                chosenCreatorID = shuffledBuckets.keys.randomElement()!
-                recentCreators.removeAll()
-            }
-
-            if var creatorVideos = shuffledBuckets[chosenCreatorID], !creatorVideos.isEmpty {
-                let video = creatorVideos.removeFirst()
-                result.append(video)
-
-                recentCreators.append(chosenCreatorID)
-                if recentCreators.count > maxRecentTracking {
-                    recentCreators.removeFirst()
-                }
-
-                if creatorVideos.isEmpty {
-                    shuffledBuckets.removeValue(forKey: chosenCreatorID)
-                } else {
-                    shuffledBuckets[chosenCreatorID] = creatorVideos
-                }
-            }
-        }
-
-        return result
-    }
 }
 
 // MARK: - Discovery Mode

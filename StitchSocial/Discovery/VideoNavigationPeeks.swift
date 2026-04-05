@@ -162,7 +162,7 @@ struct VideoNavigationPeeks: View {
             
             let hapticEnabled = UserDefaults.standard.bool(forKey: "hapticFeedbackEnabled") || true
             
-            let currentVideo = allVideos[safe: currentVideoIndex] ?? allVideos.first
+            let currentVideo = allVideos[currentVideoIndex] ?? allVideos.first
             if hapticEnabled,
                allVideos.count > 1,
                let currentVideo = currentVideo,

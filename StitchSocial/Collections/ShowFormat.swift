@@ -1,12 +1,4 @@
 //
-//  ShowFormat.swift
-//  StitchSocial
-//
-//  Created by James Garmon on 3/31/26.
-//
-
-
-//
 //  Show.swift
 //  StitchSocial
 //
@@ -25,42 +17,61 @@ import SwiftUI
 
 // MARK: - Show Format
 
-/// Video format/orientation for all content in this show
+/// All content is 9:16 vertical on Stitch Social.
+/// Kept as enum for Firestore compat but only one value used.
 enum ShowFormat: String, CaseIterable, Codable {
-    case vertical = "vertical"       // 9:16 — mobile native, drama box, stories
-    case widescreen = "widescreen"   // 16:9 — podcasts, documentaries, films
+    case vertical = "vertical"
     
-    var displayName: String {
-        switch self {
-        case .vertical: return "9:16 Vertical"
-        case .widescreen: return "16:9 Widescreen"
-        }
-    }
-    
-    var aspectRatio: Double {
-        switch self {
-        case .vertical: return 9.0 / 16.0
-        case .widescreen: return 16.0 / 9.0
-        }
-    }
-    
-    var icon: String {
-        switch self {
-        case .vertical: return "rectangle.portrait"
-        case .widescreen: return "rectangle"
-        }
-    }
+    var displayName: String { "9:16 Vertical" }
+    var aspectRatio: Double { 9.0 / 16.0 }
+    var icon: String { "rectangle.portrait" }
 }
 
 // MARK: - Show Genre
 
 enum ShowGenre: String, CaseIterable, Codable {
-    case drama, comedy, thriller, action, reality
-    case documentary, music, sports, horror, romance
-    case scifi, animation, other
+    case podcast = "podcast"
+    case tutorial = "tutorial"
+    case movie = "movie"
+    case shortFilm = "shortFilm"
+    case irl = "irl"
+    case documentary = "documentary"
+    case interview = "interview"
+    case series = "series"
+    case music = "music"
+    case comedy = "comedy"
+    case other = "other"
     
     var displayName: String {
-        rawValue.prefix(1).uppercased() + rawValue.dropFirst()
+        switch self {
+        case .podcast: return "Podcast"
+        case .tutorial: return "Tutorial"
+        case .movie: return "Movie"
+        case .shortFilm: return "Short Film"
+        case .irl: return "IRL"
+        case .documentary: return "Documentary"
+        case .interview: return "Interview"
+        case .series: return "Series"
+        case .music: return "Music"
+        case .comedy: return "Comedy"
+        case .other: return "Other"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .podcast: return "mic.fill"
+        case .tutorial: return "graduationcap.fill"
+        case .movie: return "film"
+        case .shortFilm: return "film.stack"
+        case .irl: return "video.fill"
+        case .documentary: return "doc.text.image"
+        case .interview: return "person.2.wave.2.fill"
+        case .series: return "play.rectangle.on.rectangle"
+        case .music: return "music.note"
+        case .comedy: return "theatermasks"
+        case .other: return "square.grid.2x2"
+        }
     }
 }
 
@@ -167,7 +178,7 @@ struct Show: Identifiable, Codable, Hashable {
         creatorID: String,
         creatorName: String = "",
         format: ShowFormat = .vertical,
-        genre: ShowGenre = .drama,
+        genre: ShowGenre = .other,
         contentType: CollectionContentType = .series,
         tags: [ShowTag] = [],
         coverImageURL: String? = nil,

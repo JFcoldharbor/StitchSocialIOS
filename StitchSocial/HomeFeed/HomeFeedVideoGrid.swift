@@ -11,9 +11,6 @@ import AVKit
 import FirebaseAuth
 import Combine
 
-// MARK: - Debug Helper
-private let debug = HomeFeedDebugger.shared
-
 // MARK: - HomeFeedVideoGrid
 
 struct HomeFeedVideoGrid: View {
@@ -46,7 +43,6 @@ struct HomeFeedVideoGrid: View {
                 )
             }
             .onAppear {
-                debug.gridAppeared(threadCount: threads.count)
             }
         }
     }
@@ -172,7 +168,6 @@ struct SinglePlayerComponent: View {
     // MARK: - State Changes
     
     private func handleActiveChange(_ nowActive: Bool) {
-        debug.activeStateChanged(videoID: video.id, from: !nowActive, to: nowActive)
         
         if nowActive {
             createPlayer()
@@ -188,19 +183,13 @@ struct SinglePlayerComponent: View {
         guard player == nil else {
             player?.seek(to: .zero)
             player?.play()
-            debug.log(.playback, "Reusing player: \(video.id.prefix(8))")
             return
         }
         
-        debug.playerSetupStarted(videoID: video.id, isActive: true)
-        
         guard let url = URL(string: video.videoURL), !video.videoURL.isEmpty else {
-            debug.error("Invalid URL: \(video.id.prefix(8))")
             hasError = true
             return
         }
-        
-        debug.playerCreating(videoID: video.id, url: video.videoURL)
         
         let playerItem = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: playerItem)
@@ -211,14 +200,11 @@ struct SinglePlayerComponent: View {
             .receive(on: DispatchQueue.main)
             .sink { status in
                 if status == .readyToPlay {
-                    debug.playerReady(videoID: video.id, isActive: isActive)
                     isReady = true
                     if isActive {
                         newPlayer.play()
-                        debug.playbackStarted(videoID: video.id, source: "ready")
                     }
                 } else if status == .failed {
-                    debug.playerFailed(videoID: video.id, error: playerItem.error)
                     hasError = true
                 }
             }
@@ -237,13 +223,11 @@ struct SinglePlayerComponent: View {
         }
         
         player = newPlayer
-        debug.playerCreated(videoID: video.id)
     }
     
     private func destroyPlayer() {
         guard player != nil else { return }
         
-        debug.log(.player, "Destroying: \(video.id.prefix(8))")
         
         player?.pause()
         player?.replaceCurrentItem(with: nil)

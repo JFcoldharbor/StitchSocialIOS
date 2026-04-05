@@ -73,6 +73,11 @@ struct DiscoveryView: View {
     // Collection player state
     @State private var showingCollectionPlayer = false
     @State private var selectedCollection: VideoCollection?
+    
+    // Show detail state
+    @State private var showingShowDetail = false
+    @State private var selectedShowId: String?
+    @State private var selectedShowEpisodes: [VideoCollection] = []
 
     // MARK: - Extracted Body Helpers
     // Split out to avoid compiler type-check timeout on body
@@ -190,6 +195,24 @@ struct DiscoveryView: View {
                     onDismiss: {
                         showingCollectionPlayer = false
                         selectedCollection = nil
+                    }
+                )
+            }
+        }
+        .fullScreenCover(isPresented: $showingShowDetail) {
+            if let showId = selectedShowId {
+                ShowDetailView(
+                    showId: showId,
+                    initialEpisodes: selectedShowEpisodes,
+                    onDismiss: {
+                        showingShowDetail = false
+                        selectedShowId = nil
+                        selectedShowEpisodes = []
+                    },
+                    onPlayEpisode: { episode in
+                        showingShowDetail = false
+                        selectedCollection = episode
+                        showingCollectionPlayer = true
                     }
                 )
             }
@@ -577,15 +600,52 @@ struct DiscoveryView: View {
                 ScrollView(showsIndicators: false) {
                     LazyVStack(spacing: 16) {
                         ForEach(viewModel.discoveryCollections) { collection in
-                            CollectionRowView(
-                                collection: collection,
-                                style: .card,
-                                onTap: {
-                                    selectedCollection = collection
-                                    showingCollectionPlayer = true
-                                },
-                                onCreatorTap: { }
-                            )
+                            Button {
+                                selectedCollection = collection
+                                showingCollectionPlayer = true
+                            } label: {
+                                HStack(spacing: 12) {
+                                    // Thumbnail
+                                    ZStack {
+                                        if let coverURL = collection.coverImageURL, let url = URL(string: coverURL) {
+                                            AsyncImage(url: url) { image in
+                                                image.resizable().aspectRatio(contentMode: .fill)
+                                            } placeholder: {
+                                                Rectangle().fill(Color.white.opacity(0.08))
+                                            }
+                                        } else {
+                                            Rectangle().fill(Color.white.opacity(0.08))
+                                                .overlay(Image(systemName: "rectangle.stack.fill")
+                                                    .font(.system(size: 20))
+                                                    .foregroundColor(.gray.opacity(0.4)))
+                                        }
+                                    }
+                                    .frame(width: 90, height: 120)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                                    // Info
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(collection.title)
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundColor(.white)
+                                            .lineLimit(2)
+                                        Text(collection.creatorName)
+                                            .font(.system(size: 12))
+                                            .foregroundColor(.gray)
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "play.rectangle.fill").font(.system(size: 9))
+                                            Text("\(collection.segmentCount) parts").font(.system(size: 11))
+                                        }
+                                        .foregroundColor(.cyan.opacity(0.8))
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(Color.white.opacity(0.04))
+                                .cornerRadius(10)
+                            }
+                            .buttonStyle(.plain)
                             .padding(.horizontal, 16)
                         }
                         Spacer(minLength: 80)
