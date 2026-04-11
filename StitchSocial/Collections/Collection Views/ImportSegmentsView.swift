@@ -259,14 +259,10 @@ struct ImportSegmentsView: View {
                 segmentIds.append(segId)
                 totalDuration += seg.duration
                 
-                // Compress if >100MB
-                currentTask = "Checking \(i+1)/\(segments.count)..."
-                let finalURL = try await compressIfNeeded(url: seg.localURL)
-                
-                // Upload video — streams from disk with progress
-                // Storage: videoCollections/{episodeId}/segments/{segId}.mp4 (organized by episode)
+                // Upload original file — no compression, preserves 4K quality
+                // Segments are short so file sizes are manageable
                 currentTask = "Uploading \(i+1)/\(segments.count)..."
-                let videoURL = try await uploadFile(from: finalURL, to: "videoCollections/\(episodeId)/segments/\(segId).mp4", type: "video/mp4")
+                let videoURL = try await uploadFile(from: seg.localURL, to: "videoCollections/\(episodeId)/segments/\(segId).mp4", type: "video/mp4")
                 
                 // Upload thumbnail
                 var thumbURL = ""
@@ -276,7 +272,7 @@ struct ImportSegmentsView: View {
                 }
                 if i == 0 && !thumbURL.isEmpty { firstThumbURL = thumbURL }
                 
-                let fileSize = (try? FileManager.default.attributesOfItem(atPath: finalURL.path)[.size] as? Int) ?? 0
+                let fileSize = (try? FileManager.default.attributesOfItem(atPath: seg.localURL.path)[.size] as? Int) ?? 0
                 
                 // Segment Firestore doc → subcollection: videoCollections/{episodeId}/segments/{segId}
                 // CACHING: CollectionCacheManager should cache these on first player load
@@ -359,23 +355,6 @@ struct ImportSegmentsView: View {
                 Task { @MainActor in self.currentSegProgress = pct }
             }
         }
-    }
-    
-    // MARK: - Compress If Needed
-    
-    private func compressIfNeeded(url: URL) async throws -> URL {
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
-        guard size > 100 * 1024 * 1024 else { return url }
-        
-        currentTask = "Compressing..."
-        let asset = AVURLAsset(url: url)
-        let out = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("mp4")
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else { return url }
-        session.outputURL = out
-        session.outputFileType = .mp4
-        session.shouldOptimizeForNetworkUse = true
-        await session.export()
-        return session.status == .completed ? out : url
     }
     
     private func formatDuration(_ s: TimeInterval) -> String { String(format: "%d:%02d", Int(s)/60, Int(s)%60) }

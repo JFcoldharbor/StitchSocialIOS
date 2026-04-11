@@ -170,6 +170,7 @@ struct VideoCollection: Identifiable, Codable, Hashable {
     let allowReplies: Bool
     let contentType: CollectionContentType
     let allowStitchReplies: Bool
+    var isFree: Bool          // Episode-level free override (show-level isFree also unlocks)
     
     // MARK: - Show Hierarchy (NEW — links episode to show/season)
     
@@ -220,6 +221,7 @@ struct VideoCollection: Identifiable, Codable, Hashable {
         allowReplies: Bool = true,
         contentType: CollectionContentType = .standard,
         allowStitchReplies: Bool? = nil,
+        isFree: Bool = false,
         // Show hierarchy (NEW — defaults nil for backwards compat)
         showId: String? = nil,
         seasonId: String? = nil,
@@ -256,6 +258,7 @@ struct VideoCollection: Identifiable, Codable, Hashable {
         self.allowReplies = allowReplies
         self.contentType = contentType
         self.allowStitchReplies = allowStitchReplies ?? contentType.allowsStitchReplies
+        self.isFree = isFree
         // Show hierarchy
         self.showId = showId
         self.seasonId = seasonId

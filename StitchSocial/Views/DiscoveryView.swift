@@ -34,6 +34,7 @@ struct DiscoveryView: View {
 
     @StateObject private var viewModel = DiscoveryViewModel()
     @EnvironmentObject private var authService: AuthService
+    @Environment(\.scenePhase) private var scenePhase
 
     // MARK: - Services
 
@@ -45,7 +46,7 @@ struct DiscoveryView: View {
 
     @State private var selectedCategory: DiscoveryCategory = .all
     @State private var discoveryMode:    DiscoveryMode     = .swipe
-    @State private var currentSwipeIndex: Int = 0
+    // swipeIndex lives in ViewModel — survives tab switches without resetting position
     @State private var showingSearch = false
 
     // MARK: - Community State
@@ -176,8 +177,14 @@ struct DiscoveryView: View {
         // swipeCards/swipeToSeed handled via handleSwipeIndexChanged (seed-locking logic).
         // tapFullscreen handled in FullscreenVideoView.onAppear.
         // threadButton/stitchButton handled in ContextualVideoOverlay + ThreadView.
-        .onChange(of: currentSwipeIndex) { _, newIndex in
+        .onChange(of: viewModel.swipeIndex) { _, newIndex in
             OnboardingState.shared.handleSwipeIndexChanged(to: newIndex)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                viewModel.handleForeground()
+                Task { await viewModel.loadInitialContent() }
+            }
         }
         .sheet(isPresented: $showingProfileView) {
             if let userID = selectedUserForProfile {
@@ -233,11 +240,11 @@ struct DiscoveryView: View {
                         .foregroundColor(.cyan)
                 }
             } else {
-                Text(selectedCategory == .communities
-                     ? "\(communityService.myCommunities.count) channels"
-                     : "\(viewModel.filteredVideos.count) videos")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.5))
+                if selectedCategory == .communities {
+                    Text("\(communityService.myCommunities.count) channels")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.5))
+                }
             }
 
             Spacer()
@@ -245,7 +252,7 @@ struct DiscoveryView: View {
             HStack(spacing: 18) {
                 if selectedCategory.isVideoCategory {
                     Button {
-                        viewModel.randomizeContent()
+                        viewModel.reshuffleAndRestart()
                     } label: {
                         Image(systemName: "shuffle")
                             .font(.system(size: 18, weight: .medium))
@@ -288,8 +295,12 @@ struct DiscoveryView: View {
                     Button {
                         selectedCategory = category
                         if category.isVideoCategory {
-                            Task { await viewModel.filterBy(category: category) }
-                            currentSwipeIndex = 0
+                            // .all tab: cursor feed already handles this — just reset index
+                            // Other tabs: use filterBy for their specific queries
+                            if category != .all {
+                                Task { await viewModel.filterBy(category: category) }
+                            }
+                            viewModel.swipeIndex = 0
                         } else if category == .communities {
                             Task {
                                 if let userID = authService.currentUserID {
@@ -470,7 +481,7 @@ struct DiscoveryView: View {
         ZStack(alignment: .top) {
             DiscoverySwipeCards(
                 videos: viewModel.filteredVideos,
-                currentIndex: $currentSwipeIndex,
+                currentIndex: $viewModel.swipeIndex,
                 onVideoTap: { video in
                     if let collection = viewModel.collectionCardMap[video.id] {
                         selectedCollection = collection
@@ -487,13 +498,15 @@ struct DiscoveryView: View {
                     showingProfileView = true
                 },
                 onNavigateToThread: { _ in },
-                isFullscreenActive: videoPresentation != nil || showingSearch || selectedHashtagPresentation != nil
+                isFullscreenActive: videoPresentation != nil || showingSearch || selectedHashtagPresentation != nil,
+                collectionCardMap: viewModel.collectionCardMap
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(swipeCardFrameReporter)
-            .onChange(of: currentSwipeIndex) { _, newValue in
-                if newValue >= viewModel.filteredVideos.count - 10 {
-                    Task { await viewModel.loadMoreContent() }
+            .onChange(of: viewModel.swipeIndex) { _, newValue in
+                // When user reaches last video — shuffle and restart
+                if newValue >= viewModel.filteredVideos.count - 1 && !viewModel.filteredVideos.isEmpty {
+                    viewModel.reshuffleAndRestart()
                 }
             }
 
@@ -517,7 +530,7 @@ struct DiscoveryView: View {
                     )
                 }
             },
-            onLoadMore: { Task { await viewModel.loadMoreContent() } },
+            onLoadMore: { viewModel.reshuffleAndRestart() },
             onRefresh:  { Task { await viewModel.refreshContent() } },
             isLoadingMore: viewModel.isLoading
         )
@@ -847,4 +860,104 @@ struct DiscoveryHashtagChip: View {
 #Preview {
     DiscoveryView()
         .environmentObject(AuthService())
+}
+
+// MARK: - Discovery Mode
+
+enum DiscoveryMode: String, CaseIterable {
+    case swipe = "swipe"
+    case grid  = "grid"
+
+    var displayName: String {
+        switch self { case .swipe: return "Swipe"; case .grid: return "Grid" }
+    }
+    var icon: String {
+        switch self { case .swipe: return "square.stack"; case .grid: return "rectangle.grid.2x2" }
+    }
+}
+
+// MARK: - Discovery Category
+
+enum DiscoveryCategory: String, CaseIterable {
+    case communities    = "communities"
+    case collections    = "collections"
+    case all            = "all"
+    case trending       = "trending"
+    case pymk           = "pymk"
+    case hotHashtags    = "hotHashtags"
+    case recent         = "recent"
+    case heatCheck      = "heatCheck"
+    case following      = "following"
+    case undiscovered   = "undiscovered"
+    case longestThreads = "longestThreads"
+    case spinOffs       = "spinOffs"
+    case podcasts       = "podcasts"
+    case films          = "films"
+    case rollTheDice    = "rollTheDice"
+
+    var displayName: String {
+        switch self {
+        case .communities:    return "Communities"
+        case .collections:    return "Collections"
+        case .following:      return "Following"
+        case .trending:       return "Trending"
+        case .pymk:           return "PYMK"
+        case .hotHashtags:    return "Hot Hashtags"
+        case .all:            return "All"
+        case .recent:         return "New"
+        case .heatCheck:      return "Heat Check"
+        case .undiscovered:   return "Undiscovered"
+        case .longestThreads: return "Threads"
+        case .spinOffs:       return "Spin-Offs"
+        case .podcasts:       return "Podcasts"
+        case .films:          return "Films"
+        case .rollTheDice:    return "Roll the Dice"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .communities:    return "person.3.fill"
+        case .collections:    return "rectangle.stack.fill"
+        case .following:      return "heart.fill"
+        case .trending:       return "flame.fill"
+        case .pymk:           return "person.badge.plus"
+        case .hotHashtags:    return "number"
+        case .all:            return "square.grid.2x2"
+        case .recent:         return "sparkles"
+        case .heatCheck:      return "thermometer.high"
+        case .undiscovered:   return "binoculars.fill"
+        case .longestThreads: return "bubble.left.and.bubble.right.fill"
+        case .spinOffs:       return "arrow.triangle.branch"
+        case .podcasts:       return "mic.fill"
+        case .films:          return "film"
+        case .rollTheDice:    return "dice.fill"
+        }
+    }
+
+    var isVideoCategory: Bool {
+        switch self {
+        case .communities, .collections, .pymk, .podcasts, .films: return false
+        default: return true
+        }
+    }
+
+    var isCollectionCategory: Bool {
+        return self == .podcasts || self == .films || self == .collections
+    }
+}
+
+// MARK: - Presentation Wrappers
+
+struct DiscoveryVideoPresentation: Identifiable, Equatable {
+    let id: String
+    let video: CoreVideoMetadata
+    static func == (lhs: DiscoveryVideoPresentation, rhs: DiscoveryVideoPresentation) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+struct DiscoveryHashtagPresentation: Identifiable {
+    let id: String
+    let hashtag: TrendingHashtag
 }

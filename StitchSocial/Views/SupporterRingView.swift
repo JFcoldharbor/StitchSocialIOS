@@ -101,9 +101,8 @@ struct SupporterRingView: View {
 
     private func loadSubs() {
         Task {
-            // Always fetch for the VIEWER (current auth user), not profile owner
-            guard let viewerID = Auth.auth().currentUser?.uid else { return }
-            let fetched = (try? await SubscriptionService.shared.fetchMySubscriptions(userID: viewerID)) ?? []
+            // Fetch the profile OWNER's subs via read-only path — never touches mySubscriptions
+            let fetched = (try? await SubscriptionService.shared.fetchSubscriptions(forUserID: userID)) ?? []
             await MainActor.run { subs = fetched.filter { $0.status == .active } }
         }
     }

@@ -11,6 +11,7 @@
 import SwiftUI
 import AVFoundation
 import FirebaseAuth
+import FirebaseFirestore
 import Combine
 
 /// Collection player that displays segments with HORIZONTAL swipe navigation
@@ -107,6 +108,9 @@ struct CollectionPlayerView: View {
                                 handleOverlayAction(action, for: segment)
                             }
                         )
+                        // KEY: force overlay teardown/rebuild on each new segment so
+                        // any @StateObject inside gets fresh data — prevents title/count bleed
+                        .id(segment.id)
                         .opacity(showOverlay ? 1 : 0)
                         .animation(.easeOut(duration: 0.4), value: showOverlay)
                         .allowsHitTesting(showOverlay)
@@ -120,7 +124,12 @@ struct CollectionPlayerView: View {
             loadSegments()
             showOverlayBriefly()
         }
-        .sheet(isPresented: $showingThreadView) {
+        // Fetch live viewCount + record view when segment becomes active
+        .onChange(of: currentSegmentIndex) { _, newIndex in
+            guard newIndex < segments.count else { return }
+            Task { await refreshSegmentViewCount(at: newIndex) }
+        }
+        .fullScreenCover(isPresented: $showingThreadView) {
             if let segment = currentSegment {
                 ThreadDetailSheet(video: segment)
             }
@@ -128,7 +137,6 @@ struct CollectionPlayerView: View {
         .onReceive(playerCoordinator.segmentEndSubject) { _ in
             guard currentSegmentIndex < segments.count - 1 else { return }
             currentSegmentIndex += 1
-            // Preload segment after next
             let nextNext = currentSegmentIndex + 1
             if nextNext < segments.count {
                 Task { await VideoDiskCache.shared.cacheVideo(from: segments[nextNext].videoURL) }
@@ -188,6 +196,9 @@ struct CollectionPlayerView: View {
                     self.isLoading = false
                 }
                 
+                // Fetch live viewCount for the first segment immediately
+                await refreshSegmentViewCount(at: currentSegmentIndex)
+                
                 // Preload next 2 segment videos to disk cache
                 let urls = sortedSegments.prefix(3).map { $0.videoURL }.filter { !$0.isEmpty }
                 Task { await VideoDiskCache.shared.prefetchVideos(urls) }
@@ -210,6 +221,60 @@ struct CollectionPlayerView: View {
         }
     }
     
+    // MARK: - Live View Count Refresh
+    // Fetches the real viewCount from Firestore for the active segment.
+    // One lightweight document read per segment — only fires on segment change.
+    // Updates segments array in place so ContextualVideoOverlay (keyed by .id) shows real count.
+
+    private func refreshSegmentViewCount(at index: Int) async {
+        guard index < segments.count else { return }
+        let segment = segments[index]
+        guard !segment.id.isEmpty else { return }
+
+        do {
+            let db = Firestore.firestore(database: Config.Firebase.databaseName)
+            let doc = try await db.collection("videos").document(segment.id).getDocument()
+            guard let data = doc.data() else { return }
+            let liveViewCount = data["viewCount"] as? Int ?? segment.viewCount
+            let liveHypeCount = data["hypeCount"] as? Int ?? segment.hypeCount
+            let liveCoolCount = data["coolCount"] as? Int ?? segment.coolCount
+
+            // Only update if values changed to avoid unnecessary re-renders
+            guard liveViewCount != segment.viewCount
+                || liveHypeCount != segment.hypeCount
+                || liveCoolCount != segment.coolCount else { return }
+
+            await MainActor.run {
+                guard index < segments.count else { return }
+                segments[index] = CoreVideoMetadata(
+                    id: segment.id, title: segment.title,
+                    description: segment.description,
+                    taggedUserIDs: segment.taggedUserIDs,
+                    videoURL: segment.videoURL, thumbnailURL: segment.thumbnailURL,
+                    creatorID: segment.creatorID, creatorName: segment.creatorName,
+                    createdAt: segment.createdAt, threadID: segment.threadID,
+                    replyToVideoID: segment.replyToVideoID,
+                    conversationDepth: segment.conversationDepth,
+                    viewCount: liveViewCount, hypeCount: liveHypeCount,
+                    coolCount: liveCoolCount, replyCount: segment.replyCount,
+                    shareCount: segment.shareCount, temperature: segment.temperature,
+                    qualityScore: segment.qualityScore, engagementRatio: segment.engagementRatio,
+                    velocityScore: segment.velocityScore, trendingScore: segment.trendingScore,
+                    duration: segment.duration, aspectRatio: segment.aspectRatio,
+                    fileSize: segment.fileSize, discoverabilityScore: segment.discoverabilityScore,
+                    isPromoted: segment.isPromoted, lastEngagementAt: segment.lastEngagementAt,
+                    collectionID: segment.collectionID, segmentNumber: segment.segmentNumber,
+                    segmentTitle: segment.segmentTitle, isCollectionSegment: segment.isCollectionSegment,
+                    replyTimestamp: segment.replyTimestamp,
+                    recordingSource: segment.recordingSource, hashtags: segment.hashtags
+                )
+            }
+        } catch {
+            // Non-fatal — overlay shows 0 instead of live count
+            print("⚠️ COLLECTION PLAYER: Could not refresh viewCount for segment \(segment.id.prefix(8)): \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Loading View
     
     private var loadingView: some View {

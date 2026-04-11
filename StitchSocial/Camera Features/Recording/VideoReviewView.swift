@@ -26,10 +26,13 @@ struct VideoReviewView: View {
     
     // MARK: - State
     
-    @State private var selectedTab: EditTab = .trim
     @State private var isPlaying = false
     @State private var showingCancelAlert = false
     @State private var showingExportError = false
+    @State private var selectedOverlayID: UUID? = nil
+    @State private var editingOverlayID: UUID?  = nil
+    @State private var activePanel: EditPanel? = nil
+    @State private var showTextEditor = false
     
     // MARK: - Initialization
     
@@ -48,41 +51,57 @@ struct VideoReviewView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            
-            VStack(spacing: 0) {
-                // Full-screen video preview (fills entire screen)
-                ZStack {
-                    videoPreview
-                    
-                    // Overlaid top toolbar
-                    VStack {
-                        topToolbar
-                            .padding(.top, 50)
-                        Spacer()
-                    }
-                    
-                    // Overlaid edit tabs at bottom
-                    VStack {
-                        Spacer()
-                        
-                        // Edit content area (slides up over video)
-                        editContentArea
-                            .background(
-                                LinearGradient(
-                                    colors: [Color.clear, Color.black.opacity(0.8), Color.black],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .frame(height: 280)
-                        
-                        // Edit tabs
-                        editTabBar
-                        
-                        // Bottom action bar
-                        bottomActionBar
-                    }
+
+            // ── Full-screen video ──────────────────────────────────────
+            videoPreview.ignoresSafeArea()
+
+            // ── Live caption overlay (time-synced to playback) ─────────
+            CaptionOverlayView(
+                captions: editState.state.captions,
+                currentTime: editState.currentPlaybackTime,
+                videoSize: editState.state.videoSize,
+                enabled: editState.state.captionsEnabled,
+                globalPreset: editState.state.globalCaptionPreset,
+                globalPosition: editState.state.globalCaptionPosition
+            )
+            .allowsHitTesting(false)
+
+            // ── Text overlay canvas ────────────────────────────────────
+            TextOverlayCanvasView(editState: editState, selectedOverlayID: $selectedOverlayID, editingOverlayID: $editingOverlayID)
+
+            // ── Top bar ────────────────────────────────────────────────
+            VStack {
+                topBar
+                    .padding(.top, 56)
+                Spacer()
+            }
+
+            // ── Right-side tool rail ───────────────────────────────────
+            HStack {
+                Spacer()
+                VStack(spacing: 0) {
+                    Spacer()
+                    toolRail
+                        .padding(.bottom, 120)
                 }
+            }
+
+            // ── Bottom: Next button ────────────────────────────────────
+            VStack {
+                Spacer()
+                bottomBar
+                    .padding(.bottom, 32)
+            }
+
+            // ── Panel sheets ───────────────────────────────────────────
+            if let panel = activePanel {
+                panelOverlay(panel)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            // ── Processing overlay ─────────────────────────────────────
+            if editState.state.isProcessing {
+                processingOverlay
             }
         }
         .ignoresSafeArea()
@@ -117,55 +136,142 @@ struct VideoReviewView: View {
         }
     }
     
-    // MARK: - Top Toolbar
-    
-    private var topToolbar: some View {
+    // MARK: - Top Bar (minimal — just X and draft save)
+
+    private var topBar: some View {
         HStack {
-            Button {
-                showingCancelAlert = true
-            } label: {
+            Button { showingCancelAlert = true } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(.white)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        Circle()
-                            .fill(.ultraThinMaterial)
-                    )
-                    .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 2)
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(Color.black.opacity(0.35)))
             }
-            
             Spacer()
-            
-            Text("Edit Video")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundColor(.white)
-                .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 2)
-            
-            Spacer()
-            
-            Button {
-                Task {
-                    await saveDraft()
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "square.and.arrow.down")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text("Save")
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    Capsule()
-                        .fill(.ultraThinMaterial)
-                )
-                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 2)
+            Button { Task { await saveDraft() } } label: {
+                Text("Draft")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .background(Capsule().fill(Color.black.opacity(0.35)))
             }
         }
         .padding(.horizontal, 16)
+    }
+
+    // MARK: - Right Tool Rail (Instagram/TikTok style)
+
+    private var toolRail: some View {
+        VStack(spacing: 20) {
+            ForEach(EditPanel.allCases, id: \.self) { panel in
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                        if activePanel == panel {
+                            activePanel = nil
+                        } else {
+                            activePanel = panel
+                            // pause while editing
+                            editState.pause(); isPlaying = false
+                        }
+                    }
+                } label: {
+                    VStack(spacing: 5) {
+                        Image(systemName: panel.icon)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundColor(.white)
+                            .shadow(color: .black.opacity(0.6), radius: 3)
+                        Text(panel.label)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.white.opacity(0.85))
+                            .shadow(color: .black.opacity(0.6), radius: 2)
+                    }
+                    .frame(width: 50)
+                    .padding(.vertical, 4)
+                    .background(
+                        activePanel == panel
+                            ? Capsule().fill(Color.white.opacity(0.2))
+                            : Capsule().fill(Color.clear)
+                    )
+                }
+            }
+        }
+        .padding(.trailing, 12)
+    }
+
+    // MARK: - Bottom Bar (Next button)
+
+    private var bottomBar: some View {
+        HStack {
+            // Duration pill
+            Text(formatDuration(editState.state.trimmedDuration))
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Capsule().fill(Color.black.opacity(0.4)))
+
+            Spacer()
+
+            Button {
+                Task { await proceedToThread() }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Next")
+                        .font(.system(size: 16, weight: .bold))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .bold))
+                }
+                .foregroundColor(.black)
+                .padding(.horizontal, 28).padding(.vertical, 12)
+                .background(
+                    Capsule()
+                        .fill(Color.white)
+                        .shadow(color: .white.opacity(0.3), radius: 12)
+                )
+            }
+            .disabled(editState.state.isProcessing || !editState.isPropertiesLoaded)
+            .opacity(editState.isPropertiesLoaded ? 1 : 0.5)
+        }
+        .padding(.horizontal, 20)
+    }
+
+    // MARK: - Panel Overlay
+
+    @ViewBuilder
+    private func panelOverlay(_ panel: EditPanel) -> some View {
+        ZStack(alignment: .bottom) {
+            // Dismiss tap area
+            Color.clear.contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.spring(response: 0.3)) { activePanel = nil }
+                    editState.play(); isPlaying = true
+                }
+
+            VStack(spacing: 0) {
+                // Drag handle
+                Capsule().fill(Color.white.opacity(0.3))
+                    .frame(width: 36, height: 4)
+                    .padding(.top, 10).padding(.bottom, 6)
+
+                switch panel {
+                case .text:
+                    TextOverlayPanelView(editState: editState, selectedOverlayID: $selectedOverlayID, editingOverlayID: $editingOverlayID)
+                case .trim:
+                    VideoTrimmerView(editState: editState)
+                case .filters:
+                    FilterPickerView(editState: editState)
+                case .captions:
+                    CaptionEditorView(editState: editState)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 320)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .shadow(color: .black.opacity(0.4), radius: 20, y: -4)
+            )
+        }
+        .ignoresSafeArea()
     }
     
     // MARK: - Video Preview
@@ -226,115 +332,11 @@ struct VideoReviewView: View {
         }
     }
     
-    // MARK: - Edit Tab Bar
+
     
-    private var editTabBar: some View {
-        HStack(spacing: 0) {
-            ForEach(EditTab.allCases, id: \.self) { tab in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        selectedTab = tab
-                    }
-                } label: {
-                    VStack(spacing: 6) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 20))
-                        
-                        Text(tab.title)
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundColor(selectedTab == tab ? .cyan : .white.opacity(0.6))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        selectedTab == tab ?
-                        Color.cyan.opacity(0.2) : Color.clear
-                    )
-                }
-            }
-        }
-        .background(.ultraThinMaterial)
-    }
+
     
-    // MARK: - Edit Content Area
-    
-    private var editContentArea: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                switch selectedTab {
-                case .trim:
-                    VideoTrimmerView(editState: editState)
-                    
-                case .filters:
-                    FilterPickerView(editState: editState)
-                    
-                case .captions:
-                    CaptionEditorView(editState: editState)
-                }
-            }
-            .padding(.top, 20)
-        }
-        .scrollIndicators(.hidden)
-    }
-    
-    // MARK: - Bottom Action Bar
-    
-    private var bottomActionBar: some View {
-        HStack(spacing: 16) {
-            // Duration display
-            HStack(spacing: 4) {
-                Image(systemName: "clock")
-                    .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.8))
-                
-                Text(formatDuration(editState.state.trimmedDuration))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.white)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                Capsule()
-                    .fill(.ultraThinMaterial)
-            )
-            
-            Spacer()
-            
-            // Continue button
-            Button {
-                Task {
-                    await proceedToThread()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Text("Continue")
-                        .font(.system(size: 16, weight: .bold))
-                    
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 14, weight: .bold))
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 32)
-                .padding(.vertical, 14)
-                .background(
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [.cyan, .blue],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .shadow(color: .cyan.opacity(0.4), radius: 12, x: 0, y: 4)
-                )
-            }
-            .disabled(editState.state.isProcessing || !editState.isPropertiesLoaded)
-            .opacity(editState.isPropertiesLoaded ? 1.0 : 0.5)
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-        .background(.ultraThinMaterial)
-    }
+
     
     // MARK: - Actions
     
@@ -402,20 +404,24 @@ struct VideoReviewView: View {
             return
         }
         
-        // If edits were made, start processing
-        if editState.state.hasEdits && !editState.state.isProcessingComplete {
+        // Always export when text overlays present — must be burned in
+        let needsExport = editState.state.hasEdits && (
+            !editState.state.isProcessingComplete || editState.state.hasTextOverlays
+        )
+        if needsExport {
+            print("📤 REVIEW: Exporting — overlays=\(editState.state.textOverlays.count)")
             editState.startProcessing()
-            
             do {
                 let result = try await exportService.exportVideo(editState: editState.state)
                 editState.finishProcessing(videoURL: result.videoURL, thumbnailURL: result.thumbnailURL)
             } catch {
-                print("âŒ REVIEW: Export failed: \(error)")
+                print("❌ REVIEW: Export failed: \(error)")
+                exportService.exportError = error.localizedDescription
+                showingExportError = true
                 return
             }
         }
-        
-        // Proceed to thread view
+                // Proceed to thread view
         onContinueToThread(editState.state)
     }
     
@@ -433,26 +439,29 @@ struct VideoReviewView: View {
     }
 }
 
-// MARK: - Edit Tabs
+// MARK: - Edit Panel
 
-enum EditTab: String, CaseIterable {
+enum EditPanel: String, CaseIterable {
+    case text
     case trim
     case filters
     case captions
-    
-    var title: String {
-        switch self {
-        case .trim: return "Trim"
-        case .filters: return "Filters"
-        case .captions: return "Captions"
-        }
-    }
-    
+
     var icon: String {
         switch self {
-        case .trim: return "scissors"
-        case .filters: return "camera.filters"
+        case .text:     return "textformat"
+        case .trim:     return "scissors"
+        case .filters:  return "camera.filters"
         case .captions: return "text.bubble"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .text:     return "Text"
+        case .trim:     return "Trim"
+        case .filters:  return "Filters"
+        case .captions: return "Captions"
         }
     }
 }
@@ -591,5 +600,23 @@ class VideoEditStateManager: ObservableObject {
     
     func finishProcessing(videoURL: URL, thumbnailURL: URL) {
         state.finishProcessing(processedVideoURL: videoURL, thumbnailURL: thumbnailURL)
+    }
+
+    // MARK: - Text Overlay CRUD
+
+    func addOverlay(_ overlay: TextOverlay) {
+        state.textOverlays.append(overlay)
+        state.lastModified = Date()
+    }
+
+    func removeOverlay(id: UUID) {
+        state.textOverlays.removeAll { $0.id == id }
+        state.lastModified = Date()
+    }
+
+    func updateOverlay(id: UUID, update: (inout TextOverlay) -> Void) {
+        guard let idx = state.textOverlays.firstIndex(where: { $0.id == id }) else { return }
+        update(&state.textOverlays[idx])
+        state.lastModified = Date()
     }
 }

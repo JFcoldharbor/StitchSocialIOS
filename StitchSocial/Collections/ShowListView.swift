@@ -19,7 +19,7 @@ struct ShowListView: View {
     let username: String
     let onDismiss: () -> Void
     
-    @StateObject private var showService = ShowService()
+    @StateObject private var showService = ShowService.shared
     @State private var shows: [Show] = []
     @State private var isLoading = true
     @State private var selectedShow: Show?
@@ -143,8 +143,10 @@ struct ShowListView: View {
     
     private func loadShows() async {
         isLoading = true
+        showService.clearAllCaches()   // always fresh — creator needs to see latest draft state
         do {
             shows = try await showService.getCreatorShows(creatorID: userID)
+            print("📚 SHOW LIST: \(shows.count) shows — statuses: \(shows.map { $0.status.rawValue })")
         } catch {
             print("❌ SHOW LIST: Failed to load: \(error)")
         }

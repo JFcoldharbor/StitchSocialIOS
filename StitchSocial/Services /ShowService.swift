@@ -21,6 +21,8 @@ import FirebaseAuth
 @MainActor
 class ShowService: ObservableObject {
     
+    static let shared = ShowService()
+    
     private let db = Firestore.firestore(database: Config.Firebase.databaseName)
     
     @Published var isLoading: Bool = false
@@ -58,13 +60,29 @@ class ShowService: ObservableObject {
     }
     
     func getCreatorShows(creatorID: String) async throws -> [Show] {
-        let snapshot = try await db.collection("shows")
-            .whereField("creatorID", isEqualTo: creatorID)
-            .order(by: "updatedAt", descending: true)
-            .getDocuments()
-        let shows = snapshot.documents.compactMap { decodeShow(from: $0.data(), id: $0.documentID) }
-        for show in shows { showCache[show.id] = (show, Date()) }
-        return shows
+        do {
+            let snapshot = try await db.collection("shows")
+                .whereField("creatorID", isEqualTo: creatorID)
+                .order(by: "updatedAt", descending: true)
+                .getDocuments()
+            let all = snapshot.documents.compactMap { decodeShow(from: $0.data(), id: $0.documentID) }
+            let shows = all.filter { $0.status != .removed }
+            print("📚 SHOW SERVICE: Loaded \(shows.count) shows for \(creatorID)")
+            for show in shows { showCache[show.id] = (show, Date()) }
+            return shows
+        } catch {
+            // Index may be missing — fall back to unordered query
+            print("⚠️ SHOW SERVICE: Ordered query failed (\(error.localizedDescription)) — retrying without order")
+            let snapshot = try await db.collection("shows")
+                .whereField("creatorID", isEqualTo: creatorID)
+                .getDocuments()
+            let all = snapshot.documents.compactMap { decodeShow(from: $0.data(), id: $0.documentID) }
+            let shows = all.filter { $0.status != .removed }
+                .sorted { $0.updatedAt > $1.updatedAt }
+            print("📚 SHOW SERVICE: Fallback loaded \(shows.count) shows for \(creatorID)")
+            for show in shows { showCache[show.id] = (show, Date()) }
+            return shows
+        }
     }
     
     func saveShow(_ show: Show) async throws {
@@ -227,40 +245,96 @@ class ShowService: ObservableObject {
     // MARK: - Encode / Decode
     // ═══════════════════════════════════════
     
-    private func encodeShow(_ show: Show) -> [String: Any] {
-        ["id": show.id, "title": show.title, "description": show.description,
-         "creatorID": show.creatorID, "creatorName": show.creatorName,
-         "format": show.format.rawValue, "genre": show.genre.rawValue,
-         "contentType": show.contentType.rawValue,
-         "tags": show.tags.map { $0.rawValue },
-         "coverImageURL": show.coverImageURL ?? "", "thumbnailURL": show.thumbnailURL ?? "",
-         "status": show.status.rawValue, "isFeatured": show.isFeatured,
-         "seasonCount": show.seasonCount, "totalEpisodes": show.totalEpisodes,
-         "totalViews": show.totalViews, "totalHypes": show.totalHypes, "totalCools": show.totalCools,
-         "createdAt": Timestamp(date: show.createdAt), "updatedAt": FieldValue.serverTimestamp()]
+    // ═══════════════════════════════════════
+    // MARK: - Schedule
+    // ═══════════════════════════════════════
+
+    /// Returns the next open premiere slot for a show.
+    /// Zero Firestore reads — uses already-loaded episodes.
+    /// CACHING: Pass in your in-memory episodesBySeasonId values.
+    func nextAvailableSlot(for show: Show, existingEpisodes: [VideoCollection]) -> Date? {
+        guard let config = show.scheduleConfig else { return nil }
+        let scheduled = existingEpisodes.filter {
+            $0.status == .published || $0.status.rawValue == "scheduled"
+        }
+        return ScheduleService.nextAvailableSlot(config: config, scheduledEpisodes: scheduled)
     }
-    
+
+    /// Batch-updates publishedAt for reordered episodes to preserve cadence spacing.
+    /// BATCHING: All writes in a single Firestore batch — 1 round trip.
+    func applyReorderedSchedule(
+        episodes: [VideoCollection],
+        show: Show
+    ) async throws {
+        guard let config = show.scheduleConfig, config.cadence != .custom else { return }
+        let pairs = ScheduleService.recomputeDates(for: episodes, config: config)
+        let batch = db.batch()
+        for (id, date) in pairs {
+            let ref = db.collection("videoCollections").document(id)
+            batch.updateData(["publishedAt": Timestamp(date: date),
+                              "status": "scheduled",
+                              "updatedAt": FieldValue.serverTimestamp()], forDocument: ref)
+        }
+        try await batch.commit()
+        print("📅 SHOW SERVICE: Reordered schedule — \(pairs.count) episodes updated")
+    }
+
+    private func encodeShow(_ show: Show) -> [String: Any] {
+        var data: [String: Any] = [
+            "id": show.id, "title": show.title, "description": show.description,
+            "creatorID": show.creatorID, "creatorName": show.creatorName,
+            "format": show.format.rawValue, "genre": show.genre.rawValue,
+            "contentType": show.contentType.rawValue,
+            "tags": show.tags.map { $0.rawValue },
+            "coverImageURL": show.coverImageURL ?? "", "thumbnailURL": show.thumbnailURL ?? "",
+            "status": show.status.rawValue, "isFeatured": show.isFeatured, "isFree": show.isFree,
+            "seasonCount": show.seasonCount, "totalEpisodes": show.totalEpisodes,
+            "totalViews": show.totalViews, "totalHypes": show.totalHypes, "totalCools": show.totalCools,
+            "createdAt": Timestamp(date: show.createdAt), "updatedAt": FieldValue.serverTimestamp()
+        ]
+        if let config = show.scheduleConfig {
+            data["releaseCadence"] = config.cadence.rawValue
+            data["releaseWeekday"] = config.releaseWeekday
+            data["releaseHour"]    = config.releaseHour
+            data["releaseMinute"]  = config.releaseMinute
+        }
+        return data
+    }
+
     private func decodeShow(from data: [String: Any], id: String) -> Show? {
-        Show(id: id,
-             title: data["title"] as? String ?? "",
-             description: data["description"] as? String ?? "",
-             creatorID: data["creatorID"] as? String ?? "",
-             creatorName: data["creatorName"] as? String ?? "",
-             format: ShowFormat(rawValue: data["format"] as? String ?? "vertical") ?? .vertical,
-             genre: ShowGenre(rawValue: data["genre"] as? String ?? "other") ?? .other,
-             contentType: CollectionContentType(rawValue: data["contentType"] as? String ?? "series") ?? .series,
-             tags: (data["tags"] as? [String])?.compactMap { ShowTag(rawValue: $0) } ?? [],
-             coverImageURL: data["coverImageURL"] as? String,
-             thumbnailURL: data["thumbnailURL"] as? String,
-             status: ShowStatus(rawValue: data["status"] as? String ?? "draft") ?? .draft,
-             isFeatured: data["isFeatured"] as? Bool ?? false,
-             seasonCount: data["seasonCount"] as? Int ?? 0,
-             totalEpisodes: data["totalEpisodes"] as? Int ?? 0,
-             totalViews: data["totalViews"] as? Int ?? 0,
-             totalHypes: data["totalHypes"] as? Int ?? 0,
-             totalCools: data["totalCools"] as? Int ?? 0,
-             createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date(),
-             updatedAt: (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date())
+        let title         = data["title"] as? String ?? ""
+        let description   = data["description"] as? String ?? ""
+        let creatorID     = data["creatorID"] as? String ?? ""
+        let creatorName   = data["creatorName"] as? String ?? ""
+        let format        = ShowFormat(rawValue: data["format"] as? String ?? "vertical") ?? .vertical
+        let genre         = ShowGenre(rawValue: data["genre"] as? String ?? "other") ?? .other
+        let contentType   = CollectionContentType(rawValue: data["contentType"] as? String ?? "series") ?? .series
+        let tags          = (data["tags"] as? [String])?.compactMap { ShowTag(rawValue: $0) } ?? []
+        let coverImageURL = data["coverImageURL"] as? String
+        let thumbnailURL  = data["thumbnailURL"] as? String
+        let status        = ShowStatus(rawValue: data["status"] as? String ?? "draft") ?? .draft
+        let isFeatured    = data["isFeatured"] as? Bool ?? false
+        let isFree        = data["isFree"] as? Bool ?? false
+        let seasonCount   = data["seasonCount"] as? Int ?? 0
+        let totalEpisodes = data["totalEpisodes"] as? Int ?? 0
+        let totalViews    = data["totalViews"] as? Int ?? 0
+        let totalHypes    = data["totalHypes"] as? Int ?? 0
+        let totalCools    = data["totalCools"] as? Int ?? 0
+        let createdAt     = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+        let updatedAt     = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
+        let cadence       = data["releaseCadence"] as? String
+        let weekday       = data["releaseWeekday"] as? Int
+        let hour          = data["releaseHour"] as? Int
+        let minute        = data["releaseMinute"] as? Int
+
+        return Show(id: id, title: title, description: description,
+                    creatorID: creatorID, creatorName: creatorName,
+                    format: format, genre: genre, contentType: contentType, tags: tags,
+                    coverImageURL: coverImageURL, thumbnailURL: thumbnailURL,
+                    status: status, isFeatured: isFeatured, isFree: isFree,
+                    seasonCount: seasonCount, totalEpisodes: totalEpisodes,
+                    totalViews: totalViews, totalHypes: totalHypes, totalCools: totalCools,
+                    createdAt: createdAt, updatedAt: updatedAt)
     }
     
     private func encodeSeason(_ season: Season) -> [String: Any] {
@@ -296,7 +370,7 @@ class ShowService: ObservableObject {
             "totalDuration": ep.totalDuration,
             "status": ep.status.rawValue, "visibility": ep.visibility.rawValue,
             "allowReplies": ep.allowReplies, "contentType": ep.contentType.rawValue,
-            "allowStitchReplies": ep.allowStitchReplies,
+            "allowStitchReplies": ep.allowStitchReplies, "isFree": ep.isFree,
             "createdAt": Timestamp(date: ep.createdAt), "updatedAt": FieldValue.serverTimestamp(),
             "totalViews": ep.totalViews, "totalHypes": ep.totalHypes,
             "totalCools": ep.totalCools, "totalReplies": ep.totalReplies, "totalShares": ep.totalShares,
@@ -330,6 +404,7 @@ class ShowService: ObservableObject {
         let replies = data["allowReplies"] as? Bool ?? true
         let cType = CollectionContentType(rawValue: data["contentType"] as? String ?? "series") ?? .series
         let stitch = data["allowStitchReplies"] as? Bool
+        let isFree = data["isFree"] as? Bool ?? false
         let pub = (data["publishedAt"] as? Timestamp)?.dateValue()
         let created = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
         let updated = (data["updatedAt"] as? Timestamp)?.dateValue() ?? Date()
@@ -359,7 +434,7 @@ class ShowService: ObservableObject {
             creatorID: cid, creatorName: cname, coverImageURL: cover,
             segmentIDs: segIDs, segmentCount: segCount, totalDuration: dur,
             status: status, visibility: vis, allowReplies: replies,
-            contentType: cType, allowStitchReplies: stitch,
+            contentType: cType, allowStitchReplies: stitch, isFree: isFree,
             showId: showId, seasonId: seasonId, episodeNumber: epNum, format: fmt,
             compressed: comp, splitIntoFiles: split,
             originalFileSizeMB: origSize, compressedFileSizeMB: compSize, adSlots: ads,

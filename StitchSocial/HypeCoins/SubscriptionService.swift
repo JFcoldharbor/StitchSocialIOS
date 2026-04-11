@@ -34,6 +34,10 @@ final class SubscriptionService: ObservableObject {
     private var isSubscribedCache:  [String: (value: Bool, fetchedAt: Date)] = [:]
     private var mySubsFetchedAt:       Date?
     private var mySubscribersFetchedAt: Date?
+    /// Read-only cache for other users' subscriptions (profile ring display).
+    /// Keyed by userID — never pollutes mySubscriptions.
+    /// CACHING: 5min TTL, evicted on invalidateAll().
+    private var profileSubsCache: [String: (subs: [ActiveSubscription], fetchedAt: Date)] = [:]
 
     private let planTTL:  TimeInterval = 600   // 10 min
     private let subsTTL:  TimeInterval = 300   // 5 min
@@ -210,6 +214,23 @@ final class SubscriptionService: ObservableObject {
         return subs
     }
 
+    // MARK: - Fetch Subscriptions for Any User (Profile Ring — read-only)
+    // Does NOT write to mySubscriptions. Keyed cache per userID.
+    // CACHING: profileSubsCache, 5min TTL. Safe to call on any profile visit.
+    func fetchSubscriptions(forUserID userID: String) async throws -> [ActiveSubscription] {
+        if let cached = profileSubsCache[userID],
+           Date().timeIntervalSince(cached.fetchedAt) < subsTTL {
+            return cached.subs
+        }
+        let snapshot = try await subsCollection
+            .whereField("subscriberID", isEqualTo: userID)
+            .whereField("status", isEqualTo: SubscriptionStatus.active.rawValue)
+            .getDocuments()
+        let subs = snapshot.documents.compactMap { try? $0.data(as: ActiveSubscription.self) }
+        profileSubsCache[userID] = (subs, Date())
+        return subs
+    }
+
     // MARK: - Is Subscribed
 
     func isSubscribed(subscriberID: String, creatorID: String) async throws -> Bool {
@@ -316,6 +337,7 @@ final class SubscriptionService: ObservableObject {
     func invalidateAll() {
         creatorPlanCache.removeAll()
         isSubscribedCache.removeAll()
+        profileSubsCache.removeAll()
         mySubsFetchedAt = nil
         mySubscribersFetchedAt = nil
     }

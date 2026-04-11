@@ -29,17 +29,41 @@ enum RecordingNavigationDestination: Hashable {
     }
 }
 
+// MARK: - Camera Mode
+
+enum CameraMode: String, CaseIterable {
+    case normal       = "Normal"
+    case teleprompter = "Script"
+    case greenScreen  = "BG"
+    case reaction     = "React"
+
+    var icon: String {
+        switch self {
+        case .normal:       return "camera.fill"
+        case .teleprompter: return "text.alignleft"
+        case .greenScreen:  return "person.crop.rectangle.fill"
+        case .reaction:     return "play.rectangle.on.rectangle.fill"
+        }
+    }
+}
+
 struct RecordingView: View {
     @StateObject private var controller: RecordingController
     @StateObject private var permissionsManager = CameraPermissionsManager()
+    @StateObject private var teleprompterState   = TeleprompterState()
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var isProcessingSelectedVideo = false
     @State private var navigationPath: [RecordingNavigationDestination] = []
-    @State private var isTorchOn = false  // Flashlight state
-    @State private var currentRecordingSource: String = "inApp"  // Tracks if video is live or from camera roll
+    @State private var currentRecordingSource: String = "inApp"
     @State private var currentZoomFactor: CGFloat = 1.0
     @State private var lastZoomFactor: CGFloat = 1.0
     @State private var dragStartY: CGFloat = 0
+    // Camera mode
+    @State private var cameraMode: CameraMode = .normal
+    // Reaction mode — opens directly, no URL needed upfront
+    @State private var showReactionCamera = false
+    // Green screen
+    @State private var greenScreenActive = false
     
     let onVideoCreated: (CoreVideoMetadata) -> Void
     let onCancel: () -> Void
@@ -129,6 +153,17 @@ struct RecordingView: View {
                 handlePhotoSelection()
             }
         }
+        .onChange(of: cameraMode) { _, newMode in handleModeChange(newMode) }
+        .fullScreenCover(isPresented: $showReactionCamera) {
+            ReactionCameraView(
+                cameraManager: controller.cameraManager,
+                onComplete: { exportedURL in
+                    showReactionCamera = false
+                    Task { await controller.processSelectedVideo(exportedURL) }
+                },
+                onCancel: { showReactionCamera = false }
+            )
+        }
     }
     
     // MARK: - Camera Interface
@@ -138,22 +173,40 @@ struct RecordingView: View {
             let isCompact = geometry.size.height < 700
             
             ZStack {
-                // Camera preview with slide-to-zoom (drag up = zoom in, drag down = zoom out)
-                SimpleCameraPreview(controller: controller)
-                    .clipped()
-                    .gesture(
-                        DragGesture(minimumDistance: 10)
-                            .onChanged { value in
-                                // Negative translation = dragging up = zoom in
-                                let dragDelta = -value.translation.height / 200
-                                let newZoom = lastZoomFactor + dragDelta
-                                currentZoomFactor = min(max(newZoom, 1.0), 5.0)
-                                controller.setZoomFactor(currentZoomFactor)
+                // Camera preview — swapped for green screen composite when active
+                ZStack {
+                    SimpleCameraPreview(controller: controller)
+                    
+                    if cameraMode == .greenScreen && greenScreenActive {
+                        GreenScreenPreviewView(processor: GreenScreenProcessor.shared)
+                            .onAppear {
+                                print("🟢 GS VIEW: GreenScreenPreviewView appeared")
+                                print("🟢 GS VIEW: processedFrame=\(GreenScreenProcessor.shared.processedFrame != nil ? "✅ has frame" : "❌ nil")")
                             }
-                            .onEnded { _ in
-                                lastZoomFactor = currentZoomFactor
-                            }
+                    }
+                }
+                .clipped()
+                .gesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { value in
+                            // Negative translation = dragging up = zoom in
+                            let dragDelta = -value.translation.height / 200
+                            let newZoom = lastZoomFactor + dragDelta
+                            currentZoomFactor = min(max(newZoom, 1.0), 5.0)
+                            controller.setZoomFactor(currentZoomFactor)
+                        }
+                        .onEnded { _ in
+                            lastZoomFactor = currentZoomFactor
+                        }
+                )
+                
+                // Teleprompter overlay — text near top/lens, PiP camera bottom-right
+                if cameraMode == .teleprompter {
+                    TeleprompterView(
+                        state: teleprompterState,
+                        cameraManager: controller.cameraManager
                     )
+                }
                 
                 // Top Bar - use safeAreaInsets from geometry but ensure minimum offset for notch
                 VStack {
@@ -175,29 +228,81 @@ struct RecordingView: View {
     // MARK: - Top Bar with Exit Button
     
     private func topBar(isCompact: Bool) -> some View {
-        HStack {
-            // Exit Button (Left)
-            Button {
-                handleExit()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(.white)
-                    .frame(width: 32, height: 32)
-                    .background(
-                        Circle()
-                            .fill(.ultraThinMaterial)
-                            .overlay(
-                                Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
-                            )
-                    )
+        VStack(spacing: 8) {
+            HStack {
+                // Exit Button (Left)
+                Button {
+                    handleExit()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(.white)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                }
+                .disabled(controller.currentPhase.isRecording)
+                .opacity(controller.currentPhase.isRecording ? 0.5 : 1.0)
+                
+                Spacer()
+                
+                // Lens Switcher (center)
+                LensSwitcherView(cameraManager: controller.cameraManager)
+                
+                Spacer()
+                
+                // Torch — wired to cameraManager
+                Button {
+                    controller.cameraManager.toggleTorch()
+                } label: {
+                    Image(systemName: controller.cameraManager.isTorchOn
+                          ? "flashlight.on.fill" : "flashlight.off.fill")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(controller.cameraManager.isTorchOn ? .yellow : .white)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
+                                )
+                        )
+                }
+                .disabled(controller.currentPhase.isRecording)
             }
-            .disabled(controller.currentPhase.isRecording)
-            .opacity(controller.currentPhase.isRecording ? 0.5 : 1.0)
+            .padding(.horizontal, 20)
             
-            Spacer()
+            // Mode picker (hidden while recording)
+            if !controller.currentPhase.isRecording {
+                modePicker.padding(.horizontal, 20)
+            }
         }
-        .padding(.horizontal, 20)
+    }
+    
+    // MARK: - Mode Picker
+    
+    private var modePicker: some View {
+        HStack(spacing: 6) {
+            ForEach(CameraMode.allCases, id: \.rawValue) { mode in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { cameraMode = mode }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: mode.icon).font(.system(size: 11, weight: .medium))
+                        Text(mode.rawValue)
+                            .font(.system(size: 12, weight: cameraMode == mode ? .bold : .medium))
+                    }
+                    .foregroundColor(cameraMode == mode ? .black : .white)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Capsule().fill(cameraMode == mode ? Color.white : Color.white.opacity(0.15)))
+                }
+            }
+        }
     }
     
     // MARK: - Processing Interface
@@ -277,7 +382,13 @@ struct RecordingView: View {
                 durationDisplay
             }
             
-            // Flip + Flashlight row (above record button)
+            // Teleprompter inline controls (size + speed sliders)
+            if cameraMode == .teleprompter {
+                TeleprompterControlBar(state: teleprompterState)
+                    .padding(.horizontal, 20)
+            }
+            
+            // Flip + optional green screen toggle
             HStack(spacing: 20) {
                 Button {
                     Task {
@@ -299,27 +410,37 @@ struct RecordingView: View {
                 .disabled(controller.currentPhase.isRecording)
                 .opacity(controller.currentPhase.isRecording ? 0.5 : 1.0)
                 
-                Button {
-                    isTorchOn.toggle()
-                } label: {
-                    Image(systemName: isTorchOn ? "flashlight.on.fill" : "flashlight.off.fill")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundColor(.white)
-                        .frame(width: 40, height: 40)
-                        .background(
-                            Circle()
-                                .fill(.ultraThinMaterial)
-                                .overlay(
-                                    Circle().stroke(Color.white.opacity(0.2), lineWidth: 1)
-                                )
-                        )
+                if cameraMode == .greenScreen {
+                    Button {
+                        greenScreenActive.toggle()
+                        if greenScreenActive {
+                            print("🟢 GS TOGGLE: Activating green screen...")
+                            GreenScreenProcessor.shared.activate()
+                            print("🟢 GS TOGGLE: isActive=\(GreenScreenProcessor.shared.isActive) isActiveAtomic=\(GreenScreenProcessor.shared.isActiveAtomic)")
+                        } else {
+                            GreenScreenProcessor.shared.deactivate()
+                            print("🟢 GS TOGGLE: Deactivated")
+                        }
+                    } label: {
+                        Image(systemName: greenScreenActive
+                              ? "person.crop.rectangle.fill" : "person.crop.rectangle")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundColor(greenScreenActive ? .green : .white)
+                            .frame(width: 40, height: 40)
+                            .background(
+                                Circle()
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(Circle().stroke(
+                                        greenScreenActive ? Color.green.opacity(0.5) : Color.white.opacity(0.2),
+                                        lineWidth: 1))
+                            )
+                    }
+                    .disabled(controller.currentPhase.isRecording)
                 }
-                .disabled(controller.currentPhase.isRecording)
-                .opacity(controller.currentPhase.isRecording ? 0.5 : 1.0)
             }
             
             HStack(spacing: isCompact ? 28 : 40) {
-                // LEFT BUTTON - Dynamic (Gallery or Delete)
+                // LEFT BUTTON - gallery / delete
                 if controller.segments.isEmpty {
                     // IDLE STATE: Show Gallery
                     PhotosPicker(selection: $selectedPhotoItem, matching: .videos) {
@@ -371,9 +492,11 @@ struct RecordingView: View {
                     tierLimit: controller.userTierLimit,
                     onPressStart: {
                         currentRecordingSource = "inApp"
+                        if cameraMode == .teleprompter { teleprompterState.startScrolling() }
                         controller.startSegment()
                     },
                     onPressEnd: {
+                        if cameraMode == .teleprompter { teleprompterState.stopScrolling() }
                         controller.stopSegment()
                     },
                     compactMode: isCompact
@@ -478,6 +601,21 @@ struct RecordingView: View {
         )
     }
     
+    // MARK: - Mode Change Handler
+    
+    private func handleModeChange(_ mode: CameraMode) {
+        teleprompterState.stopScrolling()
+        if greenScreenActive {
+            GreenScreenProcessor.shared.deactivate()
+            greenScreenActive = false
+        }
+        if mode == .reaction {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                showReactionCamera = true
+            }
+        }
+    }
+    
     // MARK: - Actions
     
     private func handleExit() {
@@ -488,6 +626,10 @@ struct RecordingView: View {
         
         // Use controller's method to stop timer
         controller.stopRecordingTimer()
+        
+        // Cleanup new features
+        teleprompterState.stopScrolling()
+        GreenScreenProcessor.shared.cleanup()
         
         // Do camera cleanup
         Task { @MainActor in
@@ -595,6 +737,8 @@ struct RecordingView: View {
     }
     
     private func cleanupCamera() {
+        teleprompterState.stopScrolling()
+        GreenScreenProcessor.shared.cleanup()
         Task {
             await controller.stopCameraSession()
             
@@ -630,25 +774,40 @@ struct RecordingView: View {
 
 struct SimpleCameraPreview: UIViewRepresentable {
     @ObservedObject var controller: RecordingController
-    
+
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
-        
-        let previewLayer = controller.cameraManager.previewLayer
-        previewLayer.videoGravity = .resizeAspectFill
-        previewLayer.frame = view.bounds
-        view.layer.addSublayer(previewLayer)
-        
+        attachPreviewLayer(to: view)
         return view
     }
-    
+
     func updateUIView(_ uiView: UIView, context: Context) {
         DispatchQueue.main.async {
-            if let previewLayer = uiView.layer.sublayers?.first as? AVCaptureVideoPreviewLayer {
-                previewLayer.frame = uiView.bounds
+            let layer = controller.cameraManager.previewLayer
+            // Re-attach if layer got moved to another view (e.g. ReactionCameraPreviewView)
+            if layer.superlayer != uiView.layer {
+                layer.removeFromSuperlayer()
+                layer.frame = uiView.bounds
+                uiView.layer.insertSublayer(layer, at: 0)
+            } else {
+                layer.frame = uiView.bounds
             }
         }
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: ()) {
+        uiView.layer.sublayers?
+            .compactMap { $0 as? AVCaptureVideoPreviewLayer }
+            .forEach { $0.removeFromSuperlayer() }
+    }
+
+    private func attachPreviewLayer(to view: UIView) {
+        let layer = controller.cameraManager.previewLayer
+        layer.removeFromSuperlayer()
+        layer.videoGravity = .resizeAspectFill
+        layer.frame = view.bounds
+        view.layer.insertSublayer(layer, at: 0)
     }
 }
 

@@ -217,7 +217,10 @@ class VideoService: ObservableObject {
             FirebaseSchema.VideoDocument.recordingSource: recordingSource,
             
             // Hashtags
-            FirebaseSchema.VideoDocument.hashtags: hashtags
+            FirebaseSchema.VideoDocument.hashtags: hashtags,
+            
+            // Random seed for discovery feed rotation — required for feedSeed index
+            "feedSeed": Double.random(in: 0.0...1.0)
         ]
         
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
@@ -579,11 +582,23 @@ class VideoService: ObservableObject {
     func getVideo(id: String) async throws -> CoreVideoMetadata {
         let document = try await db.collection(FirebaseSchema.Collections.videos).document(id).getDocument()
         
-        guard document.exists, let data = document.data() else {
-            throw StitchError.validationError("Video not found")
+        if document.exists, let data = document.data() {
+            return createCoreVideoMetadata(from: data, id: id)
         }
         
-        return createCoreVideoMetadata(from: data, id: id)
+        // Fallback: segment may live in videoCollections/{collectionID}/segments/{id}
+        // Query collection group to find it without knowing the collectionID
+        let segSnap = try await db.collectionGroup("segments")
+            .whereField("id", isEqualTo: id)
+            .limit(to: 1)
+            .getDocuments()
+        
+        if let segDoc = segSnap.documents.first {
+            print("📡 VIDEO SERVICE: Found segment \(id.prefix(8)) in subcollection")
+            return createCoreVideoMetadata(from: segDoc.data(), id: id)
+        }
+        
+        throw StitchError.validationError("Video not found")
     }
     
     /// Get thread videos (for VideoCoordinator stitch notifications)
@@ -656,18 +671,31 @@ class VideoService: ObservableObject {
     
     /// Get complete thread data
     func getCompleteThread(threadID: String) async throws -> ThreadData {
-        // Get parent video
+        // Get parent video — check top-level videos first
         let parentDoc = try await db.collection(FirebaseSchema.Collections.videos)
             .document(threadID)
             .getDocument()
         
-        guard parentDoc.exists, let parentData = parentDoc.data() else {
-            throw StitchError.validationError("Thread not found")
+        let parentVideo: CoreVideoMetadata
+        
+        if parentDoc.exists, let parentData = parentDoc.data() {
+            parentVideo = createCoreVideoMetadata(from: parentData, id: threadID)
+        } else {
+            // Fallback: segment lives in videoCollections/{collectionID}/segments/{threadID}
+            let segSnap = try await db.collectionGroup("segments")
+                .whereField("id", isEqualTo: threadID)
+                .limit(to: 1)
+                .getDocuments()
+            
+            guard let segDoc = segSnap.documents.first else {
+                throw StitchError.validationError("Thread not found")
+            }
+            
+            print("📡 VIDEO SERVICE: getCompleteThread — found segment \(threadID.prefix(8)) in subcollection")
+            parentVideo = createCoreVideoMetadata(from: segDoc.data(), id: threadID)
         }
         
-        let parentVideo = createCoreVideoMetadata(from: parentData, id: threadID)
-        
-        // Get child videos
+        // Get child videos (replies always live in top-level videos collection)
         let childVideos = try await getThreadChildren(threadID: threadID)
         
         return ThreadData(
@@ -677,56 +705,103 @@ class VideoService: ObservableObject {
         )
     }
     
-    /// Get user videos with pagination
+    /// Get user videos with pagination (EXCLUDES collection segments)
     func getUserVideos(
         userID: String,
         limit: Int = 20,
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> PaginatedResult<CoreVideoMetadata> {
         
+        // Fetch more to account for filtered collection segments
+        let fetchLimit = limit + 10
+        
         var query: Query = db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.creatorID, isEqualTo: userID)
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-            .limit(to: limit)
+            .limit(to: fetchLimit)
         
         if let lastDoc = lastDocument {
             query = query.start(afterDocument: lastDoc)
         }
         
         let snapshot = try await query.getDocuments()
-        let videos = snapshot.documents.map { document in
+        
+        let allVideos = snapshot.documents.map { document in
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
+        // Client-side filter: exclude collection segments
+        let filteredVideos = allVideos.filter { video in
+            // Exclude videos that are collection segments
+            return video.collectionID == nil || video.collectionID?.isEmpty == true
+        }
+        
+        // Take only the requested limit
+        let limitedVideos = Array(filteredVideos.prefix(limit))
+        
         return PaginatedResult(
-            items: videos,
+            items: limitedVideos,
             lastDocument: snapshot.documents.last,
-            hasMore: snapshot.documents.count >= limit
+            hasMore: snapshot.documents.count >= fetchLimit
         )
     }
     
     // MARK: - Collection Support
     
-    /// Get all segments for a collection from subcollection path
-    /// Path: videoCollections/{collectionID}/segments/{segmentID}
+    /// Get all videos belonging to a collection, sorted by segment number
     func getVideosByCollection(collectionID: String) async throws -> [CoreVideoMetadata] {
-        print("📡 VIDEO SERVICE: Fetching segments for collection \(collectionID)")
-        
-        // SUBCOLLECTION read — eliminates cross-collection whereField scan
-        // CACHING: CollectionPlayerView prefetches via VideoDiskCache after first load
-        let snapshot = try await db
-            .collection("videoCollections").document(collectionID)
-            .collection("segments")
+        print("📡 VIDEO SERVICE: Fetching videos for collection \(collectionID)")
+
+        // Primary: query top-level videos by collectionID field
+        let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
+            .whereField("collectionID", isEqualTo: collectionID)
             .order(by: "segmentNumber", descending: false)
             .getDocuments()
-        
-        let videos = snapshot.documents.map { document in
-            createCoreVideoMetadata(from: document.data(), id: document.documentID)
+
+        var videos = snapshot.documents.map { createCoreVideoMetadata(from: $0.data(), id: $0.documentID) }
+
+        // Fallback 1: subcollection path (ImportSegmentsView writes here)
+        if videos.isEmpty {
+            print("📡 VIDEO SERVICE: Top-level query returned 0 — trying subcollection path")
+            let subSnap = try await db.collection("videoCollections")
+                .document(collectionID)
+                .collection("segments")
+                .getDocuments()
+            videos = subSnap.documents
+                .map { createCoreVideoMetadata(from: $0.data(), id: $0.documentID) }
+                .sorted { ($0.segmentNumber ?? 0) < ($1.segmentNumber ?? 0) }
+            if !videos.isEmpty {
+                print("📡 VIDEO SERVICE: Found \(videos.count) segments in subcollection")
+            }
         }
-        
-        print("✅ VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
+
+        // Fallback 2: fetch by segmentIDs from collection doc
+        if videos.isEmpty {
+            print("📡 VIDEO SERVICE: Trying segmentIDs fallback")
+            let collDoc = try await db.collection("videoCollections").document(collectionID).getDocument()
+            let segmentIDs = collDoc.data()?["segmentIDs"] as? [String] ?? []
+            if !segmentIDs.isEmpty {
+                let chunks = stride(from: 0, to: segmentIDs.count, by: 30).map {
+                    Array(segmentIDs[$0..<min($0 + 30, segmentIDs.count)])
+                }
+                var all: [CoreVideoMetadata] = []
+                for chunk in chunks {
+                    let chunkSnap = try await db.collection(FirebaseSchema.Collections.videos)
+                        .whereField(FieldPath.documentID(), in: chunk)
+                        .getDocuments()
+                    all.append(contentsOf: chunkSnap.documents.map {
+                        createCoreVideoMetadata(from: $0.data(), id: $0.documentID)
+                    })
+                }
+                videos = all.sorted { ($0.segmentNumber ?? 0) < ($1.segmentNumber ?? 0) }
+                print("📡 VIDEO SERVICE: Found \(videos.count) segments via segmentIDs")
+            }
+        }
+
+        print("📡 VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
         return videos
     }
+    
     /// Get timestamped replies for a video segment (replies that reference specific timestamps)
     /// - Parameter videoID: The video ID (also accepts segmentID)
     func getTimestampedReplies(videoID: String? = nil, segmentID: String? = nil) async throws -> [CoreVideoMetadata] {
@@ -750,7 +825,7 @@ class VideoService: ObservableObject {
         return replies
     }
     
-    /// Get all threads with children for discovery feed
+    /// Get all threads with children for discovery feed (EXCLUDES collection segments)
     func getAllThreadsWithChildren(
         limit: Int = 50,
         lastDocument: DocumentSnapshot? = nil
@@ -759,10 +834,13 @@ class VideoService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
+        // Fetch more to account for filtered collection segments
+        let fetchLimit = limit + 20
+        
         var query = db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
             .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
-            .limit(to: limit)
+            .limit(to: fetchLimit)
         
         if let lastDoc = lastDocument {
             query = query.start(afterDocument: lastDoc)
@@ -773,13 +851,31 @@ class VideoService: ObservableObject {
         
         for doc in snapshot.documents {
             let video = createCoreVideoMetadata(from: doc.data(), id: doc.documentID)
+            
+            // Skip collection segments - they should only appear in collection player
+            if let collID = video.collectionID, !collID.isEmpty {
+                continue
+            }
+            
             let childVideos = try await getThreadChildren(threadID: video.id)
-            threads.append(ThreadData(id: video.id, parentVideo: video, childVideos: childVideos))
-            if threads.count >= limit { break }
+            
+            let threadData = ThreadData(
+                id: video.id,
+                parentVideo: video,
+                childVideos: childVideos
+            )
+            threads.append(threadData)
+            
+            // Stop once we have enough threads
+            if threads.count >= limit {
+                break
+            }
         }
         
+        let hasMore = snapshot.documents.count >= fetchLimit
+        
         print("VIDEO SERVICE: Discovery feed loaded - \(threads.count) threads")
-        return (threads: threads, lastDocument: snapshot.documents.last, hasMore: snapshot.documents.count >= limit)
+        return (threads: threads, lastDocument: snapshot.documents.last, hasMore: hasMore)
     }
     
     /// Get video analytics

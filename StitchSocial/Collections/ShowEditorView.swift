@@ -9,8 +9,15 @@
 import SwiftUI
 import PhotosUI
 import FirebaseAuth
+import FirebaseFirestore
 import FirebaseStorage
 import UniformTypeIdentifiers
+
+private struct ShowEditorViewEpisodeNavItem: Identifiable {
+    let id: String
+    let episode: VideoCollection
+    let seasonId: String
+}
 
 struct ShowEditorView: View {
     
@@ -26,24 +33,28 @@ struct ShowEditorView: View {
     @State private var expandedSeason: String?
     @State private var saving = false
     @State private var isLoading = true
-    @State private var selectedEpisode: EpisodeNavItem?
+    @State private var selectedEpisode: ShowEditorViewEpisodeNavItem?
     
     // Cover photo
     @State private var coverPickerItem: PhotosPickerItem?
     @State private var coverImage: UIImage?
     @State private var isUploadingCover = false
     @State private var showingFilePicker = false
+    @State private var scheduleConfig: ShowScheduleConfig = .default
     
-    struct EpisodeNavItem: Identifiable {
-        let id: String
-        let episode: VideoCollection
-        let seasonId: String
+    init(show: Show, isNew: Bool, onSave: ((Show) -> Void)? = nil, onDismiss: @escaping () -> Void) {
+        self._show = State(initialValue: show)
+        self.isNew = isNew
+        self.onSave = onSave
+        self.onDismiss = onDismiss
+        self._scheduleConfig = State(initialValue: show.scheduleConfig ?? .default)
     }
-    
+
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
                 showMetadataSection
+                releaseScheduleSection
                 seasonsSection
             }
             .padding(.bottom, 40)
@@ -65,6 +76,7 @@ struct ShowEditorView: View {
             }
         }
         .task {
+            if let c = show.scheduleConfig { scheduleConfig = c }
             if !isNew { await loadFullShow() }
             isLoading = false
         }
@@ -132,12 +144,149 @@ struct ShowEditorView: View {
             Toggle(isOn: $show.isFeatured) {
                 Text("Featured on home screen").font(.system(size: 12)).foregroundColor(.white)
             }.tint(.pink)
+            Toggle(isOn: $show.isFree) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Entire show is free").font(.system(size: 12)).foregroundColor(.white)
+                    Text("All episodes unlocked for everyone").font(.system(size: 10)).foregroundColor(.gray)
+                }
+            }.tint(.cyan)
         }
         .padding(14).background(Color.white.opacity(0.04)).cornerRadius(12).padding(.horizontal, 16)
     }
     
     // MARK: - Seasons
     
+    // MARK: - Release Schedule Section
+
+    private var releaseScheduleSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Release Schedule")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.white)
+
+            // Cadence picker
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Cadence").font(.system(size: 10)).foregroundColor(.gray)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(ReleaseCadence.allCases, id: \.self) { cad in
+                            Button {
+                                scheduleConfig.cadence = cad
+                                persistSchedule()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: cad.icon).font(.system(size: 10))
+                                    Text(cad.displayName).font(.system(size: 12, weight: .medium))
+                                }
+                                .foregroundColor(scheduleConfig.cadence == cad ? .black : .white.opacity(0.7))
+                                .padding(.horizontal, 12).padding(.vertical, 6)
+                                .background(scheduleConfig.cadence == cad ? Color.cyan : Color.white.opacity(0.08))
+                                .cornerRadius(20)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+
+            if scheduleConfig.cadence != .custom && scheduleConfig.cadence != .oneOff {
+                // Day of week (weekly / biweekly)
+                if scheduleConfig.cadence == .weekly || scheduleConfig.cadence == .biweekly {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Release Day").font(.system(size: 10)).foregroundColor(.gray)
+                        HStack(spacing: 6) {
+                            ForEach(1...7, id: \.self) { day in
+                                let names = ["S","M","T","W","T","F","S"]
+                                let name = names[day - 1]
+                                Button {
+                                    scheduleConfig.releaseWeekday = day
+                                    persistSchedule()
+                                } label: {
+                                    Text(name)
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(scheduleConfig.releaseWeekday == day ? .black : .white.opacity(0.6))
+                                        .frame(width: 32, height: 32)
+                                        .background(scheduleConfig.releaseWeekday == day ? Color.cyan : Color.white.opacity(0.08))
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+
+                // Release time
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Drop Time").font(.system(size: 10)).foregroundColor(.gray)
+                    DatePicker(
+                        "",
+                        selection: Binding(
+                            get: {
+                                Calendar.current.date(bySettingHour: scheduleConfig.releaseHour,
+                                                       minute: scheduleConfig.releaseMinute,
+                                                       second: 0, of: Date()) ?? Date()
+                            },
+                            set: { newDate in
+                                let comps = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                                scheduleConfig.releaseHour = comps.hour ?? 20
+                                scheduleConfig.releaseMinute = comps.minute ?? 0
+                                persistSchedule()
+                            }
+                        ),
+                        displayedComponents: .hourAndMinute
+                    )
+                    .datePickerStyle(.compact)
+                    .tint(.cyan)
+                    .labelsHidden()
+                    .padding(8)
+                    .background(Color.white.opacity(0.06))
+                    .cornerRadius(8)
+                }
+
+                // Summary
+                HStack(spacing: 4) {
+                    Image(systemName: "calendar.badge.clock").font(.system(size: 11)).foregroundColor(.cyan)
+                    Text(scheduleSummary).font(.system(size: 11)).foregroundColor(.cyan.opacity(0.85))
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.04))
+        .cornerRadius(12)
+        .padding(.horizontal, 16)
+    }
+
+    private var scheduleSummary: String {
+        switch scheduleConfig.cadence {
+        case .oneOff:
+            return "Single premiere — one-time release"
+        case .daily:
+            return "New episode every day at \(scheduleConfig.releaseTimeDisplay)"
+        case .weekly:
+            return "Every \(scheduleConfig.weekdayName) at \(scheduleConfig.releaseTimeDisplay)"
+        case .biweekly:
+            return "Every other \(scheduleConfig.weekdayName) at \(scheduleConfig.releaseTimeDisplay)"
+        case .monthly:
+            return "Monthly at \(scheduleConfig.releaseTimeDisplay)"
+        case .custom:
+            return "No auto-schedule — set dates per episode"
+        }
+    }
+
+    private func persistSchedule() {
+        Task {
+            let db = Firestore.firestore(database: Config.Firebase.databaseName)
+            try? await db.collection("shows").document(show.id).setData([
+                "releaseCadence": scheduleConfig.cadence.rawValue,
+                "releaseWeekday": scheduleConfig.releaseWeekday,
+                "releaseHour":    scheduleConfig.releaseHour,
+                "releaseMinute":  scheduleConfig.releaseMinute,
+                "updatedAt":      FieldValue.serverTimestamp()
+            ] as [String: Any], merge: true)
+        }
+    }
+
     private var seasonsSection: some View {
         VStack(spacing: 10) {
             HStack {
@@ -203,23 +352,62 @@ struct ShowEditorView: View {
     }
     
     private func episodeRow(_ ep: VideoCollection, seasonId: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "film").font(.system(size: 12)).foregroundColor(.gray)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Ep \(ep.episodeNumber ?? 0): \(ep.title.isEmpty ? "Untitled" : ep.title)")
-                    .font(.system(size: 12, weight: .medium)).foregroundColor(.white).lineLimit(1)
-                Text("\(ep.segmentCount) segments").font(.system(size: 9)).foregroundColor(.gray)
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "film").font(.system(size: 12)).foregroundColor(.gray)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text("Ep \(ep.episodeNumber ?? 0): \(ep.title.isEmpty ? "Untitled" : ep.title)")
+                            .font(.system(size: 12, weight: .medium)).foregroundColor(.white).lineLimit(1)
+                        // Show free badge if episode or show is free
+                        if ep.isFree || show.isFree {
+                            Text("FREE")
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundColor(.cyan)
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(Color.cyan.opacity(0.15))
+                                .cornerRadius(4)
+                        }
+                    }
+                    Text("\(ep.segmentCount) segments").font(.system(size: 9)).foregroundColor(.gray)
+                }
+                Spacer()
+                // Free toggle per episode (disabled if whole show is free)
+                if !show.isFree {
+                    Toggle("", isOn: Binding(
+                        get: { ep.isFree },
+                        set: { newVal in toggleEpisodeFree(ep, seasonId: seasonId, isFree: newVal) }
+                    ))
+                    .tint(.cyan)
+                    .labelsHidden()
+                    .scaleEffect(0.75)
+                }
+                Button { selectedEpisode = ShowEditorViewEpisodeNavItem(id: ep.id, episode: ep, seasonId: seasonId) } label: {
+                    Text("Edit").font(.system(size: 10, weight: .medium)).foregroundColor(.pink)
+                }
+                Button { Task { await deleteEpisode(ep, seasonId: seasonId) } } label: {
+                    Image(systemName: "trash").font(.system(size: 10)).foregroundColor(.red.opacity(0.5))
+                }
             }
-            Spacer()
-            Button { selectedEpisode = EpisodeNavItem(id: ep.id, episode: ep, seasonId: seasonId) } label: {
-                Text("Edit / Upload").font(.system(size: 10, weight: .medium)).foregroundColor(.pink)
-            }
-            Button { Task { await deleteEpisode(ep, seasonId: seasonId) } } label: {
-                Image(systemName: "trash").font(.system(size: 10)).foregroundColor(.red.opacity(0.5))
+            .padding(.horizontal, 10).padding(.vertical, 7)
+        }
+        .background(Color.white.opacity(0.04)).cornerRadius(8)
+    }
+    
+    private func toggleEpisodeFree(_ ep: VideoCollection, seasonId: String, isFree: Bool) {
+        // Update local state
+        if var eps = episodesBySeasonId[seasonId], let idx = eps.firstIndex(where: { $0.id == ep.id }) {
+            // Rebuild with new isFree — VideoCollection is immutable so we use withUpdatedMetadata if available
+            Task {
+                let db = Firestore.firestore(database: Config.Firebase.databaseName)
+                try? await db.collection("videoCollections").document(ep.id)
+                    .setData(["isFree": isFree, "updatedAt": FieldValue.serverTimestamp()], merge: true)
+                // Reload to reflect change
+                if let updated = try? await showService.getEpisodes(showId: show.id, seasonId: seasonId) {
+                    episodesBySeasonId[seasonId] = updated
+                }
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(Color.white.opacity(0.04)).cornerRadius(8)
     }
     
     // MARK: - Actions
@@ -228,7 +416,11 @@ struct ShowEditorView: View {
         saving = true
         show.seasonCount = seasons.count
         show.totalEpisodes = episodesBySeasonId.values.flatMap { $0 }.count
-        do { try await showService.saveShow(show); onSave?(show) }
+        do {
+            try await showService.saveShow(show)
+            print(isNew ? "✅ SHOW EDITOR: Created new show \(show.id)" : "✅ SHOW EDITOR: Updated show \(show.id)")
+            onSave?(show)
+        }
         catch { print("❌ SHOW EDITOR: Save failed: \(error)") }
         saving = false
     }

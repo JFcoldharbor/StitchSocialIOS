@@ -173,10 +173,19 @@ struct FirebaseSchema {
         
         // Content authenticity
         static let recordingSource = "recordingSource"  // "inApp", "cameraRoll", "unknown"
-        
+
         // Hashtags
-        static let hashtags = "hashtags"  // [String] - extracted hashtags from description
-        
+        static let hashtags = "hashtags"  // [String]
+
+        // Discovery feed
+        static let feedSeed = "feedSeed"               // Double 0-1 for random catalog slice
+        static let visibility = "visibility"            // "public", "followers", "private"
+        static let excludeFromDiscovery = "excludeFromDiscovery"  // Bool
+        static let teenSafe = "teenSafe"               // Bool — teen safety filter
+
+        // Collection segment flag
+        static let isCollectionSegment = "isCollectionSegment"  // Bool
+
         // Internal fields
         static let isInternalAccount = "isInternalAccount"
         static let isDeleted = "isDeleted"
@@ -521,38 +530,57 @@ struct FirebaseSchema {
         static let createdAt = "createdAt"
         static let updatedAt = "updatedAt"
         static let publishedAt = "publishedAt"
-        
+
         // Segment management
-        static let segmentVideoIDs = "segmentVideoIDs"     // Ordered array of video IDs
-        static let segmentThumbnails = "segmentThumbnails" // Quick access thumbnails
+        // NOTE: actual Firestore field is "segmentIDs" — segmentVideoIDs is legacy alias
+        static let segmentIDs = "segmentIDs"               // Canonical field name used by all services
+        static let segmentVideoIDs = "segmentIDs"          // Alias kept for backward compat
+        static let segmentThumbnails = "segmentThumbnails"
         static let segmentCount = "segmentCount"
         static let totalDuration = "totalDuration"
-        
+
         // Status and visibility
-        static let status = "status"                       // draft, processing, published, archived, deleted
+        static let status = "status"                       // draft, scheduled, published, paused, completed, removed
         static let visibility = "visibility"               // public, followers, private, unlisted
-        static let thumbnailURL = "thumbnailURL"           // Cover image
-        
+        // NOTE: actual cover field is "coverImageURL" — thumbnailURL is legacy
+        static let coverImageURL = "coverImageURL"         // Canonical cover field
+        static let thumbnailURL = "coverImageURL"          // Alias kept for backward compat
+        static let format = "format"                       // "vertical"
+
+        // Content type & show hierarchy
+        static let contentType = "contentType"             // podcast, series, film, documentary, etc.
+        static let showId = "showId"
+        static let seasonId = "seasonId"
+        static let episodeNumber = "episodeNumber"
+        static let isFree = "isFree"
+        static let allowReplies = "allowReplies"
+        static let allowStitchReplies = "allowStitchReplies"
+
         // Engagement aggregates (sum of all segments)
         static let totalViews = "totalViews"
         static let totalHypes = "totalHypes"
         static let totalCools = "totalCools"
         static let totalReplies = "totalReplies"
         static let totalShares = "totalShares"
-        
+
         // Discovery
         static let temperature = "temperature"
         static let discoverabilityScore = "discoverabilityScore"
         static let isPromoted = "isPromoted"
         static let isFeatured = "isFeatured"
-        
+
         // Categorization
         static let tags = "tags"
         static let category = "category"
-        
+
+        // Draft fields (present when status == "draft")
+        static let draftSegmentConfig = "draftSegmentConfig"
+        static let draftInterval = "draftInterval"
+        static let draftSplitMode = "draftSplitMode"
+
         /// Full document path in stitchfin database
         static func documentPath(collectionID: String) -> String {
-            return Collections.fullPath(for: Collections.videoCollections) + "/\(collectionID)"
+            return Collections.fullPath(for: Collections.videoCollections) + "\(collectionID)"
         }
     }
     
@@ -610,7 +638,8 @@ struct FirebaseSchema {
         static let currentSegmentProgress = "currentSegmentProgress" // Seconds into segment
         
         // Completion tracking
-        static let completedSegments = "completedSegments" // Array of completed segment indexes
+        static let completedSegmentIDs = "completedSegmentIDs" // Array of completed segment IDs (strings)
+        static let completedSegments = "completedSegmentIDs"  // Alias for backward compat
         static let totalWatchTime = "totalWatchTime"       // Seconds
         static let percentComplete = "percentComplete"     // 0.0 to 1.0
         
@@ -793,28 +822,66 @@ struct FirebaseSchema {
             ReferralDocument.createdAt,
             ReferralDocument.expiresAt
         ]
-        
+
+        // MARK: - Critical Discovery Indexes
+
+        /// Cursor-based discovery feed — conversationDepth ASC + createdAt DESC
+        /// ⚠️ REQUIRED: Create in Firebase Console or firestore.indexes.json
+        static let discoveryFeedCursor = [
+            VideoDocument.conversationDepth,  // ASC
+            VideoDocument.createdAt           // DESC
+        ]
+
+        /// Creator shows list — creatorID ASC + updatedAt DESC
+        /// ⚠️ REQUIRED for ShowService.getCreatorShows ordered query
+        static let showsByCreator = [
+            "creatorID",   // shows collection
+            "updatedAt"    // DESC
+        ]
+
+        /// Episodes by show — showId ASC + seasonId ASC + episodeNumber ASC
+        static let episodesByShow = [
+            CollectionDocument.showId,
+            CollectionDocument.seasonId,
+            CollectionDocument.episodeNumber
+        ]
+
+        /// Discovery collections by contentType + status + publishedAt
+        static let collectionsByType = [
+            CollectionDocument.contentType,
+            CollectionDocument.status,
+            CollectionDocument.publishedAt
+        ]
+
         /// Generate index creation commands for stitchfin database
+        /// ⚠️ CRITICAL: Create these in Firebase Console → Firestore → Indexes
         static func generateIndexCommands() -> [String] {
             return [
-                "firebase firestore:indexes --project=stitchbeta-8bbfe --database=stitchfin",
-                "// Add these composite indexes to firestore.indexes.json",
-                "// Database: stitchfin",
-                "// Collection: videos - Creator timeline",
-                "// Collection: videos - Thread hierarchy",
-                "// Collection: videos - Tagged users",
-                "// Collection: videos - Milestone tracking",
-                "// Collection: videos - Collection segments (NEW)",
-                "// Collection: videos - Timestamped replies (NEW)",
-                "// Collection: videoCollections - By creator (NEW)",
-                "// Collection: videoCollections - Published discovery (NEW)",
-                "// Collection: videoCollections - Featured (NEW)",
-                "// Collection: collectionDrafts - By user (NEW)",
-                "// Collection: collectionProgress - By user (NEW)",
-                "// Collection: interactions - User engagement",
-                "// Collection: following - Social connections",
-                "// Collection: notifications - User notifications",
-                "// Collection: referrals - Referral tracking"
+                // ── CRITICAL — app breaks without these ──────────────────
+                "videos: conversationDepth ASC + isDeleted ASC + createdAt DESC  [cursor feed]",
+                "videos: conversationDepth ASC + feedSeed ASC                    [feedSeed discovery]",
+                "shows:  creatorID ASC + updatedAt DESC                          [ShowService.getCreatorShows]",
+
+                // ── Collections ──────────────────────────────────────────
+                "videos: collectionID ASC + segmentNumber ASC                    [getVideosByCollection]",
+                "videoCollections: creatorID ASC + createdAt DESC                [getUserCollections]",
+                "videoCollections: status ASC + contentType ASC + publishedAt DESC [discovery by type]",
+                "videoCollections: showId ASC + seasonId ASC + episodeNumber ASC [episodes by show]",
+
+                // ── Engagement & Social ──────────────────────────────────
+                "interactions: videoID ASC + engagementType ASC + timestamp DESC [WhoViewedSheet]",
+                "following: followerID ASC + isActive ASC + createdAt DESC",
+                "following: followingID ASC + isActive ASC + createdAt DESC",
+
+                // ── Notifications ────────────────────────────────────────
+                "notifications: recipientID ASC + isRead ASC + createdAt DESC",
+
+                // ── Referrals ────────────────────────────────────────────
+                "referrals: referralCode ASC + status ASC + expiresAt ASC",
+                "referrals: referrerID ASC + status ASC + createdAt DESC",
+
+                // ── How to create: ───────────────────────────────────────
+                "firebase firestore:indexes --project=stitchbeta-8bbfe --database=stitchfin"
             ]
         }
     }

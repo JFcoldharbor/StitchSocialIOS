@@ -304,44 +304,7 @@ struct ProfileView: View {
         }
         // All Collections Sheet
         .sheet(isPresented: $showingAllCollections) {
-            NavigationStack {
-                AllCollectionsView(
-                    collections: userCollections,
-                    isOwnProfile: viewModel.isOwnProfile,
-                    onShowTap: { showId in
-                        showingAllCollections = false
-                        selectedShowId = showId
-                        selectedShowEpisodes = userCollections.filter { $0.showId == showId }
-                        showingShowDetail = true
-                    },
-                    onEditShow: { showId in
-                        showingAllCollections = false
-                        Task {
-                            let service = ShowService()
-                            if let show = try? await service.getShow(showId) {
-                                editingShow = show
-                                showingShowEditor = true
-                            }
-                        }
-                    },
-                    onDeleteShow: { showId in
-                        Task {
-                            let service = ShowService()
-                            try? await service.deleteShow(showId)
-                            userCollections.removeAll { $0.showId == showId }
-                        }
-                    },
-                    onCreateShow: {
-                        showingAllCollections = false
-                        editingShow = nil
-                        showingShowEditor = true
-                    },
-                    onDismiss: {
-                        showingAllCollections = false
-                    }
-                )
-            }
-            .preferredColorScheme(.dark)
+            allCollectionsSheet
         }
         .onChange(of: videoPresentation) { oldValue, newValue in
             print("ðŸ” DEBUG: videoPresentation changed to \(newValue?.id ?? "nil")")
@@ -368,6 +331,48 @@ struct ProfileView: View {
     }
 
     // MARK: - Profile Content
+
+    @ViewBuilder
+    private var allCollectionsSheet: some View {
+        let cID   = viewModel.currentUser?.id       ?? ""
+        let cName = viewModel.currentUser?.username  ?? ""
+        NavigationStack {
+            AllCollectionsView(
+                collections: userCollections,
+                isOwnProfile: viewModel.isOwnProfile,
+                onShowTap: { showId in
+                    showingAllCollections = false
+                    selectedShowId = showId
+                    selectedShowEpisodes = userCollections.filter { $0.showId == showId }
+                    showingShowDetail = true
+                },
+                onEditShow: { showId in
+                    showingAllCollections = false
+                    Task {
+                        if let show = try? await ShowService.shared.getShow(showId) {
+                            editingShow = show
+                            showingShowEditor = true
+                        }
+                    }
+                },
+                onDeleteShow: { showId in
+                    Task {
+                        try? await ShowService.shared.deleteShow(showId)
+                        userCollections.removeAll { $0.showId == showId }
+                    }
+                },
+                onCreateShow: {
+                    showingAllCollections = false
+                    editingShow = nil
+                    showingShowEditor = true
+                },
+                onDismiss: { showingAllCollections = false },
+                creatorID: cID,
+                creatorName: cName
+            )
+        }
+        .preferredColorScheme(.dark)
+    }
 
     private func profileContent(user: BasicUserInfo) -> some View {
         GeometryReader { geometry in

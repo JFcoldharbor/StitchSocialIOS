@@ -152,6 +152,7 @@ struct Show: Identifiable, Codable, Hashable {
     
     var status: ShowStatus
     var isFeatured: Bool
+    var isFree: Bool          // When true, all episodes are free regardless of episode setting
     
     // MARK: - Counts (cached rollups — updated on season/episode add/delete)
     
@@ -168,7 +169,11 @@ struct Show: Identifiable, Codable, Hashable {
     
     let createdAt: Date
     var updatedAt: Date
-    
+
+    // MARK: - Release Schedule
+
+    var scheduleConfig: ShowScheduleConfig?   // nil = no cadence set yet
+
     // MARK: - Init
     
     init(
@@ -185,13 +190,15 @@ struct Show: Identifiable, Codable, Hashable {
         thumbnailURL: String? = nil,
         status: ShowStatus = .draft,
         isFeatured: Bool = false,
+        isFree: Bool = false,
         seasonCount: Int = 0,
         totalEpisodes: Int = 0,
         totalViews: Int = 0,
         totalHypes: Int = 0,
         totalCools: Int = 0,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        scheduleConfig: ShowScheduleConfig? = nil
     ) {
         self.id = id
         self.title = title
@@ -206,6 +213,7 @@ struct Show: Identifiable, Codable, Hashable {
         self.thumbnailURL = thumbnailURL
         self.status = status
         self.isFeatured = isFeatured
+        self.isFree = isFree
         self.seasonCount = seasonCount
         self.totalEpisodes = totalEpisodes
         self.totalViews = totalViews
@@ -213,6 +221,7 @@ struct Show: Identifiable, Codable, Hashable {
         self.totalCools = totalCools
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.scheduleConfig = scheduleConfig
     }
     
     // MARK: - Hashable

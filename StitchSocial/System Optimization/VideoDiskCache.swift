@@ -24,8 +24,8 @@ class VideoDiskCache {
     
     // MARK: - Configuration
     
-    /// Max disk cache size: 500MB
-    private let maxCacheSize: Int64 = 500 * 1024 * 1024
+    /// Max disk cache size: 2GB — supports ~40 x 50MB 4K segments
+    private let maxCacheSize: Int64 = 2 * 1024 * 1024 * 1024
     
     /// Max age before auto-eviction: 7 days
     private let maxCacheAge: TimeInterval = 7 * 24 * 3600

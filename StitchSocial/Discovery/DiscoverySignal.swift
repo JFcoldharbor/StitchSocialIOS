@@ -138,18 +138,19 @@ struct CreatorSignalAccumulator: Codable {
     /// Recalculate preference based on current signal state
     mutating func recalculatePreference() {
         // Cool-down takes priority
-        if totalCoolSignals >= 5 && videosWithCoolSignals >= 2 {
+        // TUNED: Require 3+ unique videos before blocking — prevents accidental fast-swipe perma-block
+        if totalCoolSignals >= 7 && videosWithCoolSignals >= 3 {
             preference = .blocked
-        } else if totalCoolSignals >= 4 {
+        } else if totalCoolSignals >= 5 && videosWithCoolSignals >= 2 {
             preference = .strongSuppress
-            // Activate delay before allowing 5th
+            // Activate delay before allowing blocking threshold
             if !coolDelayActive {
                 coolDelayActive = true
                 coolDelayStartedAt = Date()
             }
-        } else if totalCoolSignals >= 2 {
+        } else if totalCoolSignals >= 3 {
             preference = .moderateSuppress
-        } else if totalCoolSignals == 1 {
+        } else if totalCoolSignals == 1 || totalCoolSignals == 2 {
             preference = .mildSuppress
         }
         // Hype side (only if no cool signals override)
@@ -169,8 +170,8 @@ struct CreatorSignalAccumulator: Codable {
         guard let lastCool = lastCoolSignalAt else { return }
         let timeSinceLastCool = Date().timeIntervalSince(lastCool)
         
-        // Only decay signals below the 5th-tap threshold
-        if timeSinceLastCool > CreatorSignalAccumulator.coolDecayWindow && totalCoolSignals < 5 {
+        // Only decay signals below the blocking threshold
+        if timeSinceLastCool > CreatorSignalAccumulator.coolDecayWindow && totalCoolSignals < 7 {
             // Reduce cool signals by 1 for each decay period passed
             let decayPeriods = Int(timeSinceLastCool / CreatorSignalAccumulator.coolDecayWindow)
             let decayAmount = min(decayPeriods, totalCoolSignals)
@@ -541,6 +542,23 @@ class DiscoveryEngagementTracker: ObservableObject {
     
     // MARK: - Cleanup
     
+    /// Reset a single creator's block/suppress state in memory.
+    /// Call from DiscoveryViewModel.clearBlockForCreator(_:) to unblock accidentally-blocked creators.
+    /// Does NOT immediately write to Firestore — next signal flush will overwrite the stored preference.
+    func resetPreference(for creatorID: String) {
+        creatorPreferences[creatorID] = .neutral
+        creatorAccumulators[creatorID] = CreatorSignalAccumulator(creatorID: creatorID)
+        creatorCoolVideoSets[creatorID] = []
+        creatorHypeVideoSets[creatorID] = []
+        // Queue a persist so neutral preference overwrites the blocked record in Firestore
+        if var acc = creatorAccumulators[creatorID] {
+            acc.preference = .neutral
+            creatorAccumulators[creatorID] = acc
+            persistIfNeeded(creatorID: creatorID, accumulator: acc)
+        }
+        print("🔓 DISCOVERY TRACKER: Reset preference for \(creatorID.prefix(8)) → neutral")
+    }
+
     func flushOnExit() {
         Task {
             await flushPendingPersists()

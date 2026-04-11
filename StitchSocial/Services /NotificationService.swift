@@ -416,6 +416,43 @@ class NotificationService: ObservableObject {
         return ReEngagementResult(success: true, notificationId: notificationId, pushSent: pushSent, reason: nil, hoursRemaining: nil)
     }
 
+    // MARK: - New Episode Notification
+    // Fans out to both followers AND active subscribers of the creator.
+    // The Cloud Function (stitchnoti_sendNewEpisode) handles:
+    //   1. Querying followers subcollection on the creator user doc
+    //   2. Querying subscriptions collection for active subs
+    //   3. Deduplicating (a user who is both follower + subscriber gets one notification)
+    //   4. Batching FCM sends (max 500 per batch)
+    // App side just passes episode metadata — CF does all fan-out reads.
+
+    func sendNewEpisodeNotification(
+        creatorID: String,
+        creatorUsername: String,
+        showTitle: String,
+        episodeTitle: String,
+        episodeID: String,
+        showID: String,
+        episodeNumber: Int?,
+        isFree: Bool
+    ) async throws {
+        var data: [String: Any] = [
+            "creatorID": creatorID,
+            "creatorUsername": creatorUsername,
+            "showTitle": showTitle,
+            "episodeTitle": episodeTitle.isEmpty ? "New Episode" : episodeTitle,
+            "episodeID": episodeID,
+            "showID": showID,
+            "isFree": isFree
+        ]
+        if let epNum = episodeNumber { data["episodeNumber"] = epNum }
+
+        let result = try await callFunction(name: "sendNewEpisode", data: data)
+        if let resultData = result as? [String: Any],
+           let notified = resultData["notified"] as? Int {
+            print("✅ NEW EPISODE: Notifications sent to \(notified) followers/subscribers")
+        }
+    }
+
     // MARK: - Resend Read Notifications
 
     func resendReadNotifications(limit: Int = 5) async throws -> ResendResult {

@@ -45,6 +45,13 @@ struct VideoEditState: Codable {
     // MARK: - Caption State
     
     var captions: [VideoCaption]
+    var captionsEnabled: Bool               // toggle on/off in review
+    var globalCaptionPreset: CaptionStylePreset  // applies to all captions
+    var globalCaptionPosition: CaptionPosition   // single position for all
+    
+    // MARK: - Text Overlay State
+    
+    var textOverlays: [TextOverlay]
     
     // MARK: - Processing State
     
@@ -97,6 +104,12 @@ struct VideoEditState: Codable {
         
         // Default: no captions
         self.captions = []
+        self.captionsEnabled = true
+        self.globalCaptionPreset = CaptionStylePreset.instaBoldStacked
+        self.globalCaptionPosition = .bottom
+        
+        // Default: no text overlays
+        self.textOverlays = []
         
         // Default: not processing
         self.isProcessing = false
@@ -129,7 +142,7 @@ struct VideoEditState: Codable {
         case videoURL, videoDuration, videoSize, createdAt
         case trimStartTime, trimEndTime
         case selectedFilter, filterIntensity
-        case captions
+        case captions, textOverlays, captionsEnabled, globalCaptionPreset, globalCaptionPosition
         case isProcessing, processingProgress, processedVideoURL, processedThumbnailURL
         case compressedVideoURL, compressionComplete, compressionProgress, originalFileSize, compressedFileSize
         case draftID, lastModified
@@ -151,6 +164,10 @@ struct VideoEditState: Codable {
         filterIntensity = try container.decode(Double.self, forKey: .filterIntensity)
         
         captions = try container.decode([VideoCaption].self, forKey: .captions)
+        textOverlays = try container.decodeIfPresent([TextOverlay].self, forKey: .textOverlays) ?? []
+        captionsEnabled = try container.decodeIfPresent(Bool.self, forKey: .captionsEnabled) ?? true
+        globalCaptionPreset = try container.decodeIfPresent(CaptionStylePreset.self, forKey: .globalCaptionPreset) ?? .instaBoldStacked
+        globalCaptionPosition = try container.decodeIfPresent(CaptionPosition.self, forKey: .globalCaptionPosition) ?? .bottom
         
         isProcessing = try container.decode(Bool.self, forKey: .isProcessing)
         processingProgress = try container.decode(Double.self, forKey: .processingProgress)
@@ -297,11 +314,15 @@ struct VideoEditState: Codable {
     }
     
     var hasCaptions: Bool {
-        !captions.isEmpty
+        captionsEnabled && !captions.isEmpty
+    }
+    
+    var hasTextOverlays: Bool {
+        !textOverlays.isEmpty
     }
     
     var hasEdits: Bool {
-        hasTrim || hasFilter || hasCaptions
+        hasTrim || hasFilter || hasCaptions || hasTextOverlays
     }
     
     var hasCompression: Bool {
@@ -634,17 +655,19 @@ struct VideoCaption: Codable, Identifiable {
     var duration: TimeInterval
     var position: CaptionPosition
     var style: CaptionStyle
-    
+    var preset: CaptionStylePreset?   // nil = use legacy CaptionStyle
+
     var endTime: TimeInterval {
         startTime + duration
     }
-    
+
     init(
         text: String,
         startTime: TimeInterval,
         duration: TimeInterval = 3.0,
-        position: CaptionPosition = .center,
-        style: CaptionStyle = .standard
+        position: CaptionPosition = .bottom,
+        style: CaptionStyle = .standard,
+        preset: CaptionStylePreset? = CaptionStylePreset.instaBoldStacked
     ) {
         self.id = UUID().uuidString
         self.text = text
@@ -652,6 +675,7 @@ struct VideoCaption: Codable, Identifiable {
         self.duration = duration
         self.position = position
         self.style = style
+        self.preset = preset
     }
 }
 
@@ -660,12 +684,13 @@ enum CaptionPosition: String, Codable, CaseIterable {
     case top
     case center
     case bottom
-    
+
+    /// Legacy offset — use safeOffset for rendering to avoid UI overlap
     var offset: CGFloat {
         switch self {
-        case .top: return 0.2
-        case .center: return 0.5
-        case .bottom: return 0.8
+        case .top:    return 0.15
+        case .center: return 0.50
+        case .bottom: return 0.68
         }
     }
 }

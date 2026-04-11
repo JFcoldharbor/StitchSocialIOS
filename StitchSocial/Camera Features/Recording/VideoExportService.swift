@@ -129,7 +129,7 @@ class VideoExportService: ObservableObject {
     /// Determine the best export mode based on what edits were made
     private func determineExportMode(editState: VideoEditState, asset: AVAsset) -> ExportMode {
         let hasFilter = editState.selectedFilter != nil
-        let hasCaptions = !editState.captions.isEmpty
+        let hasCaptions = editState.captionsEnabled && !editState.captions.isEmpty
         
         // Check if trim is at original bounds (no actual trim)
         let hasTrim = hasActualTrim(editState: editState, asset: asset)
@@ -244,12 +244,12 @@ class VideoExportService: ObservableObject {
     
     // MARK: - Full Process Export (With Re-encoding)
     
-    /// Full export with composition for filters/captions
+    /// Full export with composition for filters/captions/text overlays
     private func fullProcessExport(
         asset: AVAsset,
         editState: VideoEditState
     ) async throws -> URL {
-        print("ðŸŽ¨ EXPORT: Full process mode - re-encoding with edits")
+        print("🎨 EXPORT: Full process mode - re-encoding with edits")
         
         // Create composition with trim
         let composition = try await createComposition(
@@ -258,9 +258,28 @@ class VideoExportService: ObservableObject {
             trimEnd: editState.trimEndTime
         )
         
-        // Apply filter if selected
-        let videoComposition: AVVideoComposition?
-        if let filter = editState.selectedFilter {
+        let hasFilter   = editState.selectedFilter != nil
+        let hasOverlays = !editState.textOverlays.isEmpty
+        let hasCaptions = editState.captionsEnabled && !editState.captions.isEmpty
+        let needsAnimTool = hasOverlays || hasCaptions
+        var videoComposition: AVVideoComposition?
+
+        if needsAnimTool {
+            // Use combined animationTool for both text overlays and captions
+            let renderSize = try await getRenderSize(from: composition)
+            let mvc = try await buildBaseVideoComposition(from: composition, renderSize: renderSize)
+            mvc.animationTool = buildCombinedAnimationTool(
+                overlays: editState.textOverlays,
+                captions: editState.captionsEnabled ? editState.captions.map { c in
+                    var copy = c; copy.preset = c.preset ?? editState.globalCaptionPreset
+                    copy.position = editState.globalCaptionPosition; return copy
+                } : [],
+                renderSize: renderSize,
+                duration: composition.duration
+            )
+            videoComposition = mvc
+            print("🎨 EXPORT: Burned \(editState.textOverlays.count) overlays + \(editState.captions.count) captions via animationTool")
+        } else if hasFilter, let filter = editState.selectedFilter {
             videoComposition = try await createFilterVideoComposition(
                 filter: filter,
                 intensity: editState.filterIntensity,
@@ -269,14 +288,50 @@ class VideoExportService: ObservableObject {
         } else {
             videoComposition = nil
         }
-        
-        // Export with quality settings
+
         let outputURL = try await exportCompositionWithQuality(
             composition: composition,
             videoComposition: videoComposition
         )
-        
+
+        // If both filter + animationTool, apply filter as a second pass
+        if hasFilter && needsAnimTool, let filter = editState.selectedFilter {
+            print("🎨 EXPORT: Applying filter post-pass")
+            return try await applyFilterPostProcess(
+                videoURL: outputURL,
+                filter: filter,
+                intensity: editState.filterIntensity
+            )
+        }
+
         return outputURL
+    }
+
+    /// Post-process filter pass — used only when filter + text overlays both present
+    private func applyFilterPostProcess(
+        videoURL: URL,
+        filter: VideoFilter,
+        intensity: Double
+    ) async throws -> URL {
+        let asset = AVAsset(url: videoURL)
+        let comp  = AVMutableComposition()
+        guard let vTrack = try await asset.loadTracks(withMediaType: .video).first else {
+            return videoURL
+        }
+        let dur = try await asset.load(.duration)
+        let cv  = comp.addMutableTrack(withMediaType: .video,
+                                        preferredTrackID: kCMPersistentTrackID_Invalid)
+        try cv?.insertTimeRange(CMTimeRange(start: .zero, duration: dur), of: vTrack, at: .zero)
+        cv?.preferredTransform = try await vTrack.load(.preferredTransform)
+        if let aTrack = try? await asset.loadTracks(withMediaType: .audio).first {
+            let ca = comp.addMutableTrack(withMediaType: .audio,
+                                           preferredTrackID: kCMPersistentTrackID_Invalid)
+            try ca?.insertTimeRange(CMTimeRange(start: .zero, duration: dur), of: aTrack, at: .zero)
+        }
+        let vc = try await createFilterVideoComposition(
+            filter: filter, intensity: intensity, composition: comp
+        )
+        return try await exportCompositionWithQuality(composition: comp, videoComposition: vc)
     }
     
     // MARK: - Composition Creation

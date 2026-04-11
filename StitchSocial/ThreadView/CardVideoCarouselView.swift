@@ -641,6 +641,7 @@ final class CachedPlayerUIView: UIView {
     private var playerLayer: AVPlayerLayer?
     private var statusObserver: NSKeyValueObservation?
     private var loopObserver: Any?
+    private var killObserver: Any?
     private var isReadyToPlay = false
     private var pendingPlay = false
     private var currentVideoID: String?
@@ -713,6 +714,17 @@ final class CachedPlayerUIView: UIView {
             self?.player?.seek(to: .zero)
             self?.player?.play()
         }
+        
+        // 5. Kill all players — stops carousel when stitch/recording sheet opens
+        killObserver = NotificationCenter.default.addObserver(
+            forName: .killAllVideoPlayers,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.pendingPlay = false
+            self?.player?.pause()
+            print("🛑 CAROUSEL: Killed by killAllVideoPlayers")
+        }
     }
     
     func play() {
@@ -736,6 +748,10 @@ final class CachedPlayerUIView: UIView {
         if let obs = loopObserver {
             NotificationCenter.default.removeObserver(obs)
             loopObserver = nil
+        }
+        if let obs = killObserver {
+            NotificationCenter.default.removeObserver(obs)
+            killObserver = nil
         }
         player = nil
         currentVideoID = nil

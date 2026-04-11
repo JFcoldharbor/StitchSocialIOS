@@ -20,8 +20,13 @@ struct AllCollectionsView: View {
     var onCreateShow: (() -> Void)? = nil
     let onDismiss: () -> Void
     
+    // Schedule entry point
+    var creatorID: String = ""
+    var creatorName: String = ""
+
     @State private var showToDelete: String?
     @State private var showDeleteConfirm = false
+    @State private var showingSchedule = false
     
     private var showGroups: [(showId: String, title: String, episodes: [VideoCollection])] {
         let withShow = collections.filter { $0.showId != nil && !($0.showId?.isEmpty ?? true) }
@@ -81,14 +86,31 @@ struct AllCollectionsView: View {
                 Button("Done") { onDismiss() }
                     .foregroundColor(.cyan)
             }
-            if isOwnProfile {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { onCreateShow?() } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundColor(.pink)
+            ToolbarItem(placement: .navigationBarTrailing) {
+                HStack(spacing: 14) {
+                    // Calendar — visible to all; shows creator's premiere schedule
+                    if !creatorID.isEmpty {
+                        Button { showingSchedule = true } label: {
+                            Image(systemName: "calendar")
+                                .foregroundColor(.cyan)
+                        }
+                    }
+                    if isOwnProfile {
+                        Button { onCreateShow?() } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundColor(.pink)
+                        }
                     }
                 }
             }
+        }
+        .fullScreenCover(isPresented: $showingSchedule) {
+            CreatorScheduleView(
+                creatorID: creatorID,
+                creatorName: creatorName,
+                isOwner: isOwnProfile,
+                onDismiss: { showingSchedule = false }
+            )
         }
         .confirmationDialog("Delete Show?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {

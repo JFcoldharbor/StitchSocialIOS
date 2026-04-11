@@ -20,6 +20,8 @@ struct DiscoverySwipeCards: View {
     let onNavigateToProfile: (String) -> Void
     let onNavigateToThread: (String) -> Void
     var isFullscreenActive: Bool = false
+    /// Map of videoID → VideoCollection for collection card rendering
+    var collectionCardMap: [String: VideoCollection] = [:]
     
     // MARK: - Discovery Engagement Tracker
     @ObservedObject private var discoveryTracker = DiscoveryEngagementTracker.shared
@@ -76,6 +78,7 @@ struct DiscoverySwipeCards: View {
         
         return DiscoveryCard(
             video: video,
+            collection: collectionCardMap[video.id],
             shouldAutoPlay: isTopCard && !isFullscreenActive,
             isFullscreenActive: isFullscreenActive,
             onVideoLoop: { videoID in
@@ -244,6 +247,7 @@ struct DiscoverySwipeCards: View {
 
 struct DiscoveryCard: View {
     let video: CoreVideoMetadata
+    let collection: VideoCollection?       // non-nil = render as collection card
     let shouldAutoPlay: Bool
     let isFullscreenActive: Bool
     let onVideoLoop: (String) -> Void
@@ -280,17 +284,23 @@ struct DiscoveryCard: View {
         GeometryReader { geometry in
             ZStack {
                 Color.black
-                regularCardContent(geometry: geometry)
+                if let col = collection {
+                    collectionCardContent(collection: col, geometry: geometry)
+                } else {
+                    regularCardContent(geometry: geometry)
+                }
             }
         }
         .cornerRadius(16)
         .shadow(color: .black.opacity(0.3), radius: 10, x: 0, y: 5)
         .onAppear {
-            loadThumbnail()
-            bindVideo()
+            if collection == nil {
+                loadThumbnail()
+                bindVideo()
+            }
         }
         .onDisappear {
-            teardown()
+            if collection == nil { teardown() }
         }
         .onChange(of: video.id) { oldID, newID in
             // Card slot got new video data â€” rebind without destroying view
@@ -415,8 +425,129 @@ struct DiscoveryCard: View {
     }
     
     // MARK: - Collection Card Content (static, no video player)
-    
-    // MARK: - Card Overlay
+
+    private func collectionCardContent(collection: VideoCollection, geometry: GeometryProxy) -> some View {
+        ZStack(alignment: .bottom) {
+
+            // Cover image fills card
+            if let coverURL = collection.coverImageURL, let url = URL(string: coverURL) {
+                AsyncImage(url: url, transaction: Transaction(animation: .easeIn(duration: 0.2))) { phase in
+                    if let image = phase.image {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
+                    } else {
+                        collectionPlaceholder(geometry: geometry)
+                    }
+                }
+            } else {
+                collectionPlaceholder(geometry: geometry)
+            }
+
+            // Darkened gradient overlay
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.3), .black.opacity(0.92)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+
+            // Bottom info panel
+            VStack(alignment: .leading, spacing: 10) {
+
+                // "SERIES" badge
+                HStack(spacing: 5) {
+                    Image(systemName: "rectangle.stack.fill")
+                        .font(.system(size: 10, weight: .bold))
+                    Text("SERIES")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .tracking(1.5)
+                }
+                .foregroundColor(.black)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color(red: 0.0, green: 0.85, blue: 0.95),
+                                         Color(red: 0.6, green: 0.4, blue: 0.95)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                )
+
+                // Title
+                Text(collection.title)
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                    .shadow(color: .black.opacity(0.6), radius: 4)
+
+                // Creator + segment count row
+                HStack(spacing: 10) {
+                    Text("@\(collection.creatorName)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.8))
+
+                    Spacer()
+
+                    if collection.segmentCount > 0 {
+                        let count = collection.segmentCount
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.rectangle.fill")
+                                .font(.system(size: 11))
+                            Text("\(count) \(count == 1 ? "part" : "parts")")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundColor(.white.opacity(0.75))
+                    }
+                }
+
+                // "Tap to watch" CTA
+                HStack(spacing: 6) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 11, weight: .bold))
+                    Text("Tap to watch series")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.white.opacity(0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.white.opacity(0.25), lineWidth: 1)
+                        )
+                )
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 24)
+        }
+        .allowsHitTesting(false)     // tap handled by DiscoverySwipeCards gesture
+    }
+
+    private func collectionPlaceholder(geometry: GeometryProxy) -> some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.08, green: 0.08, blue: 0.14),
+                         Color(red: 0.15, green: 0.08, blue: 0.22)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Image(systemName: "rectangle.stack.fill")
+                .font(.system(size: 52))
+                .foregroundColor(.white.opacity(0.15))
+        }
+        .frame(width: geometry.size.width, height: geometry.size.height)
+    }
+
+
     
     private var cardOverlay: some View {
         VStack {

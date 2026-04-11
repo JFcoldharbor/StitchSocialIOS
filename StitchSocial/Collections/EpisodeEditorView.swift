@@ -40,6 +40,9 @@ struct EpisodeEditorView: View {
     @State private var episodeTitle: String
     @State private var episodeDescription: String
     @State private var episodeStatus: String
+    @State private var episodeIsFree: Bool
+    @State private var publishIntent: PublishIntent = .draft
+    @State private var suggestedSlot: Date? = nil
     
     @State private var uploadPhase: String = "idle"
     @State private var uploadProgress: Double = 0
@@ -68,6 +71,11 @@ struct EpisodeEditorView: View {
         self._episodeTitle = State(initialValue: episode.title)
         self._episodeDescription = State(initialValue: episode.description)
         self._episodeStatus = State(initialValue: episode.status.rawValue)
+        self._episodeIsFree = State(initialValue: episode.isFree)
+        self._publishIntent = State(initialValue: PublishIntent.from(
+            status: episode.status.rawValue,
+            publishedAt: episode.publishedAt
+        ))
         self._episodeCoverURL = State(initialValue: episode.coverImageURL)
     }
     
@@ -91,7 +99,17 @@ struct EpisodeEditorView: View {
             }
         }
         .background(Color.black)
-        .task { await loadExistingSegments() }
+        .task {
+            await loadExistingSegments()
+            if let show = show, let config = show.scheduleConfig {
+                // Pass existing episodes so ScheduleService can find the next open slot
+                let allEps = [episode]   // minimal; caller can expand with season episodes
+                suggestedSlot = ScheduleService.nextAvailableSlot(
+                    config: config,
+                    scheduledEpisodes: allEps
+                )
+            }
+        }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background || newPhase == .inactive {
                 Task { await saveDraft() }
@@ -134,18 +152,9 @@ struct EpisodeEditorView: View {
                         .font(.system(size: 13)).foregroundColor(.white)
                         .padding(8).background(Color.white.opacity(0.06)).cornerRadius(8)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Status").font(.system(size: 10)).foregroundColor(.gray)
-                    Picker("", selection: $episodeStatus) {
-                        Text("Draft").tag("draft")
-                        Text("Published").tag("published")
-                        Text("Scheduled").tag("scheduled")
-                    }
-                    .pickerStyle(.menu).tint(.white)
-                    .padding(4).background(Color.white.opacity(0.06)).cornerRadius(8)
-                }
-                .frame(width: 130)
             }
+            
+            PremiereDatePicker(intent: $publishIntent, suggestedDate: suggestedSlot)
             
             VStack(alignment: .leading, spacing: 4) {
                 Text("Description").font(.system(size: 10)).foregroundColor(.gray)
@@ -153,6 +162,13 @@ struct EpisodeEditorView: View {
                     .font(.system(size: 13)).foregroundColor(.white).lineLimit(2...4)
                     .padding(8).background(Color.white.opacity(0.06)).cornerRadius(8)
             }
+            
+            Toggle(isOn: $episodeIsFree) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Free episode").font(.system(size: 12)).foregroundColor(.white)
+                    Text("Anyone can watch, no tier required").font(.system(size: 10)).foregroundColor(.gray)
+                }
+            }.tint(.cyan)
             
             HStack {
                 Text("\(existingSegments.count) segments \u{2022} \(formatDuration(existingSegments.reduce(0) { $0 + $1.duration }))")
@@ -646,8 +662,15 @@ struct EpisodeEditorView: View {
     }
     
     private func saveEpisodeMetadata() async {
-        let updated = episode.withUpdatedMetadata(title: episodeTitle, description: episodeDescription, coverImageURL: episodeCoverURL)
-        do { try await showService.saveEpisode(showId: showId, seasonId: seasonId, episode: updated) }
+        let db = Firestore.firestore(database: Config.Firebase.databaseName)
+        do {
+            let updated = episode.withUpdatedMetadata(title: episodeTitle, description: episodeDescription, coverImageURL: episodeCoverURL)
+            try await showService.saveEpisode(showId: showId, seasonId: seasonId, episode: updated)
+            var extras = publishIntent.firestoreFields()
+            extras["isFree"] = episodeIsFree
+            extras["updatedAt"] = FieldValue.serverTimestamp()
+            try await db.collection("videoCollections").document(episode.id).setData(extras, merge: true)
+        }
         catch { print("❌ EPISODE EDITOR: Save failed: \(error)") }
     }
     
@@ -675,6 +698,7 @@ struct EpisodeEditorView: View {
             "contentType": episode.contentType.rawValue,
             "visibility": "public",
             "allowReplies": true,
+            "isFree": episodeIsFree,
             "segmentCount": existingSegments.count,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
@@ -757,9 +781,11 @@ struct EpisodeEditorView: View {
                 print("📤 EPISODE EDITOR: Splitting segment \(i+1) [\(String(format: "%.1f", seg.startTime))s → \(String(format: "%.1f", seg.endTime))s]")
                 
                 let segURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("\(segId).mp4")
+                    .appendingPathComponent("\(segId).mov")
                 
-                guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else {
+                // AVAssetExportPresetPassthrough — no re-encode, preserves original 4K quality
+                // Use .mov output — matches iPhone source format, no container conversion needed
+                guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
                     print("⚠️ EPISODE EDITOR: Could not create export session for segment \(i+1)")
                     continue
                 }
@@ -768,7 +794,7 @@ struct EpisodeEditorView: View {
                 let endCMTime = CMTime(seconds: seg.endTime, preferredTimescale: 600)
                 exportSession.timeRange = CMTimeRange(start: startCMTime, end: endCMTime)
                 exportSession.outputURL = segURL
-                exportSession.outputFileType = .mp4
+                exportSession.outputFileType = .mov
                 exportSession.shouldOptimizeForNetworkUse = true
                 
                 // Export segment — use async/await version, no polling loop
@@ -792,8 +818,8 @@ struct EpisodeEditorView: View {
                 let uploadPctBase = 40.0 + (Double(i) / Double(totalSegs) * 50.0)  // 40-90%
                 let videoDownloadURL = try await uploadFileWithProgress(
                     from: segURL,
-                    to: "videoCollections/\(episode.id)/segments/\(segId).mp4",
-                    type: "video/mp4",
+                    to: "videoCollections/\(episode.id)/segments/\(segId).mov",
+                    type: "video/quicktime",
                     progressBase: uploadPctBase,
                     progressRange: 50.0 / Double(totalSegs)
                 )
@@ -861,9 +887,10 @@ struct EpisodeEditorView: View {
                 "segmentIDs": segmentIds,
                 "segmentCount": finalSegments.count,
                 "totalDuration": totalDuration,
-                "status": "published",
+                "status": publishIntent.statusString,
                 "visibility": "public",
                 "allowReplies": true,
+                "isFree": episodeIsFree,
                 "contentType": episode.contentType.rawValue,
                 "showId": showId,
                 "seasonId": seasonId,
@@ -874,7 +901,7 @@ struct EpisodeEditorView: View {
                 "totalReplies": 0, "totalShares": 0,
                 "createdAt": Timestamp(date: episode.createdAt),
                 "updatedAt": FieldValue.serverTimestamp(),
-                "publishedAt": FieldValue.serverTimestamp(),
+                "publishedAt": publishIntent.publishedAt.map { Timestamp(date: $0) } ?? (FieldValue.serverTimestamp() as Any),
             ] as [String: Any], forDocument: db.collection("videoCollections").document(episode.id), merge: true)
             
             print("📤 EPISODE EDITOR: Committing batch...")
@@ -885,6 +912,26 @@ struct EpisodeEditorView: View {
             uploadProgress = 100
             uploadDetail = "\(finalSegments.count) segments created!"
             await loadExistingSegments()
+            
+            // Fire-and-forget notification to followers + subscribers
+            let epTitle = episodeTitle
+            let epID = episode.id
+            let epNum = episode.episodeNumber
+            let free = episodeIsFree
+            let showT = show?.title ?? ""
+            let creatorName = show?.creatorName ?? ""
+            Task {
+                try? await NotificationService().sendNewEpisodeNotification(
+                    creatorID: Auth.auth().currentUser?.uid ?? "",
+                    creatorUsername: creatorName,
+                    showTitle: showT,
+                    episodeTitle: epTitle,
+                    episodeID: epID,
+                    showID: showId,
+                    episodeNumber: epNum,
+                    isFree: free
+                )
+            }
             
             try? await Task.sleep(for: .seconds(1.5))
             editorActive = false

@@ -694,7 +694,21 @@ struct VideoPlayerComponent: View {
             return
         }
         
-        let asset = AVAsset(url: videoURL)
+        // ✅ DISK CACHE: Use local file if available — prevents Firebase Storage re-download on every play
+        // Falls back to remote URL and caches in background for next view
+        let playbackURL: URL
+        if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
+            playbackURL = cachedURL
+            print("💾 VIDEO PLAYER: Disk cache hit — \(video.id.prefix(8))")
+        } else {
+            playbackURL = videoURL
+            print("🌐 VIDEO PLAYER: Cache miss, streaming — \(video.id.prefix(8))")
+            Task.detached(priority: .utility) {
+                await VideoDiskCache.shared.cacheVideo(from: video.videoURL)
+            }
+        }
+        
+        let asset = AVAsset(url: playbackURL)
         playerItem = AVPlayerItem(asset: asset)
         player = AVPlayer(playerItem: playerItem)
         
