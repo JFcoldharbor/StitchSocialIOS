@@ -282,7 +282,13 @@ class AuthService: ObservableObject {
         do {
             // No need to stop notification listener - handled by NotificationViewModel
             print("🔓 AUTH: Signing out user")
-            
+
+            // Drop the coin-balance listener BEFORE Firebase clears auth so
+            // the snapshot listener doesn't briefly retry against a stale
+            // uid — the auth-state observer in HypeCoinCoordinator then
+            // confirms disconnect on the actual auth-cleared event.
+            HypeCoinCoordinator.shared.disconnect()
+
             try auth.signOut()
             currentUser = nil
             authState = .unauthenticated

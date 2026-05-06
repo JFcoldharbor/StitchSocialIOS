@@ -22,6 +22,7 @@
 //
 
 import Foundation
+import FirebaseAuth
 import FirebaseFirestore
 import Combine
 import UIKit
@@ -63,23 +64,28 @@ final class HypeCoinCoordinator: ObservableObject {
     private var tipBatchTimer: Timer?
     
     // MARK: - Firestore Listener
-    
+
     private var balanceListener: ListenerRegistration?
     private var currentUserID: String?
-    
+    private var authStateHandle: AuthStateDidChangeListenerHandle?
+
     // MARK: - Lifecycle
-    
+
     private var cancellables = Set<AnyCancellable>()
-    
+
     // MARK: - Init
-    
+
     private init() {
         setupAppLifecycleObservers()
+        setupAuthObserver()
     }
-    
+
     deinit {
         balanceListener?.remove()
         tipBatchTimer?.invalidate()
+        if let handle = authStateHandle {
+            Auth.auth().removeStateDidChangeListener(handle)
+        }
     }
     
     // MARK: - Setup
@@ -108,8 +114,33 @@ final class HypeCoinCoordinator: ObservableObject {
         balance = nil
     }
     
+    // MARK: - Auth State Observer
+    //
+    // Without this, configure(userID:) holds the FIRST uid we ever saw —
+    // even after sign-out + sign-in as a different account. The Firestore
+    // listener then targets the wrong /coin_balances/{uid} doc and the
+    // rules reject it ("Missing or insufficient permissions"). Reattach
+    // the listener whenever Firebase Auth swaps users.
+
+    private func setupAuthObserver() {
+        authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            guard let self = self else { return }
+            Task { @MainActor in
+                if let newUID = user?.uid, !newUID.isEmpty {
+                    if self.currentUserID != newUID {
+                        self.disconnect()
+                        self.configure(userID: newUID)
+                    }
+                } else {
+                    // Signed out — drop everything so a future sign-in starts clean.
+                    self.disconnect()
+                }
+            }
+        }
+    }
+
     // MARK: - App Lifecycle (Sync on Foreground)
-    
+
     private func setupAppLifecycleObservers() {
         NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
             .sink { [weak self] _ in
