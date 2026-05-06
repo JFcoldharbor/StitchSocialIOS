@@ -483,7 +483,7 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
                 NotificationCenter.default.post(name: .navigateToNotifications, object: nil)
             }
             
-        case "follow", "user", "reengagement_followers":
+        case "follow", "user", "reengagement_followers", "subscription":
             if let userID = userInfo["userID"] as? String ?? userInfo["senderID"] as? String {
                 print("👤 NOTIFICATION: Navigate to user profile \(userID)")
                 NotificationCenter.default.post(

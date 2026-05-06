@@ -22,6 +22,15 @@ final class SubscriptionService: ObservableObject {
 
     static let shared = SubscriptionService()
 
+    /// Optional NotificationService for firing "new subscriber" pushes on
+    /// successful subscribe(). Wired by app root via configure(...). When
+    /// nil the subscribe path proceeds silently — service is decoupled.
+    weak var notificationService: NotificationService?
+
+    func configure(notificationService: NotificationService) {
+        self.notificationService = notificationService
+    }
+
     // MARK: - Published
 
     @Published private(set) var mySubscriptions: [ActiveSubscription] = []  // fan view
@@ -163,10 +172,38 @@ final class SubscriptionService: ObservableObject {
             "totalEarned": FieldValue.increment(Int64(price))
         ])
 
+        // Notify creator about the new subscriber. fetchSubscriberDisplayName
+        // resolves displayName → username → "Someone" so notification copy
+        // never shows a raw uid. Best-effort — tip flow stays committed even
+        // if notification write fails.
+        if let ns = notificationService {
+            let subscriberName = await fetchSubscriberDisplayName(subscriberID)
+            do {
+                try await ns.sendSubscriptionNotification(
+                    to: creatorID,
+                    fromUserID: subscriberID,
+                    fromUsername: subscriberName,
+                    subscriptionTier: coinTier.displayName
+                )
+            } catch {
+                print("⚠️ SUB SERVICE: subscription notification failed — \(error)")
+            }
+        }
+
         // Invalidate
         isSubscribedCache.removeValue(forKey: creatorID)
         mySubsFetchedAt = nil
         return sub
+    }
+
+    /// Display-name fallback chain: displayName → username → "Someone".
+    /// Mirrors TipService.fetchUsername — keeps notification copy human.
+    private func fetchSubscriberDisplayName(_ userID: String) async -> String {
+        guard !userID.isEmpty else { return "Someone" }
+        let data = (try? await db.collection("users").document(userID).getDocument().data()) ?? [:]
+        if let dn = (data["displayName"] as? String), !dn.isEmpty { return dn }
+        if let un = (data["username"]    as? String), !un.isEmpty { return un }
+        return "Someone"
     }
 
     // MARK: - Cancel

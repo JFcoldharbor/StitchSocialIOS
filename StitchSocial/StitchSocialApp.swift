@@ -74,8 +74,9 @@ struct StitchSocialApp: App {
                     }
                     #endif
                     
-                    // Wire TipService with shared NotificationService
+                    // Wire TipService + SubscriptionService with shared NotificationService
                     TipService.shared.configure(notificationService: notificationService)
+                    SubscriptionService.shared.configure(notificationService: notificationService)
 
                     // Initialize memory management
                     initializeMemoryManagement()
