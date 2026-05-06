@@ -62,15 +62,23 @@ final class TipService: ObservableObject {
             }
     }
 
-    // MARK: - Private: Username Fetch (cached)
-    // In-memory cache — avoids re-reading Firestore for same tipper across multiple flushes.
-    private func fetchUsername(_ userID: String) async -> String? {
+    // MARK: - Private: Display name for tip notifications (cached)
+    // In-memory cache — avoids re-reading Firestore for same tipper across
+    // multiple flushes. Prefers displayName (the friendly user-facing name)
+    // over username (which is sometimes set to the UID on seeded accounts
+    // and reads like a Firebase ID in notification copy). Fallback chain:
+    //   displayName → username → "Someone".
+    private func fetchUsername(_ userID: String) async -> String {
         if let cached = usernameCache[userID] { return cached }
+        let fallback = "Someone"
+        guard !userID.isEmpty else { return fallback }
         let db = Firestore.firestore()
-        guard let data = try? await db.collection("users").document(userID).getDocument().data(),
-              let username = data["username"] as? String else { return nil }
-        usernameCache[userID] = username
-        return username
+        let data = (try? await db.collection("users").document(userID).getDocument().data()) ?? [:]
+        let resolved = (data["displayName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? (data["username"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? fallback
+        usernameCache[userID] = resolved
+        return resolved
     }
     // HypeCoinCoordinator already caches balance with a real-time listener.
     // We read from it directly — zero extra Firestore reads.
@@ -185,17 +193,36 @@ final class TipService: ObservableObject {
                         let userService = UserService()
                         try? await userService.awardClout(userID: creatorID, amount: TipConfig.cloutBonusPerFlush)
 
+                        // Aggregate writes — per-video total (public social
+                        // proof) and creator's top-supporters list (visible
+                        // on profile, names only). Run before the notification
+                        // so the recipient's profile reflects the new state
+                        // by the time the alert lands.
+                        let tipperUsername = await self.fetchUsername(tipperID)
+                        await self.recordTipAggregates(
+                            videoID: videoID,
+                            creatorID: creatorID,
+                            tipperID: tipperID,
+                            tipperUsername: tipperUsername,
+                            amount: amountToFlush
+                        )
+
                         // In-app notification to creator (debounced 60s via NotificationService)
-                        // Push notification handled server-side by stitchnoti_processTip CF
-                        if let tipperUsername = await self.fetchUsername(tipperID),
-                           let ns = self.notificationService {
-                            try? await ns.sendTipNotification(
-                                to: creatorID,
-                                fromUserID: tipperID,
-                                fromUsername: tipperUsername,
-                                amount: amountToFlush,
-                                videoID: videoID
-                            )
+                        // Push notification handled server-side by stitchnoti_processTip CF.
+                        if let ns = self.notificationService {
+                            do {
+                                try await ns.sendTipNotification(
+                                    to: creatorID,
+                                    fromUserID: tipperID,
+                                    fromUsername: tipperUsername,
+                                    amount: amountToFlush,
+                                    videoID: videoID
+                                )
+                            } catch {
+                                print("⚠️ TIP SERVICE: tip notification failed — \(error)")
+                            }
+                        } else {
+                            print("⚠️ TIP SERVICE: notificationService not configured — skipping tip notification for \(creatorID)")
                         }
 
                         self.tipStates[videoID]?.isFlushing = false
@@ -210,6 +237,89 @@ final class TipService: ObservableObject {
                     continuation.resume()
                 }
             }
+        }
+    }
+
+    // MARK: - Tip Aggregates (per-video total + creator top supporters)
+    //
+    // Public per-video total drives social proof on the card overlay.
+    // Top supporters list lives on the creator's user doc as a denormalized
+    // array (top 10) with usernames only — amounts stay private to the
+    // tipper and creator.
+    //
+    // Schema:
+    //   videos/{videoID}.coinTotal: Int  (atomic increment)
+    //   users/{creatorID}/supporters/{tipperID}: {
+    //       tipperID: String, username: String, totalSent: Int, lastSentAt: Timestamp
+    //   }
+    //   users/{creatorID}.topSupporters: [{tipperID, username, totalSent}]  (cap 10)
+    //
+    // Each tip flush triggers all three writes. Subcollection is the
+    // source of truth; the user-doc array is a denormalized read-cache
+    // refreshed lazily after each tip.
+
+    private func recordTipAggregates(
+        videoID: String,
+        creatorID: String,
+        tipperID: String,
+        tipperUsername: String,
+        amount: Int
+    ) async {
+        let db = Firestore.firestore()
+
+        // 1) Per-video coin total (public). Increment is atomic; the field
+        //    auto-creates on first tip if it doesn't already exist.
+        if !videoID.isEmpty {
+            do {
+                try await db.collection("videos").document(videoID).updateData([
+                    "coinTotal": FieldValue.increment(Int64(amount)),
+                    "lastTippedAt": Timestamp(date: Date())
+                ])
+            } catch {
+                print("⚠️ TIP AGG: video coinTotal update failed for \(videoID) — \(error)")
+            }
+        }
+
+        // 2) Per-tipper supporter row under the creator. setData with merge
+        //    so the doc is created on first tip and incremented thereafter.
+        let supporterRef = db.collection("users").document(creatorID)
+            .collection("supporters").document(tipperID)
+        do {
+            try await supporterRef.setData([
+                "tipperID": tipperID,
+                "username": tipperUsername,
+                "totalSent": FieldValue.increment(Int64(amount)),
+                "lastSentAt": Timestamp(date: Date())
+            ], merge: true)
+        } catch {
+            print("⚠️ TIP AGG: supporter row update failed for \(creatorID)/\(tipperID) — \(error)")
+            return
+        }
+
+        // 3) Refresh the creator's top-10 array. Read the subcollection
+        //    sorted by totalSent desc, project to the public shape, and
+        //    write to users/{creatorID}.topSupporters.
+        do {
+            let snapshot = try await db.collection("users").document(creatorID)
+                .collection("supporters")
+                .order(by: "totalSent", descending: true)
+                .limit(to: 10)
+                .getDocuments()
+
+            let top: [[String: Any]] = snapshot.documents.map { doc in
+                let data = doc.data()
+                return [
+                    "tipperID": data["tipperID"] as? String ?? doc.documentID,
+                    "username": data["username"] as? String ?? "user",
+                    "totalSent": data["totalSent"] as? Int ?? 0
+                ]
+            }
+
+            try await db.collection("users").document(creatorID).updateData([
+                "topSupporters": top
+            ])
+        } catch {
+            print("⚠️ TIP AGG: topSupporters refresh failed for \(creatorID) — \(error)")
         }
     }
 }

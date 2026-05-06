@@ -11,6 +11,7 @@
 
 import SwiftUI
 import FirebaseAuth
+import FirebaseFirestore
 
 // MARK: - Supporter Ring View
 
@@ -68,7 +69,10 @@ struct SupporterRingView: View {
             .frame(width: 80, height: 80)
             .clipShape(Circle())
 
-            // Supporter ring — centered on same ZStack
+            // Supporter ring — only paints colored when there's a sub-tier
+            // active. We always render the bubble below so the sheet entry
+            // point is always accessible (zero extra reads — topSupporters
+            // is loaded lazily by the sheet itself).
             if !subs.isEmpty {
                 Circle()
                     .stroke(ringColor, lineWidth: 3)
@@ -76,26 +80,40 @@ struct SupporterRingView: View {
                     .shadow(color: ringColor.opacity(0.7), radius: 5)
             }
         }
-        // Count bubble pinned to bottom-trailing of the 100pt circle
+        // Bubble pinned to bottom-trailing — always visible. Shows the sub
+        // count when present, otherwise a small heart icon. Either way it
+        // opens the same sheet (which has Supporting + Top Supporters tabs).
         .overlay(alignment: .bottomTrailing) {
-            if !subs.isEmpty {
-                Button { showSheet = true } label: {
-                    Text("\(subs.count)")
-                        .font(.system(size: 9, weight: .heavy))
-                        .foregroundColor(.black)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(ringColor)
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(Color.black, lineWidth: 1.5))
+            Button { showSheet = true } label: {
+                Group {
+                    if !subs.isEmpty {
+                        Text("\(subs.count)")
+                            .font(.system(size: 9, weight: .heavy))
+                            .foregroundColor(.black)
+                    } else {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.black)
+                    }
                 }
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(subs.isEmpty ? Color.white.opacity(0.85) : ringColor)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(Color.black, lineWidth: 1.5))
             }
         }
         .frame(width: 100, height: 100)
         .onAppear { loadSubs() }
         .sheet(isPresented: $showSheet) {
-            SubscriptionsSheetView(subs: subs, userID: userID)
-                .preferredColorScheme(.dark)
+            // Default to Top Supporters when the user isn't subscribed to
+            // anyone — that's the only data the sheet has to show.
+            SubscriptionsSheetView(
+                subs: subs,
+                userID: userID,
+                initialTab: subs.isEmpty ? .topSupporters : .supporting
+            )
+            .preferredColorScheme(.dark)
         }
     }
 
@@ -110,13 +128,32 @@ struct SupporterRingView: View {
 
 // MARK: - Subscriptions Sheet
 
+enum SupporterTab: Hashable { case supporting, topSupporters }
+
+/// One row of users/{id}.topSupporters. Names only — amounts are intentionally
+/// private (tip totals stay between tipper and creator).
+struct TopSupporterEntry: Identifiable, Hashable {
+    let id: String          // tipperID
+    let username: String
+}
+
 struct SubscriptionsSheetView: View {
 
     let subs:   [ActiveSubscription]
     let userID: String
+    let initialTab: SupporterTab
+
+    init(subs: [ActiveSubscription], userID: String, initialTab: SupporterTab = .supporting) {
+        self.subs = subs
+        self.userID = userID
+        self.initialTab = initialTab
+        self._selectedTab = State(initialValue: initialTab)
+    }
 
     @Environment(\.dismiss) private var dismiss
     @State private var creatorInfos: [String: BasicUserInfo] = [:]
+    @State private var selectedTab: SupporterTab
+    @State private var topSupporters: [TopSupporterEntry] = []
 
     var body: some View {
         ZStack {
@@ -133,10 +170,10 @@ struct SubscriptionsSheetView: View {
                 // Header
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Supporting")
+                        Text(selectedTab == .supporting ? "Supporting" : "Top Supporters")
                             .font(.system(size: 22, weight: .black))
                             .foregroundColor(.white)
-                        Text("\(subs.count) creator\(subs.count == 1 ? "" : "s")")
+                        Text(headerSubtitle)
                             .font(.system(size: 13))
                             .foregroundColor(.white.opacity(0.4))
                     }
@@ -148,13 +185,45 @@ struct SubscriptionsSheetView: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                .padding(.bottom, 20)
+                .padding(.bottom, 16)
 
-                // Subscription rows
+                // Tab picker
+                HStack(spacing: 8) {
+                    tabPill(.supporting, label: "Supporting")
+                    tabPill(.topSupporters, label: "Top Supporters")
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 16)
+
+                // Content
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 12) {
-                        ForEach(subs) { sub in
-                            SubRow(sub: sub, creatorInfo: creatorInfos[sub.creatorID])
+                        switch selectedTab {
+                        case .supporting:
+                            if subs.isEmpty {
+                                EmptyStateView(
+                                    icon: "person.2",
+                                    title: "Not supporting anyone yet",
+                                    subtitle: "Subscribe to creators to see them here."
+                                )
+                            } else {
+                                ForEach(subs) { sub in
+                                    SubRow(sub: sub, creatorInfo: creatorInfos[sub.creatorID])
+                                }
+                            }
+                        case .topSupporters:
+                            if topSupporters.isEmpty {
+                                EmptyStateView(
+                                    icon: "heart.text.square",
+                                    title: "No top supporters yet",
+                                    subtitle: "Tippers who back your videos will show up here."
+                                )
+                            } else {
+                                ForEach(Array(topSupporters.enumerated()), id: \.element.id) { idx, entry in
+                                    TopSupporterRow(rank: idx + 1, entry: entry)
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 20)
@@ -164,7 +233,35 @@ struct SubscriptionsSheetView: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.hidden)
-        .onAppear { loadCreatorInfos() }
+        .onAppear {
+            loadCreatorInfos()
+            loadTopSupporters()
+        }
+    }
+
+    private var headerSubtitle: String {
+        switch selectedTab {
+        case .supporting:
+            return "\(subs.count) creator\(subs.count == 1 ? "" : "s")"
+        case .topSupporters:
+            return "\(topSupporters.count) supporter\(topSupporters.count == 1 ? "" : "s")"
+        }
+    }
+
+    @ViewBuilder
+    private func tabPill(_ tab: SupporterTab, label: String) -> some View {
+        let active = selectedTab == tab
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { selectedTab = tab }
+        } label: {
+            Text(label)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(active ? .black : .white.opacity(0.6))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(active ? Color.white : Color.white.opacity(0.08))
+                .clipShape(Capsule())
+        }
     }
 
     private func loadCreatorInfos() {
@@ -176,6 +273,101 @@ struct SubscriptionsSheetView: View {
                 }
             }
         }
+    }
+
+    private func loadTopSupporters() {
+        // Reads users/{userID}.topSupporters — denormalized top-10 array
+        // refreshed by TipService.recordTipAggregates after each tip flush.
+        // Names only; tip amounts stay private.
+        Task {
+            let db = Firestore.firestore()
+            guard let data = try? await db.collection("users").document(userID).getDocument().data(),
+                  let raw = data["topSupporters"] as? [[String: Any]] else {
+                return
+            }
+            let parsed: [TopSupporterEntry] = raw.compactMap { row in
+                guard let id = row["tipperID"] as? String,
+                      !id.isEmpty,
+                      let username = row["username"] as? String,
+                      !username.isEmpty else { return nil }
+                return TopSupporterEntry(id: id, username: username)
+            }
+            await MainActor.run { topSupporters = parsed }
+        }
+    }
+}
+
+// MARK: - Top Supporter Row
+
+private struct TopSupporterRow: View {
+    let rank:  Int
+    let entry: TopSupporterEntry
+
+    private var medalColor: Color {
+        switch rank {
+        case 1:  return Color(hex: "fbbf24") // gold
+        case 2:  return Color(hex: "d4d4d8") // silver
+        case 3:  return Color(hex: "f97316") // bronze
+        default: return Color.white.opacity(0.3)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Rank badge
+            Text("\(rank)")
+                .font(.system(size: 14, weight: .heavy))
+                .foregroundColor(rank <= 3 ? .black : .white.opacity(0.7))
+                .frame(width: 28, height: 28)
+                .background(medalColor)
+                .clipShape(Circle())
+
+            // Avatar placeholder (initial)
+            Text(entry.username.prefix(1).uppercased())
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(.white)
+                .frame(width: 40, height: 40)
+                .background(Color.white.opacity(0.08))
+                .clipShape(Circle())
+                .overlay(Circle().stroke(medalColor.opacity(0.4), lineWidth: 1.5))
+
+            // Username
+            Text(entry.username)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(.white)
+                .lineLimit(1)
+
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.03))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(medalColor.opacity(0.18), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// MARK: - Empty State
+
+private struct EmptyStateView: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 36, weight: .light))
+                .foregroundColor(.white.opacity(0.3))
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.white.opacity(0.65))
+            Text(subtitle)
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.35))
+                .multilineTextAlignment(.center)
+        }
+        .padding(.vertical, 40)
+        .frame(maxWidth: .infinity)
     }
 }
 

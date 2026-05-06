@@ -219,8 +219,9 @@ class FollowManager: ObservableObject {
     
     /// Load follow state for a specific user from the server
     func loadFollowState(for userID: String) async {
-        guard let currentUserID = Auth.auth().currentUser?.uid else { return }
-        
+        guard let currentUserID = Auth.auth().currentUser?.uid, !currentUserID.isEmpty else { return }
+        guard !userID.isEmpty else { return }
+
         do {
             let isFollowing = try await userService.isFollowing(followerID: currentUserID, followingID: userID)
             await MainActor.run {
@@ -237,12 +238,20 @@ class FollowManager: ObservableObject {
     
     /// Load follow states for multiple users at once
     func loadFollowStates(for userIDs: [String]) async {
-        guard let currentUserID = Auth.auth().currentUser?.uid else { return }
-        
-        print("ðŸ”„ FOLLOW MANAGER: Loading follow states for \(userIDs.count) users from Firebase...")
-        
+        guard let currentUserID = Auth.auth().currentUser?.uid, !currentUserID.isEmpty else { return }
+
+        // Strip blank IDs — they sneak in when seeded/deleted users leave
+        // dangling references and Firestore's `document(_:)` would crash
+        // synchronously on an empty path.
+        let validIDs = userIDs.filter { !$0.isEmpty }
+        if validIDs.count != userIDs.count {
+            print("ðŸ”„ FOLLOW MANAGER: dropped \(userIDs.count - validIDs.count) empty user IDs")
+        }
+
+        print("ðŸ”„ FOLLOW MANAGER: Loading follow states for \(validIDs.count) users from Firebase...")
+
         await withTaskGroup(of: Void.self) { group in
-            for userID in userIDs {
+            for userID in validIDs {
                 group.addTask {
                     do {
                         let isFollowing = try await self.userService.isFollowing(followerID: currentUserID, followingID: userID)

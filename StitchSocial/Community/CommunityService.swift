@@ -384,15 +384,17 @@ class CommunityService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
-        // Verify subscription — developers bypass
+        // Verify subscription — creators always get to join their own
+        // community for free (it's their house), and developers bypass.
         var coinsPaid = 0
-        
-        if !SubscriptionService.shared.isDeveloper {
+        let isOwnCommunity = userID == creatorID
+
+        if !SubscriptionService.shared.isDeveloper && !isOwnCommunity {
             let subCheck = try await subscriptionService.checkSubscription(
                 subscriberID: userID,
                 creatorID: creatorID
             )
-            
+
             guard subCheck.isSubscribed else {
                 throw CommunityError.subscriptionRequired
             }
@@ -433,14 +435,22 @@ class CommunityService: ObservableObject {
             }
         }
         
-        let membership = CommunityMembership(
+        var membership = CommunityMembership(
             userID: userID,
             communityID: creatorID,
             username: resolvedUsername,
             displayName: resolvedDisplayName,
             coinsPaid: coinsPaid
         )
-        
+        // Creator joining their own community (e.g. legacy account that
+        // didn't get auto-joined at creation time) gets owner + mod role
+        // and a high level — same as the createCommunity path.
+        if isOwnCommunity {
+            membership.isOwner = true
+            membership.isModerator = true
+            membership.level = 1000
+        }
+
         // BATCHED WRITE: membership doc + community member count increment
         let batch = db.batch()
         

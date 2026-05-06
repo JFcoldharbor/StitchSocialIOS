@@ -352,12 +352,18 @@ class UserService: ObservableObject {
     
     /// Check if user is following another user
     func isFollowing(followerID: String, followingID: String) async throws -> Bool {
+        // Firestore's `document(_:)` raises FIRInvalidArgumentException
+        // synchronously when the path is empty — that bypasses Swift's
+        // throws machinery and terminates the app. Guard up front so a
+        // stray empty ID (e.g. from a deleted seed user reference) just
+        // resolves to "not following" instead of crashing.
+        guard !followerID.isEmpty, !followingID.isEmpty else { return false }
         let followingDoc = try await db.collection(FirebaseSchema.Collections.users)
             .document(followerID)
             .collection("following")
             .document(followingID)
             .getDocument()
-        
+
         return followingDoc.exists
     }
     

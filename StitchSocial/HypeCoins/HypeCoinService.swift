@@ -42,17 +42,40 @@ class HypeCoinService: ObservableObject {
     func fetchBalance(userID: String) async throws -> HypeCoinBalance {
         let docRef = db.collection(Collections.balances).document(userID)
         let doc = try await docRef.getDocument()
-        
+
+        // Create the doc only when it truly doesn't exist. Previously the
+        // fallback fired on ANY decode failure (missing field, transient
+        // type bridge, etc.) and overwrote a perfectly good balance with
+        // a zeroed-out one — that's how a tipper would come back to "0
+        // coins" after a successful tip.
+        guard doc.exists else {
+            let newBalance = HypeCoinBalance(userID: userID)
+            try docRef.setData(from: newBalance)
+            self.balance = newBalance
+            return newBalance
+        }
+
         if let balance = try? doc.data(as: HypeCoinBalance.self) {
             self.balance = balance
             return balance
         }
-        
-        // Create new balance if doesn't exist
-        let newBalance = HypeCoinBalance(userID: userID)
-        try docRef.setData(from: newBalance)
-        self.balance = newBalance
-        return newBalance
+
+        // Doc exists but Codable couldn't decode (likely a missing field
+        // we've added since this user's doc was written, or a Date/
+        // Timestamp glitch). Salvage by reading raw fields with safe
+        // defaults — never destructively rewrite the doc.
+        let data = doc.data() ?? [:]
+        var salvaged = HypeCoinBalance(userID: userID)
+        salvaged.availableCoins = (data["availableCoins"] as? Int) ?? Int(data["availableCoins"] as? Int64 ?? 0)
+        salvaged.pendingCoins   = (data["pendingCoins"] as? Int)   ?? Int(data["pendingCoins"] as? Int64 ?? 0)
+        salvaged.lifetimeEarned = (data["lifetimeEarned"] as? Int) ?? Int(data["lifetimeEarned"] as? Int64 ?? 0)
+        salvaged.lifetimeSpent  = (data["lifetimeSpent"] as? Int)  ?? Int(data["lifetimeSpent"] as? Int64 ?? 0)
+        salvaged.lastUpdated    = (data["lastUpdated"] as? Timestamp)?.dateValue()
+            ?? (data["lastUpdated"] as? Date)
+            ?? Date()
+        print("⚠️ COINS: balance doc decode failed for \(userID); salvaged available=\(salvaged.availableCoins) pending=\(salvaged.pendingCoins)")
+        self.balance = salvaged
+        return salvaged
     }
     
     // MARK: - Web Purchase Verification

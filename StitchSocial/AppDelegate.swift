@@ -463,10 +463,11 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         switch type {
         // All video-related notifications → thread view with target video
         case "video", "engagement", "hype", "cool", "reengagement_stitches",
-             "reengagement_milestone", "stitch", "thread", "reply", "newVideo", "mention":
+             "reengagement_milestone", "stitch", "thread", "reply", "newVideo", "mention",
+             "tip":
             let videoID = userInfo["videoID"] as? String
             let threadID = userInfo["threadID"] as? String ?? videoID
-            
+
             if let tid = threadID {
                 print("🧵 NOTIFICATION: Navigate to thread \(tid), target: \(videoID ?? "root")")
                 NotificationCenter.default.post(
