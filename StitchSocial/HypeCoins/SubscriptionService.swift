@@ -59,8 +59,28 @@ final class SubscriptionService: ObservableObject {
     private var subsCollection:   CollectionReference { db.collection("subscriptions") }
 
     private var currentUserEmail: String?
+    private var authStateHandle: AuthStateDidChangeListenerHandle?
+    private var observedUID: String? = Auth.auth().currentUser?.uid
 
-    private init() {}
+    private init() {
+        // Wipe per-user caches when Firebase Auth swaps users so a toggle
+        // between linked accounts doesn't surface the previous account's
+        // subscription list, plan, or isSubscribed cache.
+        authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            Task { @MainActor in
+                guard let self = self else { return }
+                let newUID = user?.uid
+                if newUID != self.observedUID {
+                    self.observedUID = newUID
+                    self.invalidateAll()
+                    self.mySubscriptions = []
+                    self.mySubscribers = []
+                    self.creatorPlan = nil
+                    print("⭐ SUB SERVICE: cache reset on auth swap → \(newUID ?? "nil")")
+                }
+            }
+        }
+    }
 
     func setCurrentUserEmail(_ email: String?) {
         currentUserEmail = email

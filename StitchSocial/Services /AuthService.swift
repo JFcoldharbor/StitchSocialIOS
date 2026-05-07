@@ -141,11 +141,26 @@ class AuthService: ObservableObject {
             let userProfile = try await loadUserProfile(userID: result.user.uid)
             currentUser = userProfile
             authState = .authenticated
-            
+
+            // Seed LinkedAccountManager with the just-signed-in account
+            // when it's not already there. This way the multi-account
+            // toggle "knows about" your current login without a separate
+            // explicit link step. No-op when the account is already
+            // linked (handled inside addEmailPasswordAccount via the
+            // duplicate check — silently ignored on retry).
+            await LinkedAccountManager.shared.seedActiveIfMissing(
+                uid: userProfile.id,
+                email: email,
+                password: password,
+                accountType: userProfile.accountType,
+                displayName: userProfile.displayName,
+                profileImageURL: userProfile.profileImageURL
+            )
+
             // FCM token registration is now automatic via FCMPushManager
             print("📱 AUTH: FCM token registration handled by FCMPushManager")
             print("📧 AUTH: Email verified: \(isEmailVerified)")
-            
+
             return userProfile
             
         } catch {
@@ -396,7 +411,13 @@ class AuthService: ObservableObject {
             return
         }
         
-        if currentUser != nil && authState == .authenticated {
+        // Only short-circuit when the cached profile is for THIS user.
+        // After a linked-account toggle the uid changes but authState
+        // stays .authenticated — without the uid check, we'd keep
+        // showing the previous account's profile in Settings.
+        if let cached = currentUser,
+           cached.id == user.uid,
+           authState == .authenticated {
             print("✅ AUTH STATE: Already authenticated with current user")
             return
         }

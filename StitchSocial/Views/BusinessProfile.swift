@@ -100,8 +100,8 @@ enum BusinessProfileBuilder {
 /// IMPORTANT: This is destructive for the old personal account data.
 /// Only run on accounts confirmed as businesses.
 enum BusinessMigration {
-    
-    private static let db = Firestore.firestore()
+
+    private static let db = FirebaseConfig.firestore
     
     static func migrateToBusinessAccount(
         userID: String,

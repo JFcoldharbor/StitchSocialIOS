@@ -34,7 +34,7 @@ final class BadgeService: ObservableObject {
     @Published private(set) var activeBoostCache: [String: Double] = [:]
 
     private var listeners: [String: ListenerRegistration] = [:]
-    private let db = Firestore.firestore()
+    private let db = FirebaseConfig.firestore
     private let udKey = "badgeCache_v1"
 
     // MARK: - Public API

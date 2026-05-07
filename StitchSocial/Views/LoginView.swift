@@ -772,7 +772,7 @@ struct LoginView: View {
     /// If you later need to CHECK acceptance on app launch, cache the version
     /// in UserDefaults to avoid a Firestore read every cold start.
     private func saveTermsAcceptance(userID: String) async {
-        let db = Firestore.firestore()
+        let db = FirebaseConfig.firestore
         let userRef = db.collection("users").document(userID)
         
         let termsData: [String: Any] = [

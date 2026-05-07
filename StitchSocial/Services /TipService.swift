@@ -17,6 +17,7 @@
 //
 
 import Foundation
+import FirebaseAuth
 import FirebaseFirestore
 import Combine
 
@@ -47,6 +48,9 @@ final class TipService: ObservableObject {
         self.notificationService = notificationService
     }
 
+    private var authStateHandle: AuthStateDidChangeListenerHandle?
+    private var observedUID: String? = Auth.auth().currentUser?.uid
+
     private init() {
         // Stay in sync with coordinator after Firestore propagates.
         // Only update if TipService has no pending flush (prevents overwriting optimistic state).
@@ -60,6 +64,28 @@ final class TipService: ObservableObject {
                     self.localCoinBalance = serverBalance
                 }
             }
+
+        // Reset per-account state when Firebase Auth swaps users so a
+        // linked-account toggle doesn't carry over the previous user's
+        // optimistic balance, pending flushes, session totals, or the
+        // username cache.
+        authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            Task { @MainActor in
+                guard let self = self else { return }
+                let newUID = user?.uid
+                if newUID != self.observedUID {
+                    self.observedUID = newUID
+                    // Cancel any in-flight flush timers cleanly.
+                    for (_, task) in self.flushTimers { task.cancel() }
+                    self.flushTimers.removeAll()
+                    self.tipStates.removeAll()
+                    self.usernameCache.removeAll()
+                    self.localCoinBalance = 0
+                    self.balanceLoaded = false
+                    print("🪙 TIP SERVICE: cache reset on auth swap → \(newUID ?? "nil")")
+                }
+            }
+        }
     }
 
     // MARK: - Private: Display name for tip notifications (cached)
@@ -72,7 +98,7 @@ final class TipService: ObservableObject {
         if let cached = usernameCache[userID] { return cached }
         let fallback = "Someone"
         guard !userID.isEmpty else { return fallback }
-        let db = Firestore.firestore()
+        let db = Firestore.firestore(database: Config.Firebase.databaseName)
         let data = (try? await db.collection("users").document(userID).getDocument().data()) ?? [:]
         let resolved = (data["displayName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ?? (data["username"] as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -265,7 +291,7 @@ final class TipService: ObservableObject {
         tipperUsername: String,
         amount: Int
     ) async {
-        let db = Firestore.firestore()
+        let db = Firestore.firestore(database: Config.Firebase.databaseName)
 
         // 1) Per-video coin total (public). Increment is atomic; the field
         //    auto-creates on first tip if it doesn't already exist.

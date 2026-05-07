@@ -30,6 +30,7 @@ struct SettingsView: View {
     @State private var showingMySubscriptions = false
     @State private var showingMySubscribers = false
     @State private var showingAdOpportunities = false
+    @State private var showingAccountSwitcher = false
     @State private var showingCashOut = false
     @State private var showingSubscriptionSettings = false
     @State private var showingCommunitySettings = false
@@ -104,6 +105,30 @@ struct SettingsView: View {
                     // About Section
                     aboutSection
                     
+                    // Account Switcher — single-tap toggle when both
+                    // accounts are linked, plus a sub-row for managing
+                    // the linked-accounts list (add / remove).
+                    SettingsSection(title: "ACCOUNTS", icon: "person.2.fill", iconColor: .cyan) {
+                        QuickAccountToggleRow()
+                        Button { showingAccountSwitcher = true } label: {
+                            HStack {
+                                Text("Manage linked accounts")
+                                    .foregroundColor(.white)
+                                Spacer()
+                                let count = LinkedAccountManager.shared.accounts.count
+                                if count > 0 {
+                                    Text("\(count)")
+                                        .foregroundColor(.white.opacity(0.4))
+                                        .font(.system(size: 13))
+                                }
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.white.opacity(0.3))
+                                    .font(.system(size: 12))
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+
                     // Sign Out
                     signOutButton
                         .padding(.top, 8)
@@ -172,6 +197,10 @@ struct SettingsView: View {
             if let user = currentUser {
                 AdOpportunitiesView(user: user)
             }
+        }
+        .sheet(isPresented: $showingAccountSwitcher) {
+            AccountSwitcherView()
+                .environmentObject(authService)
         }
         .sheet(isPresented: $showingCashOut) {
             if let user = currentUser {

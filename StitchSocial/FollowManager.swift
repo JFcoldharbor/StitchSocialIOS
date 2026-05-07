@@ -45,9 +45,29 @@ class FollowManager: ObservableObject {
     var onFollowError: ((String, Error) -> Void)?
     
     // MARK: - Initialization
-    
+
+    private var authStateHandle: AuthStateDidChangeListenerHandle?
+    private var observedUID: String? = Auth.auth().currentUser?.uid
+
     private init() {
         print("ðŸ”— FOLLOW MANAGER: Singleton initialized with auto-follow protection + notifications")
+        // Reset cached follow states whenever the signed-in user changes
+        // (account toggle / sign-out). Without this, the new account
+        // would inherit the previous account's follow state cache and
+        // show wrong "following" pills until manually refreshed.
+        authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            Task { @MainActor in
+                guard let self = self else { return }
+                let newUID = user?.uid
+                if newUID != self.observedUID {
+                    self.observedUID = newUID
+                    self.followingStates.removeAll()
+                    self.loadingStates.removeAll()
+                    self.lastError = nil
+                    print("ðŸ”— FOLLOW MANAGER: cache reset on auth swap → \(newUID ?? "nil")")
+                }
+            }
+        }
     }
     
     // MARK: - Public Interface

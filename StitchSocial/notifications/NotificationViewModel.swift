@@ -37,13 +37,37 @@ class NotificationViewModel: ObservableObject {
     @Published var hasMoreNotifications: Bool = false
     
     // MARK: - Initialization
-    
+
+    private var authStateHandle: AuthStateDidChangeListenerHandle?
+    private var observedUID: String? = Auth.auth().currentUser?.uid
+
     init(notificationService: NotificationService) {
         self.notificationService = notificationService
         print("🔧 NOTIFICATION VM: Initialized with service integration")
-        
+
         // Start real-time listener
         startListening()
+
+        // Reattach the listener whenever Firebase Auth swaps users so a
+        // linked-account toggle streams the new user's notifications
+        // instead of the previous account's.
+        authStateHandle = Auth.auth().addStateDidChangeListener { [weak self] _, user in
+            Task { @MainActor in
+                guard let self = self else { return }
+                let newUID = user?.uid
+                if newUID != self.observedUID {
+                    self.observedUID = newUID
+                    self.notificationService.stopListening()
+                    self.allNotifications = []
+                    self.filteredNotifications = []
+                    self.unreadCount = 0
+                    self.lastDocument = nil
+                    self.hasMoreNotifications = false
+                    self.startListening()
+                    print("🔔 NOTIFICATION VM: listener reattached on auth swap → \(newUID ?? "nil")")
+                }
+            }
+        }
     }
     
     deinit {

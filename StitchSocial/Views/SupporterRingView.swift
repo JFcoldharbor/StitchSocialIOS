@@ -280,7 +280,7 @@ struct SubscriptionsSheetView: View {
         // refreshed by TipService.recordTipAggregates after each tip flush.
         // Names only; tip amounts stay private.
         Task {
-            let db = Firestore.firestore()
+            let db = Firestore.firestore(database: Config.Firebase.databaseName)
             guard let data = try? await db.collection("users").document(userID).getDocument().data(),
                   let raw = data["topSupporters"] as? [[String: Any]] else {
                 return

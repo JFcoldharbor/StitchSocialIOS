@@ -39,8 +39,8 @@ class AdService: ObservableObject {
     @Published var errorMessage: String?
     
     // MARK: - Properties
-    
-    private let db = Firestore.firestore()
+
+    private let db = FirebaseConfig.firestore
     
     // MARK: - Cache Storage
     

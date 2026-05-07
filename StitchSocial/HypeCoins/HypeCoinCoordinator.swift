@@ -38,7 +38,7 @@ final class HypeCoinCoordinator: ObservableObject {
     
     private let coinService = HypeCoinService.shared
     private let subscriptionService = SubscriptionService.shared
-    private let db = Firestore.firestore()
+    private let db = FirebaseConfig.firestore
     
     // MARK: - Published State
     
