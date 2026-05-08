@@ -76,7 +76,9 @@ final class SubscriptionService: ObservableObject {
                     self.mySubscriptions = []
                     self.mySubscribers = []
                     self.creatorPlan = nil
+                    #if DEBUG
                     print("⭐ SUB SERVICE: cache reset on auth swap → \(newUID ?? "nil")")
+                    #endif
                 }
             }
         }
@@ -206,7 +208,9 @@ final class SubscriptionService: ObservableObject {
                     subscriptionTier: coinTier.displayName
                 )
             } catch {
+                #if DEBUG
                 print("⚠️ SUB SERVICE: subscription notification failed — \(error)")
+                #endif
             }
         }
 

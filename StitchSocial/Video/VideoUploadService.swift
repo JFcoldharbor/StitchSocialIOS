@@ -130,8 +130,12 @@ class VideoUploadService: ObservableObject {
             )
             
             let orientation = VideoOrientation.from(aspectRatio: technicalMetadata.aspectRatio)
+            #if DEBUG
             print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD SERVICE: Video uploaded successfully - \(metadata.title)")
+            #endif
+            #if DEBUG
             print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â UPLOAD SERVICE: \(orientation.displayName) video (aspect ratio: \(String(format: "%.3f", technicalMetadata.aspectRatio)))")
+            #endif
             
             return result
             
@@ -149,7 +153,9 @@ class VideoUploadService: ObservableObject {
                 error: error
             )
             
+            #if DEBUG
             print("ÃƒÂ¢Ã‚ÂÃ…â€™ UPLOAD SERVICE: Upload failed - \(error.localizedDescription)")
+            #endif
             throw error
         }
     }
@@ -160,16 +166,22 @@ class VideoUploadService: ObservableObject {
     private func ensureUploadableSize(videoURL: URL) async throws -> URL {
         let fileSize = try getFileSize(videoURL)
         
+        #if DEBUG
         print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â¦ UPLOAD: File size is \(formatFileSize(fileSize))")
+        #endif
         
         // If under limit, use as-is
         if fileSize <= Self.maxUploadSize {
+            #if DEBUG
             print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD: File is within size limit")
+            #endif
             return videoURL
         }
         
         // Need to compress
+        #if DEBUG
         print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â UPLOAD: File exceeds \(formatFileSize(Self.maxUploadSize)), compressing...")
+        #endif
         await updateProgress(0.05, task: "Compressing large video...")
         
         let compressor = FastVideoCompressor.shared
@@ -187,7 +199,9 @@ class VideoUploadService: ObservableObject {
                 }
             )
             
+            #if DEBUG
             print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD: Compressed \(formatFileSize(fileSize)) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ \(formatFileSize(result.compressedSize))")
+            #endif
             
             // Verify it's now under limit
             if result.compressedSize <= Self.maxUploadSize {
@@ -246,7 +260,9 @@ class VideoUploadService: ObservableObject {
         let createdVideo: CoreVideoMetadata
         
         let orientation = VideoOrientation.from(aspectRatio: uploadResult.aspectRatio)
+        #if DEBUG
         print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â UPLOAD SERVICE: Creating \(orientation.displayName) video document")
+        #endif
         
         switch recordingContext {
         case .newThread:
@@ -276,10 +292,14 @@ class VideoUploadService: ObservableObject {
                             videoTitle: createdVideo.title,
                             followerIDs: followerIDs
                         )
+                        #if DEBUG
                         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD SERVICE: Notified \(followerIDs.count) followers")
+                        #endif
                     }
                 } catch {
+                    #if DEBUG
                     print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â UPLOAD SERVICE: Failed to notify followers - \(error)")
+                    #endif
                 }
             }
             
@@ -311,7 +331,9 @@ class VideoUploadService: ObservableObject {
                         )
                     }
                 } catch {
+                    #if DEBUG
                     print("UPLOAD SERVICE: Failed to award stitch regen - \(error)")
+                    #endif
                 }
             }
             
@@ -343,7 +365,9 @@ class VideoUploadService: ObservableObject {
                         )
                     }
                 } catch {
+                    #if DEBUG
                     print("UPLOAD SERVICE: Failed to award reply regen - \(error)")
+                    #endif
                 }
             }
             
@@ -391,12 +415,16 @@ class VideoUploadService: ObservableObject {
                 videoID: createdVideo.id,
                 taggedUserIDs: taggedUserIDs
             )
+            #if DEBUG
             print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…â€™ UPLOAD SERVICE: Saved \(taggedUserIDs.count) tagged users")
+            #endif
             
             // Mention notifications handled by VideoCoordinator (PHASE 4)
         }
         await updateProgress(1.0, task: "Video created successfully!")
+        #if DEBUG
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD SERVICE: Video document created - \(createdVideo.id)")
+        #endif
         
         // MARK: - Hype Rating Regen for posting
         Task {
@@ -593,7 +621,9 @@ class VideoUploadService: ObservableObject {
             }
             
             let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
+            #if DEBUG
             print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â METADATA: \(orientation.displayName) - \(Int(width))x\(Int(height))")
+            #endif
         }
         
         return TechnicalMetadata(
@@ -731,7 +761,9 @@ class VideoUploadService: ObservableObject {
         }
         
         await updateProgress(1.0, task: "Clip uploaded!")
+        #if DEBUG
         print("✅ STREAM CLIP: Uploaded \(commentID)")
+        #endif
         
         return (downloadURL, thumbURL)
     }

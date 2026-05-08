@@ -549,7 +549,9 @@ struct NotificationView: View {
         let senderIDs = viewModel.filteredNotifications.map { $0.senderID }
         if !senderIDs.isEmpty {
             await followManager.loadFollowStates(for: senderIDs)
+            #if DEBUG
             print("Ã¢Å“â€¦ NOTIFICATION VIEW: Loaded follow states for \(senderIDs.count) senders")
+            #endif
         }
     }
     
@@ -565,11 +567,15 @@ struct NotificationView: View {
             await MainActor.run {
                 recentUsers = users
                 leaderboardVideos = videos
+                #if DEBUG
                 print("Ã¢Å“â€¦ DISCOVERY: Loaded \(users.count) users, \(videos.count) videos")
+                #endif
             }
             
         } catch {
+            #if DEBUG
             print("Ã¢ÂÅ’ DISCOVERY: Failed to load - \(error)")
+            #endif
         }
         
         isLoadingDiscovery = false
@@ -606,7 +612,9 @@ struct NotificationView: View {
                     threadID: threadID,
                     targetVideoID: videoID
                 )
+                #if DEBUG
                 print("\u{1F4F1} Navigation to thread: \(threadID), target: \(videoID)")
+                #endif
             } else {
                 // No threadID in payload — fetch video to resolve its real threadID
                 // This handles old notifications sent before threadID was added
@@ -621,14 +629,18 @@ struct NotificationView: View {
                             targetVideoID: isReply ? videoID : nil
                         )
                     }
+                    #if DEBUG
                     print("\u{1F4F1} Resolved thread: \(resolvedThreadID), target: \(videoID), isReply: \(isReply)")
+                    #endif
                 } catch {
                     // Fallback: use videoID as threadID (original behavior)
                     videoThreadPresentation = VideoThreadPresentation(
                         threadID: videoID,
                         targetVideoID: videoID
                     )
+                    #if DEBUG
                     print("\u{26A0}\u{FE0F} Fallback navigation for \(videoID): \(error.localizedDescription)")
+                    #endif
                 }
             }
         }
@@ -685,7 +697,9 @@ struct NotificationRowView: View {
                     .frame(width: 40, height: 40)
                     .clipShape(Circle())
                     .onAppear {
+                        #if DEBUG
                         print("Ã°Å¸â€“Â¼Ã¯Â¸Â PROFILE IMAGE: Loading from URL - \(profileImageURL)")
+                        #endif
                     }
             } else {
                 Circle()
@@ -697,9 +711,15 @@ struct NotificationRowView: View {
                             .foregroundColor(.white.opacity(0.5))
                     )
                     .onAppear {
+                        #if DEBUG
                         print("Ã¢Å¡Â Ã¯Â¸Â PROFILE IMAGE: Missing in payload - \(notification.payload)")
+                        #endif
+                        #if DEBUG
                         print("Ã¢Å¡Â Ã¯Â¸Â Notification ID: \(notification.id)")
+                        #endif
+                        #if DEBUG
                         print("Ã¢Å¡Â Ã¯Â¸Â Sender ID: \(notification.senderID)")
+                        #endif
                     }
             }
         }

@@ -160,7 +160,9 @@ final class HypeCoinCoordinator: ObservableObject {
             guard let self = self else { return }
             
             if let error = error {
+                #if DEBUG
                 print("❌ COINS: Listener error - \(error.localizedDescription)")
+                #endif
                 return
             }
             
@@ -183,7 +185,9 @@ final class HypeCoinCoordinator: ObservableObject {
                     self.showPurchaseSuccess = false
                 }
                 
+                #if DEBUG
                 print("💰 COINS: Detected web purchase of \(purchased) coins")
+                #endif
             }
             
             // Update cache
@@ -205,10 +209,14 @@ final class HypeCoinCoordinator: ObservableObject {
             cachedBalance = freshBalance
             balance = freshBalance
             balanceLastFetched = Date()
+            #if DEBUG
             print("🔄 COINS: Balance synced - \(freshBalance.availableCoins) available")
+            #endif
         } catch {
             lastError = error.localizedDescription
+            #if DEBUG
             print("❌ COINS: Sync failed - \(error)")
+            #endif
         }
     }
     
@@ -248,7 +256,9 @@ final class HypeCoinCoordinator: ObservableObject {
             
         case "purchase-cancelled":
             // User cancelled - no action needed
+            #if DEBUG
             print("ℹ️ COINS: Purchase cancelled by user")
+            #endif
             
         default:
             break
@@ -287,11 +297,15 @@ final class HypeCoinCoordinator: ObservableObject {
                 // once Firestore propagates. Eager fetch returns stale pre-tip value
                 // and overwrites the optimistic UI balance.
                 completion?(true)
+                #if DEBUG
                 print("💸 COINS: Tipped \(amount) to \(toUserID)")
+                #endif
             } catch {
                 lastError = error.localizedDescription
                 completion?(false)
+                #if DEBUG
                 print("❌ COINS: Tip failed - \(error)")
+                #endif
             }
         }
     }
@@ -338,10 +352,14 @@ final class HypeCoinCoordinator: ObservableObject {
                     type: .tipReceived
                 )
                 data.completions.forEach { $0?(true) }
+                #if DEBUG
                 print("💸 COINS: Batched tip of \(data.total) to \(toUserID)")
+                #endif
             } catch {
                 data.completions.forEach { $0?(false) }
+                #if DEBUG
                 print("❌ COINS: Batched tip failed - \(error)")
+                #endif
             }
         }
         
@@ -366,7 +384,9 @@ final class HypeCoinCoordinator: ObservableObject {
         )
         
         await syncBalance()
+        #if DEBUG
         print("🎉 COINS: Subscribed to \(toCreatorID) at \(creatorTier.displayName)")
+        #endif
     }
     
     func cancelSubscription(creatorID: String) async throws {

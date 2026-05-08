@@ -161,7 +161,9 @@ struct TaggedUserChip: View {
             }
             
         } catch {
+            #if DEBUG
             print("❌ TAGGED USER CHIP: Failed to load user \(userID) - \(error)")
+            #endif
             
             await MainActor.run {
                 user = nil
@@ -240,7 +242,9 @@ struct TaggedUserChipSimple: View {
 #Preview {
     VStack(spacing: 16) {
         TaggedUserChip(userID: "test_user_id") {
+            #if DEBUG
             print("Removed")
+            #endif
         }
         
         TaggedUserChipSimple(
@@ -248,7 +252,9 @@ struct TaggedUserChipSimple: View {
             profileImageURL: nil,
             isVerified: true
         ) {
+            #if DEBUG
             print("Removed")
+            #endif
         }
     }
     .padding()

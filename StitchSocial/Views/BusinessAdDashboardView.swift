@@ -357,7 +357,9 @@ struct BusinessAdDashboardView: View {
             _ = try await adService.fetchBusinessCampaigns(businessID: user.id)
             _ = try await adService.fetchBusinessStats(businessID: user.id)
         } catch {
+            #if DEBUG
             print("❌ BUSINESS AD: Failed to load - \(error.localizedDescription)")
+            #endif
         }
     }
     

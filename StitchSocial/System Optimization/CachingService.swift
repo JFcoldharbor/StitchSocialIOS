@@ -58,7 +58,9 @@ class CachingService: ObservableObject {
         manageVideoCacheSize()
         updateCacheStats()
         
+        #if DEBUG
         print("💾 CACHE: Video cached - \(video.id)")
+        #endif
     }
     
     /// Get cached video if available and not expired
@@ -74,7 +76,9 @@ class CachingService: ObservableObject {
         videoCache[id]?.accessCount += 1
         
         cacheStats.hits += 1
+        #if DEBUG
         print("💾 CACHE: Video hit - \(id)")
+        #endif
         return cached.video
     }
     
@@ -84,7 +88,9 @@ class CachingService: ObservableObject {
             cacheVideo(video, priority: priority)
         }
         
+        #if DEBUG
         print("💾 CACHE: Batched \(videos.count) videos")
+        #endif
     }
     
     /// Get all cached videos for a specific user, sorted by createdAt descending
@@ -112,7 +118,9 @@ class CachingService: ObservableObject {
         manageUserCacheSize()
         updateCacheStats()
         
+        #if DEBUG
         print("💾 CACHE: User cached - \(user.id)")
+        #endif
     }
     
     /// Get cached user if available
@@ -148,7 +156,9 @@ class CachingService: ObservableObject {
         manageThreadCacheSize()
         updateCacheStats()
         
+        #if DEBUG
         print("💾 CACHE: Thread cached - \(thread.id)")
+        #endif
     }
     
     /// Get cached thread if available
@@ -173,7 +183,9 @@ class CachingService: ObservableObject {
             cacheThread(thread, priority: priority)
         }
         
+        #if DEBUG
         print("💾 CACHE: Batched \(threads.count) threads")
+        #endif
     }
     
     // MARK: - Cache Management
@@ -214,7 +226,9 @@ class CachingService: ObservableObject {
         accessTimes.removeValue(forKey: oldestVideoID)
         cacheStats.evictions += 1
         
+        #if DEBUG
         print("💾 CACHE: Evicted video - \(oldestVideoID)")
+        #endif
     }
     
     /// Evict least recently used user
@@ -227,7 +241,9 @@ class CachingService: ObservableObject {
         accessTimes.removeValue(forKey: oldestUserID)
         cacheStats.evictions += 1
         
+        #if DEBUG
         print("💾 CACHE: Evicted user - \(oldestUserID)")
+        #endif
     }
     
     /// Evict least recently used thread
@@ -240,7 +256,9 @@ class CachingService: ObservableObject {
         accessTimes.removeValue(forKey: oldestThreadID)
         cacheStats.evictions += 1
         
+        #if DEBUG
         print("💾 CACHE: Evicted thread - \(oldestThreadID)")
+        #endif
     }
     
     /// Find least recently used item by access time
@@ -292,12 +310,24 @@ class CachingService: ObservableObject {
     /// Log cache performance metrics
     func logCachePerformance() {
         let stats = cacheStats
+        #if DEBUG
         print("📊 CACHE PERFORMANCE:")
+        #endif
+        #if DEBUG
         print("   Total Entries: \(stats.totalEntries)")
+        #endif
+        #if DEBUG
         print("   Hit Rate: \(String(format: "%.1f%%", stats.hitRate * 100))")
+        #endif
+        #if DEBUG
         print("   Memory Usage: \(formatMemorySize(stats.memoryUsage))")
+        #endif
+        #if DEBUG
         print("   Evictions: \(stats.evictions)")
+        #endif
+        #if DEBUG
         print("   Videos: \(stats.videoEntries), Users: \(stats.userEntries), Threads: \(stats.threadEntries)")
+        #endif
     }
     
     /// Format memory size for display
@@ -344,7 +374,9 @@ class CachingService: ObservableObject {
         
         if removedCount > 0 {
             updateCacheStats()
+            #if DEBUG
             print("💾 CACHE: Cleaned \(removedCount) expired entries")
+            #endif
         }
         
         // Also clean AI result cache (coordinated cleanup)
@@ -360,7 +392,9 @@ class CachingService: ObservableObject {
         
         cacheStats = CacheStats()
         
+        #if DEBUG
         print("💾 CACHE: Cleared all caches")
+        #endif
     }
     
     // MARK: - Feed-Specific Caching for Instant Startup
@@ -380,7 +414,9 @@ class CachingService: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("💾 CACHE: Cached complete feed with \(threads.count) threads")
+        #endif
     }
     
     /// Get cached feed for instant display
@@ -402,7 +438,9 @@ class CachingService: ObservableObject {
         }
         
         cacheStats.hits += resultThreads.count
+        #if DEBUG
         print("💾 CACHE: Feed hit - \(resultThreads.count) cached threads")
+        #endif
         return resultThreads
     }
 }
@@ -482,7 +520,9 @@ extension CachingService {
             threadCache[thread.id] = existing
             accessTimes[thread.id] = Date()
             
+            #if DEBUG
             print("💾 CACHE: Updated thread - \(thread.id)")
+            #endif
         } else {
             cacheThread(thread, priority: .normal)
         }
@@ -495,10 +535,18 @@ extension CachingService {
     
     /// Test caching functionality
     func helloWorldTest() {
+        #if DEBUG
         print("💾 CACHE SERVICE: Hello World - Ready for instant feed loading!")
+        #endif
+        #if DEBUG
         print("💾 Limits: \(maxVideoEntries) videos, \(maxUserEntries) users, \(maxThreadEntries) threads")
+        #endif
+        #if DEBUG
         print("💾 Memory: \(formatMemorySize(maxMemorySize)) limit")
+        #endif
+        #if DEBUG
         print("💾 Expiration: \(Int(cacheExpiration / 60)) minutes")
+        #endif
     }
     
     /// Test cache with sample data
@@ -538,9 +586,13 @@ extension CachingService {
         
         // Test retrieval
         if let retrieved = getCachedVideo(id: testVideo.id) {
+            #if DEBUG
             print("✅ CACHE: Test passed - video retrieved successfully")
+            #endif
         } else {
+            #if DEBUG
             print("❌ CACHE: Test failed - video not retrieved")
+            #endif
         }
         
         // Log performance

@@ -115,7 +115,9 @@ class DiscoveryViewModel: ObservableObject {
                 return videoService.createCoreVideoMetadata(from: data, id: doc.documentID)
             }
 
+            #if DEBUG
             print("✅ DISCOVERY: Loaded \(loaded.count) / \(snapshot.documents.count) docs — filtered: \(filteredOut)")
+            #endif
 
             // FIX: Shuffle on initial load — 48hr fresh content always surfaces first
             allVideos = shuffleWithRecencyPin(loaded)
@@ -127,11 +129,15 @@ class DiscoveryViewModel: ObservableObject {
             await loadFeaturedCollectionsForSwipeFeed()
 
             applyBlockedCreatorFilter()
+            #if DEBUG
             print("✅ DISCOVERY: \(allVideos.count) videos + \(collectionCardMap.count) collection cards injected")
+            #endif
 
         } catch {
             errorMessage = "Failed to load videos"
+            #if DEBUG
             print("❌ DISCOVERY: \(error)")
+            #endif
         }
     }
 
@@ -141,7 +147,9 @@ class DiscoveryViewModel: ObservableObject {
         allVideos = shuffleWithRecencyPin(allVideos)
         applyBlockedCreatorFilter()
         swipeIndex = 0
+        #if DEBUG
         print("🔀 DISCOVERY: Reshuffled \(filteredVideos.count) videos (48hr pinned to front)")
+        #endif
     }
 
     /// Shuffle that keeps videos created in the last 48 hours at the front.
@@ -160,7 +168,9 @@ class DiscoveryViewModel: ObservableObject {
             rest.insert(card, at: at)
         }
 
+        #if DEBUG
         print("📌 DISCOVERY: \(fresh.count) fresh (≤48hr) pinned, \(rest.count) shuffled behind")
+        #endif
         return fresh + rest
     }
 
@@ -171,7 +181,9 @@ class DiscoveryViewModel: ObservableObject {
     func clearBlockForCreator(_ creatorID: String) {
         DiscoveryEngagementTracker.shared.resetPreference(for: creatorID)
         applyBlockedCreatorFilter()
+        #if DEBUG
         print("🔓 DISCOVERY: Cleared block for creator \(creatorID.prefix(8))")
+        #endif
     }
 
     // MARK: - Foreground Refresh
@@ -187,7 +199,9 @@ class DiscoveryViewModel: ObservableObject {
             filteredVideos = []
             collectionCardMap = [:]
             swipeIndex = 0
+            #if DEBUG
             print("🔄 DISCOVERY: Stale data (>30min) — will reload on next appear")
+            #endif
         }
     }
 
@@ -219,7 +233,9 @@ class DiscoveryViewModel: ObservableObject {
             hashtagVideos = result.videos
             filteredVideos = result.videos
         } catch {
+            #if DEBUG
             print("❌ DISCOVERY: Hashtag load failed: \(error)")
+            #endif
         }
         isLoading = false
     }
@@ -274,7 +290,9 @@ class DiscoveryViewModel: ObservableObject {
             filteredVideos = valid
             swipeIndex = 0
         } catch {
+            #if DEBUG
             print("❌ DISCOVERY: filterBy \(category) failed: \(error)")
+            #endif
         }
     }
 
@@ -347,9 +365,13 @@ class DiscoveryViewModel: ObservableObject {
                 allVideos.insert(card, at: insertAt)
             }
 
+            #if DEBUG
             print("🎬 DISCOVERY: Injected \(injected.count) collection cards into swipe feed")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ DISCOVERY: Collection card load failed — \(error.localizedDescription)")
+            #endif
         }
     }
 

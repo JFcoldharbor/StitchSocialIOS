@@ -63,7 +63,9 @@ class ScheduleDataService {
         let items = snap.documents.compactMap { ScheduleItem(doc: $0) }
 
         cache[key] = (items, Date())
+        #if DEBUG
         print("📅 SCHEDULE: Loaded \(items.count) items for \(creatorID) (owner: \(isOwner))")
+        #endif
         return items
     }
 
@@ -601,10 +603,14 @@ struct CreatorScheduleView: View {
             guard let data = doc.data() else { return }
             // Decode minimally — enough for EpisodeEditorView
             // Full decode handled by CollectionService in the editor
+            #if DEBUG
             print("📅 SCHEDULE: Opening editor for \(item.id)")
+            #endif
             // onEditEpisode callback lets parent handle navigation
         } catch {
+            #if DEBUG
             print("❌ SCHEDULE: Failed to load episode for editing: \(error)")
+            #endif
         }
     }
 

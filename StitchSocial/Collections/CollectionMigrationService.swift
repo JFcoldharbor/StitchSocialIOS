@@ -46,11 +46,15 @@ class CollectionMigrationService {
             }
             
             guard !orphans.isEmpty else {
+                #if DEBUG
                 print("🔄 MIGRATION: No orphan collections found for \(userID)")
+                #endif
                 return 0
             }
             
+            #if DEBUG
             print("🔄 MIGRATION: Found \(orphans.count) orphan collections to wrap into shows")
+            #endif
             
             var migratedCount = 0
             
@@ -125,14 +129,20 @@ class CollectionMigrationService {
                 try await batch.commit()
                 migratedCount += 1
                 
+                #if DEBUG
                 print("🔄 MIGRATION: Wrapped '\(title)' → show \(showId)")
+                #endif
             }
             
+            #if DEBUG
             print("🔄 MIGRATION: Migrated \(migratedCount) orphan collections into shows")
+            #endif
             return migratedCount
             
         } catch {
+            #if DEBUG
             print("❌ MIGRATION: Failed: \(error)")
+            #endif
             return 0
         }
     }

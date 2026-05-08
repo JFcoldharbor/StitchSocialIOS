@@ -181,7 +181,9 @@ struct ProgressiveCoolButton: View {
     
     /// Cool is always regular engagement - no burst variant
     private func handleTap() {
+        #if DEBUG
         print("🔵 COOL TAP - videoID: \(videoID), tier: \(userTier)")
+        #endif
         
         if shouldBlockSelfEngagement {
             showError("You can't cool your own content")

@@ -82,7 +82,9 @@ final class TipService: ObservableObject {
                     self.usernameCache.removeAll()
                     self.localCoinBalance = 0
                     self.balanceLoaded = false
+                    #if DEBUG
                     print("🪙 TIP SERVICE: cache reset on auth swap → \(newUID ?? "nil")")
+                    #endif
                 }
             }
         }
@@ -122,7 +124,9 @@ final class TipService: ObservableObject {
 
         localCoinBalance = HypeCoinCoordinator.shared.balance?.availableCoins ?? 0
         balanceLoaded = true
+        #if DEBUG
         print("💰 TIP SERVICE: Balance from coordinator — \(localCoinBalance) coins")
+        #endif
     }
 
     // MARK: - Public Tap Entry Points
@@ -158,12 +162,16 @@ final class TipService: ObservableObject {
 
     private func canTip(tipperID: String, creatorID: String, amount: Int) -> Bool {
         guard tipperID != creatorID else {
+            #if DEBUG
             print("🚫 TIP SERVICE: Self-tip blocked")
+            #endif
             return false
         }
         let pending = tipStates.values.reduce(0) { $0 + $1.pendingAmount }
         guard (localCoinBalance - pending) >= amount else {
+            #if DEBUG
             print("🚫 TIP SERVICE: Insufficient funds — balance:\(localCoinBalance) pending:\(pending) needed:\(amount)")
+            #endif
             return false
         }
         return true
@@ -180,7 +188,9 @@ final class TipService: ObservableObject {
         state.sessionTotal  += amount
         tipStates[videoID]   = state
 
+        #if DEBUG
         print("🪙 TIP SERVICE: Accumulated +\(amount) — pending:\(state.pendingAmount) session:\(state.sessionTotal)")
+        #endif
 
         // Debounce flush
         flushTimers[videoID]?.cancel()
@@ -202,7 +212,9 @@ final class TipService: ObservableObject {
         state.lastFlushAt = Date()
         tipStates[videoID] = state
 
+        #if DEBUG
         print("🚀 TIP SERVICE: Flushing \(amountToFlush) coins → creator \(creatorID)")
+        #endif
 
         // Use coordinator — handles batching, cooldown, and balance sync
         await withCheckedContinuation { continuation in
@@ -245,20 +257,28 @@ final class TipService: ObservableObject {
                                     videoID: videoID
                                 )
                             } catch {
+                                #if DEBUG
                                 print("⚠️ TIP SERVICE: tip notification failed — \(error)")
+                                #endif
                             }
                         } else {
+                            #if DEBUG
                             print("⚠️ TIP SERVICE: notificationService not configured — skipping tip notification for \(creatorID)")
+                            #endif
                         }
 
                         self.tipStates[videoID]?.isFlushing = false
+                        #if DEBUG
                         print("✅ TIP SERVICE: \(amountToFlush) coins sent to \(creatorID)")
+                        #endif
                     } else {
                         // Rollback
                         self.localCoinBalance += amountToFlush
                         self.tipStates[videoID]?.sessionTotal -= amountToFlush
                         self.tipStates[videoID]?.isFlushing   = false
+                        #if DEBUG
                         print("❌ TIP SERVICE: Flush failed — rolled back \(amountToFlush) coins")
+                        #endif
                     }
                     continuation.resume()
                 }
@@ -302,7 +322,9 @@ final class TipService: ObservableObject {
                     "lastTippedAt": Timestamp(date: Date())
                 ])
             } catch {
+                #if DEBUG
                 print("⚠️ TIP AGG: video coinTotal update failed for \(videoID) — \(error)")
+                #endif
             }
         }
 
@@ -318,7 +340,9 @@ final class TipService: ObservableObject {
                 "lastSentAt": Timestamp(date: Date())
             ], merge: true)
         } catch {
+            #if DEBUG
             print("⚠️ TIP AGG: supporter row update failed for \(creatorID)/\(tipperID) — \(error)")
+            #endif
             return
         }
 
@@ -345,7 +369,9 @@ final class TipService: ObservableObject {
                 "topSupporters": top
             ])
         } catch {
+            #if DEBUG
             print("⚠️ TIP AGG: topSupporters refresh failed for \(creatorID) — \(error)")
+            #endif
         }
     }
 }

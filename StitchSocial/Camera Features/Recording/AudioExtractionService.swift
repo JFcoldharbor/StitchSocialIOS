@@ -116,7 +116,9 @@ class AudioExtractionService: ObservableObject {
                 extractionTime: Date().timeIntervalSince(startTime)
             )
 
+            #if DEBUG
             print("🎵 AUDIO: Extracted \(String(format: "%.1f", seconds))s, \(formatBytes(fileSize)), \(String(format: "%.1f", result.extractionTime))s")
+            #endif
             return result
 
         } catch {

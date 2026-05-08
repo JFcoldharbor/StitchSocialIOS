@@ -143,7 +143,9 @@ enum BusinessMigration {
         
         try await userRef.updateData(updates)
         
+        #if DEBUG
         print("🏢 MIGRATION: Converted \(userID) to business account: \(brandName)")
+        #endif
     }
     
     /// Batch migrate multiple accounts at once.
@@ -164,12 +166,16 @@ enum BusinessMigration {
                 )
                 successCount += 1
             } catch {
+                #if DEBUG
                 print("⚠️ MIGRATION: Failed for \(account.userID): \(error.localizedDescription)")
+                #endif
                 failCount += 1
             }
         }
         
+        #if DEBUG
         print("🏢 MIGRATION: Batch complete — \(successCount) success, \(failCount) failed")
+        #endif
         return (successCount, failCount)
     }
 }

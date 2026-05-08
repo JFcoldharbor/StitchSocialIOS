@@ -172,7 +172,9 @@ struct VideoNavigationPeeks: View {
                 startHeartbeatHaptic()
             }
         } catch {
+            #if DEBUG
             print("Haptic setup failed: \(error)")
+            #endif
         }
     }
     
@@ -231,7 +233,9 @@ struct VideoNavigationPeeks: View {
             let player = try engine.makePlayer(with: pattern)
             try player.start(atTime: 0)
         } catch {
+            #if DEBUG
             print("Failed to play heartbeat haptic: \(error)")
+            #endif
         }
     }
     

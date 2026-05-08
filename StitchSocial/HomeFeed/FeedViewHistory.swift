@@ -141,9 +141,13 @@ class FeedViewHistory {
         do {
             let data = try JSONEncoder().encode(position)
             UserDefaults.standard.set(data, forKey: feedPositionKey)
+            #if DEBUG
             print("📍 FEED HISTORY: Saved position - item \(itemIndex), stitch \(stitchIndex)")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ FEED HISTORY: Failed to save position - \(error)")
+            #endif
         }
     }
     
@@ -165,7 +169,9 @@ class FeedViewHistory {
             
             return position
         } catch {
+            #if DEBUG
             print("❌ FEED HISTORY: Failed to decode position - \(error)")
+            #endif
             return nil
         }
     }
@@ -192,9 +198,13 @@ class FeedViewHistory {
             let data = try JSONEncoder().encode(sessionData)
             UserDefaults.standard.set(data, forKey: lastSessionFeedKey)
             UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastSessionTimestampKey)
+            #if DEBUG
             print("💾 FEED HISTORY: Saved \(sessionData.count) threads for session resume")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ FEED HISTORY: Failed to save session feed - \(error)")
+            #endif
         }
     }
     
@@ -219,7 +229,9 @@ class FeedViewHistory {
             let sessionData = try JSONDecoder().decode([SessionThread].self, from: data)
             return sessionData.map { $0.id }
         } catch {
+            #if DEBUG
             print("❌ FEED HISTORY: Failed to decode session feed - \(error)")
+            #endif
             return nil
         }
     }
@@ -274,7 +286,9 @@ class FeedViewHistory {
             seenIDs.removeAll { oldKeys.contains($0) }
             saveSeenVideoIDs(seenIDs)
             
+            #if DEBUG
             print("🧹 FEED HISTORY: Cleaned \(oldKeys.count) old entries")
+            #endif
         }
     }
     
@@ -287,7 +301,9 @@ class FeedViewHistory {
         UserDefaults.standard.removeObject(forKey: lastSessionFeedKey)
         UserDefaults.standard.removeObject(forKey: lastSessionTimestampKey)
         UserDefaults.standard.removeObject(forKey: viewHistoryTimestampsKey)
+        #if DEBUG
         print("🗑️ FEED HISTORY: Cleared all history")
+        #endif
     }
     
     // MARK: - Debug

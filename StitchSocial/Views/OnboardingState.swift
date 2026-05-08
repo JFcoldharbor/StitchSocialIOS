@@ -62,7 +62,9 @@ final class OnboardingState: ObservableObject {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             currentStep = next
         }
+        #if DEBUG
         print("🎓 ONBOARDING: → \(next.rawValue) (\(next.title))")
+        #endif
     }
 
     /// Called by DiscoveryView's onChange(currentSwipeIndex) to handle the seed-locking logic
@@ -72,14 +74,18 @@ final class OnboardingState: ObservableObject {
         case .swipeHint:
             // First swipe — move to free-swipe phase
             withAnimation(.easeInOut(duration: 0.3)) { currentStep = .swipeToSeed }
+            #if DEBUG
             print("🎓 ONBOARDING: → swipeToSeed (free swipe phase)")
+            #endif
         case .swipeToSeed:
             // Check if reached seed video
             if index == seedIndex {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     currentStep = .tapHint
                 }
+                #if DEBUG
                 print("🎓 ONBOARDING: → tapHint (seed video reached at index \(index))")
+                #endif
             }
         default:
             break
@@ -99,7 +105,9 @@ final class OnboardingState: ObservableObject {
                 .collection("users").document(uid)
                 .updateData(["hasCompletedOnboarding": true])
         }
+        #if DEBUG
         print("✅ ONBOARDING: Complete")
+        #endif
     }
 
     #if DEBUG

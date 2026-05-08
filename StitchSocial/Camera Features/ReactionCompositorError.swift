@@ -98,9 +98,13 @@ class ReactionCompositor {
             // return nil for (e.g. images straight from PhotosPicker on iOS 17+).
             contentCIImage = CIImage(image: img)
             if contentCIImage == nil {
+                #if DEBUG
                 print("🎬 COMPOSITOR: ⚠️ Failed to load CIImage from UIImage \(img.size)")
+                #endif
             } else {
+                #if DEBUG
                 print("🎬 COMPOSITOR: Cached CIImage \(img.size)")
+                #endif
             }
         case .solidColor(let color):
             let c = UIColor(color)
@@ -188,7 +192,9 @@ class ReactionCompositor {
         videoComposition.renderSize = renderSize
         videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
 
+        #if DEBUG
         print("🎬 COMPOSITOR: Exporting \(layout.rawValue) layout…")
+        #endif
         return try await exportComposition(composition, videoComposition: videoComposition)
     }
 
@@ -328,7 +334,9 @@ class ReactionCompositor {
             audioMix = mix
         }
 
+        #if DEBUG
         print("🎬 COMPOSITOR: Exporting \(layout.rawValue) layout (Mode A)…")
+        #endif
         return try await exportComposition(composition, videoComposition: videoComposition, audioMix: audioMix)
     }
 
@@ -653,7 +661,9 @@ class ReactionCompositor {
         try await session.export(to: outputURL, as: .mp4)
 
         let size = (try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+        #if DEBUG
         print("🎬 COMPOSITOR: Done — \(size / 1024)KB")
+        #endif
         return outputURL
     }
 }

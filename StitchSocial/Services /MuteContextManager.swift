@@ -21,7 +21,9 @@ class MuteContextManager: ObservableObject {
         didSet {
             // Persist to UserDefaults whenever it changes
             UserDefaults.standard.set(isMuted, forKey: "StitchSocial_isMuted")
+            #if DEBUG
             print("🔊 MUTE: isMuted = \(isMuted)")
+            #endif
         }
     }
     
@@ -41,7 +43,9 @@ class MuteContextManager: ObservableObject {
         let savedMuteState = UserDefaults.standard.object(forKey: "StitchSocial_isMuted") as? Bool ?? true
         self.isMuted = savedMuteState
         
+        #if DEBUG
         print("🔊 MUTE: Initialized with isMuted = \(savedMuteState)")
+        #endif
         
         setupCallDetection()
         setupVolumeButtonListening()
@@ -66,12 +70,16 @@ class MuteContextManager: ObservableObject {
         
         // Auto-mute as courtesy when call starts — user can unmute if they want
         if isOnCall && !wasOnCall {
+            #if DEBUG
             print("☎️ MUTE: Call started - auto-muting (user can override)")
+            #endif
             isMuted = true
         }
         
         if !isOnCall && wasOnCall {
+            #if DEBUG
             print("☎️ MUTE: Call ended")
+            #endif
         }
     }
     
@@ -90,9 +98,13 @@ class MuteContextManager: ObservableObject {
                 }
             }
             
+            #if DEBUG
             print("🔊 MUTE: Volume button listening enabled")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ MUTE: Failed to setup volume button listening: \(error)")
+            #endif
         }
     }
     
@@ -109,7 +121,9 @@ class MuteContextManager: ObservableObject {
             if isMuted {
                 lastVolumeButtonTime = Date()
                 DispatchQueue.main.async {
+                    #if DEBUG
                     print("🔊 MUTE: Volume UP pressed - unmuting")
+                    #endif
                     self.isMuted = false
                 }
             }
@@ -132,7 +146,9 @@ class MuteContextManager: ObservableObject {
         // Debounce: ignore toggles within 0.3 seconds of last toggle
         let timeSinceLastToggle = Date().timeIntervalSince(lastToggleTime)
         guard timeSinceLastToggle > 0.3 else {
+            #if DEBUG
             print("🔊 MUTE: Toggle ignored (debounce active)")
+            #endif
             return
         }
         

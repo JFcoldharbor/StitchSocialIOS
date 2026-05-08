@@ -44,7 +44,9 @@ class CollectionService: ObservableObject {
     // MARK: - Initialization
     
     init() {
+        #if DEBUG
         print("📚 COLLECTION SERVICE: Initialized")
+        #endif
     }
     
     // MARK: - Draft Management
@@ -86,7 +88,9 @@ class CollectionService: ObservableObject {
         let draftData = encodeDraft(draft)
         try await db.collection("collectionDrafts").document(draftID).setData(draftData)
         
+        #if DEBUG
         print("📝 COLLECTION SERVICE: Draft created - \(draftID)")
+        #endif
         return draft
     }
     
@@ -102,7 +106,9 @@ class CollectionService: ObservableObject {
         let draftData = encodeDraft(updatedDraft)
         try await db.collection("collectionDrafts").document(draft.id).setData(draftData, merge: true)
         
+        #if DEBUG
         print("💾 COLLECTION SERVICE: Draft saved - \(draft.id)")
+        #endif
     }
     
     /// Loads a specific draft
@@ -127,14 +133,18 @@ class CollectionService: ObservableObject {
             decodeDraft(from: doc.data(), id: doc.documentID)
         }
         
+        #if DEBUG
         print("📂 COLLECTION SERVICE: Loaded \(drafts.count) drafts for user \(creatorID)")
+        #endif
         return drafts
     }
     
     /// Deletes a draft
     func deleteDraft(draftID: String) async throws {
         try await db.collection("collectionDrafts").document(draftID).delete()
+        #if DEBUG
         print("🗑️ COLLECTION SERVICE: Draft deleted - \(draftID)")
+        #endif
     }
     
     // MARK: - Segment Management
@@ -156,7 +166,9 @@ class CollectionService: ObservableObject {
         draft.addSegment(segment)
         try await saveDraft(draft)
         
+        #if DEBUG
         print("➕ COLLECTION SERVICE: Segment added to draft \(draftID)")
+        #endif
         return draft
     }
     
@@ -173,7 +185,9 @@ class CollectionService: ObservableObject {
         draft.updateSegment(segment)
         try await saveDraft(draft)
         
+        #if DEBUG
         print("✏️ COLLECTION SERVICE: Segment updated in draft \(draftID)")
+        #endif
         return draft
     }
     
@@ -190,7 +204,9 @@ class CollectionService: ObservableObject {
         draft.removeSegment(id: segmentID)
         try await saveDraft(draft)
         
+        #if DEBUG
         print("➖ COLLECTION SERVICE: Segment removed from draft \(draftID)")
+        #endif
         return draft
     }
     
@@ -207,7 +223,9 @@ class CollectionService: ObservableObject {
         draft.reorderSegments(newOrder)
         try await saveDraft(draft)
         
+        #if DEBUG
         print("🔄 COLLECTION SERVICE: Segments reordered in draft \(draftID)")
+        #endif
         return draft
     }
     
@@ -240,21 +258,29 @@ class CollectionService: ObservableObject {
         if let coverData = coverImageData, let uploader = coverImageUploader {
             do {
                 uploadedCoverURL = try await uploader(coverData, collectionID)
+                #if DEBUG
                 print("📸 COLLECTION SERVICE: Cover photo uploaded for \(collectionID)")
+                #endif
             } catch {
+                #if DEBUG
                 print("⚠️ COLLECTION SERVICE: Cover upload failed, using fallback: \(error)")
+                #endif
             }
         }
         
         var createdVideoIDs: [String] = []
         
+        #if DEBUG
         print("📚 COLLECTION SERVICE: Publishing collection with \(draft.segments.count) segments")
+        #endif
         
         // Create video documents for each segment
         for (index, segment) in draft.segments.enumerated() {
             // Ensure segment has uploaded URLs
             guard let videoURL = segment.uploadedVideoURL, !videoURL.isEmpty else {
+                #if DEBUG
                 print("⚠️ COLLECTION SERVICE: Segment \(index) missing video URL")
+                #endif
                 throw CollectionServiceError.validationFailed(["Segment \(index + 1) not uploaded"])
             }
             
@@ -313,7 +339,9 @@ class CollectionService: ObservableObject {
             try await db.collection("videos").document(videoID).setData(videoData)
             createdVideoIDs.append(videoID)
             
+            #if DEBUG
             print("✅ COLLECTION SERVICE: Created segment video \(segmentNumber)/\(draft.segments.count) - \(videoID)")
+            #endif
         }
         
         // Determine cover image priority:
@@ -323,13 +351,19 @@ class CollectionService: ObservableObject {
         let finalCoverImageURL: String?
         if let uploaded = uploadedCoverURL, !uploaded.isEmpty {
             finalCoverImageURL = uploaded
+            #if DEBUG
             print("📸 COLLECTION SERVICE: Using uploaded cover photo")
+            #endif
         } else if let draftCover = draft.coverImageURL, !draftCover.isEmpty {
             finalCoverImageURL = draftCover
+            #if DEBUG
             print("📸 COLLECTION SERVICE: Using draft cover photo")
+            #endif
         } else {
             finalCoverImageURL = draft.segments.first?.thumbnailURL
+            #if DEBUG
             print("📸 COLLECTION SERVICE: Using first segment thumbnail as cover")
+            #endif
         }
         
         // Create the collection document
@@ -363,7 +397,9 @@ class CollectionService: ObservableObject {
         // Delete the draft
         try await deleteDraft(draftID: draft.id)
         
+        #if DEBUG
         print("🎉 COLLECTION SERVICE: Collection published - \(collectionID) with \(createdVideoIDs.count) video documents")
+        #endif
         return collection
     }
     
@@ -374,7 +410,9 @@ class CollectionService: ObservableObject {
             "updatedAt": Timestamp()
         ])
         
+        #if DEBUG
         print("📦 COLLECTION SERVICE: Collection archived - \(collectionID)")
+        #endif
     }
     
     /// Archives a collection
@@ -389,7 +427,9 @@ class CollectionService: ObservableObject {
             "status": "deleted",
             "updatedAt": FieldValue.serverTimestamp()
         ])
+        #if DEBUG
         print("🗑️ COLLECTION SERVICE: Collection deleted - \(collectionID)")
+        #endif
     }
     
     // MARK: - Reading Collections
@@ -414,7 +454,9 @@ class CollectionService: ObservableObject {
         
         // This would need VideoService to decode, so we return the raw data
         // In practice, you'd inject VideoService or have a shared decoder
+        #if DEBUG
         print("📼 COLLECTION SERVICE: Found \(snapshot.documents.count) segments for collection \(collectionID)")
+        #endif
         
         // Return empty for now - actual implementation would decode videos
         return []
@@ -443,7 +485,9 @@ class CollectionService: ObservableObject {
             decodeCollection(from: doc.data(), id: doc.documentID)
         }
         
+        #if DEBUG
         print("📚 COLLECTION SERVICE: Loaded \(collections.count) collections for user \(userID)")
+        #endif
         return collections
     }
     
@@ -460,7 +504,9 @@ class CollectionService: ObservableObject {
             decodeCollection(from: doc.data(), id: doc.documentID)
         }
         
+        #if DEBUG
         print("🔍 COLLECTION SERVICE: Loaded \(collections.count) discovery collections")
+        #endif
         return collections
     }
     
@@ -487,7 +533,9 @@ class CollectionService: ObservableObject {
         let progressData = encodeProgress(progress)
         try await db.collection("collectionProgress").document(progress.id).setData(progressData, merge: true)
         
+        #if DEBUG
         print("📊 COLLECTION SERVICE: Progress updated for \(progress.collectionID)")
+        #endif
     }
     
     /// Marks a segment as complete
@@ -513,7 +561,9 @@ class CollectionService: ObservableObject {
         
         try await updateWatchProgress(progress!)
         
+        #if DEBUG
         print("✅ COLLECTION SERVICE: Segment marked complete - \(segmentID)")
+        #endif
         return progress!
     }
     
@@ -789,7 +839,11 @@ extension CollectionService {
     
     /// Test service functionality
     func helloWorldTest() {
+        #if DEBUG
         print("📚 COLLECTION SERVICE: Hello World - Ready for collection management!")
+        #endif
+        #if DEBUG
         print("📚 Features: Draft CRUD, Segment management, Publishing, Progress tracking")
+        #endif
     }
 }

@@ -67,19 +67,25 @@ class ShowService: ObservableObject {
                 .getDocuments()
             let all = snapshot.documents.compactMap { decodeShow(from: $0.data(), id: $0.documentID) }
             let shows = all.filter { $0.status != .removed }
+            #if DEBUG
             print("📚 SHOW SERVICE: Loaded \(shows.count) shows for \(creatorID)")
+            #endif
             for show in shows { showCache[show.id] = (show, Date()) }
             return shows
         } catch {
             // Index may be missing — fall back to unordered query
+            #if DEBUG
             print("⚠️ SHOW SERVICE: Ordered query failed (\(error.localizedDescription)) — retrying without order")
+            #endif
             let snapshot = try await db.collection("shows")
                 .whereField("creatorID", isEqualTo: creatorID)
                 .getDocuments()
             let all = snapshot.documents.compactMap { decodeShow(from: $0.data(), id: $0.documentID) }
             let shows = all.filter { $0.status != .removed }
                 .sorted { $0.updatedAt > $1.updatedAt }
+            #if DEBUG
             print("📚 SHOW SERVICE: Fallback loaded \(shows.count) shows for \(creatorID)")
+            #endif
             for show in shows { showCache[show.id] = (show, Date()) }
             return shows
         }
@@ -276,7 +282,9 @@ class ShowService: ObservableObject {
                               "updatedAt": FieldValue.serverTimestamp()], forDocument: ref)
         }
         try await batch.commit()
+        #if DEBUG
         print("📅 SHOW SERVICE: Reordered schedule — \(pairs.count) episodes updated")
+        #endif
     }
 
     private func encodeShow(_ show: Show) -> [String: Any] {

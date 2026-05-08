@@ -640,7 +640,9 @@ struct CashOutSheet: View {
                 }
             }
         } catch {
+            #if DEBUG
             print("⚠️ CASHOUT: No saved payout info")
+            #endif
         }
         
         // Load effective share (auto-fetches custom override from user doc)
@@ -709,7 +711,9 @@ struct CashOutSheet: View {
                         .collection("private").document("payoutInfo")
                         .setData(from: info)
                     
+                    #if DEBUG
                     print("💾 CASHOUT: Payout info saved")
+                    #endif
                 }
                 
                 // Process cash out

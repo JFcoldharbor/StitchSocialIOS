@@ -105,7 +105,9 @@ class VideoCoordinator: ObservableObject {
         self.audioExtractor = audioExtractor ?? AudioExtractionService()
         self.notificationService = notificationService ?? NotificationService()
         
+        #if DEBUG
         print("🎬 VIDEO COORDINATOR: Initialized with FAST COMPRESSION + TRIM SUPPORT")
+        #endif
     }
     
     // MARK: - 🆕 NEW: Background Pre-Compression
@@ -114,14 +116,18 @@ class VideoCoordinator: ObservableObject {
     /// Call this as soon as recording stops, before user enters review screen
     func startBackgroundCompression(videoURL: URL) {
         guard preCompressedVideoURL == nil else {
+            #if DEBUG
             print("⚠️ BACKGROUND COMPRESS: Already have pre-compressed video")
+            #endif
             return
         }
         
         preCompressionComplete = false
         preCompressionProgress = 0.0
         
+        #if DEBUG
         print("🚀 BACKGROUND COMPRESS: Starting while user reviews...")
+        #endif
         
         Task {
             do {
@@ -139,11 +145,15 @@ class VideoCoordinator: ObservableObject {
                 await MainActor.run {
                     self.preCompressedVideoURL = result.outputURL
                     self.preCompressionComplete = true
+                    #if DEBUG
                     print("✅ BACKGROUND COMPRESS: Complete - \(result.compressedSize / 1024 / 1024)MB in \(String(format: "%.1f", result.processingTime))s")
+                    #endif
                 }
                 
             } catch {
+                #if DEBUG
                 print("⚠️ BACKGROUND COMPRESS: Failed - \(error.localizedDescription)")
+                #endif
                 // Not fatal - we'll compress on-demand during post
             }
         }
@@ -157,7 +167,9 @@ class VideoCoordinator: ObservableObject {
         preCompressedVideoURL = nil
         preCompressionComplete = false
         preCompressionProgress = 0.0
+        #if DEBUG
         print("🔄 BACKGROUND COMPRESS: Invalidated (trim changed)")
+        #endif
     }
     
     // MARK: - 🔧 UPDATED: Main Video Creation (with trim support)
@@ -199,17 +211,25 @@ class VideoCoordinator: ObservableObject {
         aiAnalysisProgress = 0.0
         uploadProgress = 0.0
         
+        #if DEBUG
         print("🚀 FAST WORKFLOW: Starting optimized processing")
+        #endif
+        #if DEBUG
         print("🎬 VIDEO: \(recordedVideoURL.lastPathComponent)")
+        #endif
         
         // Log trim info
         if let start = trimStartTime, let end = trimEndTime {
+            #if DEBUG
             print("✂️ TRIM: \(String(format: "%.1f", start))s - \(String(format: "%.1f", end))s")
+            #endif
         }
         
         // Log pre-compression status
         if let preURL = preCompressedURL ?? preCompressedVideoURL, preCompressionComplete {
+            #if DEBUG
             print("⚡ PRE-COMPRESSED: Using background-compressed video")
+            #endif
         }
         
         defer {
@@ -297,7 +317,9 @@ class VideoCoordinator: ObservableObject {
         currentTask = "Processing video..."
         await updateProgress(0.0)
         
+        #if DEBUG
         print("⚡ PARALLEL: Starting audio + compression + AI")
+        #endif
         
         var audioResult: AudioExtractionResult?
         var compressionResult: CompressionResult?
@@ -330,7 +352,9 @@ class VideoCoordinator: ObservableObject {
                 
                 // Check if we have pre-compressed video (no trim change)
                 if let preURL = preCompressedURL, trimStartTime == nil {
+                    #if DEBUG
                     print("⚡ COMPRESSION: Using pre-compressed video!")
+                    #endif
                     compressedURL = preURL
                     originalSize = await self.getFileSize(videoURL)
                     compressedSize = await self.getFileSize(preURL)
@@ -341,7 +365,9 @@ class VideoCoordinator: ObservableObject {
                     
                 } else if let start = trimStartTime, let end = trimEndTime {
                     // Compress WITH trim (single pass - most efficient)
+                    #if DEBUG
                     print("🗜️ COMPRESSION: Fast compress + trim in single pass")
+                    #endif
                     
                     let result = try await self.fastCompressor.compressWithTrim(
                         sourceURL: videoURL,
@@ -360,7 +386,9 @@ class VideoCoordinator: ObservableObject {
                     
                 } else {
                     // Standard fast compression (no trim)
+                    #if DEBUG
                     print("🗜️ COMPRESSION: Fast compress (no trim)")
+                    #endif
                     
                     let result = try await self.fastCompressor.compress(
                         sourceURL: videoURL,
@@ -391,7 +419,9 @@ class VideoCoordinator: ObservableObject {
                     processingTime: processingTime
                 )
                 
+                #if DEBUG
                 print("✅ COMPRESSION: \(originalSize / 1024 / 1024)MB → \(compressedSize / 1024 / 1024)MB in \(String(format: "%.1f", processingTime))s")
+                #endif
                 
                 return .compression(result)
             }
@@ -400,7 +430,9 @@ class VideoCoordinator: ObservableObject {
             group.addTask { [weak self] in
                 guard let self = self else { throw VideoCreationError.unknown("Coordinator deallocated") }
                 
+                #if DEBUG
                 print("🧠 PARALLEL: Starting AI analysis")
+                #endif
                 
                 let aiResult = await self.aiAnalyzer.analyzeVideo(
                     url: videoURL,
@@ -420,17 +452,23 @@ class VideoCoordinator: ObservableObject {
                 switch task {
                 case .audioExtraction(let result):
                     audioResult = result
+                    #if DEBUG
                     print("🎵 PARALLEL: Audio extraction complete")
+                    #endif
                 case .compression(let result):
                     compressionResult = result
                     self.compressionResult = result
                     self.compressedVideoURL = result.outputURL
+                    #if DEBUG
                     print("🗜️ PARALLEL: Compression complete - \(String(format: "%.0f", result.compressionRatio * 100))% of original")
+                    #endif
                 case .aiAnalysis(let result):
                     aiResult = result
                     self.aiAnalysisResult = result
                     if let title = result?.title {
+                        #if DEBUG
                         print("🧠 PARALLEL: AI analysis complete - '\(title)'")
+                        #endif
                     }
                 }
             }
@@ -442,7 +480,9 @@ class VideoCoordinator: ObservableObject {
             
             self.extractedAudioURL = audio.audioURL
             
+            #if DEBUG
             print("✅ PARALLEL PROCESSING: All tasks complete")
+            #endif
             await self.updateProgress(0.7)
             
             return ParallelProcessingResult(
@@ -467,7 +507,9 @@ class VideoCoordinator: ObservableObject {
         currentTask = "Uploading video..."
         await updateProgress(0.7)
         
+        #if DEBUG
         print("☁️ UPLOAD: Starting with compressed video (\(compressionResult.compressedSize / 1024 / 1024)MB)")
+        #endif
         
         let metadata = VideoUploadMetadata(
             title: aiResult?.title ?? getDefaultTitle(for: recordingContext),
@@ -513,7 +555,9 @@ class VideoCoordinator: ObservableObject {
         await updateProgress(0.9)
         uploadResult = result
         
+        #if DEBUG
         print("☁️ UPLOAD: Complete - \(result.videoURL)")
+        #endif
         return result
     }
     
@@ -551,7 +595,9 @@ class VideoCoordinator: ObservableObject {
             creatorName: ""
         )
         
+        #if DEBUG
         print("📝 FEED INTEGRATION: Title = '\(finalTitle)'")
+        #endif
         
         let createdVideo = try await uploadService.createVideoDocument(
             uploadResult: uploadResult,
@@ -592,9 +638,13 @@ class VideoCoordinator: ObservableObject {
                     videoTitle: videoTitle,
                     mentionContext: "tagged in video"
                 )
+                #if DEBUG
                 print("✅ MENTION: Sent to \(taggedUserID)")
+                #endif
             } catch {
+                #if DEBUG
                 print("⚠️ MENTION: Failed for \(taggedUserID) - \(error)")
+                #endif
             }
         }
     }
@@ -640,7 +690,9 @@ class VideoCoordinator: ObservableObject {
                         parentCreatorID: "",
                         threadUserIDs: []
                     )
+                    #if DEBUG
                     print("✅ STITCH: Notified thread creator \(originalCreatorID)")
+                    #endif
                 }
 
                 // 2. Notify depth-1 horizontal participants (targeted query, cached)
@@ -658,11 +710,15 @@ class VideoCoordinator: ObservableObject {
                         parentCreatorID: "",
                         threadUserIDs: Array(horizontalParticipants)
                     )
+                    #if DEBUG
                     print("✅ STITCH: Notified \(horizontalParticipants.count) depth-1 participants in thread \(threadID)")
+                    #endif
                 }
 
             } catch {
+                #if DEBUG
                 print("⚠️ STITCH: Notification failed for thread \(threadID) - \(error)")
+                #endif
             }
         }
     }
@@ -704,9 +760,15 @@ class VideoCoordinator: ObservableObject {
             performanceStats.sub20SecondCount += 1
         }
         
+        #if DEBUG
         print("🎉 WORKFLOW COMPLETE!")
+        #endif
+        #if DEBUG
         print("⏱️ TOTAL TIME: \(String(format: "%.1f", totalTime))s")
+        #endif
+        #if DEBUG
         print("🎯 SUB-20s: \(totalTime < 20 ? "YES ✓" : "NO")")
+        #endif
     }
     
     private func handleCreationError(_ error: Error) async {

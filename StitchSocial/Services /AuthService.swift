@@ -45,7 +45,9 @@ class AuthService: ObservableObject {
     
     init() {
         setupAuthListener()
+        #if DEBUG
         print("🔧 AUTH SERVICE: Enhanced auth using database: \(Config.Firebase.databaseName)")
+        #endif
         verifyFirebaseConfiguration()
     }
     
@@ -58,17 +60,29 @@ class AuthService: ObservableObject {
     // MARK: - Firebase Configuration Verification
     
     private func verifyFirebaseConfiguration() {
+        #if DEBUG
         print("🔍 FIREBASE CONFIG: Verifying setup...")
+        #endif
         
         if let app = Auth.auth().app {
+            #if DEBUG
             print("✅ FIREBASE: App configured - \(app.name)")
+            #endif
+            #if DEBUG
             print("✅ FIREBASE: Database name - \(Config.Firebase.databaseName)")
+            #endif
         } else {
+            #if DEBUG
             print("❌ FIREBASE: App not configured")
+            #endif
         }
         
+        #if DEBUG
         print("✅ FIRESTORE: Configuration ready")
+        #endif
+        #if DEBUG
         print("✅ FUNCTIONS: Region configured - us-central1")
+        #endif
     }
     
     // MARK: - Authenticated Cloud Functions
@@ -79,22 +93,32 @@ class AuthService: ObservableObject {
             throw StitchError.authenticationError("User not authenticated for function call")
         }
         
+        #if DEBUG
         print("🔐 AUTH: Calling authenticated function: \(name)")
+        #endif
         
         do {
             let token = try await user.getIDToken(forcingRefresh: true)
+            #if DEBUG
             print("✅ AUTH: Fresh token retrieved for function call")
+            #endif
             
             let result = try await functions.httpsCallable(name).call(data)
             
+            #if DEBUG
             print("✅ AUTH: Function \(name) called successfully")
+            #endif
             return result.data
             
         } catch {
+            #if DEBUG
             print("❌ AUTH: Function \(name) failed: \(error)")
+            #endif
             
             if error.localizedDescription.contains("UNAUTHENTICATED") {
+                #if DEBUG
                 print("🔄 AUTH: Retrying with force token refresh...")
+                #endif
                 let _ = try await user.getIDToken(forcingRefresh: true)
                 let retryResult = try await functions.httpsCallable(name).call(data)
                 return retryResult.data
@@ -132,7 +156,9 @@ class AuthService: ObservableObject {
         
         do {
             let result = try await auth.signIn(withEmail: email, password: password)
+            #if DEBUG
             print("✅ AUTH: Email sign in successful: \(result.user.uid)")
+            #endif
             
             // Check email verification status and cache it
             isEmailVerified = result.user.isEmailVerified
@@ -158,15 +184,21 @@ class AuthService: ObservableObject {
             )
 
             // FCM token registration is now automatic via FCMPushManager
+            #if DEBUG
             print("📱 AUTH: FCM token registration handled by FCMPushManager")
+            #endif
+            #if DEBUG
             print("📧 AUTH: Email verified: \(isEmailVerified)")
+            #endif
 
             return userProfile
             
         } catch {
             authState = .error
             lastError = .authenticationError("Sign in failed: \(error.localizedDescription)")
+            #if DEBUG
             print("❌ AUTH: Email sign in failed: \(error)")
+            #endif
             throw lastError!
         }
     }
@@ -181,15 +213,27 @@ class AuthService: ObservableObject {
         defer { isLoading = false }
         
         do {
+            #if DEBUG
             print("🔍 PRE-SIGNUP DEBUG:")
+            #endif
+            #if DEBUG
             print("   Database: \(Config.Firebase.databaseName)")
+            #endif
+            #if DEBUG
             print("   Auth state: \(auth.currentUser?.uid ?? "none")")
+            #endif
             
             let result = try await auth.createUser(withEmail: email, password: password)
             
+            #if DEBUG
             print("🔍 POST-SIGNUP DEBUG:")
+            #endif
+            #if DEBUG
             print("   Firebase User: \(result.user.uid)")
+            #endif
+            #if DEBUG
             print("   Email: \(result.user.email ?? "none")")
+            #endif
             
             if let displayName = displayName {
                 let changeRequest = result.user.createProfileChangeRequest()
@@ -201,30 +245,40 @@ class AuthService: ObservableObject {
             Task {
                 do {
                     try await result.user.sendEmailVerification()
+                    #if DEBUG
                     print("📧 AUTH: Verification email sent to \(email)")
+                    #endif
                 } catch {
+                    #if DEBUG
                     print("⚠️ AUTH: Failed to send verification email: \(error) — non-blocking")
+                    #endif
                 }
             }
             
             isEmailVerified = false
             UserDefaults.standard.set(false, forKey: CacheKeys.emailVerified)
             
+            #if DEBUG
             print("✅ AUTH: Email sign up successful: \(result.user.uid)")
+            #endif
             
             let userProfile = try await createNewUserProfile(for: result.user, providedUsername: username, providedDisplayName: displayName, accountType: accountType, brandName: brandName, websiteURL: websiteURL, businessCategory: businessCategory)
             currentUser = userProfile
             authState = .authenticated
             
             // FCM token registration is now automatic via FCMPushManager
+            #if DEBUG
             print("📱 AUTH: FCM token registration handled by FCMPushManager")
+            #endif
             
             return userProfile
             
         } catch {
             authState = .error
             lastError = .authenticationError("Sign up failed: \(error.localizedDescription)")
+            #if DEBUG
             print("❌ AUTH: Email sign up failed: \(error)")
+            #endif
             throw lastError!
         }
     }
@@ -259,12 +313,16 @@ class AuthService: ObservableObject {
             if verified {
                 // Cache it permanently — email can't become un-verified
                 UserDefaults.standard.set(true, forKey: CacheKeys.emailVerified)
+                #if DEBUG
                 print("✅ AUTH: Email verification confirmed and cached")
+                #endif
             }
             
             return verified
         } catch {
+            #if DEBUG
             print("⚠️ AUTH: Failed to check email verification: \(error)")
+            #endif
             return false
         }
     }
@@ -276,14 +334,18 @@ class AuthService: ObservableObject {
         }
         
         guard !user.isEmailVerified else {
+            #if DEBUG
             print("✅ AUTH: Email already verified, no resend needed")
+            #endif
             isEmailVerified = true
             UserDefaults.standard.set(true, forKey: CacheKeys.emailVerified)
             return
         }
         
         try await user.sendEmailVerification()
+        #if DEBUG
         print("📧 AUTH: Verification email resent to \(user.email ?? "unknown")")
+        #endif
     }
     
     /// Sign out current user
@@ -296,7 +358,9 @@ class AuthService: ObservableObject {
         
         do {
             // No need to stop notification listener - handled by NotificationViewModel
+            #if DEBUG
             print("🔓 AUTH: Signing out user")
+            #endif
 
             // Drop the coin-balance listener BEFORE Firebase clears auth so
             // the snapshot listener doesn't briefly retry against a stale
@@ -312,11 +376,15 @@ class AuthService: ObservableObject {
             // Clear cached verification on sign out
             UserDefaults.standard.removeObject(forKey: CacheKeys.emailVerified)
             
+            #if DEBUG
             print("✅ AUTH: Sign out successful")
+            #endif
         } catch {
             authState = .error
             lastError = .authenticationError("Sign out failed: \(error.localizedDescription)")
+            #if DEBUG
             print("❌ AUTH: Sign out failed: \(error)")
+            #endif
             throw lastError!
         }
     }
@@ -327,10 +395,14 @@ class AuthService: ObservableObject {
         
         do {
             try await auth.sendPasswordReset(withEmail: email)
+            #if DEBUG
             print("✅ AUTH: Password reset email sent to \(email)")
+            #endif
         } catch {
             lastError = .authenticationError("Password reset failed: \(error.localizedDescription)")
+            #if DEBUG
             print("❌ AUTH: Password reset failed: \(error)")
+            #endif
             throw lastError!
         }
     }
@@ -373,7 +445,9 @@ class AuthService: ObservableObject {
         
         currentUser = try await loadUserProfile(userID: userID)
         
+        #if DEBUG
         print("✅ AUTH: User profile updated")
+        #endif
     }
     
     /// Refresh currentUser from Firestore — call after external profile edits (UserService.updateProfile)
@@ -382,9 +456,13 @@ class AuthService: ObservableObject {
         guard let userID = auth.currentUser?.uid else { return }
         do {
             currentUser = try await loadUserProfile(userID: userID)
+            #if DEBUG
             print("🔄 AUTH: Current user refreshed")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ AUTH: Failed to refresh current user: \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -407,7 +485,9 @@ class AuthService: ObservableObject {
         }
         
         guard authState != .signingIn && authState != .authenticating else {
+            #if DEBUG
             print("🔄 AUTH STATE: Skipping state change during authentication process")
+            #endif
             return
         }
         
@@ -418,7 +498,9 @@ class AuthService: ObservableObject {
         if let cached = currentUser,
            cached.id == user.uid,
            authState == .authenticated {
+            #if DEBUG
             print("✅ AUTH STATE: Already authenticated with current user")
+            #endif
             return
         }
         
@@ -430,12 +512,18 @@ class AuthService: ObservableObject {
             isEmailVerified = UserDefaults.standard.bool(forKey: CacheKeys.emailVerified)
             
             // FCM token registration is automatic via FCMPushManager
+            #if DEBUG
             print("✅ AUTH: User profile loaded from state change")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ AUTH: Failed to load user profile in state change: \(error)")
+            #endif
             
             if error.localizedDescription.contains("User profile not found") {
+                #if DEBUG
                 print("🔍 AUTH: Profile not found - user might be in signup process")
+                #endif
                 return
             }
             
@@ -449,11 +537,21 @@ class AuthService: ObservableObject {
     private func createNewUserProfile(for user: User, providedUsername: String? = nil, providedDisplayName: String? = nil, accountType: AccountType = .personal, brandName: String? = nil, websiteURL: String? = nil, businessCategory: AdCategory? = nil) async throws -> BasicUserInfo {
         let email = user.email ?? ""
         
+        #if DEBUG
         print("🔍 CREATING USER PROFILE DEBUG:")
+        #endif
+        #if DEBUG
         print("   User UID: \(user.uid)")
+        #endif
+        #if DEBUG
         print("   Email: \(email)")
+        #endif
+        #if DEBUG
         print("   Account Type: \(accountType.rawValue)")
+        #endif
+        #if DEBUG
         print("   Database: \(Config.Firebase.databaseName)")
+        #endif
         
         let specialConfig = SpecialUsersConfig.getSpecialUser(for: email)
         
@@ -531,28 +629,40 @@ class AuthService: ObservableObject {
         }
         
         do {
+            #if DEBUG
             print("🔍 ATTEMPTING FIRESTORE WRITE...")
+            #endif
             
             try await db.collection(FirebaseSchema.Collections.users)
                 .document(user.uid)
                 .setData(userData)
             
+            #if DEBUG
             print("✅ USER PROFILE: Successfully created for \(user.uid)")
+            #endif
             
             let verifyDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(user.uid)
                 .getDocument()
             
             if verifyDoc.exists {
+                #if DEBUG
                 print("✅ VERIFICATION: Document exists in Firestore")
+                #endif
             } else {
+                #if DEBUG
                 print("❌ VERIFICATION: Document does not exist after creation!")
+                #endif
                 throw StitchError.authenticationError("Profile creation verification failed")
             }
             
         } catch {
+            #if DEBUG
             print("❌ FIRESTORE WRITE FAILED:")
+            #endif
+            #if DEBUG
             print("   Error: \(error)")
+            #endif
             throw StitchError.authenticationError("Failed to create user profile: \(error.localizedDescription)")
         }
         
@@ -561,9 +671,13 @@ class AuthService: ObservableObject {
         let basicUserInfo = createBasicUserInfo(from: userData, uid: user.uid)
         
         if let special = specialConfig {
+            #if DEBUG
             print("🎉 AUTH: Special user created - \(special.role.displayName): \(username)")
+            #endif
         } else {
+            #if DEBUG
             print("✅ AUTH: Regular user created: \(username)")
+            #endif
         }
         
         return basicUserInfo
@@ -603,7 +717,9 @@ class AuthService: ObservableObject {
         let autoFollowUsers = SpecialUsersConfig.getAutoFollowUsers()
         
         for specialUser in autoFollowUsers {
+            #if DEBUG
             print("ℹ️ AUTH: Would auto-follow \(specialUser.email)")
+            #endif
         }
     }
     
@@ -700,7 +816,9 @@ extension AuthService {
 extension AuthService {
     
     func debugCleanUserState() async {
+        #if DEBUG
         print("🧹 AUTH: Cleaning user state...")
+        #endif
         try? auth.signOut()
         currentUser = nil
         authState = .unauthenticated
@@ -708,16 +826,30 @@ extension AuthService {
         isLoading = false
         isEmailVerified = false
         UserDefaults.standard.removeObject(forKey: CacheKeys.emailVerified)
+        #if DEBUG
         print("🧹 AUTH: User state cleaned")
+        #endif
     }
     
     func helloWorldTest() {
+        #if DEBUG
         print("👋 AUTH SERVICE: Complete Hello World - Ready for authentication")
+        #endif
+        #if DEBUG
         print("📱 AUTH SERVICE: Current state: \(authState.displayName)")
+        #endif
+        #if DEBUG
         print("👤 AUTH SERVICE: Current user: \(currentUser?.username ?? "None")")
+        #endif
+        #if DEBUG
         print("🌟 AUTH SERVICE: Special user: \(isSpecialUser)")
+        #endif
+        #if DEBUG
         print("📧 AUTH SERVICE: Email verified: \(isEmailVerified)")
+        #endif
+        #if DEBUG
         print("✅ AUTH SERVICE: FCM handled by FCMPushManager automatically")
+        #endif
     }
     
     
@@ -736,7 +868,9 @@ extension AuthService {
         for accountID in defaultAccounts {
             do {
                 try await userService.followUser(followerID: userID, followingID: accountID)
+                #if DEBUG
                 print("✅ AUTO-FOLLOW: User \(userID) followed \(accountID)")
+                #endif
                 
                 // Send follow notification — fire and forget
                 Task {
@@ -744,13 +878,19 @@ extension AuthService {
                         let _ = try await functions.httpsCallable("stitchnoti_sendFollow").call([
                             "recipientID": accountID
                         ])
+                        #if DEBUG
                         print("🔔 AUTO-FOLLOW: Notification sent to \(accountID)")
+                        #endif
                     } catch {
+                        #if DEBUG
                         print("⚠️ AUTO-FOLLOW: Notification failed for \(accountID): \(error)")
+                        #endif
                     }
                 }
             } catch {
+                #if DEBUG
                 print("⚠️ AUTO-FOLLOW: Failed to follow \(accountID): \(error)")
+                #endif
             }
         }
     }

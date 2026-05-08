@@ -36,7 +36,9 @@ class DeepLinkHandler: ObservableObject {
     
     /// Process incoming deep link URL
     func handleURL(_ url: URL) {
+        #if DEBUG
         print("🔗 DEEP LINK: Processing URL - \(url.absoluteString)")
+        #endif
         
         isProcessing = true
         
@@ -48,16 +50,24 @@ class DeepLinkHandler: ObservableObject {
             handleReferralInvite(code: code)
             
         case .profile(let userID):
+            #if DEBUG
             print("🔗 DEEP LINK: Navigate to profile \(userID)")
+            #endif
             
         case .video(let videoID):
+            #if DEBUG
             print("🔗 DEEP LINK: Navigate to video \(videoID)")
+            #endif
             
         case .thread(let threadID):
+            #if DEBUG
             print("🔗 DEEP LINK: Navigate to thread \(threadID)")
+            #endif
             
         case .unknown:
+            #if DEBUG
             print("❌ DEEP LINK: Unknown URL format")
+            #endif
         }
         
         processedLink = destination
@@ -99,13 +109,17 @@ class DeepLinkHandler: ObservableObject {
     // MARK: - Referral Handling
     
     private func handleReferralInvite(code: String) {
+        #if DEBUG
         print("🎯 DEEP LINK: Processing referral invite with code: \(code)")
+        #endif
         
         // Store the referral code and show signup prompt
         pendingReferralCode = code
         showingReferralSignup = true
         
+        #if DEBUG
         print("📝 DEEP LINK: Stored referral code for signup flow")
+        #endif
     }
     
     // MARK: - Helper Methods

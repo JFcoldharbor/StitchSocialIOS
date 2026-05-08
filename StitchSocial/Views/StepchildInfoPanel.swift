@@ -417,13 +417,19 @@ struct StepchildInfoPanel: View {
             stepchildren: sampleStepchildren,
             isVisible: true,
             onStepchildSelected: { stepchild in
+                #if DEBUG
                 print("Selected stepchild: \(stepchild.creatorName)")
+                #endif
             },
             onClose: {
+                #if DEBUG
                 print("Panel closed")
+                #endif
             },
             onEngagement: { video, type in
+                #if DEBUG
                 print("Engagement: \(type) on \(video.creatorName)")
+                #endif
             }
         )
     }

@@ -209,7 +209,9 @@ struct ProgressiveHypeButton: View {
     /// 🆕 Unified tap handler - isBurst determines regular vs burst engagement
     private func handleTap(isBurst: Bool) {
         let mode = isBurst ? "BURST" : "regular"
+        #if DEBUG
         print("🔴 HYPE TAP (\(mode)) - videoID: \(videoID), tier: \(userTier)")
+        #endif
         
         showingBurstIndicator = false
         

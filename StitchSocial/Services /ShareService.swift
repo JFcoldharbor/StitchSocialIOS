@@ -51,7 +51,9 @@ class ShareService: ObservableObject {
         from viewController: UIViewController? = nil
     ) {
         guard let videoURL = URL(string: video.videoURL) else {
+            #if DEBUG
             print("❌ SHARE: Invalid video URL")
+            #endif
             return
         }
         
@@ -101,7 +103,9 @@ class ShareService: ObservableObject {
                                 from: viewController
                             )
                         case .failure(let error):
+                            #if DEBUG
                             print("❌ SHARE: Promo export failed — \(error.localizedDescription)")
+                            #endif
                             // Fallback to regular share
                             self.shareRegular(
                                 localURL: localURL,
@@ -158,7 +162,9 @@ class ShareService: ObservableObject {
                     )
                     
                 case .failure(let error):
+                    #if DEBUG
                     print("❌ SHARE: Watermark failed - \(error.localizedDescription)")
+                    #endif
                     self.presentShareSheet(
                         videoURL: localURL,
                         video: video,
@@ -180,7 +186,9 @@ class ShareService: ObservableObject {
     func shareCollage(threadData: ThreadData) {
         self.collageThreadData = threadData
         self.showCollageSelection = true
+        #if DEBUG
         print("🎬 SHARE: Launching collage selection for thread \(threadData.id) (\(threadData.childVideos.count) replies)")
+        #endif
     }
     
     /// Share a completed collage video file
@@ -212,7 +220,9 @@ class ShareService: ObservableObject {
         
         activityVC.completionWithItemsHandler = { [weak self] activityType, completed, _, _ in
             if completed {
+                #if DEBUG
                 print("✅ SHARE: Collage shared via \(activityType?.rawValue ?? "unknown")")
+                #endif
             }
             if let url = self?.currentShareURL {
                 try? FileManager.default.removeItem(at: url)
@@ -230,7 +240,9 @@ class ShareService: ObservableObject {
         }
         
         presenter?.present(activityVC, animated: true)
+        #if DEBUG
         print("📤 SHARE: Presenting collage share sheet")
+        #endif
     }
     
     /// Dismiss collage selection
@@ -250,22 +262,30 @@ class ShareService: ObservableObject {
         
         // Check disk cache — avoid re-downloading videos we already played
         if let cachedURL = VideoDiskCache.shared.getCachedURL(for: url.absoluteString) {
+            #if DEBUG
             print("✅ SHARE: Using disk-cached video")
+            #endif
             completion(cachedURL)
             return
         }
         
+        #if DEBUG
         print("📥 SHARE: Downloading video...")
+        #endif
         
         let task = URLSession.shared.downloadTask(with: url) { localURL, response, error in
             if let error = error {
+                #if DEBUG
                 print("❌ SHARE: Download failed - \(error.localizedDescription)")
+                #endif
                 completion(nil)
                 return
             }
             
             guard let localURL = localURL else {
+                #if DEBUG
                 print("❌ SHARE: No local URL after download")
+                #endif
                 completion(nil)
                 return
             }
@@ -277,10 +297,14 @@ class ShareService: ObservableObject {
             
             do {
                 try FileManager.default.moveItem(at: localURL, to: tempURL)
+                #if DEBUG
                 print("✅ SHARE: Video downloaded to \(tempURL)")
+                #endif
                 completion(tempURL)
             } catch {
+                #if DEBUG
                 print("❌ SHARE: Failed to move downloaded file - \(error)")
+                #endif
                 completion(nil)
             }
         }
@@ -329,7 +353,9 @@ class ShareService: ObservableObject {
         // Completion handler
         activityVC.completionWithItemsHandler = { [weak self] activityType, completed, items, error in
             if completed {
+                #if DEBUG
                 print("✅ SHARE: Shared via \(activityType?.rawValue ?? "unknown")")
+                #endif
             }
             
             // Cleanup temp file
@@ -351,7 +377,9 @@ class ShareService: ObservableObject {
         }
         
         presenter?.present(activityVC, animated: true)
+        #if DEBUG
         print("📤 SHARE: Presenting share sheet")
+        #endif
     }
     
     // MARK: - Helper to get top view controller

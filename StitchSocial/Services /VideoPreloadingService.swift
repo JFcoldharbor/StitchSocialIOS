@@ -113,7 +113,9 @@ class VideoPreloadingService: ObservableObject {
     
     /// Handle kill all players notification
     private func handleKillAllPlayers() {
+        #if DEBUG
         print("🛑 PRELOAD: Received kill all players notification")
+        #endif
         pauseAllPlayback()
     }
     
@@ -201,7 +203,9 @@ class VideoPreloadingService: ObservableObject {
         // Cancel combine subscriptions
         cancellables.removeAll()
         
+        #if DEBUG
         print("🧹 PRELOAD: Cleaned up all observers")
+        #endif
     }
     
     // MARK: - Core Preloading API
@@ -213,14 +217,18 @@ class VideoPreloadingService: ObservableObject {
         
         // Return existing player if available
         if let existingPlayer = playerPool[video.id] {
+            #if DEBUG
             print("🎬 PRELOAD: Using cached player for \(video.id.prefix(8))")
+            #endif
             poolStats.cacheHits += 1
             return existingPlayer
         }
         
         // Don't create new players if in critical memory state
         if memoryPressureLevel >= .critical && currentlyPlayingVideoID != nil {
+            #if DEBUG
             print("⚠️ PRELOAD: Memory critical, not creating new player for \(video.id.prefix(8))")
+            #endif
             return nil
         }
         
@@ -238,7 +246,9 @@ class VideoPreloadingService: ObservableObject {
         
         // Don't preload if memory is critical
         guard memoryPressureLevel < .critical else {
+            #if DEBUG
             print("⚠️ PRELOAD: Skipping preload - memory critical")
+            #endif
             // Still ensure current video works
             if playerPool[current.id] == nil {
                 await preloadVideo(current, priority: .high)
@@ -261,7 +271,9 @@ class VideoPreloadingService: ObservableObject {
         let videosToPreload = Array(upcoming.prefix(effectiveDistance))
         preloadQueue = videosToPreload.map { $0.id }
         
+        #if DEBUG
         print("🎬 PRELOAD: Queued \(videosToPreload.count) videos for preloading")
+        #endif
         
         // Start preloading in background
         await preloadQueuedVideos(videos: videosToPreload, priority: priority)
@@ -271,25 +283,33 @@ class VideoPreloadingService: ObservableObject {
     func preloadVideo(_ video: CoreVideoMetadata, priority: PreloadPriority = .normal) async {
         guard !currentlyPreloading.contains(video.id),
               playerPool[video.id] == nil else {
+            #if DEBUG
             print("🎬 PRELOAD: Video \(video.id.prefix(8)) already preloading/cached")
+            #endif
             return
         }
         
         // Skip non-essential preloads under memory pressure
         if memoryPressureLevel >= .critical && priority != .high {
+            #if DEBUG
             print("⚠️ PRELOAD: Skipping low-priority preload for \(video.id.prefix(8))")
+            #endif
             return
         }
         
         // PHASE 1 FIX: Enforce pool capacity BEFORE adding new player
         while playerPool.count >= currentMaxPoolSize {
+            #if DEBUG
             print("🎬 PRELOAD: Pool at capacity (\(currentMaxPoolSize)), evicting oldest")
+            #endif
             evictOldestPlayer()
         }
         
         // Check concurrent preload limit
         guard currentlyPreloading.count < maxConcurrentPreloads else {
+            #if DEBUG
             print("🎬 PRELOAD: Concurrent limit reached, queueing \(video.id.prefix(8))")
+            #endif
             if !preloadQueue.contains(video.id) {
                 preloadQueue.append(video.id)
             }
@@ -321,7 +341,9 @@ class VideoPreloadingService: ObservableObject {
         currentlyPlayingVideoID = videoID
         protectedVideoIDs.insert(videoID)
         updateAccessOrder(for: videoID)
+        #if DEBUG
         print("🎬 PRELOAD: Marked \(videoID.prefix(8)) as currently playing (protected)")
+        #endif
     }
     
     /// Protect specific video IDs from eviction (e.g. adjacent videos)
@@ -335,7 +357,9 @@ class VideoPreloadingService: ObservableObject {
     /// Call when playback stops
     func clearCurrentlyPlaying() {
         if let videoID = currentlyPlayingVideoID {
+            #if DEBUG
             print("🎬 PRELOAD: Cleared currently playing: \(videoID.prefix(8))")
+            #endif
         }
         currentlyPlayingVideoID = nil
         protectedVideoIDs.removeAll()
@@ -391,7 +415,9 @@ class VideoPreloadingService: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("🎬 PRELOAD: Horizontal setup complete - protected \(protectIDs.count) videos")
+        #endif
     }
     
     /// Smart preloading for vertical stitch navigation
@@ -420,7 +446,9 @@ class VideoPreloadingService: ObservableObject {
             await preloadVideo(allVideos[index], priority: priority)
         }
         
+        #if DEBUG
         print("🎬 PRELOAD: Vertical setup complete - \(preloadIndices.count) videos in thread")
+        #endif
     }
     
     // MARK: - Memory Management Actions
@@ -442,7 +470,9 @@ class VideoPreloadingService: ObservableObject {
         lastWarningTime = now
         escalatePressure(to: level)
         
+        #if DEBUG
         print("⚠️ MEMORY: Warning #\(memoryWarningCount) - escalating to \(level)")
+        #endif
     }
     
     private func escalatePressure(to level: MemoryPressureLevel) {
@@ -459,17 +489,23 @@ class VideoPreloadingService: ObservableObject {
             break
             
         case .elevated:
+            #if DEBUG
             print("🟡 MEMORY: Elevated cleanup")
+            #endif
             reducePoolSize(to: 4)
             URLCache.shared.removeAllCachedResponses()
             
         case .critical:
+            #if DEBUG
             print("🟠 MEMORY: Critical cleanup")
+            #endif
             reducePoolSize(to: 2)
             clearPreloadedPlayers()
             
         case .emergency:
+            #if DEBUG
             print("🔴 MEMORY: Emergency cleanup")
+            #endif
             clearAllExceptCurrent()
             preloadQueue.removeAll()
             currentlyPreloading.removeAll()
@@ -488,14 +524,18 @@ class VideoPreloadingService: ObservableObject {
                     self.memoryPressureLevel = .normal
                     self.memoryWarningCount = 0
                     self.restoreFullPoolSize()
+                    #if DEBUG
                     print("✅ MEMORY: Pressure returned to normal")
+                    #endif
                 }
             }
         }
     }
     
     private func handleEnterBackground() {
+        #if DEBUG
         print("📱 PRELOAD: Entering background")
+        #endif
         
         // Pause all playback
         pauseAllPlayback()
@@ -508,7 +548,9 @@ class VideoPreloadingService: ObservableObject {
     }
     
     private func handleEnterForeground() {
+        #if DEBUG
         print("📱 PRELOAD: Entering foreground")
+        #endif
         
         // Reset memory state
         memoryWarningCount = 0
@@ -534,7 +576,9 @@ class VideoPreloadingService: ObservableObject {
         // Evict excess players using LRU
         trimPoolToSize(size)
         
+        #if DEBUG
         print("📉 PRELOAD: Pool reduced to \(size) players")
+        #endif
     }
     
     /// Restore full preloading capability
@@ -544,7 +588,9 @@ class VideoPreloadingService: ObservableObject {
         currentMaxPoolSize = defaultPoolSize
         isInReducedMode = false
         
+        #if DEBUG
         print("📈 PRELOAD: Pool restored to \(defaultPoolSize) players")
+        #endif
     }
     
     /// Trim pool using LRU eviction
@@ -594,7 +640,9 @@ class VideoPreloadingService: ObservableObject {
             preloadProgress.removeValue(forKey: videoID)
             accessOrder.removeAll { $0 == videoID }
             
+            #if DEBUG
             print("🎬 PRELOAD: Cleared player for \(videoID.prefix(8))")
+            #endif
         }
         
         updatePoolStats()
@@ -612,7 +660,9 @@ class VideoPreloadingService: ObservableObject {
         accessOrder.removeAll()
         currentlyPlayingVideoID = nil
         
+        #if DEBUG
         print("🎬 PRELOAD: Cleared all players from pool")
+        #endif
     }
     
     /// Clear preloaded players but keep currently playing
@@ -625,7 +675,9 @@ class VideoPreloadingService: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("🧹 PRELOAD: Cleared preloaded players, kept current")
+        #endif
     }
     
     /// Emergency: Keep only currently playing and protected
@@ -638,7 +690,9 @@ class VideoPreloadingService: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("🧹 PRELOAD: Emergency cleanup - kept only current player")
+        #endif
     }
     
     /// Pause all playback (for background)
@@ -646,7 +700,9 @@ class VideoPreloadingService: ObservableObject {
         for (_, player) in playerPool {
             player.pause()
         }
+        #if DEBUG
         print("⏸️ PRELOAD: Paused all playback")
+        #endif
     }
     
     /// Get preload status for video
@@ -682,7 +738,9 @@ class VideoPreloadingService: ObservableObject {
     /// PHASE 1 FIX: Creates player AND adds to pool atomically
     private func createPlayer(for video: CoreVideoMetadata) -> AVPlayer? {
         guard let videoURL = URL(string: video.videoURL) else {
+            #if DEBUG
             print("❌ PRELOAD: Invalid URL for \(video.id.prefix(8))")
+            #endif
             return nil
         }
         
@@ -719,7 +777,9 @@ class VideoPreloadingService: ObservableObject {
         
         updatePoolStats()
         
+        #if DEBUG
         print("🎬 PRELOAD: Created new player for \(video.id.prefix(8))")
+        #endif
         return player
     }
     
@@ -747,13 +807,17 @@ class VideoPreloadingService: ObservableObject {
         for video in videos {
             // Check if we should continue preloading
             guard preloadQueue.contains(video.id) else {
+                #if DEBUG
                 print("🎬 PRELOAD: Skipping \(video.id.prefix(8)) - removed from queue")
+                #endif
                 continue
             }
             
             // Stop preloading if memory pressure is critical
             guard memoryPressureLevel < .critical else {
+                #if DEBUG
                 print("⚠️ PRELOAD: Stopping queue processing - memory critical")
+                #endif
                 break
             }
             
@@ -769,7 +833,9 @@ class VideoPreloadingService: ObservableObject {
     /// PHASE 1 FIX: Removes failed players from pool
     private func performVideoPreload(video: CoreVideoMetadata, priority: PreloadPriority) async {
         guard let videoURL = URL(string: video.videoURL) else {
+            #if DEBUG
             print("❌ PRELOAD: Invalid URL for \(video.id.prefix(8))")
+            #endif
             return
         }
         
@@ -817,7 +883,9 @@ class VideoPreloadingService: ObservableObject {
             
             updatePoolStats()
             
+            #if DEBUG
             print("🎬 PRELOAD: Completed preload for \(video.id.prefix(8))")
+            #endif
         } else {
             // PHASE 1 FIX: Clean up failed player
             player.pause()
@@ -827,7 +895,9 @@ class VideoPreloadingService: ObservableObject {
             }
             preloadProgress.removeValue(forKey: video.id)
             
+            #if DEBUG
             print("❌ PRELOAD: Failed to preload \(video.id.prefix(8)), cleaned up")
+            #endif
         }
     }
     
@@ -841,7 +911,9 @@ class VideoPreloadingService: ObservableObject {
         while attempts < maxAttempts {
             // Check for failure
             if playerItem.status == .failed {
+                #if DEBUG
                 print("❌ PRELOAD: Player failed for \(videoID.prefix(8))")
+                #endif
                 return false
             }
             
@@ -850,7 +922,9 @@ class VideoPreloadingService: ObservableObject {
                 let buffered = playerItem.loadedTimeRanges.first?.timeRangeValue.duration.seconds ?? 0
                 if buffered >= 1.0 {
                     preloadProgress[videoID] = 1.0
+                    #if DEBUG
                     print("✅ PRELOAD: Ready with \(String(format: "%.1f", buffered))s buffered after \(attempts) polls")
+                    #endif
                     return true
                 }
             }
@@ -863,11 +937,15 @@ class VideoPreloadingService: ObservableObject {
         // If status is readyToPlay but buffer is thin, still accept it
         if playerItem.status == .readyToPlay {
             preloadProgress[videoID] = 1.0
+            #if DEBUG
             print("⚠️ PRELOAD: Ready but thin buffer for \(videoID.prefix(8))")
+            #endif
             return true
         }
         
+        #if DEBUG
         print("❌ PRELOAD: Timeout for \(videoID.prefix(8))")
+        #endif
         return false
     }
     
@@ -884,7 +962,9 @@ class VideoPreloadingService: ObservableObject {
         }
         
         preloadQueue.removeFirst()
+        #if DEBUG
         print("🎬 PRELOAD: Processing next in queue: \(nextVideoID.prefix(8))")
+        #endif
     }
     
     private func updatePoolStats() {
@@ -924,7 +1004,9 @@ extension VideoPreloadingService {
             currentThreadIndex: currentThreadIndex
         )
         
+        #if DEBUG
         print("🎬 PRELOAD: Setup complete for HomeFeed - thread \(currentThreadIndex), video \(currentVideoIndex)")
+        #endif
     }
     
     /// Integration with DiscoveryView
@@ -940,7 +1022,9 @@ extension VideoPreloadingService {
             priority: .normal
         )
         
+        #if DEBUG
         print("🎬 PRELOAD: Setup complete for Discovery - video \(currentIndex)")
+        #endif
     }
     
     /// Integration with ProfileView
@@ -956,7 +1040,9 @@ extension VideoPreloadingService {
             await preloadVideo(nextVideo, priority: .normal)
         }
         
+        #if DEBUG
         print("🎬 PRELOAD: Setup complete for Profile - video \(selectedIndex)")
+        #endif
     }
     
     /// Integration for thread/stitch navigation
@@ -989,7 +1075,9 @@ extension VideoPreloadingService {
             priority: .normal
         )
         
+        #if DEBUG
         print("🔄 PRELOAD: Thread navigation setup - thread children + next threads")
+        #endif
     }
 }
 
@@ -1062,13 +1150,27 @@ extension VideoPreloadingService {
     /// Log performance summary
     func logPerformanceSummary() {
         let metrics = getPerformanceMetrics()
+        #if DEBUG
         print("📊 PRELOAD PERFORMANCE:")
+        #endif
+        #if DEBUG
         print("   Cache Hit Rate: \(String(format: "%.1f%%", metrics.cacheHitRate * 100))")
+        #endif
+        #if DEBUG
         print("   Pool Utilization: \(String(format: "%.1f%%", metrics.poolUtilization * 100))")
+        #endif
+        #if DEBUG
         print("   Memory Usage: \(String(format: "%.1fMB", metrics.memoryUsage))")
+        #endif
+        #if DEBUG
         print("   Memory Pressure: \(memoryPressureLevel)")
+        #endif
+        #if DEBUG
         print("   Pool Size Limit: \(currentMaxPoolSize)")
+        #endif
+        #if DEBUG
         print("   Currently Playing: \(currentlyPlayingVideoID ?? "none")")
+        #endif
     }
     
     /// Get memory status for debugging
@@ -1109,17 +1211,31 @@ extension VideoPreloadingService {
     
     /// Test preloading functionality
     func helloWorldTest() {
+        #if DEBUG
         print("🎬 PRELOAD SERVICE: Hello World - Ready for smooth multidirectional video swiping!")
+        #endif
+        #if DEBUG
         print("🎥 Pool Size: \(currentMaxPoolSize) players (reduced: \(isInReducedMode))")
+        #endif
+        #if DEBUG
         print("📍 Preload Distance: \(preloadDistance) videos")
+        #endif
+        #if DEBUG
         print("📊 Current Pool: \(playerPool.count) players")
+        #endif
+        #if DEBUG
         print("⚡ Concurrent Limit: \(maxConcurrentPreloads) simultaneous preloads")
+        #endif
+        #if DEBUG
         print("🧠 Memory Pressure: \(memoryPressureLevel)")
+        #endif
     }
     
     /// Force cleanup for testing
     func forceMemoryCleanup() {
+        #if DEBUG
         print("🔧 DEBUG: Forcing memory cleanup")
+        #endif
         performCleanup(for: .critical)
     }
 }

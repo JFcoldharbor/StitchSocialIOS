@@ -20,7 +20,9 @@ extension VideoService {
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> (threads: [ThreadData], lastDocument: DocumentSnapshot?, hasMore: Bool) {
         
+        #if DEBUG
         print("🚀 DISCOVERY SERVICE: Loading \(limit) parent threads only")
+        #endif
         
         // Query for parent threads only (conversationDepth = 0)
         var query = db.collection(FirebaseSchema.Collections.videos)
@@ -52,14 +54,18 @@ extension VideoService {
         
         let hasMore = snapshot.documents.count >= limit
         
+        #if DEBUG
         print("✅ DISCOVERY SERVICE: Loaded \(threads.count) parent threads in fast mode")
+        #endif
         return (threads: threads, lastDocument: snapshot.documents.last, hasMore: hasMore)
     }
     
     /// Get trending discovery threads (fallback for empty feeds)
     func getTrendingDiscoveryThreads(limit: Int = 20) async throws -> [ThreadData] {
         
+        #if DEBUG
         print("📈 DISCOVERY SERVICE: Loading trending threads")
+        #endif
         
         // Query for hot/trending parent threads
         let query = db.collection(FirebaseSchema.Collections.videos)
@@ -84,7 +90,9 @@ extension VideoService {
             threads.append(thread)
         }
         
+        #if DEBUG
         print("✅ DISCOVERY SERVICE: Loaded \(threads.count) trending threads")
+        #endif
         return threads
     }
     
@@ -95,7 +103,9 @@ extension VideoService {
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> (threads: [ThreadData], lastDocument: DocumentSnapshot?, hasMore: Bool) {
         
+        #if DEBUG
         print("🎯 DISCOVERY SERVICE: Loading \(category) category threads")
+        #endif
         
         var query: Query
         
@@ -148,7 +158,9 @@ extension VideoService {
         
         let hasMore = snapshot.documents.count >= limit
         
+        #if DEBUG
         print("✅ DISCOVERY SERVICE: Loaded \(threads.count) \(category) threads")
+        #endif
         return (threads: threads, lastDocument: snapshot.documents.last, hasMore: hasMore)
     }
     
@@ -157,7 +169,9 @@ extension VideoService {
     /// Load children for a specific thread when needed (for fullscreen mode)
     func loadDiscoveryThreadChildren(threadID: String) async throws -> [CoreVideoMetadata] {
         
+        #if DEBUG
         print("🔄 DISCOVERY SERVICE: Loading children for thread \(threadID)")
+        #endif
         
         let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
             .whereField(FirebaseSchema.VideoDocument.threadID, isEqualTo: threadID)
@@ -169,7 +183,9 @@ extension VideoService {
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
+        #if DEBUG
         print("✅ DISCOVERY SERVICE: Loaded \(children.count) children for thread \(threadID)")
+        #endif
         return children
     }
     
@@ -181,7 +197,9 @@ extension VideoService {
         totalVideos: Int = 50
     ) async throws -> [CoreVideoMetadata] {
         
+        #if DEBUG
         print("⚡ DISCOVERY SERVICE: Loading optimized feed (\(totalVideos) videos in \(batchSize)-video batches)")
+        #endif
         
         var allVideos: [CoreVideoMetadata] = []
         var lastDoc: DocumentSnapshot?
@@ -194,7 +212,9 @@ extension VideoService {
             
             guard currentBatchSize > 0 else { break }
             
+            #if DEBUG
             print("📦 DISCOVERY SERVICE: Loading batch \(batchNum)/\(batches) (\(currentBatchSize) videos)")
+            #endif
             
             let result = try await getDiscoveryParentThreadsOnly(
                 limit: currentBatchSize,
@@ -206,12 +226,16 @@ extension VideoService {
             lastDoc = result.lastDocument
             
             if !result.hasMore {
+                #if DEBUG
                 print("📭 DISCOVERY SERVICE: No more content available")
+                #endif
                 break
             }
         }
         
+        #if DEBUG
         print("✅ DISCOVERY SERVICE: Optimized feed complete - \(allVideos.count) videos loaded")
+        #endif
         return allVideos
     }
     
@@ -227,7 +251,9 @@ extension VideoService {
         // TODO: Integrate with CachingService when available
         // For now, just load fresh content
         
+        #if DEBUG
         print("🗄️ DISCOVERY SERVICE: Cache integration pending - loading fresh content")
+        #endif
         
         let result = try await getDiscoveryParentThreadsOnly(limit: limit)
         return result.threads.map { $0.parentVideo }

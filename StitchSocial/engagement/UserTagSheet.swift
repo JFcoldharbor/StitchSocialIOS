@@ -411,7 +411,9 @@ struct UserTagSheet: View {
                 await MainActor.run {
                     searchResults = []
                     isSearching = false
+                    #if DEBUG
                     print("❌ TAG SEARCH: Search error: \(error)")
+                    #endif
                 }
             }
         }
@@ -439,7 +441,9 @@ struct UserTagSheet: View {
                     }
                 }
             } catch {
+                #if DEBUG
                 print("❌ TAG SHEET: Failed to load user \(userID): \(error)")
+                #endif
             }
         }
     }
@@ -665,10 +669,14 @@ private func tierColor(for tier: UserTier) -> Color {
 #Preview {
     UserTagSheet(
         onSelectUsers: { users in
+            #if DEBUG
             print("Selected users: \(users.map { $0.username })")
+            #endif
         },
         onDismiss: {
+            #if DEBUG
             print("Dismissed")
+            #endif
         },
         alreadyTaggedIDs: [],
         initiallySelectedIDs: []

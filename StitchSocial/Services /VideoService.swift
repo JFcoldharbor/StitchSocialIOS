@@ -127,7 +127,9 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
+            #if DEBUG
             print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            #endif
         }
         
         // CRITICAL: Server-side duration enforcement — fetch user tier from Firestore
@@ -148,7 +150,9 @@ class VideoService: ObservableObject {
         // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
+            #if DEBUG
             print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            #endif
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -156,10 +160,14 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
+                #if DEBUG
                 print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                #endif
             } else {
                 finalCreatorName = "unknown_user"
+                #if DEBUG
                 print("ÃƒÂ¢Ã‚ÂÃ…â€™ VIDEO SERVICE: Could not fetch username, using fallback")
+                #endif
             }
         }
         
@@ -167,7 +175,9 @@ class VideoService: ObservableObject {
         
         // Determine video orientation for logging
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
+        #if DEBUG
         print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â VIDEO SERVICE: Creating \(orientation.displayName) video with aspect ratio \(String(format: "%.3f", aspectRatio))")
+        #endif
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -226,7 +236,9 @@ class VideoService: ObservableObject {
         try await db.collection(FirebaseSchema.Collections.videos).document(videoID).setData(videoData)
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
+        #if DEBUG
         print("✅ VIDEO SERVICE: Created thread \(videoID) by @\(finalCreatorName) with Firebase UID \(validatedCreatorID)")
+        #endif
         return video
     }
     
@@ -256,13 +268,17 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
+            #if DEBUG
             print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            #endif
         }
         
         // FIX: If creatorName is empty, fetch username
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
+            #if DEBUG
             print("Ã¢Å¡Â Ã¯Â¸Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            #endif
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -270,17 +286,23 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
+                #if DEBUG
                 print("Ã¢Å“â€¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                #endif
             } else {
                 finalCreatorName = "unknown_user"
+                #if DEBUG
                 print("Ã¢ÂÅ’ VIDEO SERVICE: Could not fetch username, using fallback")
+                #endif
             }
         }
         
         let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
         
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
+        #if DEBUG
         print("Ã°Å¸â€œÂ¹ VIDEO SERVICE: Creating spin-off \(orientation.displayName) video referencing \(originalVideoID)")
+        #endif
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -345,7 +367,9 @@ class VideoService: ObservableObject {
         ])
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
+        #if DEBUG
         print("Ã¢Å“â€¦ VIDEO SERVICE: Created spin-off thread \(videoID) by @\(finalCreatorName) from original \(originalVideoID)")
+        #endif
         return video
     }
     
@@ -375,7 +399,9 @@ class VideoService: ObservableObject {
         let validatedCreatorID = currentFirebaseUID
         
         if creatorID != validatedCreatorID {
+            #if DEBUG
             print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: Correcting creatorID from '\(creatorID)' to Firebase UID '\(validatedCreatorID)'")
+            #endif
         }
         
         // CRITICAL: Server-side duration enforcement
@@ -396,7 +422,9 @@ class VideoService: ObservableObject {
         // FIX: If creatorName is empty, fetch username from Firestore
         var finalCreatorName = creatorName
         if finalCreatorName.isEmpty {
+            #if DEBUG
             print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: creatorName empty, fetching username from Firestore...")
+            #endif
             let userDoc = try await db.collection(FirebaseSchema.Collections.users)
                 .document(validatedCreatorID)
                 .getDocument()
@@ -404,10 +432,14 @@ class VideoService: ObservableObject {
             if let userData = userDoc.data(),
                let username = userData[FirebaseSchema.UserDocument.username] as? String {
                 finalCreatorName = username
+                #if DEBUG
                 print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VIDEO SERVICE: Auto-fetched username: @\(finalCreatorName)")
+                #endif
             } else {
                 finalCreatorName = "unknown_user"
+                #if DEBUG
                 print("ÃƒÂ¢Ã‚ÂÃ…â€™ VIDEO SERVICE: Could not fetch username, using fallback")
+                #endif
             }
         }
         
@@ -429,17 +461,23 @@ class VideoService: ObservableObject {
                 userID: validatedCreatorID
             )
             guard canReply else {
+                #if DEBUG
                 print("🚫 VIDEO SERVICE: Reply blocked — \(reason)")
+                #endif
                 throw StitchError.validationError("Cannot reply: \(reason)")
             }
+            #if DEBUG
             print("✅ VIDEO SERVICE: Lane validation passed — \(reason)")
+            #endif
         }
         
         let videoID = FirebaseSchema.DocumentIDPatterns.generateVideoID()
         
         // Determine video orientation for logging
         let orientation = VideoOrientation.from(aspectRatio: aspectRatio)
+        #if DEBUG
         print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã‚Â VIDEO SERVICE: Creating \(orientation.displayName) reply with aspect ratio \(String(format: "%.3f", aspectRatio))")
+        #endif
         
         let videoData: [String: Any] = [
             FirebaseSchema.VideoDocument.id: videoID,
@@ -526,7 +564,9 @@ class VideoService: ObservableObject {
         }
         
         let video = createCoreVideoMetadata(from: videoData, id: videoID)
+        #if DEBUG
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ VIDEO SERVICE: Created reply \(videoID) by @\(finalCreatorName) to \(parentID)")
+        #endif
         
         // 🔔 PROXIMITY-BASED THREAD NOTIFICATIONS
         // Rule: thread creator always notified. Depth-1 horizontal participants notified
@@ -547,7 +587,9 @@ class VideoService: ObservableObject {
                         videoID: videoID,
                         videoTitle: capturedTitle
                     )
+                    #if DEBUG
                     print("✅ REPLY NOTIFICATION: Sent to direct reply target \(parentCreatorID)")
+                    #endif
                 }
 
                 // 2. Horizontal participants — only notify for depth-1 stitches on the parent thread.
@@ -565,11 +607,15 @@ class VideoService: ObservableObject {
                             parentCreatorID: "",
                             threadUserIDs: Array(horizontalParticipants)
                         )
+                        #if DEBUG
                         print("✅ HORIZONTAL STITCH NOTIFICATION: Sent to \(horizontalParticipants.count) depth-1 participants")
+                        #endif
                     }
                 }
             } catch {
+                #if DEBUG
                 print("⚠️ THREAD NOTIFICATION: Failed - \(error)")
+                #endif
             }
         }
         
@@ -594,7 +640,9 @@ class VideoService: ObservableObject {
             .getDocuments()
         
         if let segDoc = segSnap.documents.first {
+            #if DEBUG
             print("📡 VIDEO SERVICE: Found segment \(id.prefix(8)) in subcollection")
+            #endif
             return createCoreVideoMetadata(from: segDoc.data(), id: id)
         }
         
@@ -691,7 +739,9 @@ class VideoService: ObservableObject {
                 throw StitchError.validationError("Thread not found")
             }
             
+            #if DEBUG
             print("📡 VIDEO SERVICE: getCompleteThread — found segment \(threadID.prefix(8)) in subcollection")
+            #endif
             parentVideo = createCoreVideoMetadata(from: segDoc.data(), id: threadID)
         }
         
@@ -750,7 +800,9 @@ class VideoService: ObservableObject {
     
     /// Get all videos belonging to a collection, sorted by segment number
     func getVideosByCollection(collectionID: String) async throws -> [CoreVideoMetadata] {
+        #if DEBUG
         print("📡 VIDEO SERVICE: Fetching videos for collection \(collectionID)")
+        #endif
 
         // Primary: query top-level videos by collectionID field
         let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
@@ -762,7 +814,9 @@ class VideoService: ObservableObject {
 
         // Fallback 1: subcollection path (ImportSegmentsView writes here)
         if videos.isEmpty {
+            #if DEBUG
             print("📡 VIDEO SERVICE: Top-level query returned 0 — trying subcollection path")
+            #endif
             let subSnap = try await db.collection("videoCollections")
                 .document(collectionID)
                 .collection("segments")
@@ -771,13 +825,17 @@ class VideoService: ObservableObject {
                 .map { createCoreVideoMetadata(from: $0.data(), id: $0.documentID) }
                 .sorted { ($0.segmentNumber ?? 0) < ($1.segmentNumber ?? 0) }
             if !videos.isEmpty {
+                #if DEBUG
                 print("📡 VIDEO SERVICE: Found \(videos.count) segments in subcollection")
+                #endif
             }
         }
 
         // Fallback 2: fetch by segmentIDs from collection doc
         if videos.isEmpty {
+            #if DEBUG
             print("📡 VIDEO SERVICE: Trying segmentIDs fallback")
+            #endif
             let collDoc = try await db.collection("videoCollections").document(collectionID).getDocument()
             let segmentIDs = collDoc.data()?["segmentIDs"] as? [String] ?? []
             if !segmentIDs.isEmpty {
@@ -794,11 +852,15 @@ class VideoService: ObservableObject {
                     })
                 }
                 videos = all.sorted { ($0.segmentNumber ?? 0) < ($1.segmentNumber ?? 0) }
+                #if DEBUG
                 print("📡 VIDEO SERVICE: Found \(videos.count) segments via segmentIDs")
+                #endif
             }
         }
 
+        #if DEBUG
         print("📡 VIDEO SERVICE: Loaded \(videos.count) segments for collection \(collectionID)")
+        #endif
         return videos
     }
     
@@ -807,7 +869,9 @@ class VideoService: ObservableObject {
     func getTimestampedReplies(videoID: String? = nil, segmentID: String? = nil) async throws -> [CoreVideoMetadata] {
         let targetID = videoID ?? segmentID ?? ""
         guard !targetID.isEmpty else {
+            #if DEBUG
             print("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: No videoID or segmentID provided for timestamped replies")
+            #endif
             return []
         }
         
@@ -821,7 +885,9 @@ class VideoService: ObservableObject {
             createCoreVideoMetadata(from: document.data(), id: document.documentID)
         }
         
+        #if DEBUG
         print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â¡ VIDEO SERVICE: Loaded \(replies.count) timestamped replies for \(targetID)")
+        #endif
         return replies
     }
     
@@ -874,7 +940,9 @@ class VideoService: ObservableObject {
         
         let hasMore = snapshot.documents.count >= fetchLimit
         
+        #if DEBUG
         print("VIDEO SERVICE: Discovery feed loaded - \(threads.count) threads")
+        #endif
         return (threads: threads, lastDocument: snapshot.documents.last, hasMore: hasMore)
     }
     
@@ -950,7 +1018,9 @@ class VideoService: ObservableObject {
         try await markVideoShardActive(videoID: videoID)
         await propagateToCollection(videoID: videoID, field: "totalHypes", delta: Int64(amount))
         
+        #if DEBUG
         print("ðŸ”¥ SHARD: +\(amount) hype â†’ shard \(shardIndex) + video doc for \(videoID)")
+        #endif
     }
     
     /// Increment cool shard for a video (random shard selection)
@@ -978,7 +1048,9 @@ class VideoService: ObservableObject {
         try await markVideoShardActive(videoID: videoID)
         await propagateToCollection(videoID: videoID, field: "totalCools", delta: Int64(amount))
         
+        #if DEBUG
         print("â„ï¸ SHARD: +\(amount) cool â†’ shard \(shardIndex) + video doc for \(videoID)")
+        #endif
     }
     
     /// Decrement hype shard (for grace period switches/removal)
@@ -993,7 +1065,9 @@ class VideoService: ObservableObject {
         let safeAmount = min(amount, max(0, min(currentShardTotal, currentVideoCount)))
         
         guard safeAmount > 0 else {
+            #if DEBUG
             print("ðŸ”¥ SHARD: Skip hype decrement - totals: shard=\(currentShardTotal), doc=\(currentVideoCount), requested=-\(amount)")
+            #endif
             return
         }
         
@@ -1019,9 +1093,13 @@ class VideoService: ObservableObject {
         await propagateToCollection(videoID: videoID, field: "totalHypes", delta: Int64(-safeAmount))
         
         if safeAmount < amount {
+            #if DEBUG
             print("ðŸ”¥ SHARD: -\(safeAmount) hype â†’ shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
+            #endif
         } else {
+            #if DEBUG
             print("ðŸ”¥ SHARD: -\(safeAmount) hype â†’ shard 0 + video doc for \(videoID)")
+            #endif
         }
     }
     
@@ -1037,7 +1115,9 @@ class VideoService: ObservableObject {
         let safeAmount = min(amount, max(0, min(currentShardTotal, currentVideoCount)))
         
         guard safeAmount > 0 else {
+            #if DEBUG
             print("â„ï¸ SHARD: Skip cool decrement - totals: shard=\(currentShardTotal), doc=\(currentVideoCount), requested=-\(amount)")
+            #endif
             return
         }
         
@@ -1063,9 +1143,13 @@ class VideoService: ObservableObject {
         await propagateToCollection(videoID: videoID, field: "totalCools", delta: Int64(-safeAmount))
         
         if safeAmount < amount {
+            #if DEBUG
             print("â„ï¸ SHARD: -\(safeAmount) cool â†’ shard 0 + video doc for \(videoID) (CAPPED from -\(amount), shard=\(currentShardTotal), doc=\(currentVideoCount))")
+            #endif
         } else {
+            #if DEBUG
             print("â„ï¸ SHARD: -\(safeAmount) cool â†’ shard 0 + video doc for \(videoID)")
+            #endif
         }
     }
     
@@ -1118,7 +1202,9 @@ class VideoService: ObservableObject {
                 collectionIDCache[videoID] = nil // cache negative result
             }
         } catch {
+            #if DEBUG
             print("⚠️ COLLECTION PROPAGATE: Failed to read video \(videoID): \(error)")
+            #endif
         }
     }
     
@@ -1131,9 +1217,13 @@ class VideoService: ObservableObject {
                     field: FieldValue.increment(delta),
                     "updatedAt": Timestamp()
                 ])
+            #if DEBUG
             print("📊 COLLECTION PROPAGATE: \(field) \(delta > 0 ? "+" : "")\(delta) → collection \(collectionID)")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ COLLECTION PROPAGATE: Failed to update \(field) on \(collectionID): \(error)")
+            #endif
         }
     }
     
@@ -1208,7 +1298,9 @@ class VideoService: ObservableObject {
             .document(videoID)
             .updateData(updateData)
         
+        #if DEBUG
         print("VIDEO SERVICE: Updated engagement for \(videoID)")
+        #endif
     }
     
     /// Update video tags
@@ -1220,7 +1312,9 @@ class VideoService: ObservableObject {
                 FirebaseSchema.VideoDocument.updatedAt: Timestamp()
             ])
         
+        #if DEBUG
         print("ÃƒÂ°Ã…Â¸Ã‚ÂÃ‚Â·ÃƒÂ¯Ã‚Â¸Ã‚Â VIDEO SERVICE: Updated tags for video \(videoID) with \(taggedUserIDs.count) users")
+        #endif
     }
     
     /// Record user interaction (views and shares only)
@@ -1233,7 +1327,9 @@ class VideoService: ObservableObject {
         
         if interactionType == .view {
             guard watchTime >= 5.0 else {
+                #if DEBUG
                 print("VIDEO SERVICE: View not counted - insufficient watch time")
+                #endif
                 return
             }
             
@@ -1252,7 +1348,9 @@ class VideoService: ObservableObject {
             try await db.collection(FirebaseSchema.Collections.interactions).document(interactionID).setData(interactionData)
             try await incrementVideoViewCount(videoID: videoID)
             
+            #if DEBUG
             print("VIDEO SERVICE: Recorded view interaction")
+            #endif
             
         } else if interactionType == .share {
             let hasShared = try await hasUserInteracted(userID: userID, videoID: videoID, interactionType: .share)
@@ -1271,7 +1369,9 @@ class VideoService: ObservableObject {
             ]
             
             try await db.collection(FirebaseSchema.Collections.interactions).document(interactionID).setData(interactionData)
+            #if DEBUG
             print("VIDEO SERVICE: Recorded share interaction")
+            #endif
         }
     }
     
@@ -1479,7 +1579,9 @@ class VideoService: ObservableObject {
                 try await doc.reference.delete()
             }
         } catch {
+            #if DEBUG
             print("VIDEO SERVICE: Failed to clean up related data: \(error)")
+            #endif
         }
     }
     
@@ -1701,7 +1803,9 @@ class VideoService: ObservableObject {
                         parentCreatorID: "",
                         threadUserIDs: []
                     )
+                    #if DEBUG
                     print("✅ STITCH NOTIFICATION: Sent to thread creator \(originalCreatorID)")
+                    #endif
                 }
 
                 // Depth-1 horizontal participants notified
@@ -1717,10 +1821,14 @@ class VideoService: ObservableObject {
                         parentCreatorID: "",
                         threadUserIDs: Array(horizontalParticipants)
                     )
+                    #if DEBUG
                     print("✅ HORIZONTAL STITCH NOTIFICATION: Sent to \(horizontalParticipants.count) participants in thread \(threadID)")
+                    #endif
                 }
             } catch {
+                #if DEBUG
                 print("⚠️ STITCH NOTIFICATION: Failed for thread \(threadID) - \(error)")
+                #endif
             }
         }
     }

@@ -125,7 +125,9 @@ struct TaggedUsersRow: View {
                     }
                 }
             } catch {
+                #if DEBUG
                 print("❌ TAGGED USERS: Failed to load user \(userID): \(error)")
+                #endif
             }
         }
     }
@@ -225,7 +227,9 @@ struct SmartCompactAvatar: View {
             await MainActor.run {
                 isLoading = false
             }
+            #if DEBUG
             print("❌ SMART AVATAR: Failed to load user \(userID): \(error)")
+            #endif
         }
     }
 }
@@ -476,7 +480,9 @@ struct SmartTaggedUserRow: View {
             await MainActor.run {
                 isLoading = false
             }
+            #if DEBUG
             print("❌ TAGGED ROW: Failed to load user \(userID): \(error)")
+            #endif
         }
     }
     
@@ -682,7 +688,9 @@ struct TaggedUsersRow_Previews: PreviewProvider {
                     taggedUserIDs: ["user001", "user002"],
                     getCachedUserData: mockGetCachedUserData,
                     onUserTap: { userID in
+                        #if DEBUG
                         print("Tapped: \(userID)")
+                        #endif
                     }
                 )
                 
@@ -690,7 +698,9 @@ struct TaggedUsersRow_Previews: PreviewProvider {
                     taggedUserIDs: ["user001", "user002", "user003", "user004", "user005"],
                     getCachedUserData: mockGetCachedUserData,
                     onUserTap: { userID in
+                        #if DEBUG
                         print("Tapped: \(userID)")
+                        #endif
                     }
                 )
                 

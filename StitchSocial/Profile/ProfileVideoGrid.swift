@@ -94,7 +94,9 @@ struct ProfileVideoGrid: View {
                         .onAppear {
                             if autoPaginationAttempts < maxAutoPaginationAttempts {
                                 autoPaginationAttempts += 1
+                                #if DEBUG
                                 print("🔄 GRID: Auto-paginating for tab \(selectedTab) (attempt \(autoPaginationAttempts)/\(maxAutoPaginationAttempts))")
+                                #endif
                                 onLoadMore?()
                             }
                         }

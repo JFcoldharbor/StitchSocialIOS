@@ -50,7 +50,9 @@ final class FCMPushManager: NSObject, ObservableObject {
             await checkPermissionStatus()
         }
         
+        #if DEBUG
         print("📱 FCM PUSH MANAGER: HTTP v1 API implementation initialized")
+        #endif
     }
     
     // MARK: - FCM Setup
@@ -59,7 +61,9 @@ final class FCMPushManager: NSObject, ObservableObject {
         Messaging.messaging().delegate = self
         UNUserNotificationCenter.current().delegate = self
         
+        #if DEBUG
         print("📱 FCM PUSH MANAGER: FCM delegates configured")
+        #endif
     }
     
     /// Request notification permissions and register for FCM
@@ -72,7 +76,9 @@ final class FCMPushManager: NSObject, ObservableObject {
                 self.permissionStatus = granted ? .authorized : .denied
             }
             
+            #if DEBUG
             print("📱 FCM: Permission granted: \(granted)")
+            #endif
             
             if granted {
                 await MainActor.run {
@@ -82,12 +88,16 @@ final class FCMPushManager: NSObject, ObservableObject {
                 try await Task.sleep(nanoseconds: 1_000_000_000) // Wait for APNS
                 await refreshFCMToken()
             } else {
+                #if DEBUG
                 print("📱 FCM: Permission denied by user")
+                #endif
                 lastError = "Notification permission denied"
             }
             
         } catch {
+            #if DEBUG
             print("📱 FCM: Permission request failed: \(error)")
+            #endif
             lastError = "Permission request failed: \(error.localizedDescription)"
         }
     }
@@ -101,17 +111,23 @@ final class FCMPushManager: NSObject, ObservableObject {
             self.permissionStatus = settings.authorizationStatus
         }
         
+        #if DEBUG
         print("📱 FCM: Current permission status: \(settings.authorizationStatus.rawValue)")
+        #endif
     }
     
     /// Refresh FCM token
     private func refreshFCMToken() async {
         guard Messaging.messaging().apnsToken != nil else {
+            #if DEBUG
             print("📱 FCM: APNS token not available yet")
+            #endif
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             
             if Messaging.messaging().apnsToken == nil {
+                #if DEBUG
                 print("📱 FCM: APNS token still not available after wait")
+                #endif
                 lastError = "APNS token not available"
                 return
             }
@@ -130,10 +146,14 @@ final class FCMPushManager: NSObject, ObservableObject {
                 isRegistered = true
             }
             
+            #if DEBUG
             print("📱 FCM: Token refreshed: \(token.prefix(20))...")
+            #endif
             
         } catch {
+            #if DEBUG
             print("📱 FCM: Token refresh failed: \(error)")
+            #endif
             lastError = "Token refresh failed: \(error.localizedDescription)"
         }
     }
@@ -150,10 +170,14 @@ final class FCMPushManager: NSObject, ObservableObject {
                 "isActive": true
             ], merge: true)
             
+            #if DEBUG
             print("📱 FCM: Token stored for user: \(userID)")
+            #endif
             
         } catch {
+            #if DEBUG
             print("📱 FCM: Failed to store FCM token: \(error)")
+            #endif
             lastError = "Failed to store FCM token: \(error.localizedDescription)"
         }
     }
@@ -168,12 +192,18 @@ final class FCMPushManager: NSObject, ObservableObject {
         data: [String: Any] = [:]
     ) async -> Bool {
         
+        #if DEBUG
         print("📱 FCM: Sending push notification via HTTP v1 API to \(userID)")
+        #endif
+        #if DEBUG
         print("📱 FCM: Title: \(title)")
+        #endif
         
         // Get FCM token for recipient
         guard let fcmToken = await getFCMToken(for: userID) else {
+            #if DEBUG
             print("📱 FCM: No token found for user \(userID)")
+            #endif
             return false
         }
         
@@ -197,7 +227,9 @@ final class FCMPushManager: NSObject, ObservableObject {
         // Since we can't use the Admin SDK directly in iOS,
         // we'll use a simplified approach with Firebase Functions
         
+        #if DEBUG
         print("📱 FCM: Using Firebase Functions approach for push notification")
+        #endif
         
         // Create notification document for Firebase Function to process
         let notificationID = UUID().uuidString
@@ -217,11 +249,15 @@ final class FCMPushManager: NSObject, ObservableObject {
             // Write to a special collection that triggers a Cloud Function
             try await db.collection("pushNotificationQueue").document(notificationID).setData(notificationData)
             
+            #if DEBUG
             print("📱 FCM: Queued notification for Cloud Function processing: \(notificationID)")
+            #endif
             return true
             
         } catch {
+            #if DEBUG
             print("📱 FCM: Failed to queue notification: \(error)")
+            #endif
             return false
         }
     }
@@ -236,7 +272,9 @@ final class FCMPushManager: NSObject, ObservableObject {
         
         // This would require OAuth2 token generation which is complex for client-side
         // Better to use Cloud Functions approach above
+        #if DEBUG
         print("📱 FCM: Cloud Messaging API requires server-side implementation")
+        #endif
         return false
     }
     
@@ -246,16 +284,22 @@ final class FCMPushManager: NSObject, ObservableObject {
             let doc = try await db.collection("user_tokens").document(userID).getDocument()
             
             guard doc.exists, let data = doc.data() else {
+                #if DEBUG
                 print("📱 FCM: No token document found for user \(userID)")
+                #endif
                 return nil
             }
             
             let token = data["fcmToken"] as? String
+            #if DEBUG
             print("📱 FCM: Retrieved token for user \(userID): \(token?.prefix(20) ?? "nil")...")
+            #endif
             return token
             
         } catch {
+            #if DEBUG
             print("📱 FCM: Error getting token for user \(userID): \(error)")
+            #endif
             return nil
         }
     }
@@ -263,7 +307,9 @@ final class FCMPushManager: NSObject, ObservableObject {
     /// Send test notification to current user
     func sendTestNotification() async {
         guard let currentUserID = auth.currentUser?.uid else {
+            #if DEBUG
             print("📱 FCM: No authenticated user for test")
+            #endif
             return
         }
         
@@ -274,7 +320,9 @@ final class FCMPushManager: NSObject, ObservableObject {
             data: ["type": "test", "timestamp": "\(Date().timeIntervalSince1970)"]
         )
         
+        #if DEBUG
         print("📱 FCM: Test notification \(success ? "queued successfully" : "failed")")
+        #endif
     }
     
     // MARK: - Auth State Management
@@ -302,7 +350,9 @@ final class FCMPushManager: NSObject, ObservableObject {
             await refreshFCMToken()
         }
         
+        #if DEBUG
         print("📱 FCM: User authenticated - FCM registered")
+        #endif
     }
     
     /// Handle user sign out - clean up FCM token
@@ -314,54 +364,86 @@ final class FCMPushManager: NSObject, ObservableObject {
                     "deactivatedAt": FieldValue.serverTimestamp()
                 ])
             } catch {
+                #if DEBUG
                 print("📱 FCM: Failed to deactivate FCM token: \(error)")
+                #endif
             }
         }
         
         self.currentUserID = nil
         self.isRegistered = false
         
+        #if DEBUG
         print("📱 FCM: User signed out - FCM token deactivated")
+        #endif
     }
     
     // MARK: - Debug Methods
     
     /// Debug FCM configuration
     func debugFCMConfiguration() async {
+        #if DEBUG
         print("🔍 FCM DEBUG: Starting HTTP v1 API configuration check...")
+        #endif
         
         // Check permissions
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         
+        #if DEBUG
         print("🔍 FCM DEBUG: PERMISSIONS:")
+        #endif
+        #if DEBUG
         print("  - Status: \(settings.authorizationStatus.rawValue)")
+        #endif
+        #if DEBUG
         print("  - Alert: \(settings.alertSetting.rawValue)")
+        #endif
+        #if DEBUG
         print("  - Sound: \(settings.soundSetting.rawValue)")
+        #endif
+        #if DEBUG
         print("  - Badge: \(settings.badgeSetting.rawValue)")
+        #endif
         
         // Check FCM token
         if let token = fcmToken {
+            #if DEBUG
             print("🔍 FCM DEBUG: FCM Token: \(token.prefix(40))...")
+            #endif
         } else {
+            #if DEBUG
             print("🔍 FCM DEBUG: ❌ No FCM token available")
+            #endif
         }
         
         // Check project configuration
+        #if DEBUG
         print("🔍 FCM DEBUG: Project ID: \(projectID)")
+        #endif
         
         // Check authentication
         if let userID = auth.currentUser?.uid {
+            #if DEBUG
             print("🔍 FCM DEBUG: ✅ User authenticated: \(userID)")
+            #endif
             
             let storedToken = await getFCMToken(for: userID)
+            #if DEBUG
             print("🔍 FCM DEBUG: Token stored: \(storedToken != nil)")
+            #endif
         } else {
+            #if DEBUG
             print("🔍 FCM DEBUG: ❌ No authenticated user")
+            #endif
         }
         
+        #if DEBUG
         print("🔍 FCM DEBUG: Note: Using Cloud Functions approach for HTTP v1 API")
+        #endif
+        #if DEBUG
         print("🔍 FCM DEBUG: Configuration check complete")
+        #endif
     }
 }
 
@@ -382,7 +464,9 @@ extension FCMPushManager: MessagingDelegate {
                 self.isRegistered = true
             }
             
+            #if DEBUG
             print("📱 FCM: Token refreshed: \(token.prefix(20))...")
+            #endif
         }
     }
 }
@@ -399,9 +483,15 @@ extension FCMPushManager: UNUserNotificationCenterDelegate {
     ) {
         let userInfo = notification.request.content.userInfo
         
+        #if DEBUG
         print("📱 FCM: Notification received in foreground")
+        #endif
+        #if DEBUG
         print("📱 FCM: Title: \(notification.request.content.title)")
+        #endif
+        #if DEBUG
         print("📱 FCM: Body: \(notification.request.content.body)")
+        #endif
         
         handleIncomingPushNotification(userInfo: userInfo)
         
@@ -417,7 +507,9 @@ extension FCMPushManager: UNUserNotificationCenterDelegate {
     ) {
         let userInfo = response.notification.request.content.userInfo
         
+        #if DEBUG
         print("📱 FCM: Notification tapped")
+        #endif
         
         handleNotificationTap(userInfo: userInfo)
         
@@ -445,7 +537,9 @@ extension FCMPushManager: UNUserNotificationCenterDelegate {
             ]
         )
         
+        #if DEBUG
         print("📱 FCM: Push notification processed: \(type)")
+        #endif
     }
     
     /// Handle notification tap action
@@ -465,6 +559,8 @@ extension FCMPushManager: UNUserNotificationCenterDelegate {
             ]
         )
         
+        #if DEBUG
         print("📱 FCM: Navigation triggered for: \(type)")
+        #endif
     }
 }

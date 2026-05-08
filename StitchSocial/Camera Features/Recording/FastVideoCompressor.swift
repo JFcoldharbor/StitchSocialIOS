@@ -107,12 +107,18 @@ class FastVideoCompressor: ObservableObject {
             let sourceInfo = try await analyzeVideo(url: sourceURL)
             let targetBytes = Int64(targetSizeMB * 1024 * 1024)
             
+            #if DEBUG
             print("ðŸŽ¬ FAST COMPRESS: Source \(formatBytes(sourceInfo.fileSize)) â†’ Target \(formatBytes(targetBytes))")
+            #endif
+            #if DEBUG
             print("ðŸŽ¬ FAST COMPRESS: Duration \(String(format: "%.1f", sourceInfo.duration))s, Resolution \(Int(sourceInfo.resolution.width))x\(Int(sourceInfo.resolution.height))")
+            #endif
             
             // Step 2: Check if compression is needed
             if sourceInfo.fileSize <= targetBytes {
+                #if DEBUG
                 print("âœ… FAST COMPRESS: Already under target, copying file")
+                #endif
                 let outputURL = try copyToOutput(sourceURL)
                 
                 return CompressionResult(
@@ -136,7 +142,9 @@ class FastVideoCompressor: ObservableObject {
                 preserveResolution: preserveResolution
             )
             
+            #if DEBUG
             print("ðŸŽ¬ FAST COMPRESS: Using \(settings.codec) @ \(settings.bitrate / 1000)kbps, \(Int(settings.resolution.width))x\(Int(settings.resolution.height))")
+            #endif
             
             // Step 4: Perform hardware-accelerated compression
             let outputURL = try await performHardwareCompression(
@@ -172,15 +180,21 @@ class FastVideoCompressor: ObservableObject {
                 bitrate: settings.bitrate
             )
             
+            #if DEBUG
             print("âœ… FAST COMPRESS: \(formatBytes(sourceInfo.fileSize)) â†’ \(formatBytes(outputSize)) in \(String(format: "%.1f", processingTime))s")
+            #endif
+            #if DEBUG
             print("âœ… FAST COMPRESS: \(String(format: "%.1f", result.compressionRatio))x compression ratio")
+            #endif
             
             return result
             
         } catch {
             currentPhase = .failed
             lastError = error.localizedDescription
+            #if DEBUG
             print("âŒ FAST COMPRESS: \(error.localizedDescription)")
+            #endif
             throw error
         }
     }
@@ -312,7 +326,9 @@ class FastVideoCompressor: ObservableObject {
             )
         }
         
+        #if DEBUG
         print("📐 COMPRESSION: Display \(Int(displayResolution.width))x\(Int(displayResolution.height)), Writer \(Int(writerResolution.width))x\(Int(writerResolution.height))")
+        #endif
         
         // Use HEVC for better compression (40% smaller than H.264)
         // Fall back to H.264 if HEVC would be too slow
@@ -372,8 +388,12 @@ class FastVideoCompressor: ObservableObject {
         let evenWidth = CGFloat(Int(outputWidth) & ~1)
         let evenHeight = CGFloat(Int(outputHeight) & ~1)
         
+        #if DEBUG
         print("ðŸ“ COMPRESSION: Preserving aspect ratio \(String(format: "%.3f", sourceAspectRatio))")
+        #endif
+        #if DEBUG
         print("ðŸ“ COMPRESSION: \(Int(sourceResolution.width))x\(Int(sourceResolution.height)) â†’ \(Int(evenWidth))x\(Int(evenHeight))")
+        #endif
         
         return CGSize(width: evenWidth, height: evenHeight)
     }
@@ -505,7 +525,9 @@ class FastVideoCompressor: ObservableObject {
         videoInput.expectsMediaDataInRealTime = false
         // NO transform — pixels are already rotated
         
+        #if DEBUG
         print("📐 COMPRESSOR: naturalSize=\(naturalSize), renderSize=\(renderSize), writerDims=\(writerWidth)x\(writerHeight), fps=\(fps)")
+        #endif
         
         writer.add(videoInput)
         

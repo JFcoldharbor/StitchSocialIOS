@@ -89,7 +89,9 @@ class BackgroundPostManager: ObservableObject {
     private var currentTask: Task<Void, Never>?
     
     private init() {
+        #if DEBUG
         print("📮 BACKGROUND POST: Manager initialized")
+        #endif
     }
     
     // MARK: - Queue Post
@@ -118,7 +120,9 @@ class BackgroundPostManager: ObservableObject {
         )
         
         postQueue.append(post)
+        #if DEBUG
         print("📮 BACKGROUND POST: Queued '\(title)' (\(postQueue.count) in queue)")
+        #endif
         
         // Start processing if not already
         if !isPosting {
@@ -150,7 +154,9 @@ class BackgroundPostManager: ObservableObject {
     // MARK: - Execute Post
     
     private func executePost(_ post: PendingPost) async {
+        #if DEBUG
         print("🚀 BACKGROUND POST: Starting '\(post.title)'")
+        #endif
         
         do {
             // Get auth
@@ -221,7 +227,9 @@ class BackgroundPostManager: ObservableObject {
             progress = 1.0
             statusMessage = "Posted!"
             
+            #if DEBUG
             print("✅ BACKGROUND POST: '\(post.title)' posted successfully as \(createdVideo.id)")
+            #endif
             
             // Show completion banner briefly
             showCompletionBanner = true
@@ -232,7 +240,9 @@ class BackgroundPostManager: ObservableObject {
             processNextPost()
             
         } catch {
+            #if DEBUG
             print("❌ BACKGROUND POST: Failed - \(error.localizedDescription)")
+            #endif
             
             status = .failed
             lastError = error.localizedDescription
@@ -286,9 +296,13 @@ class BackgroundPostManager: ObservableObject {
                 minHoursBetweenShows: config.minHoursBetweenShows,
                 maxTotalShows: config.maxTotalShows
             )
+            #if DEBUG
             print("📢 BACKGROUND POST: Announcement created - \(announcement.id)")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ BACKGROUND POST: Announcement failed - \(error)")
+            #endif
         }
     }
 }

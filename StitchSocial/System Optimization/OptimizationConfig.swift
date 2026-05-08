@@ -638,7 +638,9 @@ extension OptimizationConfig {
         
         /// Apply production optimizations
         static func applyOptimizations() {
+            #if DEBUG
             print("🚀 OPTIMIZATION CONFIG: Production optimizations applied")
+            #endif
         }
     }
 }
@@ -656,16 +658,22 @@ extension OptimizationConfig {
         let physicalMemory = processInfo.physicalMemory
         if physicalMemory < 2 * 1024 * 1024 * 1024 { // Less than 2GB RAM
             // Reduce cache limits for low-memory devices
+            #if DEBUG
             print("📱 OPTIMIZATION CONFIG: Applied low-memory optimizations")
+            #endif
         }
         
         // Adjust based on device performance
         if device.model.contains("iPhone") {
             // iPhone-specific optimizations
+            #if DEBUG
             print("📱 OPTIMIZATION CONFIG: Applied iPhone optimizations")
+            #endif
         } else if device.model.contains("iPad") {
             // iPad-specific optimizations
+            #if DEBUG
             print("📱 OPTIMIZATION CONFIG: Applied iPad optimizations")
+            #endif
         }
     }
     

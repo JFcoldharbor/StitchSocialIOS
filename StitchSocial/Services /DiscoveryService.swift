@@ -114,7 +114,9 @@ class DiscoveryService: ObservableObject {
     func resetSession() {
         invalidateAllCaches()
         DiscoveryFeedQueue.shared.reset()
+        #if DEBUG
         print("🔄 DISCOVERY: Session reset")
+        #endif
     }
 
     /// One-time backfill: assigns random feedSeed to videos missing the field.
@@ -127,7 +129,9 @@ class DiscoveryService: ObservableObject {
                 .getDocuments()
             let missing = snap.documents.filter { $0.data()["feedSeed"] == nil }
             guard !missing.isEmpty else { return }
+            #if DEBUG
             print("🌱 BACKFILL: Assigning feedSeed to \(missing.count) videos")
+            #endif
             let chunks = stride(from: 0, to: missing.count, by: 500).map {
                 Array(missing[$0..<min($0 + 500, missing.count)])
             }
@@ -138,9 +142,13 @@ class DiscoveryService: ObservableObject {
                 }
                 try await batch.commit()
             }
+            #if DEBUG
             print("✅ BACKFILL: feedSeed assigned to \(missing.count) videos")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ BACKFILL: feedSeed backfill failed: \(error)")
+            #endif
         }
     }
     
@@ -219,7 +227,9 @@ class DiscoveryService: ObservableObject {
         let docs6 = (try? await r6) ?? []
         let docs7 = (try? await r7) ?? []
 
+        #if DEBUG
         print("🔍 WINDOWS: 24h=\(docs1.count) 48h=\(docs2.count) 72h=\(docs3.count) 7d=\(docs4.count) 30d=\(docs5.count) 60d=\(docs6.count) 1yr=\(docs7.count)")
+        #endif
 
         // Parse each window
         var batchSeen = Set<String>()
@@ -284,7 +294,9 @@ class DiscoveryService: ObservableObject {
         }
 
         cacheThreadsInSharedService(results)
+        #if DEBUG
         print("✅ FETCH BATCH: \(results.count) videos (seed: \(String(format: "%.3f", seed)))")
+        #endif
         return results
     }
 
@@ -357,7 +369,9 @@ class DiscoveryService: ObservableObject {
         } catch {
             // feedSeed index missing — fall back to createdAt range query
             // IMPORTANT: where clauses must come before order(by:) for inequality fields
+            #if DEBUG
             print("⚠️ DISCOVERY: feedSeed index missing — add composite index: conversationDepth ASC + feedSeed ASC")
+            #endif
             var fallback: Query = db.collection(FirebaseSchema.Collections.videos)
                 .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
             if let after = after {
@@ -399,7 +413,9 @@ class DiscoveryService: ObservableObject {
 
         let snapshot = try await query.getDocuments()
         let docs = snapshot.documents
+        #if DEBUG
         print("📡 CURSOR FEED: Raw docs from Firestore: \(docs.count)")
+        #endif
 
         var deleted = 0, segment = 0, reply = 0, priv = 0, threadDropped = 0
         let videos = docs.compactMap { doc -> CoreVideoMetadata? in
@@ -415,7 +431,9 @@ class DiscoveryService: ObservableObject {
             }
             return video
         }
+        #if DEBUG
         print("📡 CURSOR FEED: \(videos.count) shown | deleted:\(deleted) segment:\(segment) reply:\(reply) private:\(priv) threadDropped:\(threadDropped)")
+        #endif
         let hasMore = docs.count >= limit
         return (videos: videos, lastDocument: docs.last, hasMore: hasMore)
     }
@@ -530,7 +548,9 @@ class DiscoveryService: ObservableObject {
         cacheThreads(result, for: "trending", ttl: shortTTL)
         cacheThreadsInSharedService(result)
         
+        #if DEBUG
         print("🔥 TRENDING: Returning \(result.count) videos sorted by discoverabilityScore")
+        #endif
         return result
     }
     
@@ -596,7 +616,9 @@ class DiscoveryService: ObservableObject {
         cacheThreads(result, for: "recent", ttl: shortTTL)
         cacheThreadsInSharedService(result)
         
+        #if DEBUG
         print("🕐 RECENT: Returning \(result.count) videos from last 24h")
+        #endif
         return result
     }
     
@@ -610,14 +632,18 @@ class DiscoveryService: ObservableObject {
     func getRecentUsers(limit: Int = 20) async throws -> [RecentUser] {
         // Cache check
         if let cached = recentUsersCache, cached.isValid {
+            #if DEBUG
             print("✅ CACHE HIT: recentUsers (\(cached.users.count) users)")
+            #endif
             return Array(cached.users.prefix(limit))
         }
         
         isLoading = true
         defer { isLoading = false }
         
+        #if DEBUG
         print("🆕 DISCOVERY: Fetching recent users...")
+        #endif
         
         // Fetch limit*2 (down from limit*3)
         let snapshot = try await db.collection(FirebaseSchema.Collections.users)
@@ -661,7 +687,9 @@ class DiscoveryService: ObservableObject {
         // Cache
         recentUsersCache = UserCacheEntry(users: recentUsers, timestamp: Date())
         
+        #if DEBUG
         print("✅ DISCOVERY: Found \(recentUsers.count) recent users (last 7 days, public)")
+        #endif
         return recentUsers
     }
     
@@ -670,14 +698,18 @@ class DiscoveryService: ObservableObject {
     func getHypeLeaderboard(limit: Int = 10) async throws -> [LeaderboardVideo] {
         // Cache check
         if let cached = leaderboardCache, cached.isValid {
+            #if DEBUG
             print("✅ CACHE HIT: leaderboard (\(cached.videos.count) videos)")
+            #endif
             return Array(cached.videos.prefix(limit))
         }
         
         isLoading = true
         defer { isLoading = false }
         
+        #if DEBUG
         print("🔥 DISCOVERY: Fetching hype leaderboard...")
+        #endif
         
         // Fetch limit*2 (down from limit*3)
         let snapshot = try await db.collection(FirebaseSchema.Collections.videos)
@@ -725,7 +757,9 @@ class DiscoveryService: ObservableObject {
         // Cache
         leaderboardCache = LeaderboardCacheEntry(videos: leaderboardVideos, timestamp: Date())
         
+        #if DEBUG
         print("✅ DISCOVERY: Found \(leaderboardVideos.count) leaderboard videos (last 7 days, hyped)")
+        #endif
         return leaderboardVideos
     }
     
@@ -782,7 +816,9 @@ class DiscoveryService: ObservableObject {
         cacheThreads(result, for: "following")
         cacheThreadsInSharedService(result)
         
+        #if DEBUG
         print("❤️ FOLLOWING: Returning \(result.count) videos from followed creators")
+        #endif
         return result
     }
     
@@ -818,7 +854,9 @@ class DiscoveryService: ObservableObject {
         cacheThreads(result, for: "hotHashtags")
         cacheThreadsInSharedService(result)
         
+        #if DEBUG
         print("#️⃣ HOT HASHTAGS: Returning \(result.count) videos from trending tags")
+        #endif
         return result
     }
     
@@ -857,7 +895,9 @@ class DiscoveryService: ObservableObject {
         cacheThreads(result, for: "heatCheck")
         cacheThreadsInSharedService(result)
         
+        #if DEBUG
         print("🌡️ HEAT CHECK: Returning \(result.count) blazing/hot videos")
+        #endif
         return result
     }
     
@@ -896,7 +936,9 @@ class DiscoveryService: ObservableObject {
         cacheThreads(result, for: "undiscovered")
         cacheThreadsInSharedService(result)
         
+        #if DEBUG
         print("🔭 UNDISCOVERED: Returning \(result.count) low-view videos")
+        #endif
         return result
     }
     
@@ -920,7 +962,9 @@ class DiscoveryService: ObservableObject {
         cacheThreads(threads, for: "longestThreads")
         cacheThreadsInSharedService(threads)
         
+        #if DEBUG
         print("💬 LONGEST THREADS: Returning \(threads.count) most-replied threads")
+        #endif
         return threads
     }
     
@@ -958,7 +1002,9 @@ class DiscoveryService: ObservableObject {
         cacheThreads(result, for: "spinOffs")
         cacheThreadsInSharedService(result)
         
+        #if DEBUG
         print("🔀 SPIN-OFFS: Returning \(result.count) spin-off videos")
+        #endif
         return result
     }
     
@@ -999,7 +1045,9 @@ class DiscoveryService: ObservableObject {
         
         cacheCollections(collections, for: cacheKey)
         
+        #if DEBUG
         print("🎬 COLLECTIONS: Returning \(collections.count) collections for types: \(types)")
+        #endif
         return collections
     }
     
@@ -1021,7 +1069,9 @@ class DiscoveryService: ObservableObject {
         let collections = snapshot.documents.compactMap { parseVideoCollection(from: $0.data(), id: $0.documentID) }
         cacheCollections(collections, for: "all_collections")
         
+        #if DEBUG
         print("📚 DISCOVERY: Loaded \(collections.count) collections for discovery")
+        #endif
         return collections
     }
     

@@ -189,10 +189,14 @@ struct RecordingView: View {
         .sheet(isPresented: $showGalleryPicker, onDismiss: {
             // Navigate AFTER sheet is fully dismissed — prevents parent recreation
             guard let url = galleryVideoURL else {
+                #if DEBUG
                 print("📱 PICKER onDismiss: galleryVideoURL nil — no navigation")
+                #endif
                 return
             }
+            #if DEBUG
             print("📱 PICKER onDismiss: pushing .galleryReview for \(url.lastPathComponent)")
+            #endif
             galleryEditState = VideoEditState(
                 videoURL: url, videoDuration: 60.0,
                 videoSize: CGSize(width: 1080, height: 1920)
@@ -538,7 +542,9 @@ struct RecordingView: View {
                 .playAndRecord, mode: .videoRecording, options: [.defaultToSpeaker])
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
+            #if DEBUG
             print("⚠️ Audio session setup failed: \(error)")
+            #endif
         }
     }
 
@@ -548,7 +554,9 @@ struct RecordingView: View {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
+            #if DEBUG
             print("⚠️ Audio session restore failed: \(error)")
+            #endif
         }
     }
 
@@ -636,7 +644,9 @@ struct FastVideoPicker: UIViewControllerRepresentable {
         private func loadFile(from provider: NSItemProvider, uti: String, picker: PHPickerViewController) {
             provider.loadFileRepresentation(forTypeIdentifier: uti) { [weak self] url, error in
                 guard let url, error == nil else {
+                    #if DEBUG
                     print("📱 PICKER: Load failed — \(error?.localizedDescription ?? "no url")")
+                    #endif
                     DispatchQueue.main.async { picker.dismiss(animated: true) }
                     return
                 }
@@ -644,7 +654,9 @@ struct FastVideoPicker: UIViewControllerRepresentable {
                     .appendingPathComponent("gallery_\(UUID().uuidString).\(url.pathExtension)")
                 do {
                     try FileManager.default.copyItem(at: url, to: dest)
+                    #if DEBUG
                     print("📱 PICKER: Copied to \(dest.lastPathComponent)")
+                    #endif
                     // Success path: call onPick on main, which sets
                     // galleryVideoURL AND flips showGalleryPicker = false.
                     // The binding flip dismisses the SwiftUI sheet — do NOT
@@ -655,7 +667,9 @@ struct FastVideoPicker: UIViewControllerRepresentable {
                         self?.onPick(dest)
                     }
                 } catch {
+                    #if DEBUG
                     print("📱 PICKER: Copy failed — \(error)")
+                    #endif
                     DispatchQueue.main.async { picker.dismiss(animated: true) }
                 }
             }

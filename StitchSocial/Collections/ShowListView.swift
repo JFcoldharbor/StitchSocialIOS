@@ -146,9 +146,13 @@ struct ShowListView: View {
         showService.clearAllCaches()   // always fresh — creator needs to see latest draft state
         do {
             shows = try await showService.getCreatorShows(creatorID: userID)
+            #if DEBUG
             print("📚 SHOW LIST: \(shows.count) shows — statuses: \(shows.map { $0.status.rawValue })")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ SHOW LIST: Failed to load: \(error)")
+            #endif
         }
         isLoading = false
     }

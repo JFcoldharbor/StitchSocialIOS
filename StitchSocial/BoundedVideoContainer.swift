@@ -79,7 +79,9 @@ class VideoContainerCoordinator: NSObject {
         setupKillObserver()
         setupBackgroundObservers()
         
+        #if DEBUG
         print("🎬 BOUNDED VIDEO [\(context.description)]: Initialized")
+        #endif
     }
     
     // MARK: - Context-Aware Kill Observer Setup
@@ -87,7 +89,9 @@ class VideoContainerCoordinator: NSObject {
     private func setupKillObserver() {
         // Profile grid thumbnails DON'T respond to kill notifications
         guard playerContext != .profileGrid else {
+            #if DEBUG
             print("✅ BOUNDED VIDEO [profileGrid]: Skipping kill observer - thumbnails are immune")
+            #endif
             return
         }
         
@@ -97,14 +101,20 @@ class VideoContainerCoordinator: NSObject {
             queue: .main
         ) { [weak self] _ in
             guard let self = self else { return }
+            #if DEBUG
             print("🛑 BOUNDED VIDEO [\(self.playerContext.description)]: Received kill signal")
+            #endif
             self.killPlayer()
         }
+        #if DEBUG
         print("✅ BOUNDED VIDEO [\(playerContext.description)]: Kill observer active")
+        #endif
     }
     
     private func killPlayer() {
+        #if DEBUG
         print("🛑 BOUNDED VIDEO [\(playerContext.description)]: Killing player for video \(currentVideoID ?? "unknown")")
+        #endif
         
         // Complete destruction
         player?.pause()
@@ -124,7 +134,9 @@ class VideoContainerCoordinator: NSObject {
         stopViewTracking()
         resetViewTracking()
         
+        #if DEBUG
         print("✅ BOUNDED VIDEO [\(playerContext.description)]: Player destroyed")
+        #endif
     }
     
     // MARK: - Background & Foreground Observers
@@ -149,13 +161,17 @@ class VideoContainerCoordinator: NSObject {
     
     private func appDidEnterBackground() {
         player?.pause()
+        #if DEBUG
         print("📱 BOUNDED VIDEO [\(playerContext.description)]: Paused (background)")
+        #endif
     }
     
     private func appWillEnterForeground() {
         if isActive {
             player?.play()
+            #if DEBUG
             print("📱 BOUNDED VIDEO [\(playerContext.description)]: Resumed (foreground)")
+            #endif
         }
     }
     
@@ -173,7 +189,9 @@ class VideoContainerCoordinator: NSObject {
             
             // Setup new player
             guard let url = URL(string: video.videoURL) else {
+                #if DEBUG
                 print("❌ BOUNDED VIDEO [\(playerContext.description)]: Invalid URL")
+                #endif
                 return
             }
             
@@ -206,20 +224,28 @@ class VideoContainerCoordinator: NSObject {
             // Setup loop notification
             setupLoopDetection(for: video)
             
+            #if DEBUG
             print("✅ BOUNDED VIDEO [\(playerContext.description)]: Player created for \(video.id.prefix(8))")
+            #endif
         }
         
         // Update playback state
         if isActive && player != nil {
             player?.play()
             startViewTracking(for: video)
+            #if DEBUG
             print("▶️ BOUNDED VIDEO [\(playerContext.description)]: Playing")
+            #endif
         } else if !isActive && player != nil {
             player?.pause()
             stopViewTracking()
+            #if DEBUG
             print("⏸️ BOUNDED VIDEO [\(playerContext.description)]: Paused")
+            #endif
         } else if player == nil {
+            #if DEBUG
             print("🚫 BOUNDED VIDEO [\(playerContext.description)]: No player (was killed)")
+            #endif
         }
         
         // Update layer frame
@@ -248,7 +274,9 @@ class VideoContainerCoordinator: NSObject {
                 self.onVideoLoop(video.id)
             }
             
+            #if DEBUG
             print("🔄 BOUNDED VIDEO [\(self.playerContext.description)]: Video looped")
+            #endif
         }
     }
     
@@ -261,7 +289,9 @@ class VideoContainerCoordinator: NSObject {
             self?.registerView(for: video)
         }
         
+        #if DEBUG
         print("👁️ VIEW TRACKING [\(playerContext.description)]: Started for \(video.id.prefix(8))")
+        #endif
     }
     
     private func registerView(for video: CoreVideoMetadata) {
@@ -269,7 +299,9 @@ class VideoContainerCoordinator: NSObject {
         
         let watchTime = Date().timeIntervalSince(startTime)
         hasRegisteredView = true
+        #if DEBUG
         print("✅ VIEW TRACKING [\(playerContext.description)]: Registered after \(String(format: "%.1f", watchTime))s")
+        #endif
         
         viewTimer?.invalidate()
         viewTimer = nil
@@ -342,7 +374,9 @@ class VideoContainerCoordinator: NSObject {
         player = nil
         playerLayer = nil
         
+        #if DEBUG
         print("🗑️ BOUNDED VIDEO [\(playerContext.description)]: Deinitialized safely")
+        #endif
     }
 }
 

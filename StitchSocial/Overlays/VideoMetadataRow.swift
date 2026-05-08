@@ -448,7 +448,9 @@ struct VideoEditSheet: View {
                 description: finalDescription
             )
             
+            #if DEBUG
             print("✅ VIDEO EDIT: Updated video \(video.id)")
+            #endif
             
             let updatedVideo = CoreVideoMetadata(
                 id: video.id,
@@ -497,7 +499,9 @@ struct VideoEditSheet: View {
             await MainActor.run {
                 isSaving = false
                 errorMessage = "Failed to save: \(error.localizedDescription)"
+                #if DEBUG
                 print("❌ VIDEO EDIT: Failed - \(error)")
+                #endif
             }
         }
     }
@@ -517,7 +521,9 @@ extension VideoService {
             .document(videoID)
             .updateData(updateData)
         
+        #if DEBUG
         print("✅ VIDEO SERVICE: Updated metadata for \(videoID)")
+        #endif
     }
 }
 

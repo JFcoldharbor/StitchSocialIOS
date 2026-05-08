@@ -451,9 +451,13 @@ extension VideoExportService {
         }
         let droppedCount = overlays.count - visibleOverlays.count
         if droppedCount > 0 {
+            #if DEBUG
             print("📝 EXPORT: dropped \(droppedCount) empty text overlay(s)")
+            #endif
         }
+        #if DEBUG
         print("📝 EXPORT: rendering \(visibleOverlays.count) text overlay(s), \(captions.count) caption(s) at renderSize=\(renderSize)")
+        #endif
 
         // Text overlay stickers
         for overlay in visibleOverlays {

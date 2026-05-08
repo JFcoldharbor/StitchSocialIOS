@@ -210,7 +210,9 @@ private struct LeaderboardCard: View {
                     )
                 ],
                 onVideoTap: { videoID in
+                    #if DEBUG
                     print("Tapped video: \(videoID)")
+                    #endif
                 }
             )
         }

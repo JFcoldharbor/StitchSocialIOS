@@ -42,8 +42,12 @@ class ReEngagementService: ObservableObject {
         self.videoService = videoService
         self.userService = userService
         
+        #if DEBUG
         print("🔄 RE-ENGAGEMENT SERVICE: Initialized")
+        #endif
+        #if DEBUG
         print("⏱️ Min inactive: \(minInactiveHours)h, Cooldown: \(cooldownHours)h")
+        #endif
     }
     
     // MARK: - Main Check Function
@@ -52,14 +56,18 @@ class ReEngagementService: ObservableObject {
     func checkReEngagement(userID: String) async throws {
         
         guard !isChecking else {
+            #if DEBUG
             print("⏸️ RE-ENGAGEMENT: Already checking")
+            #endif
             return
         }
         
         isChecking = true
         defer { isChecking = false }
         
+        #if DEBUG
         print("🔍 RE-ENGAGEMENT: Checking for user \(userID)")
+        #endif
         
         // 1. Get last active time from Firestore directly
         let userDoc = try await db.collection(FirebaseSchema.Collections.users)
@@ -67,7 +75,9 @@ class ReEngagementService: ObservableObject {
             .getDocument()
         
         guard userDoc.exists, let userData = userDoc.data() else {
+            #if DEBUG
             print("❌ RE-ENGAGEMENT: User not found")
+            #endif
             return
         }
         
@@ -82,29 +92,45 @@ class ReEngagementService: ObservableObject {
         
         let inactiveHours = Date().timeIntervalSince(lastActive) / 3600
         
+        #if DEBUG
         print("📊 RE-ENGAGEMENT: User inactive for \(String(format: "%.1f", inactiveHours))h")
+        #endif
         
         // 2. Check if enough time passed
         guard inactiveHours >= minInactiveHours else {
+            #if DEBUG
             print("⏸️ RE-ENGAGEMENT: Not enough inactivity (\(String(format: "%.1f", inactiveHours))h < \(minInactiveHours)h)")
+            #endif
             return
         }
         
         // 3. Get new activity since last open
         let activity = try await getNewActivitySince(userID: userID, since: lastActive)
         
+        #if DEBUG
         print("📊 RE-ENGAGEMENT: Activity Summary:")
+        #endif
+        #if DEBUG
         print("   • New stitches: \(activity.newStitches)")
+        #endif
+        #if DEBUG
         print("   • Milestone: \(activity.newMilestone?.displayName ?? "none")")
+        #endif
+        #if DEBUG
         print("   • Follower posts: \(activity.followerPosts)")
+        #endif
+        #if DEBUG
         print("   • Clout to next tier: \(activity.cloutToNextTier)")
+        #endif
         
         // 4. Select notification type
         guard let notification = selectReEngagementType(
             activity: activity,
             inactiveHours: inactiveHours
         ) else {
+            #if DEBUG
             print("⏸️ RE-ENGAGEMENT: No significant activity to notify about")
+            #endif
             return
         }
         
@@ -113,14 +139,18 @@ class ReEngagementService: ObservableObject {
         
         lastCheckTime = Date()
         lastReEngagementType = notification.type
+        #if DEBUG
         print("✅ RE-ENGAGEMENT: Check complete - sent \(notification.type)")
+        #endif
     }
     
     // MARK: - Activity Detection
     
     private func getNewActivitySince(userID: String, since: Date) async throws -> UserActivity {
         
+        #if DEBUG
         print("🔍 ACTIVITY: Checking activity since \(since)")
+        #endif
         
         // FIX: Get user's videos returns PaginatedResult, access .items
         let userVideosResult = try await videoService.getUserVideos(userID: userID, limit: 20)
@@ -138,7 +168,9 @@ class ReEngagementService: ObservableObject {
             // Check for milestone reached
             if let milestone = checkMilestoneReached(video: video, since: since) {
                 newMilestone = milestone
+                #if DEBUG
                 print("🎯 ACTIVITY: Milestone detected - \(milestone.displayName)")
+                #endif
             }
         }
         
@@ -165,7 +197,9 @@ class ReEngagementService: ObservableObject {
     }
     
     private func getFollowerPostsSince(userID: String, since: Date) async throws -> Int {
+        #if DEBUG
         print("👥 ACTIVITY: Checking follower posts since \(since)")
+        #endif
         
         // Query following collection to get follower IDs
         let followingSnapshot = try await db.collection(FirebaseSchema.Collections.following)
@@ -178,11 +212,15 @@ class ReEngagementService: ObservableObject {
         }
         
         guard !followerIDs.isEmpty else {
+            #if DEBUG
             print("👥 ACTIVITY: No followers found")
+            #endif
             return 0
         }
         
+        #if DEBUG
         print("👥 ACTIVITY: Found \(followerIDs.count) followers")
+        #endif
         
         // Count videos from followers since timestamp
         let videosSnapshot = try await db.collection(FirebaseSchema.Collections.videos)
@@ -190,7 +228,9 @@ class ReEngagementService: ObservableObject {
             .whereField(FirebaseSchema.VideoDocument.createdAt, isGreaterThan: Timestamp(date: since))
             .getDocuments()
         
+        #if DEBUG
         print("👥 ACTIVITY: \(videosSnapshot.documents.count) new follower posts")
+        #endif
         return videosSnapshot.documents.count
     }
     
@@ -238,38 +278,50 @@ class ReEngagementService: ObservableObject {
         inactiveHours: Double
     ) -> ReEngagementNotification? {
         
+        #if DEBUG
         print("🎯 SELECTION: Choosing best re-engagement type...")
+        #endif
         
         // Priority order: New stitches > Milestone > Follower posts > Tier proximity
         
         // 1. New stitches (threshold: 3+)
         if activity.newStitches >= 3 {
+            #if DEBUG
             print("✅ SELECTION: New stitches (\(activity.newStitches)) - HIGH PRIORITY")
+            #endif
             return .newStitches(count: activity.newStitches)
         }
         
         // 2. Milestone reached
         if let milestone = activity.newMilestone {
+            #if DEBUG
             print("✅ SELECTION: Milestone (\(milestone.displayName)) - HIGH PRIORITY")
+            #endif
             return .milestone(milestone)
         }
         
         // 3. Follower posts (threshold: 5+)
         if activity.followerPosts >= 5 {
+            #if DEBUG
             print("✅ SELECTION: Follower activity (\(activity.followerPosts) posts)")
+            #endif
             return .followerActivity(count: activity.followerPosts)
         }
         
         // 4. Tier proximity (threshold: within 100 clout)
         if activity.cloutToNextTier > 0 && activity.cloutToNextTier <= 100 {
+            #if DEBUG
             print("✅ SELECTION: Tier proximity (\(activity.cloutToNextTier) clout to \(activity.nextTier.rawValue))")
+            #endif
             return .tierProximity(
                 remaining: activity.cloutToNextTier,
                 nextTier: activity.nextTier
             )
         }
         
+        #if DEBUG
         print("⏸️ SELECTION: No qualifying activity found")
+        #endif
         return nil
     }
     
@@ -277,7 +329,9 @@ class ReEngagementService: ObservableObject {
     
     private func sendReEngagement(userID: String, notification: ReEngagementNotification) async throws {
         
+        #if DEBUG
         print("📤 RE-ENGAGEMENT: Sending \(notification.type) to user \(userID)")
+        #endif
         
         let callable = functions.httpsCallable("stitchnoti_sendReEngagement")
         
@@ -298,46 +352,72 @@ class ReEngagementService: ObservableObject {
         if !success {
             if let reason = resultData["reason"] as? String, reason == "cooldown" {
                 let hoursRemaining = resultData["hoursRemaining"] as? String ?? "unknown"
+                #if DEBUG
                 print("⏸️ RE-ENGAGEMENT: Cooldown active (\(hoursRemaining)h remaining)")
+                #endif
                 canSendReEngagement = false
             }
             return
         }
         
         if let notificationId = resultData["notificationId"] as? String {
+            #if DEBUG
             print("✅ RE-ENGAGEMENT: Notification created - \(notificationId)")
+            #endif
         }
         
         if let pushSent = resultData["pushSent"] as? Bool {
+            #if DEBUG
             print("✅ RE-ENGAGEMENT: Push notification sent - \(pushSent)")
+            #endif
         }
         
+        #if DEBUG
         print("✅ RE-ENGAGEMENT: Sent successfully")
+        #endif
     }
     
     // MARK: - Manual Check Trigger
     
     /// Manually trigger re-engagement check (for testing or background tasks)
     func manualCheck(userID: String) async {
+        #if DEBUG
         print("🔄 RE-ENGAGEMENT: Manual check triggered")
+        #endif
         
         do {
             try await checkReEngagement(userID: userID)
         } catch {
+            #if DEBUG
             print("❌ RE-ENGAGEMENT: Manual check failed - \(error)")
+            #endif
         }
     }
     
     // MARK: - Debug Information
     
     func logStatus() {
+        #if DEBUG
         print("📊 RE-ENGAGEMENT STATUS:")
+        #endif
+        #if DEBUG
         print("   • Is checking: \(isChecking)")
+        #endif
+        #if DEBUG
         print("   • Last check: \(lastCheckTime?.formatted() ?? "never")")
+        #endif
+        #if DEBUG
         print("   • Last type: \(lastReEngagementType ?? "none")")
+        #endif
+        #if DEBUG
         print("   • Can send: \(canSendReEngagement)")
+        #endif
+        #if DEBUG
         print("   • Min inactive: \(minInactiveHours)h")
+        #endif
+        #if DEBUG
         print("   • Cooldown: \(cooldownHours)h")
+        #endif
     }
 }
 

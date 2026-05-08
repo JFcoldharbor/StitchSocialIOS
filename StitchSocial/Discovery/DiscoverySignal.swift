@@ -226,7 +226,9 @@ class DiscoveryEngagementTracker: ObservableObject {
     // MARK: - Initialization
     
     private init() {
+        #if DEBUG
         print("📊 DISCOVERY TRACKER: Initialized")
+        #endif
     }
     
     // MARK: - Session Intent Detection
@@ -236,7 +238,9 @@ class DiscoveryEngagementTracker: ObservableObject {
         manualInteractionCount += 1
         if !sessionHasIntent {
             sessionHasIntent = true
+            #if DEBUG
             print("📊 DISCOVERY TRACKER: Session intent confirmed (manual interaction detected)")
+            #endif
         }
     }
     
@@ -248,7 +252,9 @@ class DiscoveryEngagementTracker: ObservableObject {
         currentCardStartTime = nil
         currentCardVideoID = nil
         currentCardCreatorID = nil
+        #if DEBUG
         print("📊 DISCOVERY TRACKER: New session started")
+        #endif
     }
     
     // MARK: - Card Lifecycle
@@ -297,7 +303,9 @@ class DiscoveryEngagementTracker: ObservableObject {
         )
         
         processSignal(signal)
+        #if DEBUG
         print("📊 DISCOVERY TRACKER: Fullscreen tap — videoID=\(videoID.prefix(8)), hypeWeight=4")
+        #endif
     }
     
     // MARK: - Signal Processing
@@ -326,7 +334,9 @@ class DiscoveryEngagementTracker: ObservableObject {
         if wasSwipeBack {
             // This is a rewatch — check cap
             guard !record.isRewatchCapped else {
+                #if DEBUG
                 print("📊 DISCOVERY TRACKER: Rewatch capped for videoID=\(videoID.prefix(8))")
+                #endif
                 return
             }
         }
@@ -372,7 +382,9 @@ class DiscoveryEngagementTracker: ObservableObject {
             // Check if 5th cool needs delay enforcement
             if accumulator.totalCoolSignals >= 4 && accumulator.coolDelayActive {
                 guard accumulator.canRegisterBlockingCool else {
+                    #if DEBUG
                     print("📊 DISCOVERY TRACKER: Cool delay active — 5th signal blocked (wait \(String(format: "%.1f", CreatorSignalAccumulator.coolDelayDuration))s)")
+                    #endif
                     return
                 }
             }
@@ -386,7 +398,9 @@ class DiscoveryEngagementTracker: ObservableObject {
             creatorCoolVideoSets[creatorID] = coolSet
             accumulator.videosWithCoolSignals = coolSet.count
             
+            #if DEBUG
             print("📊 DISCOVERY TRACKER: Cool signal — creator=\(creatorID.prefix(8)), total=\(accumulator.totalCoolSignals), uniqueVideos=\(coolSet.count)")
+            #endif
             
         } else if signal.hypeWeight > 0 {
             // Hype signal
@@ -399,7 +413,9 @@ class DiscoveryEngagementTracker: ObservableObject {
             creatorHypeVideoSets[creatorID] = hypeSet
             accumulator.videosWithHypeSignals = hypeSet.count
             
+            #if DEBUG
             print("📊 DISCOVERY TRACKER: Hype signal — creator=\(creatorID.prefix(8)), weight=\(signal.hypeWeight), totalWeight=\(accumulator.totalHypeWeight)")
+            #endif
         }
         
         accumulator.recalculatePreference()
@@ -495,9 +511,13 @@ class DiscoveryEngagementTracker: ObservableObject {
         
         do {
             try await batch.commit()
+            #if DEBUG
             print("📊 DISCOVERY TRACKER: Persisted \(creatorsToFlush.count) creator preferences")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ DISCOVERY TRACKER: Persist failed — \(error.localizedDescription)")
+            #endif
             // Re-queue failed persists
             pendingPersists.formUnion(creatorsToFlush)
         }
@@ -534,9 +554,13 @@ class DiscoveryEngagementTracker: ObservableObject {
                 }
             }
             
+            #if DEBUG
             print("📊 DISCOVERY TRACKER: Loaded \(creatorPreferences.count) creator preferences")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ DISCOVERY TRACKER: Failed to load preferences — \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -556,7 +580,9 @@ class DiscoveryEngagementTracker: ObservableObject {
             creatorAccumulators[creatorID] = acc
             persistIfNeeded(creatorID: creatorID, accumulator: acc)
         }
+        #if DEBUG
         print("🔓 DISCOVERY TRACKER: Reset preference for \(creatorID.prefix(8)) → neutral")
+        #endif
     }
 
     func flushOnExit() {

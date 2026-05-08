@@ -101,9 +101,13 @@ class StreamXPService: ObservableObject {
         startIdleDetection()
         
         if dailyXPMultiplier < 1.0 {
+            #if DEBUG
             print("⚠️ STREAM XP: Reduced XP (\(Int(dailyXPMultiplier * 100))%) — creator past daily cap")
+            #endif
         }
+        #if DEBUG
         print("✅ STREAM XP: Viewer joined, +\(Int(Double(tier.baseXP) * dailyXPMultiplier)) base XP")
+        #endif
     }
     
     // MARK: - Viewer Interaction (Resets Idle)
@@ -174,7 +178,9 @@ class StreamXPService: ObservableObject {
                 // Award clout bonus for Double/Triple
                 if cloutBonus > 0 {
                     // TODO: Write clout bonus through engagement system
+                    #if DEBUG
                     print("🏆 STREAM XP: Clout bonus +\(cloutBonus) for full \(tier.displayName)")
+                    #endif
                 }
                 
                 // Check badge eligibility
@@ -199,7 +205,9 @@ class StreamXPService: ObservableObject {
                     source: .attendedLive,
                     multiplier: microMultiplier
                 )
+                #if DEBUG
                 print("🔥 STREAM XP: Flushed \(pendingMicroXP) micro XP from \(Int(pendingMicroXP / 0.12)) hype taps")
+                #endif
             }
         }
         
@@ -214,7 +222,9 @@ class StreamXPService: ObservableObject {
         
         cleanup()
         
+        #if DEBUG
         print("📊 STREAM XP: Viewer left — fullStay: \(fullStayBonus), badges: \(newBadges.count)")
+        #endif
         return recap
     }
     
@@ -355,7 +365,9 @@ class StreamXPService: ObservableObject {
                     self.isIdle = true
                     if !self.idleWarningShown {
                         self.idleWarningShown = true
+                        #if DEBUG
                         print("⚠️ STREAM XP: Viewer idle for 15+ min")
+                        #endif
                     }
                 }
             }

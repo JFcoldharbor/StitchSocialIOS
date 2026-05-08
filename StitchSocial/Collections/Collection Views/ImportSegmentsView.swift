@@ -236,7 +236,9 @@ struct ImportSegmentsView: View {
         // Protect from background termination
         var bgTaskID: UIBackgroundTaskIdentifier = .invalid
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "SegmentUpload") {
+            #if DEBUG
             print("⚠️ IMPORT: Background time expiring")
+            #endif
             UIApplication.shared.endBackgroundTask(bgTaskID)
             bgTaskID = .invalid
         }
@@ -329,7 +331,9 @@ struct ImportSegmentsView: View {
         } catch {
             isUploading = false
             errorMessage = "Upload failed: \(error.localizedDescription)"
+            #if DEBUG
             print("❌ IMPORT: \(error)")
+            #endif
         }
     }
     

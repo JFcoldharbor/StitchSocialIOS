@@ -291,7 +291,9 @@ struct SubscriptionCard: View {
                 }
             }
         } catch {
+            #if DEBUG
             print("⚠️ SUB CARD: Failed to load creator info")
+            #endif
         }
     }
 }

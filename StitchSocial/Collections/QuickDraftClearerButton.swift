@@ -61,22 +61,30 @@ struct QuickDraftClearerButton: View {
                 .whereField("creatorID", isEqualTo: userID)
                 .getDocuments()
             
+            #if DEBUG
             print("🗑️ Found \(snapshot.documents.count) drafts to delete")
+            #endif
             
             let batch = db.batch()
             for doc in snapshot.documents {
                 batch.deleteDocument(doc.reference)
+                #if DEBUG
                 print("  - Deleting: \(doc.documentID)")
+                #endif
             }
             
             try await batch.commit()
             
             message = "✅ Deleted \(snapshot.documents.count) drafts!"
+            #if DEBUG
             print("✅ All drafts deleted!")
+            #endif
             
         } catch {
             message = "❌ Error: \(error.localizedDescription)"
+            #if DEBUG
             print("❌ Error: \(error)")
+            #endif
         }
         
         isClearing = false
@@ -125,7 +133,9 @@ struct QuickDraftClearerButton: View {
 /// Standalone function to clear all drafts - call from anywhere
 func quickClearAllDrafts() async {
     guard let userID = Auth.auth().currentUser?.uid else {
+        #if DEBUG
         print("❌ quickClearAllDrafts: Not logged in")
+        #endif
         return
     }
     
@@ -137,11 +147,15 @@ func quickClearAllDrafts() async {
             .getDocuments()
         
         guard !snapshot.documents.isEmpty else {
+            #if DEBUG
             print("✅ No drafts to delete")
+            #endif
             return
         }
         
+        #if DEBUG
         print("🗑️ Deleting \(snapshot.documents.count) drafts...")
+        #endif
         
         let batch = db.batch()
         for doc in snapshot.documents {
@@ -149,10 +163,14 @@ func quickClearAllDrafts() async {
         }
         
         try await batch.commit()
+        #if DEBUG
         print("✅ All \(snapshot.documents.count) drafts deleted!")
+        #endif
         
     } catch {
+        #if DEBUG
         print("❌ Error clearing drafts: \(error)")
+        #endif
     }
 }
 

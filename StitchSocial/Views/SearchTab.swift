@@ -111,7 +111,9 @@ class SearchViewModel: ObservableObject {
             let result = try await hashtagService.getVideosForHashtag(hashtag.tag, limit: 30)
             hashtagVideos = result.videos
         } catch {
+            #if DEBUG
             print("❌ SEARCH: Failed to load hashtag videos: \(error)")
+            #endif
         }
         
         isSearching = false
@@ -152,7 +154,9 @@ class SearchViewModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.isSearching = false
+                    #if DEBUG
                     print("âŒ SEARCH: Search failed: \(error)")
+                    #endif
                 }
             }
         }
@@ -175,13 +179,17 @@ class SearchViewModel: ObservableObject {
             
             // Load follow states for suggested users
             await followManager.loadFollowStatesForUsers(users)
+            #if DEBUG
             print("âœ… SEARCH: Loaded \(users.count) personalized suggestions")
+            #endif
             
         } catch {
             await MainActor.run {
                 isLoadingSuggestions = false
             }
+            #if DEBUG
             print("âŒ SEARCH: Failed to load suggestions: \(error)")
+            #endif
         }
     }
     
@@ -1248,7 +1256,9 @@ class HashtagViewModel: ObservableObject {
             lastDocument = result.lastDoc
             hasMore = result.hasMore
         } catch {
+            #if DEBUG
             print("❌ HASHTAG VIEW: Failed to load videos: \(error)")
+            #endif
         }
         
         isLoading = false
@@ -1268,7 +1278,9 @@ class HashtagViewModel: ObservableObject {
             lastDocument = result.lastDoc
             hasMore = result.hasMore
         } catch {
+            #if DEBUG
             print("❌ HASHTAG VIEW: Failed to load more: \(error)")
+            #endif
         }
         
         isLoading = false
@@ -1286,9 +1298,13 @@ class HashtagViewModel: ObservableObject {
     // MARK: - Debug: Backfill
     
     func runBackfill() async {
+        #if DEBUG
         print("🏷️ BACKFILL: Starting from HashtagView...")
+        #endif
         let result = await hashtagService.backfillAllHashtags()
+        #if DEBUG
         print("🏷️ BACKFILL: Complete! Updated: \(result.updated), Failed: \(result.failed)")
+        #endif
         
         // Reload trending after backfill
         await hashtagService.loadTrendingHashtags(limit: 20)

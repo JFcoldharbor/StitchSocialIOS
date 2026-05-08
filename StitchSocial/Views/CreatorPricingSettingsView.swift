@@ -383,7 +383,9 @@ struct CreatorPricingSettingsView: View {
                 }
             }
         } catch {
+            #if DEBUG
             print("⚠️ PRICING: Failed to load plan")
+            #endif
         }
         isLoading = false
     }

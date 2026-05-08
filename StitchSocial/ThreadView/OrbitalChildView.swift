@@ -304,7 +304,9 @@ struct OrbitalChildView: View {
         impactFeedback.impactOccurred()
         
         // Could show additional options or info
+        #if DEBUG
         print("Long pressed child: \(childData.creatorName)")
+        #endif
     }
 }
 

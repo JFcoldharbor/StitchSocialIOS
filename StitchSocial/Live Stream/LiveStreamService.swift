@@ -130,7 +130,9 @@ class LiveStreamService: ObservableObject {
             await sendGoLiveNotification(creatorID: creatorID, streamID: stream.id)
         }
         
+        #if DEBUG
         print("✅ STREAM: Started \(tier.displayName) for \(creatorID)")
+        #endif
         return stream
     }
     
@@ -166,9 +168,13 @@ class LiveStreamService: ObservableObject {
                 ], forDocument: notifRef)
             }
             try await batch.commit()
+            #if DEBUG
             print("📢 STREAM: Sent go-live notification to \(membersSnap.documents.count) members")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ STREAM: Go-live notification failed - \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -221,7 +227,9 @@ class LiveStreamService: ObservableObject {
             await purgeStreamData(creatorID: creatorID, streamID: stream.id)
         }
         
+        #if DEBUG
         print("✅ STREAM: Ended \(stream.durationTier.displayName) — \(stream.elapsedSeconds)s elapsed, full: \(completion.isFullCompletion)")
+        #endif
         return completion
     }
     
@@ -254,7 +262,9 @@ class LiveStreamService: ObservableObject {
         // 4. Delete the stream doc itself
         try? await db.document(streamPath).delete()
         
+        #if DEBUG
         print("🗑️ STREAM: Purged all data for stream \(streamID)")
+        #endif
     }
     
     /// Delete all docs in a subcollection. Batches of 100.
@@ -281,7 +291,9 @@ class LiveStreamService: ObservableObject {
                 hasMore = snapshot.documents.count == 100
             }
         } catch {
+            #if DEBUG
             print("⚠️ STREAM PURGE: Failed to delete \(path) — \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -314,10 +326,14 @@ class LiveStreamService: ObservableObject {
             }
             
             if !snapshot.documents.isEmpty {
+                #if DEBUG
                 print("🗑️ STREAM: Deleted \(snapshot.documents.count) video comments + Storage files")
+                #endif
             }
         } catch {
+            #if DEBUG
             print("⚠️ STREAM PURGE: Failed to delete video comments — \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -461,7 +477,9 @@ class LiveStreamService: ObservableObject {
         ])
         
         self.activeStream = stream
+        #if DEBUG
         print("⏰ STREAM: Extended \(minutes) min — new max: \(stream.maxDurationSeconds / 60) min")
+        #endif
     }
     
     // MARK: - Viewer Join/Leave
@@ -695,7 +713,9 @@ class LiveStreamService: ObservableObject {
             
             if heartbeatAge > 120 {
                 // Stale — creator crashed/closed app >2 min ago. Auto-end.
+                #if DEBUG
                 print("⚠️ STREAM: Stale stream detected (\(Int(heartbeatAge))s since heartbeat). Auto-ending.")
+                #endif
                 self.activeStream = stream
                 self.isStreaming = true
                 _ = try? await endStream(creatorID: creatorID)
@@ -710,10 +730,14 @@ class LiveStreamService: ObservableObject {
                 startStreamTimer()
                 startCreatorHeartbeat(creatorID: creatorID, streamID: streamID)
                 
+                #if DEBUG
                 print("✅ STREAM: Recovered active stream \(streamID) — \(stream.elapsedSeconds)s elapsed")
+                #endif
             }
         } catch {
+            #if DEBUG
             print("⚠️ STREAM: Recovery check failed: \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -723,7 +747,9 @@ class LiveStreamService: ObservableObject {
             "isCreatorLive": false,
             "activeStreamID": FieldValue.delete()
         ])
+        #if DEBUG
         print("🧹 STREAM: Cleaned stale live flag for \(creatorID)")
+        #endif
     }
     
     /// Check if creator has a recoverable stream (for UI — no side effects)

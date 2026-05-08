@@ -447,19 +447,45 @@ extension SpecialUsersConfig {
     /// Print current configuration summary
     static func printConfigurationSummary() {
         let stats = statistics
+        #if DEBUG
         print("🌟 SPECIAL USERS CONFIG SUMMARY:")
+        #endif
+        #if DEBUG
         print("   Total Special Users: \(stats.totalSpecialUsers)")
+        #endif
+        #if DEBUG
         print("   Founders: \(stats.foundersCount)")
+        #endif
+        #if DEBUG
         print("   Co-Founders: \(stats.coFoundersCount)")
+        #endif
+        #if DEBUG
         print("   Ambassadors: \(stats.ambassadorsCount)")
+        #endif
+        #if DEBUG
         print("   Influencers: \(stats.influencersCount)")
+        #endif
+        #if DEBUG
         print("   Advisors: \(stats.advisorsCount)")
+        #endif
+        #if DEBUG
         print("   Celebrities: \(stats.celebritiesCount)")
+        #endif
+        #if DEBUG
         print("   Affiliates: \(stats.affiliatesCount)")
+        #endif
+        #if DEBUG
         print("   Auto-Follow Users: \(stats.autoFollowCount)")
+        #endif
+        #if DEBUG
         print("   Total Starting Clout: \(stats.totalStartingClout)")
+        #endif
+        #if DEBUG
         print("   Average Starting Clout: \(Int(stats.averageStartingClout))")
+        #endif
+        #if DEBUG
         print("   Black Ink Cast: \(getAllUsers(containing: "black ink").count)")
+        #endif
     }
     
     /// Get users containing specific text in bio/title
@@ -522,9 +548,13 @@ extension SpecialUsersConfig {
         let isValid = autoFollowUsers.count == 1 && autoFollowUsers.first?.email == "james@stitchsocial.me"
         
         if !isValid {
+            #if DEBUG
             print("⚠️ AUTO-FOLLOW CONFIG ERROR: Only James Fortune should have auto-follow enabled")
+            #endif
         } else {
+            #if DEBUG
             print("✅ AUTO-FOLLOW CONFIG: Correctly configured for James Fortune only")
+            #endif
         }
         
         return isValid

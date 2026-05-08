@@ -63,7 +63,9 @@ enum ReferralBackfill {
     ]
     
     static func run() async {
+        #if DEBUG
         print("🔧 BACKFILL: Starting referral backfill...")
+        #endif
         
         for entry in backfills {
             do {
@@ -87,7 +89,9 @@ enum ReferralBackfill {
                 }
                 
                 try await batch.commit()
+                #if DEBUG
                 print("✅ BACKFILL: \(entry.ambassadorID) — \(count) referrals written")
+                #endif
                 
                 // Check if this hits their referral goal
                 let doc = try await ambassadorRef.getDocument()
@@ -98,14 +102,20 @@ enum ReferralBackfill {
                     try await ambassadorRef.updateData([
                         "customSubSharePermanent": true
                     ])
+                    #if DEBUG
                     print("🏆 BACKFILL: \(entry.ambassadorID) hit goal \(count)/\(goal) — 80/20 locked permanent!")
+                    #endif
                 }
                 
             } catch {
+                #if DEBUG
                 print("❌ BACKFILL: Failed for \(entry.ambassadorID) — \(error.localizedDescription)")
+                #endif
             }
         }
         
+        #if DEBUG
         print("🔧 BACKFILL: Complete!")
+        #endif
     }
 }

@@ -114,7 +114,9 @@ class CommunityXPService: ObservableObject {
             )
         }
         
+        #if DEBUG
         print("📊 XP BUFFER: +\(amount) (\(source.displayName)) for \(userID) in \(communityID) — pending: \(pendingXP[key]?.totalPending ?? 0)")
+        #endif
     }
     
     /// Award XP immediately — use sparingly for critical events (level-up ceremonies, badge awards)
@@ -150,13 +152,17 @@ class CommunityXPService: ObservableObject {
                 )
                 
                 if result.leveledUp {
+                    #if DEBUG
                     print("🎉 XP FLUSH: \(buffer.userID) leveled up to \(result.newLevel) in \(buffer.communityID)")
+                    #endif
                 }
             } catch {
                 // Re-queue failed flushes
                 let key = "\(buffer.userID)_\(buffer.communityID)"
                 pendingXP[key] = buffer
+                #if DEBUG
                 print("⚠️ XP FLUSH FAILED: \(error.localizedDescription) — re-queued")
+                #endif
             }
         }
     }
@@ -250,7 +256,9 @@ class CommunityXPService: ObservableObject {
             self.lastBadgeUnlock = firstNewBadge
         }
         
+        #if DEBUG
         print("✅ XP WRITE: +\(amount) → \(newXP) total, Lv \(oldLevel)→\(newLevel), \(newBadgeIDs.count) new badges")
+        #endif
         return result
     }
     
@@ -347,7 +355,9 @@ class CommunityXPService: ObservableObject {
         
         communityService.invalidateMembershipCache(userID: userID, creatorID: communityID)
         
+        #if DEBUG
         print("✅ DAILY LOGIN: +\(totalXP) XP, streak: \(newStreak) in \(communityID)")
+        #endif
         
         return DailyLoginResult(
             awarded: true,
@@ -422,7 +432,9 @@ class CommunityXPService: ObservableObject {
             )
         }
         
+        #if DEBUG
         print("📊 XP BUFFER: +\(totalXP) from \(coinsSpent) coins spent in \(communityID)")
+        #endif
     }
     
     // MARK: - Flush Timer Management

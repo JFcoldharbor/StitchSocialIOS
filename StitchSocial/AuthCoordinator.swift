@@ -73,7 +73,9 @@ class AuthCoordinator: ObservableObject {
         self.userService = userService
         self.NotificationService = NotificationService
         
+        #if DEBUG
         print("🔐 AUTH COORDINATOR: Initialized - Ready for authentication workflow")
+        #endif
         
         // Handle existing users migration on startup
         Task {
@@ -95,8 +97,12 @@ class AuthCoordinator: ObservableObject {
         currentPhase = .authenticating
         authProgress = 0.0
         
+        #if DEBUG
         print("🔐 AUTH: Starting authentication workflow")
+        #endif
+        #if DEBUG
         print("🔐 AUTH: Email: \(email), Sign Up: \(isSignUp)")
+        #endif
         
         defer {
             isProcessing = false
@@ -142,7 +148,9 @@ class AuthCoordinator: ObservableObject {
                 specialUserInfo: specialUserInfo
             )
             
+            #if DEBUG
             print("✅ AUTH: Complete workflow finished successfully")
+            #endif
             return user
             
         } catch {
@@ -164,7 +172,9 @@ class AuthCoordinator: ObservableObject {
             currentTask = isSignUp ? "Creating account..." : "Signing in..."
             await updateProgress(0.1)
             
+            #if DEBUG
             print("🔐 AUTH: Starting \(isSignUp ? "signup" : "login") process")
+            #endif
             
             do {
                 let user: StitchUser
@@ -197,13 +207,19 @@ class AuthCoordinator: ObservableObject {
                 // Store authenticated user
                 authenticatedUser = user
                 
+                #if DEBUG
                 print("🔐 AUTH: Authentication successful - User ID: \(user.id)")
+                #endif
+                #if DEBUG
                 print("🔐 AUTH: Email: \(user.email), Display Name: \(user.displayName)")
+                #endif
                 
                 return user
                 
             } catch {
+                #if DEBUG
                 print("❌ AUTH: Authentication failed - \(error.localizedDescription)")
+                #endif
                 throw AuthError.authenticationFailed(error.localizedDescription)
             }
         }
@@ -220,10 +236,14 @@ class AuthCoordinator: ObservableObject {
         currentTask = "Checking special user status..."
         await updateProgress(0.35)
         
+        #if DEBUG
         print("🌟 SPECIAL USER: Checking status for \(email)")
+        #endif
         
         guard enableSpecialUserDetection else {
+            #if DEBUG
             print("🌟 SPECIAL USER: Detection disabled")
+            #endif
             await updateProgress(0.5)
             return nil
         }
@@ -247,9 +267,15 @@ class AuthCoordinator: ObservableObject {
             currentTask = "Special user detected: \(specialEntry.role.displayName)"
             await updateProgress(0.5)
             
+            #if DEBUG
             print("🌟 SPECIAL USER: Found special user - \(specialEntry.role.displayName)")
+            #endif
+            #if DEBUG
             print("🌟 SPECIAL USER: Starting clout: \(specialEntry.startingClout)")
+            #endif
+            #if DEBUG
             print("🌟 SPECIAL USER: Custom title: \(specialEntry.customTitle)")
+            #endif
             
             return specialInfo
             
@@ -257,7 +283,9 @@ class AuthCoordinator: ObservableObject {
             currentTask = "Regular user account"
             await updateProgress(0.5)
             
+            #if DEBUG
             print("👤 REGULAR USER: No special configuration found")
+            #endif
             return nil
         }
     }
@@ -275,7 +303,9 @@ class AuthCoordinator: ObservableObject {
         currentTask = "Setting up profile..."
         await updateProgress(0.55)
         
+        #if DEBUG
         print("👤 PROFILE: Setting up profile for \(user.id)")
+        #endif
         
         do {
             // Determine starting values
@@ -304,14 +334,22 @@ class AuthCoordinator: ObservableObject {
             currentTask = "Profile setup complete"
             await updateProgress(0.8)
             
+            #if DEBUG
             print("👤 PROFILE: Setup complete")
+            #endif
+            #if DEBUG
             print("👤 PROFILE: Starting clout: \(startingClout)")
+            #endif
+            #if DEBUG
             print("👤 PROFILE: Special user: \(specialUserInfo != nil)")
+            #endif
             
             return profile
             
         } catch {
+            #if DEBUG
             print("❌ PROFILE: Setup failed - \(error.localizedDescription)")
+            #endif
             throw AuthError.profileSetupFailed(error.localizedDescription)
         }
     }
@@ -329,10 +367,14 @@ class AuthCoordinator: ObservableObject {
         currentTask = "Initializing badges..."
         await updateProgress(0.85)
         
+        #if DEBUG
         print("🏆 BADGES: Starting initialization for \(userID)")
+        #endif
         
         guard enableBadgeInitialization else {
+            #if DEBUG
             print("🏆 BADGES: Initialization disabled")
+            #endif
             await updateProgress(1.0)
             return
         }
@@ -374,31 +416,43 @@ class AuthCoordinator: ObservableObject {
             currentTask = "Following official accounts..."
             await updateProgress(0.92)
             
+            #if DEBUG
             print("🔗 AUTO-FOLLOW: Starting auto-follow process for new user")
+            #endif
             
             // Get James Fortune's entry from special users config
             if let jamesFortune = SpecialUsersConfig.getJamesFortune() {
                 do {
+                    #if DEBUG
                     print("🔍 AUTO-FOLLOW: Looking up James Fortune user ID...")
+                    #endif
                     
                     // Find James Fortune's user ID by email
                     if let jamesUserID = try await findUserIDByEmail(email: jamesFortune.email) {
+                        #if DEBUG
                         print("✅ AUTO-FOLLOW: Found James Fortune user ID: \(jamesUserID)")
+                        #endif
                         
                         // Auto-follow James Fortune
                         try await userService.followUser(followerID: userID, followingID: jamesUserID)
                         
+                        #if DEBUG
                         print("✅ AUTO-FOLLOW: New user \(userID) automatically following James Fortune \(jamesUserID)")
+                        #endif
                         
                         currentTask = "Following official account complete"
                         
                     } else {
+                        #if DEBUG
                         print("⚠️ AUTO-FOLLOW: James Fortune user ID not found")
+                        #endif
                         currentTask = "Official account not found"
                     }
                     
                 } catch {
+                    #if DEBUG
                     print("⚠️ AUTO-FOLLOW: Failed to follow James Fortune: \(error)")
+                    #endif
                     currentTask = "Auto-follow error - continuing signup"
                     // Don't fail signup for auto-follow errors
                 }
@@ -410,14 +464,18 @@ class AuthCoordinator: ObservableObject {
         currentTask = "Badge initialization complete"
         await updateProgress(1.0)
         
+        #if DEBUG
         print("🏆 BADGES: Initialization complete - \(badgesToAward.count) badges awarded")
+        #endif
     }
     
     /// Award individual badge to user
     private func awardBadge(userID: String, badgeRawValue: String) async {
         
         // TODO: Implement badge awarding when BadgeService is available
+        #if DEBUG
         print("🏆 BADGE: Would award '\(badgeRawValue)' to \(userID)")
+        #endif
         
         // TODO: Send badge unlock notification
         // await NotificationService.sendBadgeUnlockNotification(...)
@@ -427,7 +485,9 @@ class AuthCoordinator: ObservableObject {
     
     /// Find user ID by email address
     private func findUserIDByEmail(email: String) async throws -> String? {
+        #if DEBUG
         print("🔍 AUTH: Looking up user ID for email: \(email)")
+        #endif
         
         let snapshot = try await db.collection(FirebaseSchema.Collections.users)
             .whereField(FirebaseSchema.UserDocument.email, isEqualTo: email)
@@ -437,9 +497,13 @@ class AuthCoordinator: ObservableObject {
         let userID = snapshot.documents.first?.documentID
         
         if let userID = userID {
+            #if DEBUG
             print("✅ AUTH: Found user ID \(userID) for email \(email)")
+            #endif
         } else {
+            #if DEBUG
             print("❌ AUTH: No user found for email \(email)")
+            #endif
         }
         
         return userID
@@ -452,27 +516,37 @@ class AuthCoordinator: ObservableObject {
     
     /// Migrate existing users to auto-follow James Fortune (call this in init or app startup)
     func migrateExistingUsersToAutoFollow() async {
+        #if DEBUG
         print("📦 MIGRATION: Starting existing users auto-follow migration")
+        #endif
         
         guard let jamesFortune = SpecialUsersConfig.getJamesFortune() else {
+            #if DEBUG
             print("❌ MIGRATION: James Fortune not found in config")
+            #endif
             return
         }
         
         // Check if migration already completed
         if await hasAutoFollowMigrationBeenRun() {
+            #if DEBUG
             print("✅ MIGRATION: Already completed, skipping")
+            #endif
             return
         }
         
         do {
             // Find James Fortune's user ID
             guard let jamesUserID = try await findUserIDByEmail(email: jamesFortune.email) else {
+                #if DEBUG
                 print("❌ MIGRATION: James Fortune account not found")
+                #endif
                 return
             }
             
+            #if DEBUG
             print("✅ MIGRATION: Found James Fortune account: \(jamesUserID)")
+            #endif
             
             // Get all users who should follow James
             let allUsersSnapshot = try await db.collection(FirebaseSchema.Collections.users)
@@ -501,10 +575,14 @@ class AuthCoordinator: ObservableObject {
                 
                 if let specialUser = SpecialUsersConfig.getSpecialUser(for: userEmail) {
                     if specialUser.role == .founder || specialUser.role == .coFounder {
+                        #if DEBUG
                         print("⏭️ MIGRATION: Skipping founder/co-founder \(userEmail)")
+                        #endif
                         continue
                     } else {
+                        #if DEBUG
                         print("✅ MIGRATION: Including special user \(userEmail) (\(specialUser.role.displayName))")
+                        #endif
                     }
                 }
                 
@@ -512,10 +590,14 @@ class AuthCoordinator: ObservableObject {
                 do {
                     try await userService.followUser(followerID: userID, followingID: jamesUserID)
                     successCount += 1
+                    #if DEBUG
                     print("✅ MIGRATION: User \(userID) now follows James Fortune")
+                    #endif
                 } catch {
                     errorCount += 1
+                    #if DEBUG
                     print("❌ MIGRATION: Failed to migrate user \(userID): \(error)")
+                    #endif
                 }
                 
                 // Small delay to avoid overwhelming system
@@ -524,15 +606,23 @@ class AuthCoordinator: ObservableObject {
                 }
             }
             
+            #if DEBUG
             print("🎉 MIGRATION COMPLETE:")
+            #endif
+            #if DEBUG
             print("   ✅ Successfully migrated: \(successCount) users")
+            #endif
+            #if DEBUG
             print("   ❌ Errors encountered: \(errorCount) users")
+            #endif
             
             // Mark migration complete
             try await markMigrationComplete()
             
         } catch {
+            #if DEBUG
             print("❌ MIGRATION FAILED: \(error)")
+            #endif
         }
     }
     
@@ -546,7 +636,9 @@ class AuthCoordinator: ObservableObject {
             return doc.data()?["autoFollowMigrationComplete"] as? Bool ?? false
             
         } catch {
+            #if DEBUG
             print("⚠️ MIGRATION: Could not check status: \(error)")
+            #endif
             return false
         }
     }
@@ -561,7 +653,9 @@ class AuthCoordinator: ObservableObject {
                 "autoFollowMigrationVersion": "1.0"
             ], merge: true)
         
+        #if DEBUG
         print("✅ MIGRATION: Marked as complete")
+        #endif
     }
     
     // MARK: - Completion
@@ -587,9 +681,15 @@ class AuthCoordinator: ObservableObject {
             authMetrics.specialUserLogins += 1
         }
         
+        #if DEBUG
         print("🎉 AUTH: Authentication workflow completed successfully!")
+        #endif
+        #if DEBUG
         print("📊 ANALYTICS: Session established for \(profile.isSpecialUser ? "special" : "regular") user")
+        #endif
+        #if DEBUG
         print("📊 ANALYTICS: Total logins: \(authMetrics.totalLogins)")
+        #endif
     }
     
     // MARK: - Error Handling
@@ -606,8 +706,12 @@ class AuthCoordinator: ObservableObject {
         authMetrics.totalErrors += 1
         authMetrics.lastErrorType = lastError?.localizedDescription
         
+        #if DEBUG
         print("❌ AUTH: Error encountered - \(error.localizedDescription)")
+        #endif
+        #if DEBUG
         print("🔄 RETRY: Can retry: \(canRetry)")
+        #endif
     }
     
     /// Determine if error allows retry
@@ -645,7 +749,9 @@ class AuthCoordinator: ObservableObject {
             authMetrics.totalSignUps += 1
         }
         
+        #if DEBUG
         print("📊 AUTH METRICS: Duration: \(String(format: "%.2f", duration))s, Success: \(success)")
+        #endif
     }
     
     /// Calculate authentication success rate
@@ -660,7 +766,9 @@ class AuthCoordinator: ObservableObject {
     /// Sign out user and reset state
     func signOut() async throws {
         
+        #if DEBUG
         print("🔐 AUTH: Signing out user")
+        #endif
         
         try await authService.signOut()
         
@@ -679,7 +787,9 @@ class AuthCoordinator: ObservableObject {
         showingError = false
         canRetry = false
         
+        #if DEBUG
         print("🔐 AUTH: Sign out complete")
+        #endif
     }
     
     /// Reset coordinator state
@@ -693,7 +803,9 @@ class AuthCoordinator: ObservableObject {
         showingError = false
         canRetry = false
         
+        #if DEBUG
         print("🔄 AUTH COORDINATOR: State reset")
+        #endif
     }
     
     /// Get current authentication status
@@ -842,8 +954,14 @@ extension AuthCoordinator {
     
     /// Test authentication workflow with mock data
     func helloWorldTest() {
+        #if DEBUG
         print("🔐 AUTH COORDINATOR: Hello World - Ready for complete authentication workflow!")
+        #endif
+        #if DEBUG
         print("🔐 Features: Login/Signup, Special user detection, Profile setup, Badge initialization, Auto-follow")
+        #endif
+        #if DEBUG
         print("🔐 Status: AuthService integration, Special user configuration, Auto-follow system ready")
+        #endif
     }
 }

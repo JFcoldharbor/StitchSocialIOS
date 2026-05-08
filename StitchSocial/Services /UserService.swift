@@ -69,7 +69,9 @@ class UserService: ObservableObject {
             displayName: finalDisplayName
         )
         
+        #if DEBUG
         print("USER SERVICE: Creating user with tier \(initialTier.displayName), clout: \(initialClout)")
+        #endif
         
         let userData: [String: Any] = [
             FirebaseSchema.UserDocument.id: id,
@@ -115,7 +117,9 @@ class UserService: ObservableObject {
             profileImageURL: profileImageURL
         )
         
+        #if DEBUG
         print("USER SERVICE: Created user \(finalUsername) with tier \(initialTier.displayName)")
+        #endif
         return user
     }
     
@@ -125,12 +129,16 @@ class UserService: ObservableObject {
         let document = try await db.collection(FirebaseSchema.Collections.users).document(id).getDocument()
         
         guard document.exists, let data = document.data() else {
+            #if DEBUG
             print("USER SERVICE: User not found: \(id)")
+            #endif
             return nil
         }
         
         let user = createBasicUserInfo(from: data, id: id)
+        #if DEBUG
         print("USER SERVICE: Loaded user \(user.username)")
+        #endif
         return user
     }
     
@@ -139,13 +147,17 @@ class UserService: ObservableObject {
         let document = try await db.collection(FirebaseSchema.Collections.users).document(id).getDocument()
         
         guard document.exists, let data = document.data() else {
+            #if DEBUG
             print("USER SERVICE: Extended profile not found: \(id)")
+            #endif
             return nil
         }
         
         let basicUser = createBasicUserInfo(from: data, id: id)
         
+        #if DEBUG
         print("USER SERVICE: Loaded extended profile for \(basicUser.username)")
+        #endif
         return basicUser
     }
     
@@ -158,7 +170,9 @@ class UserService: ObservableObject {
         username: String? = nil
     ) async throws {
         
+        #if DEBUG
         print("USER SERVICE: Updating profile for user \(userID)")
+        #endif
         
         var updates: [String: Any] = [
             FirebaseSchema.UserDocument.updatedAt: Timestamp()
@@ -207,14 +221,18 @@ class UserService: ObservableObject {
                 displayName: finalDisplayName
             )
             updates[FirebaseSchema.UserDocument.searchableText] = searchableText
+            #if DEBUG
             print("USER SERVICE: Updated searchableText to '\(searchableText)'")
+            #endif
         }
         
         try await db.collection(FirebaseSchema.Collections.users)
             .document(userID)
             .updateData(updates)
         
+        #if DEBUG
         print("USER SERVICE: Successfully updated \(updates.keys.count) profile fields")
+        #endif
     }
     
     /// Upload and update profile image
@@ -239,7 +257,9 @@ class UserService: ObservableObject {
                 FirebaseSchema.UserDocument.updatedAt: Timestamp()
             ])
         
+        #if DEBUG
         print("USER SERVICE: Updated profile image for user \(userID)")
+        #endif
         return downloadURL.absoluteString
     }
     
@@ -314,7 +334,9 @@ class UserService: ObservableObject {
         // Evaluate social/follower badges for the followee — followerCount just incremented
         await evaluateBadgesAfterFollow(userID: followingID)
 
+        #if DEBUG
         print("USER SERVICE: User \(followerID) followed \(followingID)")
+        #endif
     }
     
     /// Unfollow a user
@@ -354,7 +376,9 @@ class UserService: ObservableObject {
         
         try await batch.commit()
         
+        #if DEBUG
         print("USER SERVICE: User \(followerID) unfollowed \(followingID)")
+        #endif
     }
     
     /// Check if user is following another user
@@ -382,7 +406,9 @@ class UserService: ObservableObject {
             .getDocuments()
         
         let followingIDs = followingSnapshot.documents.map { $0.documentID }
+        #if DEBUG
         print("USER SERVICE: User \(userID) follows \(followingIDs.count) users")
+        #endif
         return followingIDs
     }
     
@@ -394,7 +420,9 @@ class UserService: ObservableObject {
             .getDocuments()
         
         let followerIDs = followersSnapshot.documents.map { $0.documentID }
+        #if DEBUG
         print("USER SERVICE: User \(userID) has \(followerIDs.count) followers")
+        #endif
         return followerIDs
     }
     
@@ -419,7 +447,9 @@ class UserService: ObservableObject {
             createBasicUserInfo(from: doc.data(), id: doc.documentID)
         }
         
+        #if DEBUG
         print("USER SERVICE: Found \(users.count) users matching '\(query)'")
+        #endif
         return users
     }
     
@@ -447,7 +477,9 @@ class UserService: ObservableObject {
     
     /// Get user ID by email
     func getUserID(email: String) async throws -> String? {
+        #if DEBUG
         print("🔍 USER SERVICE: Looking up user ID for email: \(email)")
+        #endif
         
         let snapshot = try await db.collection(FirebaseSchema.Collections.users)
             .whereField(FirebaseSchema.UserDocument.email, isEqualTo: email)
@@ -457,9 +489,13 @@ class UserService: ObservableObject {
         let userID = snapshot.documents.first?.documentID
         
         if let userID = userID {
+            #if DEBUG
             print("✅ USER SERVICE: Found user ID \(userID) for email \(email)")
+            #endif
         } else {
+            #if DEBUG
             print("❌ USER SERVICE: No user found for email \(email)")
+            #endif
         }
         
         return userID
@@ -467,7 +503,9 @@ class UserService: ObservableObject {
     
     /// Get user email by ID
     func getUserEmail(userID: String) async throws -> String? {
+        #if DEBUG
         print("🔍 USER SERVICE: Looking up email for user ID: \(userID)")
+        #endif
         
         do {
             let document = try await db.collection(FirebaseSchema.Collections.users)
@@ -475,22 +513,30 @@ class UserService: ObservableObject {
                 .getDocument()
             
             guard document.exists else {
+                #if DEBUG
                 print("❌ USER SERVICE: User document not found for ID: \(userID)")
+                #endif
                 throw StitchError.validationError("User not found")
             }
             
             let email = document.data()?[FirebaseSchema.UserDocument.email] as? String
             
             if let email = email {
+                #if DEBUG
                 print("✅ USER SERVICE: Found email \(email) for user ID \(userID)")
+                #endif
             } else {
+                #if DEBUG
                 print("⚠️ USER SERVICE: No email found in document for user ID: \(userID)")
+                #endif
             }
             
             return email
             
         } catch {
+            #if DEBUG
             print("⚠️ USER SERVICE: Error looking up email for user \(userID): \(error)")
+            #endif
             throw error
         }
     }
@@ -503,7 +549,9 @@ class UserService: ObservableObject {
     
     /// Refresh follower/following counts for a user
     func refreshFollowerCounts(userID: String) async throws {
+        #if DEBUG
         print("🔄 USER SERVICE: Refreshing follower counts for user \(userID)")
+        #endif
         
         do {
             // Count actual followers in subcollection
@@ -530,17 +578,23 @@ class UserService: ObservableObject {
                     FirebaseSchema.UserDocument.updatedAt: Timestamp()
                 ])
             
+            #if DEBUG
             print("✅ USER SERVICE: Updated counts - Followers: \(actualFollowerCount), Following: \(actualFollowingCount)")
+            #endif
             
         } catch {
+            #if DEBUG
             print("⚠️ USER SERVICE: Failed to refresh follower counts for \(userID): \(error)")
+            #endif
             throw error
         }
     }
     
     /// Get fresh follower/following lists for a user
     func getFreshFollowData(userID: String) async throws -> (followers: [String], following: [String]) {
+        #if DEBUG
         print("🔄 USER SERVICE: Getting fresh follow data for user \(userID)")
+        #endif
         
         // Get fresh followers list
         let followersSnapshot = try await db.collection(FirebaseSchema.Collections.users)
@@ -557,7 +611,9 @@ class UserService: ObservableObject {
         let followers = followersSnapshot.documents.map { $0.documentID }
         let following = followingSnapshot.documents.map { $0.documentID }
         
+        #if DEBUG
         print("✅ USER SERVICE: Fresh data - \(followers.count) followers, \(following.count) following")
+        #endif
         
         return (followers: followers, following: following)
     }
@@ -573,21 +629,29 @@ class UserService: ObservableObject {
             FirebaseSchema.UserDocument.updatedAt: Timestamp()
         ])
         
+        #if DEBUG
         print("USER SERVICE: Updated clout by \(cloutChange) for user \(userID)")
+        #endif
     }
     
     /// Award positive clout to user (called by EngagementResult.swift)
     func awardClout(userID: String, amount: Int) async throws {
         guard amount > 0 else {
+            #if DEBUG
             print("⚠️ USER SERVICE: Cannot award negative or zero clout amount: \(amount)")
+            #endif
             throw StitchError.validationError("Clout award amount must be positive")
         }
         
+        #if DEBUG
         print("💰 USER SERVICE: Awarding \(amount) clout to user \(userID)")
+        #endif
         
         do {
             try await updateClout(userID: userID, cloutChange: amount)
+            #if DEBUG
             print("✅ USER SERVICE: Successfully awarded \(amount) clout to user \(userID)")
+            #endif
             
             // Check for tier advancement — also fires tier badge inside
             await checkAndAdvanceTier(userID: userID)
@@ -597,7 +661,9 @@ class UserService: ObservableObject {
             await evaluateBadgesAfterClout(userID: userID)
             
         } catch {
+            #if DEBUG
             print("❌ USER SERVICE: Failed to award clout to user \(userID): \(error.localizedDescription)")
+            #endif
             throw StitchError.processingError("Failed to award clout: \(error.localizedDescription)")
         }
     }
@@ -635,23 +701,31 @@ class UserService: ObservableObject {
                     FirebaseSchema.UserDocument.tier: correctTier.rawValue,
                     FirebaseSchema.UserDocument.updatedAt: Timestamp()
                 ])
+                #if DEBUG
                 print("🎉 USER SERVICE: Tier advanced for \(userID): \(currentTier.displayName) -> \(correctTier.displayName) (clout: \(currentClout))")
+                #endif
                 // Award tier badge — zero extra reads, tier value already in hand
                 await BadgeService.shared.evaluateTierBadge(userID: userID, newTierRaw: correctTier.rawValue)
             }
         } catch {
+            #if DEBUG
             print("⚠️ USER SERVICE: Tier check failed (non-fatal): \(error.localizedDescription)")
+            #endif
         }
     }
     
     /// Deduct clout from user with minimum bounds protection (called by EngagementResult.swift)
     func deductClout(userID: String, amount: Int) async throws {
         guard amount > 0 else {
+            #if DEBUG
             print("⚠️ USER SERVICE: Cannot deduct negative or zero clout amount: \(amount)")
+            #endif
             throw StitchError.validationError("Clout deduction amount must be positive")
         }
         
+        #if DEBUG
         print("💸 USER SERVICE: Deducting \(amount) clout from user \(userID)")
+        #endif
         
         do {
             // Get current user to check clout balance
@@ -664,17 +738,23 @@ class UserService: ObservableObject {
             let actualDeduction = currentUser.clout - newClout
             
             if actualDeduction != amount {
+                #if DEBUG
                 print("⚠️ USER SERVICE: Clout deduction limited - requested: \(amount), actual: \(actualDeduction)")
+                #endif
             }
             
             // Use existing updateClout method with negative amount
             try await updateClout(userID: userID, cloutChange: -actualDeduction)
             
             // Log successful clout deduction
+            #if DEBUG
             print("✅ USER SERVICE: Successfully deducted \(actualDeduction) clout from user \(userID) (requested: \(amount))")
+            #endif
             
         } catch {
+            #if DEBUG
             print("❌ USER SERVICE: Failed to deduct clout from user \(userID): \(error.localizedDescription)")
+            #endif
             throw StitchError.processingError("Failed to deduct clout: \(error.localizedDescription)")
         }
     }
@@ -811,14 +891,18 @@ extension UserService {
             "AZUAsfkobQWSqXzgTR1UM2uogZn2"    // Teddy Ruks
         ]
         
+        #if DEBUG
         print("🔄 BACKFILL: Starting auto-follow backfill for default accounts")
+        #endif
         
         do {
             // Get all users from Firestore
             let snapshot = try await db.collection(FirebaseSchema.Collections.users).getDocuments()
             let userIDs = snapshot.documents.map { $0.documentID }
             
+            #if DEBUG
             print("🔄 BACKFILL: Found \(userIDs.count) users to process")
+            #endif
             
             for userID in userIDs {
                 for accountID in defaultAccounts {
@@ -828,18 +912,26 @@ extension UserService {
                         
                         if !isAlreadyFollowing && userID != accountID {
                             try await followUser(followerID: userID, followingID: accountID)
+                            #if DEBUG
                             print("✅ BACKFILL: User \(userID) followed \(accountID)")
+                            #endif
                         }
                     } catch {
+                        #if DEBUG
                         print("⚠️ BACKFILL: Error processing \(userID) -> \(accountID): \(error)")
+                        #endif
                     }
                 }
             }
             
+            #if DEBUG
             print("✅ BACKFILL: Completed")
+            #endif
             
         } catch {
+            #if DEBUG
             print("❌ BACKFILL: Failed: \(error)")
+            #endif
         }
     }
 }
@@ -850,8 +942,14 @@ extension UserService {
     
     /// Test user service functionality
     func helloWorldTest() {
+        #if DEBUG
         print("👥 USER SERVICE: Hello World - Ready for complete user management!")
+        #endif
+        #if DEBUG
         print("👥 Features: CRUD operations, Profile editing, Following system, Auto-follow support, Clout management")
+        #endif
+        #if DEBUG
         print("👥 Status: Firebase integration, Image upload, Username validation, Email lookup")
+        #endif
     }
 }

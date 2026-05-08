@@ -20,7 +20,9 @@ enum Secrets {
               let data = try? Data(contentsOf: url),
               let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
         else {
+            #if DEBUG
             print("⚠️ Secrets.plist not found - API keys will be empty")
+            #endif
             return [:]
         }
         return dict

@@ -126,7 +126,9 @@ class ConversationLaneService: ObservableObject {
         laneParticipantCache[childVideoID] = lanes
         cacheTimes[childVideoID] = Date()
         
+        #if DEBUG
         print("🛤️ LANES: Found \(lanes.count) conversation lanes for child \(childVideoID)")
+        #endif
         return lanes
     }
     
@@ -206,7 +208,9 @@ class ConversationLaneService: ObservableObject {
         laneMessagesCache[cacheKey] = laneMessages
         cacheTimes[cacheKey] = Date()
         
+        #if DEBUG
         print("🛤️ LANE MESSAGES: Loaded \(laneMessages.count) messages between \(participant1) and \(participant2)")
+        #endif
         return laneMessages
     }
     
@@ -344,7 +348,9 @@ class ConversationLaneService: ObservableObject {
         laneParticipantCache.removeAll()
         laneMessagesCache.removeAll()
         cacheTimes.removeAll()
+        #if DEBUG
         print("🧹 LANE CACHE: Cleared")
+        #endif
     }
     
     func invalidateLane(childVideoID: String) {
@@ -352,7 +358,9 @@ class ConversationLaneService: ObservableObject {
         // Remove all message caches for this child
         let keysToRemove = laneMessagesCache.keys.filter { $0.hasPrefix(childVideoID) }
         keysToRemove.forEach { laneMessagesCache.removeValue(forKey: $0) }
+        #if DEBUG
         print("🧹 LANE CACHE: Invalidated lanes for \(childVideoID)")
+        #endif
     }
     
     // MARK: - CoreVideoMetadata Factory (mirrors VideoService)

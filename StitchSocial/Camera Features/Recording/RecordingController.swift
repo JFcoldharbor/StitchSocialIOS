@@ -213,13 +213,17 @@ class RecordingController: ObservableObject {
             uploadService: VideoUploadService(),
             cachingService: CachingService.shared
         )
+        #if DEBUG
         print("🎬 RECORDING CONTROLLER: Initialized")
+        #endif
     }
 
     deinit {
         timerTask?.cancel()
         compressionTask?.cancel()
+        #if DEBUG
         print("🎬 RECORDING CONTROLLER: Deinitialized")
+        #endif
     }
 
     // MARK: - Camera Session
@@ -228,9 +232,13 @@ class RecordingController: ObservableObject {
         await cameraManager.startSession()
         if let user = authService.currentUser {
             let limit = videoService.getMaxRecordingDuration(for: user.tier)
+            #if DEBUG
             print("✅ CONTROLLER: Camera started — \(user.tier.displayName) tier, \(Int(limit))s limit")
+            #endif
         } else {
+            #if DEBUG
             print("✅ CONTROLLER: Camera started — default 30s limit")
+            #endif
         }
     }
 
@@ -238,7 +246,9 @@ class RecordingController: ObservableObject {
         stopTimer()
         cancelBackgroundCompression()
         await cameraManager.stopSession()
+        #if DEBUG
         print("⏹ CONTROLLER: Camera stopped")
+        #endif
     }
 
     // MARK: - Segment Recording
@@ -246,7 +256,9 @@ class RecordingController: ObservableObject {
     func startSegment() {
         guard currentPhase == .ready else { return }
         guard !isSavingSegment, !cameraManager.isRecording else {
+            #if DEBUG
             print("⚠️ SEGMENT: Cannot start — busy")
+            #endif
             return
         }
 
@@ -254,7 +266,9 @@ class RecordingController: ObservableObject {
             currentDuration: totalDuration,
             userTier: authService.currentUser?.tier ?? .rookie
         ) else {
+            #if DEBUG
             print("⚠️ SEGMENT: Tier limit reached")
+            #endif
             return
         }
 
@@ -279,7 +293,9 @@ class RecordingController: ObservableObject {
         }
 
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        #if DEBUG
         print("🎬 SEGMENT: Started segment \(segments.count + 1)")
+        #endif
     }
 
     func stopSegment() {
@@ -290,7 +306,9 @@ class RecordingController: ObservableObject {
         stopTimer()
         cameraManager.stopRecording()
         UINotificationFeedbackGenerator().notificationOccurred(.success)
+        #if DEBUG
         print("🎬 SEGMENT: Stopped at \(String(format: "%.1f", currentSegmentDuration))s")
+        #endif
     }
 
     private func handleSegmentRecorded(_ videoURL: URL?) {
@@ -309,7 +327,9 @@ class RecordingController: ObservableObject {
         recordingPhase = .ready
         currentSegmentDuration = 0
         isSavingSegment = false
+        #if DEBUG
         print("✅ SEGMENT: Saved #\(segments.count) — total \(String(format: "%.1f", totalDuration))s")
+        #endif
     }
 
     func deleteNewestSegment() {
@@ -333,7 +353,9 @@ class RecordingController: ObservableObject {
             startBackgroundCompression(mergedURL)
             currentPhase = .complete
             recordingPhase = .complete
+            #if DEBUG
             print("✅ FINISH: Merged \(segments.count) segments")
+            #endif
         } catch {
             handleRecordingError("Merge failed: \(error.localizedDescription)")
         }
@@ -476,9 +498,13 @@ class RecordingController: ObservableObject {
                 self.compressedFileSize = result.compressedSize
                 self.compressionComplete = true
                 let savings = size > 0 ? 100.0 - (Double(result.compressedSize) / Double(size) * 100.0) : 0
+                #if DEBUG
                 print("📦 COMPRESSION: \(size / 1024 / 1024)MB → \(result.compressedSize / 1024 / 1024)MB (\(String(format: "%.0f", savings))% saved)")
+                #endif
             } catch {
+                #if DEBUG
                 print("⚠️ COMPRESSION: Failed — \(error.localizedDescription)")
+                #endif
             }
         }
     }
@@ -513,7 +539,9 @@ class RecordingController: ObservableObject {
         currentPhase = .error(message)
         recordingPhase = .error(message)
         errorMessage = message
+        #if DEBUG
         print("❌ RECORDING: \(message)")
+        #endif
     }
 
     func clearError() {

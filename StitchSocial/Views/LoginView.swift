@@ -736,9 +736,13 @@ struct LoginView: View {
                             sourceType: .manual
                         )
                         if let result = result, result.success {
+                            #if DEBUG
                             print("🎉 REFERRAL: Code redeemed — referred by \(result.referrerID ?? "unknown")")
+                            #endif
                         } else {
+                            #if DEBUG
                             print("⚠️ REFERRAL: Code failed — \(result?.error ?? "unknown error")")
+                            #endif
                         }
                     }
                     
@@ -757,7 +761,9 @@ struct LoginView: View {
                 }
                 
             } catch {
+                #if DEBUG
                 print("Authentication error: \(error)")
+                #endif
             }
             
             await MainActor.run {
@@ -784,9 +790,13 @@ struct LoginView: View {
         
         do {
             try await userRef.setData(termsData, merge: true)
+            #if DEBUG
             print("✅ Terms acceptance saved for user: \(userID)")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ Failed to save terms acceptance: \(error.localizedDescription)")
+            #endif
         }
     }
     

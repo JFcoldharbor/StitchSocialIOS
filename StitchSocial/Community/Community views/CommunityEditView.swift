@@ -645,7 +645,9 @@ struct CommunityEditView: View {
             let result = try await communityService.fetchMembers(creatorID: creatorID, limit: 100)
             await MainActor.run { members = result.members }
         } catch {
+            #if DEBUG
             print("⚠️ COMMUNITY EDIT: Failed to load members - \(error.localizedDescription)")
+            #endif
         }
         await MainActor.run { isLoadingMembers = false }
     }

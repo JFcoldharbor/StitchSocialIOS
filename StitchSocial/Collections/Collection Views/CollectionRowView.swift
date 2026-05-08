@@ -45,7 +45,9 @@ struct CollectionRowView: View {
     
     var body: some View {
         Button(action: {
+            #if DEBUG
             print("📚 COLLECTION ROW: Tapped collection '\(viewModel.title)' (ID: \(viewModel.collection.id))")
+            #endif
             onTap()
         }) {
             switch style {

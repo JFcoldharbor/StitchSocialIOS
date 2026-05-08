@@ -96,7 +96,9 @@ struct AnnouncementOverlayView: View {
     // MARK: - Pause Background Videos
     
     private func pauseBackgroundVideos() {
+        #if DEBUG
         print("📢 ANNOUNCEMENT: Killing ALL background activity")
+        #endif
         
         // Use the master kill switch to stop everything
         BackgroundActivityManager.shared.killAllBackgroundActivity(reason: "Announcement overlay")
@@ -107,7 +109,9 @@ struct AnnouncementOverlayView: View {
         // Clear the preloading service player pool
         VideoPreloadingService.shared.clearAllPlayers()
         
+        #if DEBUG
         print("📢 ANNOUNCEMENT: Background videos killed")
+        #endif
     }
     
     // MARK: - Toggle Playback
@@ -341,13 +345,17 @@ struct AnnouncementOverlayView: View {
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                     canDismiss = true
                 }
+                #if DEBUG
                 print("📢 ANNOUNCEMENT: Minimum watch time reached (\(watchedSeconds)s)")
+                #endif
             }
         }
     }
     
     private func completeAnnouncement() {
+        #if DEBUG
         print("📢 ANNOUNCEMENT: Complete tapped, watchedSeconds=\(watchedSeconds)")
+        #endif
         cleanup()
         onComplete()
     }
@@ -357,7 +365,9 @@ struct AnnouncementOverlayView: View {
         watchTimer = nil
         player?.pause()
         player = nil
+        #if DEBUG
         print("📢 ANNOUNCEMENT: Cleaned up")
+        #endif
     }
 }
 

@@ -94,10 +94,14 @@ class HashtagService: ObservableObject {
             // Sort by velocity (fastest growing first)
             trendingHashtags = trending.sorted { $0.velocity > $1.velocity }
             
+            #if DEBUG
             print("ðŸ·ï¸ HASHTAG SERVICE: Loaded \(trendingHashtags.count) trending hashtags")
+            #endif
             
         } catch {
+            #if DEBUG
             print("âŒ HASHTAG SERVICE: Failed to load trending: \(error)")
+            #endif
         }
     }
     
@@ -189,7 +193,9 @@ class HashtagService: ObservableObject {
         var failed = 0
         var lastDoc: DocumentSnapshot? = nil
         
+        #if DEBUG
         print("🏷️ BACKFILL: Starting hashtag backfill...")
+        #endif
         
         repeat {
             do {
@@ -232,23 +238,33 @@ class HashtagService: ObservableObject {
                                     FirebaseSchema.VideoDocument.hashtags: hashtags
                                 ])
                             updated += 1
+                            #if DEBUG
                             print("✅ BACKFILL: \(doc.documentID) -> \(hashtags)")
+                            #endif
                         } catch {
                             failed += 1
+                            #if DEBUG
                             print("❌ BACKFILL: Failed \(doc.documentID) - \(error)")
+                            #endif
                         }
                     }
                 }
                 
+                #if DEBUG
                 print("🏷️ BACKFILL: Processed batch, updated: \(updated), failed: \(failed)")
+                #endif
                 
             } catch {
+                #if DEBUG
                 print("❌ BACKFILL: Batch failed - \(error)")
+                #endif
                 break
             }
         } while lastDoc != nil
         
+        #if DEBUG
         print("🏷️ BACKFILL: Complete! Updated: \(updated), Failed: \(failed)")
+        #endif
         return (updated, failed)
     }
     
@@ -261,7 +277,9 @@ class HashtagService: ObservableObject {
         var failed = 0
         var lastDoc: DocumentSnapshot? = nil
         
+        #if DEBUG
         print("📊 SCORE RECALC: Starting batch recalculation...")
+        #endif
         
         repeat {
             do {
@@ -300,22 +318,30 @@ class HashtagService: ObservableObject {
                                     FirebaseSchema.VideoDocument.discoverabilityScore: newDiscoverability
                                 ])
                             updated += 1
+                            #if DEBUG
                             print("📊 RECALC: \(doc.documentID) quality: \(video.qualityScore)→\(newQuality), disc: \(String(format: "%.2f", video.discoverabilityScore))→\(String(format: "%.2f", newDiscoverability))")
+                            #endif
                         } catch {
                             failed += 1
                         }
                     }
                 }
                 
+                #if DEBUG
                 print("📊 SCORE RECALC: Batch done, updated: \(updated)")
+                #endif
                 
             } catch {
+                #if DEBUG
                 print("❌ SCORE RECALC: Batch failed - \(error)")
+                #endif
                 break
             }
         } while lastDoc != nil
         
+        #if DEBUG
         print("📊 SCORE RECALC: Complete! Updated: \(updated), Failed: \(failed)")
+        #endif
         return (updated, failed)
     }
 }

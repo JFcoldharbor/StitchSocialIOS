@@ -151,7 +151,9 @@ struct ReferralButton: View {
                     showingShareSheet = true
                 }
             } catch {
+                #if DEBUG
                 print("⚠️ REFERRAL: Failed to generate link: \(error)")
+                #endif
                 isGeneratingLink = false
             }
         }
@@ -647,7 +649,9 @@ struct ReferralDashboardView: View {
                 isLoading = false
             }
         } catch {
+            #if DEBUG
             print("⚠️ REFERRAL DASHBOARD: Failed to load stats: \(error)")
+            #endif
             isLoading = false
         }
     }

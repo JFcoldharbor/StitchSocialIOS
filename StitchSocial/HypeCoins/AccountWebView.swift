@@ -32,13 +32,21 @@ struct AccountWebView: View {
     
     private var fullURL: URL? {
         guard let token = authToken, !token.isEmpty else {
+            #if DEBUG
             print("🔴 WEBVIEW: No auth token available yet")
+            #endif
             return nil
         }
         let urlString = "\(baseURL)\(initialPath)?token=\(token)&app=true"
+        #if DEBUG
         print("🌐 WEBVIEW URL: \(baseURL)\(initialPath)")
+        #endif
+        #if DEBUG
         print("🔑 WEBVIEW TOKEN LENGTH: \(token.count) chars")
+        #endif
+        #if DEBUG
         print("🔗 WEBVIEW FULL URL LENGTH: \(urlString.count) chars")
+        #endif
         return URL(string: urlString)
     }
     
@@ -167,23 +175,31 @@ struct AccountWebView: View {
     
     private func fetchAuthToken() {
         guard let user = Auth.auth().currentUser else {
+            #if DEBUG
             print("❌ WEBVIEW: No current Firebase user")
+            #endif
             tokenError = true
             return
         }
         
         user.getIDToken { token, error in
             if let error = error {
+                #if DEBUG
                 print("❌ WEBVIEW: Token error - \(error.localizedDescription)")
+                #endif
                 tokenError = true
                 return
             }
             
             if let token = token {
+                #if DEBUG
                 print("✅ WEBVIEW: Got Firebase ID token for \(user.uid)")
+                #endif
                 self.authToken = token
             } else {
+                #if DEBUG
                 print("❌ WEBVIEW: No token returned")
+                #endif
                 tokenError = true
             }
         }
@@ -248,7 +264,9 @@ struct WebViewContainer: UIViewRepresentable {
         if !context.coordinator.hasLoaded {
             context.coordinator.hasLoaded = true
             let request = URLRequest(url: url)
+            #if DEBUG
             print("🚀 WEBVIEW: Loading URL now")
+            #endif
             webView.load(request)
         }
     }
@@ -267,7 +285,9 @@ struct WebViewContainer: UIViewRepresentable {
         
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             parent.isLoading = true
+            #if DEBUG
             print("🔄 WEBVIEW: Started loading - \(webView.url?.absoluteString.prefix(80) ?? "nil")")
+            #endif
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -294,10 +314,14 @@ struct WebViewContainer: UIViewRepresentable {
             """
             webView.evaluateJavaScript(debugJS) { result, error in
                 if let result = result as? String {
+                    #if DEBUG
                     print("🔍 WEBVIEW DEBUG: \(result)")
+                    #endif
                 }
                 if let error = error {
+                    #if DEBUG
                     print("🔴 WEBVIEW JS ERROR: \(error.localizedDescription)")
+                    #endif
                 }
             }
             
@@ -310,12 +334,16 @@ struct WebViewContainer: UIViewRepresentable {
         
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             parent.isLoading = false
+            #if DEBUG
             print("❌ WEBVIEW: Navigation failed - \(error.localizedDescription)")
+            #endif
         }
         
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             parent.isLoading = false
+            #if DEBUG
             print("❌ WEBVIEW: Provisional navigation failed - \(error.localizedDescription)")
+            #endif
         }
         
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -344,15 +372,21 @@ struct WebViewContainer: UIViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             switch message.name {
             case "purchaseComplete":
+                #if DEBUG
                 print("✅ WEBVIEW: Purchase complete message received")
+                #endif
                 parent.onPurchaseComplete?()
                 
             case "closeWebView":
+                #if DEBUG
                 print("✅ WEBVIEW: Close message received")
+                #endif
                 
             case "debugLog":
                 if let msg = message.body as? String {
+                    #if DEBUG
                     print("🌐 JS: \(msg)")
+                    #endif
                 }
                 
             default:

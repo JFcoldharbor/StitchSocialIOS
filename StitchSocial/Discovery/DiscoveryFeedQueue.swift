@@ -60,7 +60,9 @@ class DiscoveryFeedQueue {
         catalogExhausted = false
         isFetching = false
         consumedCount = 0
+        #if DEBUG
         print("🔄 FEED QUEUE: Reset")
+        #endif
     }
 
     /// Returns the current play queue for the UI — all fetched so far
@@ -74,7 +76,9 @@ class DiscoveryFeedQueue {
         queue.append(contentsOf: diversified)
         lastDocument = lastDoc
         catalogExhausted = !hasMore
+        #if DEBUG
         print("🎯 FEED QUEUE: +\(diversified.count) videos (total: \(queue.count), exhausted: \(catalogExhausted))")
+        #endif
     }
 
     /// Call when UI advances to `index` — returns true if a prefetch should fire
@@ -92,7 +96,9 @@ class DiscoveryFeedQueue {
         lastDocument = nil
         catalogExhausted = false
         consumedCount = 0
+        #if DEBUG
         print("♻️ FEED QUEUE: Catalog exhausted — reshuffled \(queue.count) videos for replay")
+        #endif
     }
 
     // MARK: - Creator Diversity

@@ -109,7 +109,9 @@ class AutoCaptionService: ObservableObject {
 
         // Build captions from transcription segments
         let captions = buildCaptions(from: result)
+        #if DEBUG
         print("✅ AUTO CAPTION: Generated \(captions.count) captions")
+        #endif
         return captions
     }
 

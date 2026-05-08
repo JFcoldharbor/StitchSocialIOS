@@ -42,7 +42,9 @@ class SearchableTextBackfill: ObservableObject {
     /// Safe to run multiple times - only updates users missing the field
     func backfillAllUsers() async {
         guard !isRunning else {
+            #if DEBUG
             print("⚠️ BACKFILL: Already running")
+            #endif
             return
         }
         
@@ -52,7 +54,9 @@ class SearchableTextBackfill: ObservableObject {
         lastError = nil
         completed = false
         
+        #if DEBUG
         print("🔄 BACKFILL: Starting searchableText backfill for all users...")
+        #endif
         
         do {
             // Get all users
@@ -60,7 +64,9 @@ class SearchableTextBackfill: ObservableObject {
                 .getDocuments()
             
             total = snapshot.documents.count
+            #if DEBUG
             print("🔄 BACKFILL: Found \(total) users to process")
+            #endif
             
             var updatedCount = 0
             var skippedCount = 0
@@ -89,7 +95,9 @@ class SearchableTextBackfill: ObservableObject {
                 
                 // Skip if both are empty
                 guard !username.isEmpty || !displayName.isEmpty else {
+                    #if DEBUG
                     print("⚠️ BACKFILL: Skipping user \(userID) - no username or displayName")
+                    #endif
                     skippedCount += 1
                     progress += 1
                     continue
@@ -114,11 +122,15 @@ class SearchableTextBackfill: ObservableObject {
                 if batchCount >= batchSize {
                     do {
                         try await batch.commit()
+                        #if DEBUG
                         print("✅ BACKFILL: Committed batch of \(batchCount) users")
+                        #endif
                         batch = db.batch()
                         batchCount = 0
                     } catch {
+                        #if DEBUG
                         print("❌ BACKFILL: Batch commit failed: \(error)")
+                        #endif
                         errorCount += batchCount
                         batch = db.batch()
                         batchCount = 0
@@ -132,9 +144,13 @@ class SearchableTextBackfill: ObservableObject {
             if batchCount > 0 {
                 do {
                     try await batch.commit()
+                    #if DEBUG
                     print("✅ BACKFILL: Committed final batch of \(batchCount) users")
+                    #endif
                 } catch {
+                    #if DEBUG
                     print("❌ BACKFILL: Final batch commit failed: \(error)")
+                    #endif
                     errorCount += batchCount
                 }
             }
@@ -142,16 +158,28 @@ class SearchableTextBackfill: ObservableObject {
             completed = true
             isRunning = false
             
+            #if DEBUG
             print("✅ BACKFILL COMPLETE:")
+            #endif
+            #if DEBUG
             print("   - Total users: \(total)")
+            #endif
+            #if DEBUG
             print("   - Updated: \(updatedCount)")
+            #endif
+            #if DEBUG
             print("   - Skipped (already had searchableText): \(skippedCount)")
+            #endif
+            #if DEBUG
             print("   - Errors: \(errorCount)")
+            #endif
             
         } catch {
             lastError = error.localizedDescription
             isRunning = false
+            #if DEBUG
             print("❌ BACKFILL: Failed to fetch users: \(error)")
+            #endif
         }
     }
     
@@ -180,7 +208,9 @@ class SearchableTextBackfill: ObservableObject {
             FirebaseSchema.UserDocument.searchableText: searchableText
         ])
         
+        #if DEBUG
         print("✅ BACKFILL: Updated searchableText for user \(userID): '\(searchableText)'")
+        #endif
     }
     
     // MARK: - Validation
@@ -201,11 +231,15 @@ class SearchableTextBackfill: ObservableObject {
                 missingCount += 1
             }
             
+            #if DEBUG
             print("📊 BACKFILL CHECK: \(missingCount)/\(snapshot.documents.count) users missing searchableText")
+            #endif
             return (snapshot.documents.count, missingCount)
             
         } catch {
+            #if DEBUG
             print("❌ BACKFILL CHECK: Failed: \(error)")
+            #endif
             return (0, 0)
         }
     }
@@ -225,12 +259,18 @@ extension SearchableTextBackfill {
         let missingPercentage = Double(missing) / Double(total)
         
         if missingPercentage > 0.1 {
+            #if DEBUG
             print("🔄 AUTO-BACKFILL: \(Int(missingPercentage * 100))% of users missing searchableText, starting backfill...")
+            #endif
             await backfillAllUsers()
         } else if missing > 0 {
+            #if DEBUG
             print("ℹ️ AUTO-BACKFILL: Only \(missing) users missing searchableText, skipping full backfill")
+            #endif
         } else {
+            #if DEBUG
             print("✅ AUTO-BACKFILL: All users have searchableText")
+            #endif
         }
     }
 }

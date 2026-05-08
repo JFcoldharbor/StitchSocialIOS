@@ -57,7 +57,9 @@ class SocialSignalService: ObservableObject {
     private let signalExpirationHours: Double = 72 // Signals expire after 72 hours
     
     private init() {
+        #if DEBUG
         print("📢 SOCIAL SIGNAL SERVICE: Initialized")
+        #endif
     }
     
     // MARK: - Record Notable Engagement
@@ -80,7 +82,9 @@ class SocialSignalService: ObservableObject {
         // Don't megaphone your own content
         guard engagerID != videoCreatorID else { return }
         
+        #if DEBUG
         print("📢 MEGAPHONE: \(engagerName) (\(engagerTier)) hyped video \(videoID) with weight \(hypeWeight)")
+        #endif
         
         let docID = "\(engagerID)_\(videoID)"
         
@@ -105,7 +109,9 @@ class SocialSignalService: ObservableObject {
                 .document(docID)
                 .setData(data, merge: true)
             
+            #if DEBUG
             print("📢 MEGAPHONE: Notable engagement recorded")
+            #endif
             
             // Trigger Cloud Function to fan out to engager's followers
             try await triggerFanOut(
@@ -119,7 +125,9 @@ class SocialSignalService: ObservableObject {
             )
             
         } catch {
+            #if DEBUG
             print("⚠️ MEGAPHONE: Failed to record — \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -150,10 +158,14 @@ class SocialSignalService: ObservableObject {
             let result = try await functions.httpsCallable("stitchnoti_fanOutSocialSignal").call(payload)
             if let data = result.data as? [String: Any],
                let followersNotified = data["followersNotified"] as? Int {
+                #if DEBUG
                 print("📢 MEGAPHONE: Fan-out complete — \(followersNotified) followers will see this")
+                #endif
             }
         } catch {
+            #if DEBUG
             print("⚠️ MEGAPHONE: Fan-out Cloud Function failed — \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -203,11 +215,15 @@ class SocialSignalService: ObservableObject {
             }
             
             activeSignals = signals
+            #if DEBUG
             print("📢 SOCIAL SIGNALS: Loaded \(signals.count) active signals for feed")
+            #endif
             return signals
             
         } catch {
+            #if DEBUG
             print("⚠️ SOCIAL SIGNALS: Failed to load — \(error.localizedDescription)")
+            #endif
             return []
         }
     }
@@ -240,11 +256,15 @@ class SocialSignalService: ObservableObject {
                 try await docRef.updateData(["dismissed": true])
                 dismissedSignalIDs.insert(signalID)
                 activeSignals.removeAll { $0.id == signalID }
+                #if DEBUG
                 print("📢 SIGNAL DISMISSED: \(signalID) after \(impressions) impressions with no engagement")
+                #endif
             }
             
         } catch {
+            #if DEBUG
             print("⚠️ SIGNAL IMPRESSION: Failed — \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -265,9 +285,13 @@ class SocialSignalService: ObservableObject {
         
         do {
             try await docRef.updateData(["engagedWith": true])
+            #if DEBUG
             print("📢 SIGNAL ENGAGED: \(signalID) — user tapped in, counts as real view")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ SIGNAL ENGAGEMENT: Failed — \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -299,7 +323,9 @@ class SocialSignalService: ObservableObject {
                 )
             }
         } catch {
+            #if DEBUG
             print("⚠️ Notable engagers fetch failed — \(error.localizedDescription)")
+            #endif
             return []
         }
     }

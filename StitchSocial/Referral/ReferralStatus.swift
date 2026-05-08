@@ -172,7 +172,9 @@ class ReferralService: ObservableObject {
         deviceInfo: [String: String] = [:]
     ) async throws -> ReferralProcessingResult {
         
+        #if DEBUG
         print("🔥 REFERRAL: Processing signup with code \(referralCode) for user \(newUserID)")
+        #endif
         
         // Validate referral code format
         guard FirebaseSchema.ValidationRules.validateReferralCode(referralCode) else {
@@ -290,7 +292,9 @@ class ReferralService: ObservableObject {
                 
                 if shouldMarkPermanent {
                     referrerUpdate[FirebaseSchema.UserDocument.customSubSharePermanent] = true
+                    #if DEBUG
                     print("🏆 REFERRAL: Ambassador \(referrerID) hit \(newReferralCount)/\(referralGoal ?? 0) referrals — 80/20 locked permanently!")
+                    #endif
                 }
                 
                 transaction.updateData(referrerUpdate, forDocument: referrerRef)
@@ -337,7 +341,9 @@ class ReferralService: ObservableObject {
                 return "success"
             }
             
+            #if DEBUG
             print("✅ REFERRAL: Processed + auto-followed referrer \(referrerID)")
+            #endif
             
             // Fire-and-forget: Send follow notification to referrer via Cloud Function
             // Outside transaction so it doesn't block or risk failing the referral write
@@ -347,10 +353,14 @@ class ReferralService: ObservableObject {
                     let _ = try await functions.httpsCallable("stitchnoti_sendFollow").call([
                         "recipientID": referrerID
                     ])
+                    #if DEBUG
                     print("🔔 REFERRAL: Follow notification sent to referrer \(referrerID)")
+                    #endif
                 } catch {
                     // Non-blocking — referral still succeeded even if notification fails
+                    #if DEBUG
                     print("⚠️ REFERRAL: Follow notification failed (non-blocking): \(error)")
+                    #endif
                 }
             }
             
@@ -399,10 +409,14 @@ class ReferralService: ObservableObject {
             try await db.collection(FirebaseSchema.Collections.referrals)
                 .document("organic_\(newUserID)")
                 .setData(organicData)
+            #if DEBUG
             print("📊 REFERRAL: Organic signup tracked for \(newUserID)")
+            #endif
         } catch {
             // Non-blocking — don't fail signup over tracking
+            #if DEBUG
             print("⚠️ REFERRAL: Failed to track organic signup: \(error)")
+            #endif
         }
     }
     
@@ -410,7 +424,9 @@ class ReferralService: ObservableObject {
     
     /// Get user's referral statistics
     func getUserReferralStats(userID: String) async throws -> ReferralStats {
+        #if DEBUG
         print("📊 REFERRAL: Loading stats for user \(userID)")
+        #endif
         
         let userDoc = try await db.collection(FirebaseSchema.Collections.users)
             .document(userID)
@@ -521,7 +537,9 @@ class ReferralService: ObservableObject {
         
         if cleanupCount > 0 {
             try await batch.commit()
+            #if DEBUG
             print("🧹 REFERRAL: Cleaned up \(cleanupCount) expired referrals")
+            #endif
         }
         
         return cleanupCount

@@ -410,7 +410,9 @@ struct HomeFeedView: View {
                         items.insert(.socialSignal(signal), at: position)
                         insertOffset += 1
                     }
+                    #if DEBUG
                     print("📢 FEED: Injected \(signals.count) social signal cards")
+                    #endif
                 }
                 
                 // Add suggestions every 6 videos
@@ -468,13 +470,17 @@ struct HomeFeedView: View {
                         childVideos: sortedChildren
                     ))
                     threadChildrenLoaded = true
+                    #if DEBUG
                     print("✅ THREAD: Loaded \(sortedChildren.count) direct children sorted by engagement (filtered from \(allChildren.count))")
+                    #endif
                     
                     // Preload children via preloadNextVideos
                     preloadNextVideos()
                 }
             } catch {
+                #if DEBUG
                 print("❌ THREAD: Load failed \(error)")
+                #endif
             }
         }
     }
@@ -538,7 +544,9 @@ struct HomeFeedView: View {
                 // Load the thread for this video
                 let threads = try await homeFeedService.loadThreadsByIDs([signal.videoID])
                 guard let thread = threads.first else {
+                    #if DEBUG
                     print("📢 SIGNAL NAV: Video \(signal.videoID) not found")
+                    #endif
                     return
                 }
                 
@@ -553,7 +561,9 @@ struct HomeFeedView: View {
                     loadChildrenForCurrentItem()
                 }
             } catch {
+                #if DEBUG
                 print("⚠️ SIGNAL NAV: Failed to load video — \(error.localizedDescription)")
+                #endif
             }
         }
     }
@@ -620,7 +630,9 @@ struct HomeFeedView: View {
                         let newItems = newThreads.map { FeedItem.video($0) }
                         feedItems.append(contentsOf: newItems)
                         hasRecycledOnce = false
+                        #if DEBUG
                         print("📥 FEED: Loaded \(newThreads.count) more videos")
+                        #endif
                     }
                 } else if !hasRecycledOnce {
                     recycleVideos()
@@ -628,7 +640,9 @@ struct HomeFeedView: View {
                 isLoadingMore = false
             } catch {
                 isLoadingMore = false
+                #if DEBUG
                 print("❌ FEED: Load more failed \(error)")
+                #endif
             }
         }
     }
@@ -644,16 +658,22 @@ struct HomeFeedView: View {
         let shuffledVideos = videoItems.shuffled()
         feedItems.append(contentsOf: shuffledVideos)
         hasRecycledOnce = true
+        #if DEBUG
         print("🔄 FEED: Recycled videos")
+        #endif
     }
     
     private func handleOverlayAction(_ action: ContextualOverlayAction, thread: ThreadData) {
+        #if DEBUG
         print("📺 OVERLAY: \(action)")
+        #endif
         
         switch action {
         case .shareCollage:
             guard thread.hasReplies else {
+                #if DEBUG
                 print("⚠️ COLLAGE: Thread has no replies, cannot build collage")
+                #endif
                 return
             }
             shareService.shareCollage(threadData: thread)
@@ -683,7 +703,9 @@ struct HomeFeedView: View {
             try audioSession.setCategory(.playback, mode: .default, options: [.duckOthers])
             try audioSession.setActive(true)
         } catch {
+            #if DEBUG
             print("⚠️ Audio session error: \(error)")
+            #endif
         }
     }
     
@@ -691,7 +713,9 @@ struct HomeFeedView: View {
         do {
             try AVAudioSession.sharedInstance().setActive(false)
         } catch {
+            #if DEBUG
             print("⚠️ Audio cleanup error: \(error)")
+            #endif
         }
     }
     

@@ -32,14 +32,18 @@ class NavigationCoordinator: ObservableObject {
     // MARK: - Initialization
     
     init() {
+        #if DEBUG
         print("NAVIGATION COORDINATOR: Initialized - Ready for app navigation")
+        #endif
     }
     
     // MARK: - Primary Navigation Methods
     
     /// Navigate to user profile
     func navigateToProfile(userID: String) {
+        #if DEBUG
         print("NAV: Navigating to profile \(userID)")
+        #endif
         
         // If not on progression tab, switch to it
         if selectedTab != .progression {
@@ -58,7 +62,9 @@ class NavigationCoordinator: ObservableObject {
     
     /// Navigate to specific video
     func navigateToVideo(videoID: String, threadID: String? = nil) {
+        #if DEBUG
         print("NAV: Navigating to video \(videoID) in thread \(threadID ?? "none")")
+        #endif
         
         // Switch to home tab for video content
         selectedTab = .home
@@ -78,7 +84,9 @@ class NavigationCoordinator: ObservableObject {
     
     /// Navigate to thread conversation
     func navigateToThread(threadID: String) {
+        #if DEBUG
         print("NAV: Navigating to thread \(threadID)")
+        #endif
         
         selectedTab = .home
         
@@ -94,7 +102,9 @@ class NavigationCoordinator: ObservableObject {
     
     /// Navigate to discovery with optional filter
     func navigateToDiscovery(filter: String? = nil) {
+        #if DEBUG
         print("NAV: Navigating to discovery with filter \(filter ?? "none")")
+        #endif
         
         selectedTab = .discovery
         
@@ -114,7 +124,9 @@ class NavigationCoordinator: ObservableObject {
     
     /// Show video in fullscreen
     func presentVideo(_ video: CoreVideoMetadata) {
+        #if DEBUG
         print("NAV: Presenting fullscreen video \(video.title)")
+        #endif
         fullscreenVideo = video
         showingFullscreenVideo = true
         updateNavigationState("Fullscreen: \(video.title)")
@@ -122,14 +134,18 @@ class NavigationCoordinator: ObservableObject {
     
     /// Show settings
     func presentSettings() {
+        #if DEBUG
         print("NAV: Presenting settings")
+        #endif
         showingSettingsSheet = true
         updateNavigationState("Settings")
     }
     
     /// Show user profile in sheet
     func presentProfileSheet(userID: String) {
+        #if DEBUG
         print("NAV: Presenting profile sheet for \(userID)")
+        #endif
         selectedUserID = userID
         showingProfileSheet = true
         updateNavigationState("Profile Sheet: \(userID)")
@@ -139,7 +155,9 @@ class NavigationCoordinator: ObservableObject {
     
     /// Dismiss profile sheet
     func dismissProfileSheet() {
+        #if DEBUG
         print("NAV: Dismissing profile sheet")
+        #endif
         showingProfileSheet = false
         selectedUserID = nil
         updateNavigationState("Profile Sheet Dismissed")
@@ -147,14 +165,18 @@ class NavigationCoordinator: ObservableObject {
     
     /// Dismiss settings sheet
     func dismissSettingsSheet() {
+        #if DEBUG
         print("NAV: Dismissing settings sheet")
+        #endif
         showingSettingsSheet = false
         updateNavigationState("Settings Sheet Dismissed")
     }
     
     /// Dismiss fullscreen video
     func dismissVideo() {
+        #if DEBUG
         print("NAV: Dismissing fullscreen video")
+        #endif
         showingFullscreenVideo = false
         fullscreenVideo = nil
         updateNavigationState("Video Dismissed")
@@ -175,7 +197,9 @@ class NavigationCoordinator: ObservableObject {
     
     /// Handle tab selection with state management
     func selectTab(_ tab: MainAppTab) {
+        #if DEBUG
         print("NAV: Selecting tab \(tab.rawValue)")
+        #endif
         selectedTab = tab
         updateNavigationState("Tab: \(tab.rawValue)")
     }
@@ -184,11 +208,15 @@ class NavigationCoordinator: ObservableObject {
     
     /// Handle deep links from notifications or external sources
     func handleDeepLink(_ url: URL) {
+        #if DEBUG
         print("NAV: Handling deep link \(url)")
+        #endif
         
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let host = components.host else {
+            #if DEBUG
             print("NAV: Invalid deep link format")
+            #endif
             return
         }
         
@@ -214,13 +242,17 @@ class NavigationCoordinator: ObservableObject {
             navigateToDiscovery(filter: filter)
             
         default:
+            #if DEBUG
             print("NAV: Unknown deep link host: \(host)")
+            #endif
         }
     }
     
     /// Handle notification navigation with payload parsing
     func handleNotificationNavigation(type: String, payload: [String: Any]) {
+        #if DEBUG
         print("NAV: Handling notification navigation - Type: \(type)")
+        #endif
         
         switch type {
         case "hype", "cool", "engagement_reward":
@@ -254,7 +286,9 @@ class NavigationCoordinator: ObservableObject {
             updateNavigationState("Achievement Unlocked")
             
         default:
+            #if DEBUG
             print("NAV: Unknown notification type: \(type)")
+            #endif
         }
     }
     
@@ -264,7 +298,9 @@ class NavigationCoordinator: ObservableObject {
     private func updateNavigationState(_ action: String) {
         currentNavigation = action
         lastNavigationAction = Date()
+        #if DEBUG
         print("NAV STATE: \(action) at \(lastNavigationAction)")
+        #endif
     }
     
     /// Check if currently on specific tab

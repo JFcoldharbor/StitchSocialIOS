@@ -328,7 +328,9 @@ extension VideoService {
     
     /// Get list of users who viewed a video
     func getVideoViewers(videoID: String) async throws -> [VideoViewer] {
+        #if DEBUG
         print("📊 VIDEO SERVICE: Fetching viewers for video \(videoID)")
+        #endif
         
         // Get interactions for this video
         let snapshot = try await db.collection(FirebaseSchema.Collections.interactions)
@@ -338,7 +340,9 @@ extension VideoService {
             .limit(to: 100)
             .getDocuments()
         
+        #if DEBUG
         print("📊 VIDEO SERVICE: Found \(snapshot.documents.count) view interactions")
+        #endif
         
         // Extract unique user IDs and their view data
         var viewerMap: [String: (date: Date, watchTime: TimeInterval)] = [:]
@@ -359,7 +363,9 @@ extension VideoService {
             }
         }
         
+        #if DEBUG
         print("📊 VIDEO SERVICE: Found \(viewerMap.count) unique viewers")
+        #endif
         
         // BATCHED: Fetch users in chunks of 10 (Firestore 'in' query limit)
         // Old code: 1 getUser() per viewer = up to 100 Firestore reads
@@ -388,7 +394,9 @@ extension VideoService {
                     userLookup[doc.documentID] = user
                 }
             } catch {
+                #if DEBUG
                 print("⚠️ VIDEO SERVICE: Batch user fetch failed: \(error.localizedDescription)")
+                #endif
             }
         }
         
@@ -412,7 +420,9 @@ extension VideoService {
         
         viewers.sort { $0.viewedAt > $1.viewedAt }
         
+        #if DEBUG
         print("✅ VIDEO SERVICE: Returning \(viewers.count) viewers (batched \(userIDs.count) users in \((userIDs.count + 9) / 10) queries)")
+        #endif
         return viewers
     }
 }

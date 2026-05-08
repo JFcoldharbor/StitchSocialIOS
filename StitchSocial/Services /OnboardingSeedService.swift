@@ -77,13 +77,17 @@ final class OnboardingSeedService {
 
         // 1. Return cached video if available
         if let cached = loadFromCache() {
+            #if DEBUG
             print("✅ SEED: Returning cached seed video '\(cached.title)'")
+            #endif
             return cached
         }
 
         // 2. Fetch seed video ID from app_config/onboarding
         guard let videoID = await fetchSeedVideoID() else {
+            #if DEBUG
             print("⚠️ SEED: No seedVideoID found in app_config/onboarding")
+            #endif
             return nil
         }
 
@@ -91,10 +95,14 @@ final class OnboardingSeedService {
         do {
             let video = try await videoService.getVideo(id: videoID)
             saveToCache(video)
+            #if DEBUG
             print("✅ SEED: Fetched and cached seed video '\(video.title)' (replyCount: \(video.replyCount))")
+            #endif
             return video
         } catch {
+            #if DEBUG
             print("❌ SEED: Failed to fetch seed video \(videoID): \(error)")
+            #endif
             return nil
         }
     }
@@ -103,7 +111,9 @@ final class OnboardingSeedService {
     func clearCache() {
         UserDefaults.standard.removeObject(forKey: Keys.videoID)
         UserDefaults.standard.removeObject(forKey: Keys.videoData)
+        #if DEBUG
         print("🧹 SEED: Cache cleared")
+        #endif
     }
 
     // MARK: - Private: Firestore Fetch
@@ -117,17 +127,23 @@ final class OnboardingSeedService {
 
             guard doc.exists, let videoID = doc.data()?["seedVideoID"] as? String,
                   !videoID.isEmpty else {
+                #if DEBUG
                 print("⚠️ SEED: app_config/onboarding missing or seedVideoID empty")
+                #endif
                 return nil
             }
 
             // Cache the ID so we don't re-read app_config next time
             UserDefaults.standard.set(videoID, forKey: Keys.videoID)
+            #if DEBUG
             print("✅ SEED: Got seedVideoID '\(videoID)' from Firestore")
+            #endif
             return videoID
 
         } catch {
+            #if DEBUG
             print("❌ SEED: Failed to read app_config/onboarding: \(error)")
+            #endif
             return nil
         }
     }

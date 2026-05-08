@@ -74,23 +74,35 @@ class AIVideoAnalyzer: ObservableObject {
         // Get OpenAI API key from Secrets.plist via Secrets.swift
         self.openAIAPIKey = Secrets.openAIKey
         
+        #if DEBUG
         print("🧠 AI ANALYZER: Initialized (singleton)")
+        #endif
+        #if DEBUG
         print("📊 API KEY LENGTH: \(openAIAPIKey.count)")
+        #endif
         
         if openAIAPIKey.isEmpty {
+            #if DEBUG
             print("❌ AI ANALYZER: API key is EMPTY — check Secrets.plist")
+            #endif
             connectionStatus = .notConfigured
         } else if openAIAPIKey.hasPrefix("sk-your-") ||
                   openAIAPIKey.hasPrefix("sk-proj-your-") ||
                   openAIAPIKey.contains("YOUR_API_KEY") ||
                   openAIAPIKey.contains("PASTE_YOUR") {
+            #if DEBUG
             print("❌ AI ANALYZER: API key is PLACEHOLDER")
+            #endif
             connectionStatus = .notConfigured
         } else if !openAIAPIKey.hasPrefix("sk-") && !openAIAPIKey.hasPrefix("sk-proj-") {
+            #if DEBUG
             print("❌ AI ANALYZER: API key has INVALID FORMAT")
+            #endif
             connectionStatus = .notConfigured
         } else {
+            #if DEBUG
             print("✅ AI ANALYZER: API key loaded from Secrets.plist")
+            #endif
             connectionStatus = .testing
             Task {
                 await testConnection()
@@ -106,11 +118,15 @@ class AIVideoAnalyzer: ObservableObject {
         if let lastTest = lastConnectionTest,
            Date().timeIntervalSince(lastTest) < connectionTestTTL,
            connectionStatus == .connected {
+            #if DEBUG
             print("✅ CONNECTION: Using cached result (TTL: \(Int(connectionTestTTL - Date().timeIntervalSince(lastTest)))s remaining)")
+            #endif
             return
         }
         
+        #if DEBUG
         print("🔧 AI ANALYZER: Testing OpenAI connection...")
+        #endif
         
         await MainActor.run {
             connectionStatus = .testing
@@ -136,10 +152,14 @@ class AIVideoAnalyzer: ObservableObject {
                     connectionStatus = .connected
                     analysisStepDetails = "OpenAI API connected"
                 }
+                #if DEBUG
                 print("✅ CONNECTION: OpenAI API accessible (cached for \(Int(connectionTestTTL))s)")
+                #endif
             } else {
                 let responseString = String(data: data, encoding: .utf8) ?? "No response body"
+                #if DEBUG
                 print("❌ CONNECTION: HTTP \(httpResponse.statusCode) - \(responseString)")
+                #endif
                 await MainActor.run {
                     connectionStatus = .error
                     analysisStepDetails = "Connection failed: HTTP \(httpResponse.statusCode)"
@@ -147,7 +167,9 @@ class AIVideoAnalyzer: ObservableObject {
             }
             
         } catch {
+            #if DEBUG
             print("❌ CONNECTION: Failed - \(error.localizedDescription)")
+            #endif
             await MainActor.run {
                 connectionStatus = .error
                 analysisStepDetails = "Connection error: \(error.localizedDescription)"
@@ -164,7 +186,9 @@ class AIVideoAnalyzer: ObservableObject {
               Date().timeIntervalSince(cached.cachedAt) < aiResultCacheTTL else {
             return nil
         }
+        #if DEBUG
         print("💾 AI CACHE HIT: Reusing result for \(key) — saved 2 API calls")
+        #endif
         return cached.result
     }
     
@@ -180,7 +204,9 @@ class AIVideoAnalyzer: ObservableObject {
                 aiResultCache.removeValue(forKey: oldestKey)
             }
         }
+        #if DEBUG
         print("💾 AI CACHE: Stored result for \(key) (\(aiResultCache.count)/\(maxCachedResults))")
+        #endif
     }
     
     /// Clear expired AI result cache entries
@@ -191,7 +217,9 @@ class AIVideoAnalyzer: ObservableObject {
         }
         let removed = before - aiResultCache.count
         if removed > 0 {
+            #if DEBUG
             print("💾 AI CACHE: Cleaned \(removed) expired entries")
+            #endif
         }
     }
     
@@ -319,7 +347,9 @@ class AIVideoAnalyzer: ObservableObject {
                 return result
             } catch {
                 lastError = error
+                #if DEBUG
                 print("❌ ATTEMPT \(attempt) FAILED: \(error.localizedDescription)")
+                #endif
                 if attempt < maxRetries {
                     let delay = TimeInterval(attempt * 2)
                     await updateDebugStatus("Attempt \(attempt) failed, retrying in \(Int(delay))s...")
@@ -346,7 +376,9 @@ class AIVideoAnalyzer: ObservableObject {
                 return result
             } catch {
                 lastError = error
+                #if DEBUG
                 print("❌ ATTEMPT \(attempt) FAILED: \(error.localizedDescription)")
+                #endif
                 if attempt < maxRetries {
                     let delay = TimeInterval(attempt * 2)
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))

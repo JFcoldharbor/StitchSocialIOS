@@ -28,23 +28,37 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         
         // Debug Firebase configuration
+        #if DEBUG
         print("🔧 FIREBASE: Checking configuration...")
+        #endif
         
         if let path = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") {
+            #if DEBUG
             print("✅ FIREBASE: GoogleService-Info.plist found at: \(path)")
+            #endif
             
             if let plist = NSDictionary(contentsOfFile: path) {
                 if let projectId = plist["PROJECT_ID"] as? String {
+                    #if DEBUG
                     print("✅ FIREBASE: Project ID: \(projectId)")
+                    #endif
                 } else {
+                    #if DEBUG
                     print("❌ FIREBASE: No PROJECT_ID in plist")
+                    #endif
                 }
             } else {
+                #if DEBUG
                 print("❌ FIREBASE: Cannot read GoogleService-Info.plist")
+                #endif
             }
         } else {
+            #if DEBUG
             print("❌ FIREBASE: GoogleService-Info.plist NOT FOUND!")
+            #endif
+            #if DEBUG
             print("📋 FIREBASE: Download from Firebase Console and add to Xcode project")
+            #endif
         }
         
         // Configure Firebase with new centralized config
@@ -52,9 +66,13 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         // Verify Firebase is configured
         if let app = FirebaseApp.app() {
+            #if DEBUG
             print("✅ FIREBASE: App configured successfully - \(app.name)")
+            #endif
         } else {
+            #if DEBUG
             print("❌ FIREBASE: App configuration failed")
+            #endif
         }
         
         // Setup Firebase Cloud Messaging
@@ -68,13 +86,17 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil, queue: .main
         ) { _ in
+            #if DEBUG
             print("⚠️ APP: Memory warning — clearing collage warm cache")
+            #endif
             ThreadCollageService.clearWarmCache()
         }
         
         // TEMP: Force backfill to run again (REMOVE AFTER ONE RUN)
         UserDefaults.standard.removeObject(forKey: "creatorNameBackfillComplete")
+        #if DEBUG
         print("🔄 BACKFILL: Forcing re-run (flag cleared)")
+        #endif
         
         // 🔥 ONE-TIME BACKFILL: Fix empty creatorName fields (only runs once)
         if !UserDefaults.standard.bool(forKey: "creatorNameBackfillComplete") {
@@ -89,14 +111,20 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 if Auth.auth().currentUser != nil {
                     await backfillEmptyCreatorNames()
                 } else {
+                    #if DEBUG
                     print("⚠️ BACKFILL: Skipped - no authenticated user yet (will retry on next launch)")
+                    #endif
                 }
             }
         } else {
+            #if DEBUG
             print("✅ BACKFILL: Already completed - skipping")
+            #endif
         }
         
+        #if DEBUG
         print("✅ APP DELEGATE: Complete initialization finished")
+        #endif
         
         return true
     }
@@ -105,7 +133,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     /// Setup Firebase Cloud Messaging
     private func setupFirebaseMessaging() {
+        #if DEBUG
         print("📱 APP DELEGATE: 🔧 Setting up Firebase Messaging...")
+        #endif
         
         // Set messaging delegate
         Messaging.messaging().delegate = self
@@ -115,7 +145,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             await requestNotificationPermissions()
         }
         
+        #if DEBUG
         print("📱 APP DELEGATE: ✅ Firebase Messaging setup initiated")
+        #endif
     }
     
     /// Request notification permissions
@@ -127,14 +159,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             
             let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
             
+            #if DEBUG
             print("📱 APP DELEGATE: Notification permissions granted: \(granted)")
+            #endif
             
             if granted {
                 await UIApplication.shared.registerForRemoteNotifications()
             }
             
         } catch {
+            #if DEBUG
             print("📱 APP DELEGATE: ❌ Permission request failed: \(error)")
+            #endif
         }
     }
     
@@ -142,7 +178,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     
     /// Setup background task handlers
     private func setupBackgroundTasks() {
+        #if DEBUG
         print("⏰ BACKGROUND TASKS: Setting up handlers...")
+        #endif
         
         // Register re-engagement background task
         BGTaskScheduler.shared.register(
@@ -152,12 +190,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             self.handleReEngagementTask(task: task as! BGAppRefreshTask)
         }
         
+        #if DEBUG
         print("✅ BACKGROUND TASKS: Registered re-engagement handler")
+        #endif
     }
     
     /// Handle re-engagement background task
     private func handleReEngagementTask(task: BGAppRefreshTask) {
+        #if DEBUG
         print("🔄 RE-ENGAGEMENT TASK: Starting background check...")
+        #endif
         
         // Track performance of background task
         let trace = PerformanceMonitoringService.shared.startTrace(
@@ -171,7 +213,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Create async task
         let taskWork = Task {
             guard let userID = Auth.auth().currentUser?.uid else {
+                #if DEBUG
                 print("⚠️ RE-ENGAGEMENT TASK: No authenticated user")
+                #endif
                 PerformanceMonitoringService.shared.stopTrace(name: "re_engagement_background")
                 task.setTaskCompleted(success: true)
                 return
@@ -189,12 +233,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                 // Run check
                 try await reEngagementService.checkReEngagement(userID: userID)
                 
+                #if DEBUG
                 print("✅ RE-ENGAGEMENT TASK: Check completed successfully")
+                #endif
                 PerformanceMonitoringService.shared.stopTrace(name: "re_engagement_background")
                 task.setTaskCompleted(success: true)
                 
             } catch {
+                #if DEBUG
                 print("❌ RE-ENGAGEMENT TASK: Failed - \(error)")
+                #endif
                 PerformanceMonitoringService.shared.stopTrace(name: "re_engagement_background")
                 task.setTaskCompleted(success: false)
             }
@@ -202,7 +250,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         // Handle task expiration
         task.expirationHandler = {
+            #if DEBUG
             print("⏰ RE-ENGAGEMENT TASK: Expired")
+            #endif
             PerformanceMonitoringService.shared.stopTrace(name: "re_engagement_background")
             taskWork.cancel()
         }
@@ -217,16 +267,22 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         do {
             try BGTaskScheduler.shared.submit(request)
+            #if DEBUG
             print("✅ RE-ENGAGEMENT: Next check scheduled for 6 hours")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ RE-ENGAGEMENT: Failed to schedule - \(error)")
+            #endif
         }
     }
     
     // MARK: - Application Lifecycle Events (NEW for Presence)
     
     func applicationDidBecomeActive(_ application: UIApplication) {
+        #if DEBUG
         print("🟢 APP: Became active")
+        #endif
         
         // Start user presence tracking
         if Config.Features.enableUserPresence {
@@ -235,7 +291,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     }
     
     func applicationWillResignActive(_ application: UIApplication) {
+        #if DEBUG
         print("🟡 APP: Will resign active")
+        #endif
         
         // Clear collage warm cache — no need to hold AVAssets in background
         ThreadCollageService.clearWarmCache()
@@ -254,7 +312,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
+        #if DEBUG
         print("📱 APP DELEGATE: ✅ APNS token received: \(tokenString.prefix(20))...")
+        #endif
         
         // Set APNS token for Firebase Messaging
         Messaging.messaging().apnsToken = deviceToken
@@ -265,14 +325,18 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
+        #if DEBUG
         print("📱 APP DELEGATE: ❌ Failed to register for remote notifications: \(error)")
+        #endif
     }
     
     // MARK: - Creator Name Backfill
     
     /// Backfill empty creatorName fields in videos
     private func backfillEmptyCreatorNames() async {
+        #if DEBUG
         print("🔄 BACKFILL: Starting creator name backfill...")
+        #endif
         
         let startTime = Date()
         
@@ -287,13 +351,17 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             var fixedCount = 0
             var failedCount = 0
             
+            #if DEBUG
             print("🔄 BACKFILL: Found \(snapshot.documents.count) videos with empty creatorName")
+            #endif
             
             // Process each video
             for document in snapshot.documents {
                 let data = document.data()
                 guard let creatorID = data["creatorId"] as? String else {
+                    #if DEBUG
                     print("⚠️ BACKFILL: Video \(document.documentID) has no creatorId")
+                    #endif
                     failedCount += 1
                     continue
                 }
@@ -312,24 +380,38 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                         ])
                         
                         fixedCount += 1
+                        #if DEBUG
                         print("✅ BACKFILL: Fixed video \(document.documentID) -> \(displayName)")
+                        #endif
                     } else {
+                        #if DEBUG
                         print("⚠️ BACKFILL: Creator \(creatorID) has no displayName")
+                        #endif
                         failedCount += 1
                     }
                     
                 } catch {
+                    #if DEBUG
                     print("❌ BACKFILL: Failed to process video \(document.documentID): \(error)")
+                    #endif
                     failedCount += 1
                 }
             }
             
             let duration = Date().timeIntervalSince(startTime)
             
+            #if DEBUG
             print("🎉 BACKFILL COMPLETE:")
+            #endif
+            #if DEBUG
             print("   ✅ Fixed: \(fixedCount)")
+            #endif
+            #if DEBUG
             print("   ❌ Failed: \(failedCount)")
+            #endif
+            #if DEBUG
             print("   ⏱️ Duration: \(String(format: "%.2f", duration))s")
+            #endif
             
             // Track performance
             PerformanceMonitoringService.shared.trackMemoryOperation(
@@ -342,7 +424,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             }
             
         } catch {
+            #if DEBUG
             print("❌ BACKFILL ERROR: \(error.localizedDescription)")
+            #endif
         }
     }
 }
@@ -354,11 +438,15 @@ extension AppDelegate: MessagingDelegate {
     /// Called when FCM token is refreshed
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         guard let token = fcmToken else {
+            #if DEBUG
             print("📱 FCM: No token received")
+            #endif
             return
         }
         
+        #if DEBUG
         print("📱 FCM: Token received: \(token.prefix(20))...")
+        #endif
         
         // Store FCM token locally
         UserDefaults.standard.set(token, forKey: "fcm_token")
@@ -369,14 +457,18 @@ extension AppDelegate: MessagingDelegate {
                 await storeFCMToken(token)
             }
         } else {
+            #if DEBUG
             print("📱 FCM: No authenticated user - token stored locally only")
+            #endif
         }
     }
     
     /// Store FCM token for the current user in Firebase
     private func storeFCMToken(_ token: String) async {
         guard let currentUserID = Auth.auth().currentUser?.uid else {
+            #if DEBUG
             print("📱 FCM: No authenticated user to store token")
+            #endif
             return
         }
         
@@ -403,10 +495,14 @@ extension AppDelegate: MessagingDelegate {
                 ]
             ])
             
+            #if DEBUG
             print("📱 FCM: Token stored in Firebase successfully")
+            #endif
             
         } catch {
+            #if DEBUG
             print("📱 FCM: Failed to store token in Firebase: \(error)")
+            #endif
         }
     }
     
@@ -428,12 +524,16 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        #if DEBUG
         print("📱 NOTIFICATION: Received while app in foreground")
+        #endif
         
         let userInfo = notification.request.content.userInfo
         
         if let type = userInfo["type"] as? String {
+            #if DEBUG
             print("📱 NOTIFICATION: Type: \(type)")
+            #endif
         }
         
         // Show notification even when app is active
@@ -446,7 +546,9 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        #if DEBUG
         print("👆 NOTIFICATION: User tapped notification")
+        #endif
         
         let userInfo = response.notification.request.content.userInfo
         
@@ -469,7 +571,9 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
             let threadID = userInfo["threadID"] as? String ?? videoID
 
             if let tid = threadID {
+                #if DEBUG
                 print("🧵 NOTIFICATION: Navigate to thread \(tid), target: \(videoID ?? "root")")
+                #endif
                 NotificationCenter.default.post(
                     name: .navigateToThread,
                     object: nil,
@@ -479,13 +583,17 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
                     ]
                 )
             } else {
+                #if DEBUG
                 print("📱 NOTIFICATION: No thread/video ID, opening notifications")
+                #endif
                 NotificationCenter.default.post(name: .navigateToNotifications, object: nil)
             }
             
         case "follow", "user", "reengagement_followers", "subscription":
             if let userID = userInfo["userID"] as? String ?? userInfo["senderID"] as? String {
+                #if DEBUG
                 print("👤 NOTIFICATION: Navigate to user profile \(userID)")
+                #endif
                 NotificationCenter.default.post(
                     name: .navigateToProfile,
                     object: nil,
@@ -494,7 +602,9 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
             }
             
         case "reengagement_tier":
+            #if DEBUG
             print("⬆️ NOTIFICATION: Navigate to profile (tier progress)")
+            #endif
             NotificationCenter.default.post(
                 name: .navigateToProfile,
                 object: nil,
@@ -502,7 +612,9 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
             )
             
         default:
+            #if DEBUG
             print("📱 NOTIFICATION: General notification tapped")
+            #endif
             NotificationCenter.default.post(
                 name: .navigateToNotifications,
                 object: nil
@@ -532,20 +644,32 @@ extension AppDelegate {
         let status = await checkNotificationPermissionStatus()
         let token = getCurrentFCMToken()
         
+        #if DEBUG
         print("📱 NOTIFICATION DEBUG:")
+        #endif
+        #if DEBUG
         print("  - Permission status: \(status)")
+        #endif
+        #if DEBUG
         print("  - FCM token available: \(token != nil)")
+        #endif
+        #if DEBUG
         print("  - Token: \(token?.prefix(20) ?? "None")...")
+        #endif
     }
     
     /// Manually trigger re-engagement check (for testing)
     func testReEngagementCheck() async {
         guard let userID = Auth.auth().currentUser?.uid else {
+            #if DEBUG
             print("❌ TEST: No authenticated user")
+            #endif
             return
         }
         
+        #if DEBUG
         print("🧪 TEST: Triggering re-engagement check...")
+        #endif
         
         let videoService = VideoService()
         let userService = UserService()
@@ -556,9 +680,13 @@ extension AppDelegate {
         
         do {
             try await reEngagementService.checkReEngagement(userID: userID)
+            #if DEBUG
             print("✅ TEST: Re-engagement check completed")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ TEST: Re-engagement check failed - \(error)")
+            #endif
         }
     }
 }

@@ -161,16 +161,22 @@ struct DiscoveryView: View {
                 video: presentation.video,
                 overlayContext: .fullscreen,
                 onDismiss: {
+                    #if DEBUG
                     print("📱 DISCOVERY: Dismissing fullscreen")
+                    #endif
                     videoPresentation = nil
                 }
             )
         }
         .onChange(of: announcementService.isShowingAnnouncement) { _, isShowing in
             if isShowing {
+                #if DEBUG
                 print("📢 DISCOVERY: Announcement showing — pausing videos")
+                #endif
             } else {
+                #if DEBUG
                 print("📢 DISCOVERY: Announcement dismissed — can resume videos")
+                #endif
             }
         }
         // MARK: - Onboarding Triggers

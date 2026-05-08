@@ -153,7 +153,9 @@ class CommunityFeedService: ObservableObject {
             self.currentFeed.append(contentsOf: posts)
         }
         
+        #if DEBUG
         print("✅ FEED: Loaded \(posts.count) posts for \(communityID), total: \(currentFeed.count)")
+        #endif
         return posts
     }
     
@@ -240,7 +242,9 @@ class CommunityFeedService: ObservableObject {
         // Prepend to current feed for instant UI update
         self.currentFeed.insert(post, at: 0)
         
+        #if DEBUG
         print("✅ FEED: Post created by \(authorUsername) in \(communityID)")
+        #endif
         return post
     }
     
@@ -281,7 +285,9 @@ class CommunityFeedService: ObservableObject {
         // Invalidate feed cache
         feedCache.removeValue(forKey: payload.communityID)
         
+        #if DEBUG
         print("✅ FEED: Auto video announcement for \(payload.videoTitle) in \(payload.communityID)")
+        #endif
         return post
     }
     
@@ -323,7 +329,9 @@ class CommunityFeedService: ObservableObject {
         communityService.invalidateMembershipCache(userID: creatorID, creatorID: communityID)
         postDetailCache.removeValue(forKey: postID)
         
+        #if DEBUG
         print("✅ FEED: Post \(postID) \(pin ? "pinned" : "unpinned") in \(communityID)")
+        #endif
     }
     
     // MARK: - Delete Post
@@ -361,7 +369,9 @@ class CommunityFeedService: ObservableObject {
         replyCache.removeValue(forKey: postID)
         self.currentFeed.removeAll { $0.id == postID }
         
+        #if DEBUG
         print("🗑️ FEED: Deleted post \(postID) from \(communityID)")
+        #endif
     }
     
     // MARK: - Fetch Replies (Cursor Paginated)
@@ -484,7 +494,9 @@ class CommunityFeedService: ObservableObject {
         // Append for instant UI
         self.currentReplies.append(reply)
         
+        #if DEBUG
         print("✅ FEED: Reply by \(authorUsername) on \(postID)")
+        #endif
         return reply
     }
     
@@ -554,7 +566,9 @@ class CommunityFeedService: ObservableObject {
         // Invalidate post detail cache
         postDetailCache.removeValue(forKey: postID)
         
+        #if DEBUG
         print("🔥 FEED: \(userID) hyped post \(postID)")
+        #endif
         return true
     }
     

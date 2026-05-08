@@ -29,11 +29,15 @@ struct FirebaseSchema {
     /// Validate database configuration
     static func validateDatabaseConfig() -> Bool {
         guard !databaseName.isEmpty else {
+            #if DEBUG
             print("ÃƒÂ¢Ã‚ÂÃ…â€™ FIREBASE SCHEMA: Database name is empty")
+            #endif
             return false
         }
         
+        #if DEBUG
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ FIREBASE SCHEMA: Configured for database: \(databaseName)")
+        #endif
         return true
     }
     
@@ -102,9 +106,13 @@ struct FirebaseSchema {
             let invalidCollections = collections.filter { $0.isEmpty }
             
             if invalidCollections.isEmpty {
+                #if DEBUG
                 print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ FIREBASE SCHEMA: All \(collections.count) collections validated for \(databaseName)")
+                #endif
             } else {
+                #if DEBUG
                 print("ÃƒÂ¢Ã‚ÂÃ…â€™ FIREBASE SCHEMA: Invalid collections found: \(invalidCollections)")
+                #endif
             }
             
             return invalidCollections
@@ -1413,7 +1421,9 @@ struct FirebaseSchema {
     
     /// Initialize stitchfin database schema with referral system and collections
     static func initializeSchema() -> Bool {
+        #if DEBUG
         print("ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ FIREBASE SCHEMA: Initializing stitchfin database schema with referral system and collections...")
+        #endif
         
         let databaseValid = validateDatabaseConfig()
         let collectionsValid = Collections.validateCollections().isEmpty
@@ -1422,16 +1432,32 @@ struct FirebaseSchema {
         let collectionsSchemaValid = validateCollectionsSchema()
         
         if databaseValid && collectionsValid && referralSchemaValid && milestoneSchemaValid && collectionsSchemaValid {
+            #if DEBUG
             print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ FIREBASE SCHEMA: stitchfin database schema initialized successfully")
+            #endif
+            #if DEBUG
             print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â  FIREBASE SCHEMA: Collections: \(Collections.validateCollections().count)")
+            #endif
+            #if DEBUG
             print("ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â FIREBASE SCHEMA: Indexes: \(RequiredIndexes.generateIndexCommands().count)")
+            #endif
+            #if DEBUG
             print("ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ¢â‚¬â€ FIREBASE SCHEMA: Referral system integrated")
+            #endif
+            #if DEBUG
             print("ÃƒÂ°Ã…Â¸Ã‚ÂÃ‚Â·ÃƒÂ¯Ã‚Â¸Ã‚Â FIREBASE SCHEMA: User tagging system integrated")
+            #endif
+            #if DEBUG
             print("ÃƒÂ°Ã…Â¸Ã…Â½Ã‚Â¯ FIREBASE SCHEMA: Milestone tracking system integrated")
+            #endif
+            #if DEBUG
             print("ÃƒÂ°Ã…Â¸Ã¢â‚¬Å“Ã…Â¡ FIREBASE SCHEMA: Collections feature integrated")
+            #endif
             return true
         } else {
+            #if DEBUG
             print("ÃƒÂ¢Ã‚ÂÃ…â€™ FIREBASE SCHEMA: stitchfin database schema initialization failed")
+            #endif
             return false
         }
     }
@@ -1453,7 +1479,9 @@ struct FirebaseSchema {
             ReferralDocument.cloutAwarded
         ]
         
+        #if DEBUG
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ REFERRAL SCHEMA: \(requiredUserFields.count) user fields + \(requiredReferralFields.count) referral fields")
+        #endif
         return true
     }
     
@@ -1468,7 +1496,9 @@ struct FirebaseSchema {
             VideoDocument.milestone15000Reached
         ]
         
+        #if DEBUG
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ MILESTONE SCHEMA: \(requiredMilestoneFields.count) milestone tracking fields")
+        #endif
         return true
     }
     
@@ -1503,7 +1533,9 @@ struct FirebaseSchema {
             CollectionProgressDocument.currentSegmentIndex
         ]
         
+        #if DEBUG
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ COLLECTIONS SCHEMA: \(requiredVideoFields.count) video fields + \(requiredCollectionFields.count) collection fields + \(requiredDraftFields.count) draft fields + \(requiredProgressFields.count) progress fields")
+        #endif
         return true
     }
 }

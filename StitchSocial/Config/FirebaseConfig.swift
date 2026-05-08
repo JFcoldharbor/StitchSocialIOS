@@ -41,16 +41,30 @@ class FirebaseConfig {
         
         // Validate Firebase configuration
         if !Config.Firebase.validateConfiguration() {
+            #if DEBUG
             print("⚠️ FIREBASE: Configuration validation failed")
+            #endif
         }
         
         if Config.Features.enableDebugLogging {
+            #if DEBUG
             print("✅ FIREBASE: All services configured successfully")
+            #endif
+            #if DEBUG
             print("   Database: \(Config.Firebase.databaseName)")
+            #endif
+            #if DEBUG
             print("   Analytics: \(Config.Features.enableAnalytics ? "Enabled" : "Disabled")")
+            #endif
+            #if DEBUG
             print("   Crashlytics: \(Config.Features.enableCrashReporting ? "Enabled" : "Disabled")")
+            #endif
+            #if DEBUG
             print("   Performance: Enabled")
+            #endif
+            #if DEBUG
             print("   Realtime DB: Enabled")
+            #endif
         }
     }
     
@@ -66,7 +80,9 @@ class FirebaseConfig {
         db.settings = settings
         
         if Config.Features.enableDebugLogging {
+            #if DEBUG
             print("✅ FIRESTORE: Configured with database '\(Config.Firebase.databaseName)'")
+            #endif
         }
     }
     
@@ -83,7 +99,9 @@ class FirebaseConfig {
         let _ = Database.database().reference()
         
         if Config.Features.enableDebugLogging {
+            #if DEBUG
             print("✅ REALTIME DB: Configured with persistence enabled")
+            #endif
         }
     }
     
@@ -97,7 +115,9 @@ class FirebaseConfig {
         Performance.sharedInstance().isInstrumentationEnabled = isEnabled
         
         if Config.Features.enableDebugLogging {
+            #if DEBUG
             print("✅ PERFORMANCE: Monitoring \(isEnabled ? "enabled" : "disabled")")
+            #endif
         }
     }
     
@@ -113,7 +133,9 @@ class FirebaseConfig {
         }
         
         if Config.Features.enableDebugLogging {
+            #if DEBUG
             print("✅ CRASHLYTICS: Configured and enabled")
+            #endif
         }
     }
     

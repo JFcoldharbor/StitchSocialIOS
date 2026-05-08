@@ -155,7 +155,9 @@ class HypeRatingService: ObservableObject {
     private let minRating: Double = 0.0
     
     private init() {
+        #if DEBUG
         print("⚡ HYPE RATING SERVICE: Initialized")
+        #endif
     }
     
     // MARK: - Load
@@ -181,28 +183,38 @@ class HypeRatingService: ObservableObject {
                 let passiveRegen = state.calculatePassiveRegen()
                 if passiveRegen > 0 {
                     state.currentRating = min(maxRating, state.currentRating + passiveRegen)
+                    #if DEBUG
                     print("⚡ HYPE RATING: +\(String(format: "%.1f", passiveRegen))% passive regen")
+                    #endif
                 }
                 
                 if state.pendingRegenFromEngagement > 0 {
                     state.currentRating = min(maxRating, state.currentRating + state.pendingRegenFromEngagement)
+                    #if DEBUG
                     print("⚡ HYPE RATING: +\(String(format: "%.1f", state.pendingRegenFromEngagement))% pending engagement regen")
+                    #endif
                     state.pendingRegenFromEngagement = 0
                 }
                 
                 currentRating = state.currentRating
                 isLoaded = true
                 scheduleSave()
+                #if DEBUG
                 print("⚡ HYPE RATING: Loaded \(String(format: "%.1f", currentRating))%")
+                #endif
             } else {
                 state = HypeRatingState()
                 currentRating = state.currentRating
                 isLoaded = true
                 await saveToFirebase()
+                #if DEBUG
                 print("⚡ HYPE RATING: Initialized at \(String(format: "%.1f", currentRating))%")
+                #endif
             }
         } catch {
+            #if DEBUG
             print("⚠️ HYPE RATING: Failed to load — \(error.localizedDescription)")
+            #endif
             currentRating = state.currentRating
             isLoaded = true
         }
@@ -226,7 +238,9 @@ class HypeRatingService: ObservableObject {
         state.currentRating = min(maxRating, state.currentRating + amount)
         state.lastUpdatedAt = Date()
         currentRating = state.currentRating
+        #if DEBUG
         print("⚡ HYPE RATING: Restored +\(String(format: "%.2f", amount))% (server rejected) → \(String(format: "%.1f", currentRating))%")
+        #endif
         scheduleSave()
     }
     
@@ -244,7 +258,9 @@ class HypeRatingService: ObservableObject {
     
     private func applyRegen(source: HypeRegenSource) {
         guard state.canRegisterEvent(source) else {
+            #if DEBUG
             print("⚡ HYPE RATING: Daily cap reached for \(source.rawValue)")
+            #endif
             return
         }
         
@@ -261,7 +277,9 @@ class HypeRatingService: ObservableObject {
             state.lastFullAt = Date()
         }
         
+        #if DEBUG
         print("⚡ HYPE RATING: +\(String(format: "%.2f", reward))% from \(source.rawValue) → \(String(format: "%.1f", oldRating))% → \(String(format: "%.1f", currentRating))%")
+        #endif
         scheduleSave()
     }
     
@@ -272,7 +290,9 @@ class HypeRatingService: ObservableObject {
         state.currentRating = min(maxRating, state.currentRating + passiveRegen)
         state.lastUpdatedAt = Date()
         currentRating = state.currentRating
+        #if DEBUG
         print("⚡ HYPE RATING: Passive +\(String(format: "%.1f", passiveRegen))% → \(String(format: "%.1f", currentRating))%")
+        #endif
         scheduleSave()
     }
     
@@ -306,7 +326,9 @@ class HypeRatingService: ObservableObject {
                 .document("state")
                 .setData(data, merge: true)
         } catch {
+            #if DEBUG
             print("⚠️ HYPE RATING: Save failed — \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -328,7 +350,9 @@ class HypeRatingService: ObservableObject {
                     "pendingRegenFromEngagement": FieldValue.increment(amount)
                 ], merge: true)
         } catch {
+            #if DEBUG
             print("⚠️ HYPE RATING: Failed to queue regen — \(error.localizedDescription)")
+            #endif
         }
     }
 }

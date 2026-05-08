@@ -61,7 +61,9 @@ class BackgroundUploadManager: ObservableObject {
     // MARK: - Initialization
     
     private init() {
+        #if DEBUG
         print("📤 BACKGROUND UPLOAD: Manager initialized")
+        #endif
     }
     
     // MARK: - Public Interface
@@ -70,7 +72,9 @@ class BackgroundUploadManager: ObservableObject {
     /// Call this when user taps "Post" — screens can dismiss immediately after
     func queueUpload(draftID: String) {
         guard !uploadQueue.contains(draftID) else {
+            #if DEBUG
             print("⚠️ BACKGROUND UPLOAD: Draft \(draftID.prefix(8)) already in queue")
+            #endif
             return
         }
         
@@ -81,7 +85,9 @@ class BackgroundUploadManager: ObservableObject {
             await draftManager.markUploadStatus(draftID: draftID, status: DraftUploadStatus.readyToUpload)
         }
         
+        #if DEBUG
         print("📤 BACKGROUND UPLOAD: Queued draft \(draftID.prefix(8)) — queue size: \(uploadQueue.count)")
+        #endif
         
         // Start processing if not already running
         processNextInQueue()
@@ -91,14 +97,18 @@ class BackgroundUploadManager: ObservableObject {
     func retryUpload(draftID: String) {
         guard let draft = draftManager.getDraft(id: draftID),
               draft.canRetryUpload else {
+            #if DEBUG
             print("❌ BACKGROUND UPLOAD: Cannot retry \(draftID.prefix(8)) — missing metadata")
+            #endif
             return
         }
         
         // Re-queue it
         queueUpload(draftID: draftID)
         
+        #if DEBUG
         print("🔄 BACKGROUND UPLOAD: Retrying draft \(draftID.prefix(8)) — attempt \(draft.uploadAttemptCount + 1)")
+        #endif
     }
     
     /// Retry all failed uploads
@@ -109,7 +119,9 @@ class BackgroundUploadManager: ObservableObject {
         }
         
         if !failed.isEmpty {
+            #if DEBUG
             print("🔄 BACKGROUND UPLOAD: Retrying \(failed.count) failed uploads")
+            #endif
         }
     }
     
@@ -130,7 +142,9 @@ class BackgroundUploadManager: ObservableObject {
         currentUploadStatus = .idle
         isProcessingQueue = false
         
+        #if DEBUG
         print("🛑 BACKGROUND UPLOAD: Cancelled all uploads")
+        #endif
     }
     
     /// Called on app launch to recover interrupted uploads
@@ -145,7 +159,9 @@ class BackgroundUploadManager: ObservableObject {
         
         if !interrupted.isEmpty {
             activeUploadCount = uploadQueue.count
+            #if DEBUG
             print("🔄 BACKGROUND UPLOAD: Recovered \(interrupted.count) interrupted uploads")
+            #endif
             processNextInQueue()
         }
         
@@ -178,7 +194,9 @@ class BackgroundUploadManager: ObservableObject {
         guard let draft = draftManager.getDraft(id: draftID),
               let uploadMeta = draft.uploadMetadata,
               let uploadContext = draft.uploadContext else {
+            #if DEBUG
             print("❌ BACKGROUND UPLOAD: Draft \(draftID.prefix(8)) missing required data — skipping")
+            #endif
             removeFromQueue(draftID: draftID)
             await draftManager.markUploadStatus(draftID: draftID, status: DraftUploadStatus.failed, errorMessage: "Missing upload data")
             isProcessingQueue = false
@@ -194,7 +212,9 @@ class BackgroundUploadManager: ObservableObject {
         // Mark as uploading in draft manager
         await draftManager.markUploadStatus(draftID: draftID, status: DraftUploadStatus.uploading)
         
+        #if DEBUG
         print("📤 BACKGROUND UPLOAD: Starting upload for '\(uploadMeta.title)'")
+        #endif
         
         do {
             // Determine the best video URL to upload
@@ -269,7 +289,9 @@ class BackgroundUploadManager: ObservableObject {
             // Also trigger profile refresh
             NotificationCenter.default.post(name: NSNotification.Name("RefreshProfile"), object: nil)
             
+            #if DEBUG
             print("✅ BACKGROUND UPLOAD: '\(uploadMeta.title)' uploaded successfully")
+            #endif
             
             // Brief success display, then move on
             try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
@@ -282,7 +304,9 @@ class BackgroundUploadManager: ObservableObject {
         } catch {
             // FAILURE
             guard !Task.isCancelled else {
+                #if DEBUG
                 print("🛑 BACKGROUND UPLOAD: Cancelled for '\(uploadMeta.title)'")
+                #endif
                 isProcessingQueue = false
                 return
             }
@@ -301,7 +325,9 @@ class BackgroundUploadManager: ObservableObject {
                 userInfo: ["draftID": draftID, "error": errorMsg]
             )
             
+            #if DEBUG
             print("❌ BACKGROUND UPLOAD: Failed for '\(uploadMeta.title)' — \(errorMsg)")
+            #endif
         }
         
         // Process next in queue

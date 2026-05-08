@@ -87,12 +87,16 @@ class VideoWatermarkService {
         for name in customEndScreenNames {
             for ext in videoExtensions {
                 if let url = Bundle.main.url(forResource: name, withExtension: ext) {
+                    #if DEBUG
                     print("✅ ENDSCREEN: Found custom video: \(name).\(ext)")
+                    #endif
                     return url
                 }
             }
         }
+        #if DEBUG
         print("ℹ️ ENDSCREEN: No custom video found, using generated overlay")
+        #endif
         return nil
     }  // Full opacity for maximum visibility
     
@@ -207,7 +211,9 @@ class VideoWatermarkService {
                                 self.customEndScreenNaturalSize = try await customTrack.load(.naturalSize)
                                 self.customEndScreenTransform = try await customTrack.load(.preferredTransform)
                             } catch {
+                                #if DEBUG
                                 print("⚠️ ENDSCREEN: Could not load custom video properties")
+                                #endif
                             }
                             customSemaphore.signal()
                         }
@@ -226,8 +232,12 @@ class VideoWatermarkService {
                             customEndScreenTrack = endScreenTrack
                             usingCustomEndScreen = true
                             
+                            #if DEBUG
                             print("✅ ENDSCREEN: Added custom video on separate track (\(CMTimeGetSeconds(customEndScreenDuration))s)")
+                            #endif
+                            #if DEBUG
                             print("✅ ENDSCREEN: Custom size: \(customEndScreenNaturalSize), transform: \(customEndScreenTransform)")
+                            #endif
                         }
                         
                         // Add custom end screen audio if available
@@ -252,7 +262,9 @@ class VideoWatermarkService {
                     for _ in 0..<repeatCount {
                         try compositionVideoTrack.insertTimeRange(lastFrameRange, of: videoTrack, at: composition.duration)
                     }
+                    #if DEBUG
                     print("ℹ️ ENDSCREEN: Using generated overlay (\(endScreenDuration)s)")
+                    #endif
                 }
             }
         } catch {
@@ -332,7 +344,9 @@ class VideoWatermarkService {
         }
         
         guard let url = soundURL else {
+            #if DEBUG
             print("⚠️ WATERMARK: No sound file found. Add StitchSound.mp3 to your project.")
+            #endif
             return
         }
         
@@ -340,7 +354,9 @@ class VideoWatermarkService {
         
         soundAsset.loadTracks(withMediaType: .audio) { [weak self] tracks, error in
             guard let soundTrack = tracks?.first else {
+                #if DEBUG
                 print("⚠️ WATERMARK: Could not load sound track")
+                #endif
                 return
             }
             
@@ -354,9 +370,13 @@ class VideoWatermarkService {
             
             do {
                 try soundCompositionTrack.insertTimeRange(soundRange, of: soundTrack, at: time)
+                #if DEBUG
                 print("✅ WATERMARK: Added sound effect")
+                #endif
             } catch {
+                #if DEBUG
                 print("⚠️ WATERMARK: Failed to add sound - \(error)")
+                #endif
             }
         }
     }
@@ -467,8 +487,12 @@ class VideoWatermarkService {
                 // Show the custom end screen track
                 let endLayerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: endScreenTrack)
                 
+                #if DEBUG
                 print("🎬 ENDSCREEN: customNaturalSize=\(customEndScreenNaturalSize)")
+                #endif
+                #if DEBUG
                 print("🎬 ENDSCREEN: renderSize=\(videoSize)")
+                #endif
                 
                 // Check if custom video needs rotation
                 let customIsRotated = customEndScreenTransform.b == 1.0 || customEndScreenTransform.b == -1.0
@@ -481,10 +505,14 @@ class VideoWatermarkService {
                 var finalTransform: CGAffineTransform
                 if customIsRotated {
                     finalTransform = customEndScreenTransform
+                    #if DEBUG
                     print("✅ ENDSCREEN: Using rotated transform")
+                    #endif
                 } else {
                     finalTransform = CGAffineTransform(scaleX: scale, y: scale)
+                    #if DEBUG
                     print("✅ ENDSCREEN: Using scale=\(scale)")
+                    #endif
                 }
                 
                 endLayerInstruction.setTransform(finalTransform, at: .zero)
@@ -937,12 +965,16 @@ class VideoWatermarkService {
         
         if let logo = UIImage(named: "StitchSocialLogo") {
             logoLayer.contents = logo.cgImage
+            #if DEBUG
             print("✅ ENDSCREEN: Using custom logo")
+            #endif
         } else {
             // Fallback - create text-based logo
             let fallbackImage = createEndScreenLogo(size: CGSize(width: logoSize, height: logoSize))
             logoLayer.contents = fallbackImage.cgImage
+            #if DEBUG
             print("⚠️ ENDSCREEN: Using fallback logo")
+            #endif
         }
         
         logoLayer.contentsGravity = .resizeAspect
@@ -1177,9 +1209,13 @@ class VideoWatermarkService {
         
         if let logo = UIImage(named: "StitchSocialLogo") {
             logo.draw(in: logoRect)
+            #if DEBUG
             print("✅ WATERMARK: Using custom StitchSocialLogo")
+            #endif
         } else {
+            #if DEBUG
             print("⚠️ WATERMARK: StitchSocialLogo not found, using fallback")
+            #endif
             let iconConfig = UIImage.SymbolConfiguration(pointSize: 42 * scale, weight: .semibold)  // Was 28
             if let icon = UIImage(systemName: "film.stack", withConfiguration: iconConfig)?
                 .withTintColor(.white, renderingMode: .alwaysOriginal) {
@@ -1260,19 +1296,27 @@ class VideoWatermarkService {
         exporter.videoComposition = videoComposition
         exporter.shouldOptimizeForNetworkUse = true
         
+        #if DEBUG
         print("🎬 WATERMARK: Starting export...")
+        #endif
         
         exporter.exportAsynchronously {
             DispatchQueue.main.async {
                 switch exporter.status {
                 case .completed:
+                    #if DEBUG
                     print("✅ WATERMARK: Export completed")
+                    #endif
                     completion(.success(outputURL))
                 case .failed:
+                    #if DEBUG
                     print("❌ WATERMARK: Export failed - \(exporter.error?.localizedDescription ?? "Unknown")")
+                    #endif
                     completion(.failure(exporter.error ?? WatermarkError.exportFailed))
                 case .cancelled:
+                    #if DEBUG
                     print("⚠️ WATERMARK: Export cancelled")
+                    #endif
                     completion(.failure(WatermarkError.exportCancelled))
                 default:
                     break
@@ -1290,9 +1334,13 @@ class VideoWatermarkService {
             for file in files where file.lastPathComponent.hasPrefix("StitchSocial_") {
                 try? FileManager.default.removeItem(at: file)
             }
+            #if DEBUG
             print("🧹 WATERMARK: Cleaned up temp files")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ WATERMARK: Cleanup error - \(error)")
+            #endif
         }
     }
 }

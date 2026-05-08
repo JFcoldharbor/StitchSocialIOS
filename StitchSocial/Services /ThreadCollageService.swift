@@ -86,7 +86,9 @@ class ThreadCollageService: ObservableObject {
                             let (dur, _) = try await asset.load(.duration, .tracks)
                             return (videoID, asset, dur.seconds)
                         } catch {
+                            #if DEBUG
                             print("⚡ PRECACHE: Failed \(videoID): \(error.localizedDescription)")
+                            #endif
                             return nil
                         }
                     }
@@ -98,7 +100,9 @@ class ThreadCollageService: ObservableObject {
                     warmCache[id] = WarmCacheEntry(asset: asset, duration: duration, cachedAt: Date())
                 }
             }
+            #if DEBUG
             print("⚡ PRECACHE: Warmed \(warmCache.count) assets")
+            #endif
         }
     }
     
@@ -124,7 +128,9 @@ class ThreadCollageService: ObservableObject {
     static func clearWarmCache() {
         precacheTask?.cancel()
         warmCache.removeAll()
+        #if DEBUG
         print("🧹 PRECACHE: Warm cache cleared")
+        #endif
     }
     
     // MARK: - Private
@@ -317,7 +323,9 @@ class ThreadCollageService: ObservableObject {
                         if let vt = vTrack {
                             _ = try? await vt.load(.naturalSize, .preferredTransform)
                         }
+                        #if DEBUG
                         print("💾 COLLAGE: Loaded from disk cache — \(videoID.prefix(8))")
+                        #endif
                         return (videoID, asset, duration.seconds, vTrack, aTrack)
                     }
                     
@@ -436,7 +444,9 @@ class ThreadCollageService: ObservableObject {
         
         for clip in selectedClips {
             guard let asset = clip.asset ?? assetCache[clip.id] else {
+                #if DEBUG
                 print("⚠️ COLLAGE: Skipping clip \(clip.id) — no cached asset")
+                #endif
                 continue
             }
             
@@ -571,10 +581,14 @@ class ThreadCollageService: ObservableObject {
             ) { result in
                 switch result {
                 case .success(let watermarkedURL):
+                    #if DEBUG
                     print("✅ COLLAGE: Watermark + end screen applied via VideoWatermarkService")
+                    #endif
                     continuation.resume(returning: watermarkedURL)
                 case .failure(let error):
+                    #if DEBUG
                     print("⚠️ COLLAGE: Watermark failed, using raw video — \(error.localizedDescription)")
+                    #endif
                     continuation.resume(returning: sourceURL)
                 }
             }
@@ -606,8 +620,12 @@ class ThreadCollageService: ObservableObject {
         let compatiblePresets = AVAssetExportSession.exportPresets(compatibleWith: composition)
         let finalPreset = compatiblePresets.contains(presetName) ? presetName : AVAssetExportPresetMediumQuality
         
+        #if DEBUG
         print("🎬 COLLAGE EXPORT: Using preset \(finalPreset)")
+        #endif
+        #if DEBUG
         print("🎬 COLLAGE EXPORT: Composition duration: \(composition.duration.seconds)s")
+        #endif
         
         guard let exportSession = AVAssetExportSession(
             asset: composition,
@@ -647,8 +665,12 @@ class ThreadCollageService: ObservableObject {
             
         case .failed:
             let errorMsg = exportSession.error?.localizedDescription ?? "Unknown export error"
+            #if DEBUG
             print("❌ COLLAGE EXPORT FAILED: \(errorMsg)")
+            #endif
+            #if DEBUG
             print("❌ COLLAGE EXPORT: Underlying error: \(String(describing: exportSession.error))")
+            #endif
             throw CollageError.exportFailed(errorMsg)
             
         case .cancelled:
@@ -666,7 +688,9 @@ class ThreadCollageService: ObservableObject {
     func cleanup() {
         // GUARD: Never wipe caches while export is running — causes -12935 crash
         guard !isExporting else {
+            #if DEBUG
             print("⚠️ COLLAGE: Cleanup blocked — export in progress")
+            #endif
             return
         }
         
@@ -686,7 +710,9 @@ class ThreadCollageService: ObservableObject {
         }
         tempFileURLs.removeAll()
         
+        #if DEBUG
         print("🧹 COLLAGE: Cleaned up \(assetCache.count) cached assets and \(tempFileURLs.count) temp files")
+        #endif
     }
     
     /// Full reset — clears selection and all state

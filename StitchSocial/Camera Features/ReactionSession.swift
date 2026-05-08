@@ -153,14 +153,18 @@ class ReactionState: ObservableObject {
                     self.isRecording = false
                     self.closeOpenPauseEvent()  // ensure no half-open events leak into the compositor
                     self.sourcePlayer?.pause()
+                    #if DEBUG
                     print("🎬 REACTION: Camera done — \(url.lastPathComponent)")
+                    #endif
                     await self.compositeAndDeliver(cameraURL: url)
                 } else {
                     self.isRecording = true
                     // Refine to the actual camera-start moment for tighter
                     // pause-window alignment than the optimistic date above.
                     self.recordingStartDate = Date()
+                    #if DEBUG
                     print("🎬 REACTION: Recording started")
+                    #endif
                 }
             }
         }
@@ -266,7 +270,9 @@ class ReactionState: ObservableObject {
         ))
         player.pause()
         isSourcePaused = true
+        #if DEBUG
         print("🎬 REACTION: Pause @ camera=\(String(format: "%.2f", cameraTime))s, source=\(String(format: "%.2f", sourceTime))s")
+        #endif
     }
 
     private func resumeSource() {
@@ -277,7 +283,9 @@ class ReactionState: ObservableObject {
         }
         player.play()
         isSourcePaused = false
+        #if DEBUG
         print("🎬 REACTION: Resume @ camera=\(String(format: "%.2f", cameraTime))s")
+        #endif
     }
 
     /// Closes any open PauseEvent at the current camera time. Called when
@@ -307,12 +315,16 @@ class ReactionState: ObservableObject {
 
         do {
             let mergedURL = try await compositor.composite()
+            #if DEBUG
             print("🎬 REACTION: Composite done — \(mergedURL.lastPathComponent)")
+            #endif
             isCompositing = false
             onComplete?(mergedURL)
             onComplete = nil
         } catch {
+            #if DEBUG
             print("🎬 REACTION: Composite failed — \(error.localizedDescription)")
+            #endif
             isCompositing = false
             errorMessage = "Failed to merge reaction video"
             // Fallback: deliver raw camera file so user isn't stuck
@@ -327,7 +339,9 @@ class ReactionState: ObservableObject {
     func stopRecording() {
         cameraManager.stopRecording()
         if gsActive { GreenScreenProcessor.shared.deactivate() }
+        #if DEBUG
         print("🎬 REACTION: Stop requested — waiting for file...")
+        #endif
     }
 
     func loadVideo(url: URL) {
@@ -351,7 +365,9 @@ class ReactionState: ObservableObject {
         sourcePlayer?.pause()
         sourcePlayer = nil
         GreenScreenProcessor.shared.cleanup()
+        #if DEBUG
         print("🎬 REACTION: Cleanup")
+        #endif
     }
 }
 
@@ -438,7 +454,9 @@ struct ReactionCameraView: View {
             if !didApplyInitialSource, let url = initialSourceURL {
                 didApplyInitialSource = true
                 state.loadVideo(url: url)
+                #if DEBUG
                 print("🎬 REACTION: Auto-filled source from stitch context — \(url.lastPathComponent)")
+                #endif
             }
         }
         .onDisappear { state.cleanup() }
@@ -913,7 +931,9 @@ struct ReactionCameraView: View {
     // MARK: - Content Loading
 
     private func loadContentItem(_ item: PhotosPickerItem) {
+        #if DEBUG
         print("🎬 REACTION PICKER: Loading — \(item.supportedContentTypes.map(\.identifier))")
+        #endif
         let isVideo = item.supportedContentTypes.contains(where: {
             $0.conforms(to: .audiovisualContent) || $0.conforms(to: .movie)
         })
@@ -927,24 +947,34 @@ struct ReactionCameraView: View {
                             .appendingPathComponent("reaction_bg_\(UUID().uuidString).\(ext)")
                         do {
                             try data.write(to: dest)
+                            #if DEBUG
                             print("🎬 REACTION PICKER: Video → \(dest.lastPathComponent) (\(data.count / 1024)KB)")
+                            #endif
                             state.loadVideo(url: dest)
                         } catch {
+                            #if DEBUG
                             print("🎬 REACTION PICKER ❌ Write failed — \(error)")
+                            #endif
                             state.errorMessage = "Failed to load video"
                         }
                     } else {
                         guard let img = UIImage(data: data) else {
                             state.errorMessage = "Could not decode image"; return
                         }
+                        #if DEBUG
                         print("🎬 REACTION PICKER: Image → \(img.size)")
+                        #endif
                         state.loadImage(img)
                     }
                 case .success(nil):
+                    #if DEBUG
                     print("🎬 REACTION PICKER ❌ Data nil")
+                    #endif
                     state.errorMessage = "Could not load content"
                 case .failure(let e):
+                    #if DEBUG
                     print("🎬 REACTION PICKER ❌ Failed — \(e)")
+                    #endif
                     state.errorMessage = "Failed to load content"
                 }
             }

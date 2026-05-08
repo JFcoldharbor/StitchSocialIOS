@@ -84,11 +84,21 @@ struct StitchSocialApp: App {
                     // 🆕 Recover any interrupted background uploads from previous session
                     backgroundUploadManager.recoverInterruptedUploads()
                     
+                    #if DEBUG
                     print("📱 APP STARTUP: Services initialized")
+                    #endif
+                    #if DEBUG
                     print("📤 Background Upload: Recovery check complete")
+                    #endif
+                    #if DEBUG
                     print("📱 FCM: Automatic via FCMPushManager")
+                    #endif
+                    #if DEBUG
                     print("📱 Notifications: Automatic via NotificationViewModel")
+                    #endif
+                    #if DEBUG
                     print("🧠 Memory: VideoPreloadingService ready")
+                    #endif
                     
                     // Version gate check — 1 Firestore read, cached 1 hour
                     Task {
@@ -149,24 +159,32 @@ struct StitchSocialApp: App {
     ///
     /// Cost: 0. Everything resumes on foreground return.
     private func performBackgroundCleanup() {
+        #if DEBUG
         print("🔋 BACKGROUND CLEANUP: Stopping all background activity")
+        #endif
         
         // 1. Kill all background tasks via the existing kill switch
         BackgroundActivityManager.shared.killAllBackgroundActivity(reason: "App entering background")
         
         // 2. Stop notification snapshot listener (persistent WebSocket)
         notificationService.stopListening()
+        #if DEBUG
         print("🔋 STOPPED: NotificationService snapshot listener")
+        #endif
         
         // 3. Flush and stop CommunityXPService timer
         Task {
             await CommunityXPService.shared.onAppBackground()
         }
+        #if DEBUG
         print("🔋 STOPPED: CommunityXPService flush timer")
+        #endif
         
         // 4. Stop all video preloading and release AVPlayers
         VideoPreloadingService.shared.clearAllPlayers()
+        #if DEBUG
         print("🔋 STOPPED: VideoPreloadingService — all AVPlayers released")
+        #endif
         
         // 5. Disk cache cleanup (already existed)
         VideoDiskCache.shared.cleanupExpired()
@@ -176,12 +194,16 @@ struct StitchSocialApp: App {
         // This catches: ProfileAnimations, EmberParticlesView, FloatingIcon,
         // AnnouncementOverlayView, and any other timer-based views
         NotificationCenter.default.post(name: .killAllBackgroundTimers, object: nil)
+        #if DEBUG
         print("🔋 BROADCAST: killAllBackgroundTimers sent")
+        #endif
         
         // 7. Re-check version gate on next foreground (cache handles cost)
         // Nothing to do here — checkVersion() is called in .active
         
+        #if DEBUG
         print("🔋 BACKGROUND CLEANUP: Complete — all drains stopped")
+        #endif
     }
     
     // MARK: - Foreground Resume
@@ -189,7 +211,9 @@ struct StitchSocialApp: App {
     /// Resumes essential services when app returns to foreground.
     /// Only restarts what's needed — the current visible tab handles its own setup.
     private func performForegroundResume() {
+        #if DEBUG
         print("🔋 FOREGROUND RESUME: Restarting essential services")
+        #endif
         
         // 1. Re-check version gate (1-hour TTL cache — usually 0 reads)
         Task {
@@ -201,13 +225,17 @@ struct StitchSocialApp: App {
             notificationService.startListening(for: userID) { _ in
                 // Notifications handled by NotificationViewModel
             }
+            #if DEBUG
             print("🔋 RESUMED: NotificationService snapshot listener")
+            #endif
         }
         
         // 3. Discovery cache invalidation if stale (>10 min in background)
         // DiscoveryService handles this internally via TTL
         
+        #if DEBUG
         print("🔋 FOREGROUND RESUME: Complete")
+        #endif
     }
     
     // MARK: - Memory Management Setup
@@ -269,7 +297,9 @@ struct StitchSocialApp: App {
             object: nil,
             queue: .main
         ) { _ in
+            #if DEBUG
             print("🔴 MEMORY WARNING: Running emergency cleanup")
+            #endif
             VideoDiskCache.shared.emergencyCleanup(keepCount: 5)
             ThumbnailCache.shared.clear()
         }

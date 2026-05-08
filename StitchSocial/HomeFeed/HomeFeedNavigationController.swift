@@ -72,7 +72,9 @@ class HomeFeedNavigationController: ObservableObject {
     func jumpToPosition(threadIndex: Int, stitchIndex: Int) {
         // Validate thread index
         guard threadIndex >= 0 && threadIndex < threads.count else {
+            #if DEBUG
             print("⚠️ NAV: Invalid thread index \(threadIndex), max is \(threads.count - 1)")
+            #endif
             return
         }
         
@@ -93,7 +95,9 @@ class HomeFeedNavigationController: ObservableObject {
             onVideoChanged?(newVideo)
         }
         
+        #if DEBUG
         print("📍 NAV: Jumped to position - thread \(threadIndex), stitch \(validatedStitchIndex)")
+        #endif
         
         // Resume playback after brief delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -120,7 +124,9 @@ class HomeFeedNavigationController: ObservableObject {
     func moveHorizontalLeft() {
         guard let currentThread = getCurrentThread() else { return }
         guard !currentThread.childVideos.isEmpty else {
+            #if DEBUG
             print("🚫 No children to navigate to")
+            #endif
             return
         }
         
@@ -166,7 +172,9 @@ class HomeFeedNavigationController: ObservableObject {
             self.onPlaybackShouldResume?()
         }
         
+        #if DEBUG
         print("🎬 MOVED TO THREAD: \(threadIndex)")
+        #endif
     }
     
     private func moveToStitch(_ stitchIndex: Int) {
@@ -192,7 +200,9 @@ class HomeFeedNavigationController: ObservableObject {
             self.onPlaybackShouldResume?()
         }
         
+        #if DEBUG
         print("🎯 MOVED TO STITCH: \(stitchIndex)")
+        #endif
     }
     
     // MARK: - Reset

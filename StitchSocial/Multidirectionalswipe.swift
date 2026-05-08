@@ -217,13 +217,17 @@ extension MultidirectionalSwipeGesture {
         // PHASE 3: Check debounce before processing
         let currentTime = CFAbsoluteTimeGetCurrent()
         if currentTime - lastGestureTime < config.debounceInterval {
+            #if DEBUG
             print("⏸️ GESTURE: Debounced - too fast")
+            #endif
             return
         }
         
         // PHASE 3: Rate limiting - check gestures per second
         if !checkRateLimit(currentTime: currentTime) {
+            #if DEBUG
             print("⏸️ GESTURE: Rate limited - too many gestures")
+            #endif
             return
         }
         
@@ -260,7 +264,9 @@ extension MultidirectionalSwipeGesture {
                 isDebouncing = false
             }
             
+            #if DEBUG
             print("✅ GESTURE: \(result.description)")
+            #endif
         } else {
             // Cancelled - soft haptic
             if config.enableHaptics && isGestureActive {
@@ -324,12 +330,16 @@ extension MultidirectionalSwipeGesture {
         // Strong horizontal bias detection
         if absX > absY * 1.3 {
             currentDirection = .horizontal
+            #if DEBUG
             print("🔒 GESTURE: Locked horizontal")
+            #endif
         }
         // Strong vertical bias detection
         else if absY > absX * 1.3 {
             currentDirection = .vertical
+            #if DEBUG
             print("🔒 GESTURE: Locked vertical")
+            #endif
         }
         // Use velocity as tiebreaker
         else {
@@ -338,10 +348,14 @@ extension MultidirectionalSwipeGesture {
             
             if absVx > absVy {
                 currentDirection = .horizontal
+                #if DEBUG
                 print("🔒 GESTURE: Locked horizontal (velocity)")
+                #endif
             } else {
                 currentDirection = .vertical
+                #if DEBUG
                 print("🔒 GESTURE: Locked vertical (velocity)")
+                #endif
             }
         }
     }

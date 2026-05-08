@@ -261,7 +261,9 @@ class CollectionRowViewModel: ObservableObject, Identifiable {
             
         } catch {
             self.error = "Failed to load previews"
+            #if DEBUG
             print("❌ COLLECTION ROW VM: Failed to load segment previews: \(error)")
+            #endif
         }
         
         isLoadingPreviews = false
@@ -271,7 +273,9 @@ class CollectionRowViewModel: ObservableObject, Identifiable {
     func toggleBookmark() {
         isBookmarked.toggle()
         // TODO: Persist bookmark state to Firebase
+        #if DEBUG
         print("📚 COLLECTION ROW VM: Bookmark toggled to \(isBookmarked) for \(collection.id)")
+        #endif
     }
     
     /// Refresh collection data
@@ -281,7 +285,9 @@ class CollectionRowViewModel: ObservableObject, Identifiable {
                 collection = updated
             }
         } catch {
+            #if DEBUG
             print("❌ COLLECTION ROW VM: Failed to refresh: \(error)")
+            #endif
         }
     }
     

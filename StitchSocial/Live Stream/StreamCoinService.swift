@@ -117,7 +117,9 @@ class StreamCoinService: ObservableObject {
             await flushHypeBuffer(communityID: communityID, streamID: streamID)
         }
         
+        #if DEBUG
         print("🔥 HYPE: @\(senderUsername) sent \(hypeType.displayName) (\(hypeType.coinCost) coins)")
+        #endif
         return event
     }
     
@@ -146,7 +148,9 @@ class StreamCoinService: ObservableObject {
         
         try? await batch.commit()
         
+        #if DEBUG
         print("📦 HYPE FLUSH: \(events.count) events, \(totalCoins) coins written")
+        #endif
     }
     
     // MARK: - Collective Goals
@@ -183,15 +187,21 @@ class StreamCoinService: ObservableObject {
         case .bonusXP:
             // Award 200 XP to all current viewers — handled by Cloud Function
             // Client just shows the celebration UI
+            #if DEBUG
             print("🎉 GOAL: Bonus XP goal reached! Cloud Function will award.")
+            #endif
             
         case .legendaryBadge:
             // Legendary badge for all attendees — Cloud Function on stream end
+            #if DEBUG
             print("🏆 GOAL: Legendary Stream badge unlocked!")
+            #endif
             
         case .hotTag, .permanentHighlight:
             // These are metadata flags handled by stream doc update
+            #if DEBUG
             print("✨ GOAL: \(goal.displayName) reached!")
+            #endif
         }
     }
     

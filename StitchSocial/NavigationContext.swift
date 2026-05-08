@@ -120,12 +120,20 @@ class ThreadNavigationCoordinator: ObservableObject {
         self.threads = threads
         navigationState.reset()
         
+        #if DEBUG
         print("🎯 COORDINATOR: Set \(threads.count) threads")
+        #endif
         for (index, thread) in threads.enumerated() {
+            #if DEBUG
             print("  Thread \(index): \(thread.id) with \(thread.childVideos.count) children")
+            #endif
+            #if DEBUG
             print("    Parent: \(thread.parentVideo.title)")
+            #endif
             for (childIndex, child) in thread.childVideos.enumerated() {
+                #if DEBUG
                 print("    Child \(childIndex + 1): \(child.title)")
+                #endif
             }
         }
     }
@@ -224,7 +232,9 @@ class ThreadNavigationCoordinator: ObservableObject {
         } else if !isHorizontal && context.allowsVerticalThreadNavigation {
             handleVerticalSwipe(translation: adjustedTranslation, velocity: velocity)
         } else {
+            #if DEBUG
             print("🚫 SWIPE: Direction not allowed in context \(context)")
+            #endif
             smoothSnapToCurrentPosition()
         }
     }
@@ -233,11 +243,15 @@ class ThreadNavigationCoordinator: ObservableObject {
     
     func smoothMoveToThread(_ index: Int) {
         guard index >= 0 && index < threads.count else {
+            #if DEBUG
             print("❌ THREAD: Invalid index \(index)")
+            #endif
             return
         }
         
+        #if DEBUG
         print("🎯 THREAD: Moving to thread \(index)")
+        #endif
         
         navigationState.isAnimating = true
         navigationState.currentThreadIndex = index
@@ -262,17 +276,23 @@ class ThreadNavigationCoordinator: ObservableObject {
     
     func smoothMoveToStitch(_ index: Int) {
         guard let currentThread = getCurrentThread() else {
+            #if DEBUG
             print("❌ STITCH: No current thread")
+            #endif
             return
         }
         
         let maxIndex = currentThread.childVideos.count
         guard index >= 0 && index <= maxIndex else {
+            #if DEBUG
             print("❌ STITCH: Invalid index \(index) for thread with \(maxIndex) children")
+            #endif
             return
         }
         
+        #if DEBUG
         print("🎯 STITCH: Moving to stitch \(index)")
+        #endif
         
         navigationState.isAnimating = true
         navigationState.currentStitchIndex = index
@@ -312,16 +332,24 @@ class ThreadNavigationCoordinator: ObservableObject {
     
     private func handleHorizontalSwipe(translation: CGSize, velocity: CGSize) {
         guard let currentThread = getCurrentThread() else {
+            #if DEBUG
             print("❌ HORIZONTAL: No current thread")
+            #endif
             smoothSnapToCurrentPosition()
             return
         }
         
+        #if DEBUG
         print("🔍 HORIZONTAL: Current thread has \(currentThread.childVideos.count) children")
+        #endif
+        #if DEBUG
         print("🔍 HORIZONTAL: Current stitch index: \(navigationState.currentStitchIndex)")
+        #endif
         
         guard !currentThread.childVideos.isEmpty else {
+            #if DEBUG
             print("❌ HORIZONTAL: No children in thread \(currentThread.id)")
+            #endif
             smoothSnapToCurrentPosition()
             return
         }
@@ -333,20 +361,28 @@ class ThreadNavigationCoordinator: ObservableObject {
             // Move to next child
             if navigationState.currentStitchIndex < currentThread.childVideos.count {
                 let nextStitchIndex = navigationState.currentStitchIndex + 1
+                #if DEBUG
                 print("➡️ HORIZONTAL: Moving to child \(nextStitchIndex) of \(currentThread.childVideos.count)")
+                #endif
                 smoothMoveToStitch(nextStitchIndex)
             } else {
+                #if DEBUG
                 print("🔚 HORIZONTAL: At end of children")
+                #endif
                 smoothSnapToCurrentPosition()
             }
         } else if isSwipeRight {
             // Move to previous child
             if navigationState.currentStitchIndex > 0 {
                 let prevStitchIndex = navigationState.currentStitchIndex - 1
+                #if DEBUG
                 print("⬅️ HORIZONTAL: Moving to child \(prevStitchIndex)")
+                #endif
                 smoothMoveToStitch(prevStitchIndex)
             } else {
+                #if DEBUG
                 print("🏠 HORIZONTAL: At parent")
+                #endif
                 smoothSnapToCurrentPosition()
             }
         }
@@ -360,20 +396,28 @@ class ThreadNavigationCoordinator: ObservableObject {
             // Move to next thread
             if navigationState.currentThreadIndex < threads.count - 1 {
                 let nextThreadIndex = navigationState.currentThreadIndex + 1
+                #if DEBUG
                 print("⬇️ VERTICAL: Moving to thread \(nextThreadIndex)")
+                #endif
                 smoothMoveToThread(nextThreadIndex)
             } else {
+                #if DEBUG
                 print("🔚 VERTICAL: At end of threads")
+                #endif
                 handleEndOfFeed()
             }
         } else if isSwipeDown {
             // Move to previous thread
             if navigationState.currentThreadIndex > 0 {
                 let prevThreadIndex = navigationState.currentThreadIndex - 1
+                #if DEBUG
                 print("⬆️ VERTICAL: Moving to thread \(prevThreadIndex)")
+                #endif
                 smoothMoveToThread(prevThreadIndex)
             } else {
+                #if DEBUG
                 print("🔝 VERTICAL: At top of feed")
+                #endif
                 smoothSnapToCurrentPosition()
             }
         }
@@ -382,7 +426,9 @@ class ThreadNavigationCoordinator: ObservableObject {
     // MARK: - End of Feed Handling
     
     private func handleEndOfFeed() {
+        #if DEBUG
         print("🔄 END: Reached end of feed in context \(context)")
+        #endif
         
         switch context {
         case .homeFeed:
@@ -395,7 +441,9 @@ class ThreadNavigationCoordinator: ObservableObject {
     }
     
     private func triggerFeedReshuffling() {
+        #if DEBUG
         print("🔄 RESHUFFLE: Starting feed reshuffling")
+        #endif
         isReshuffling = true
         
         // Simulate reshuffling delay
@@ -404,7 +452,9 @@ class ThreadNavigationCoordinator: ObservableObject {
             self.navigationState.reset()
             self.isReshuffling = false
             
+            #if DEBUG
             print("✅ RESHUFFLE: Feed reshuffling complete")
+            #endif
         }
     }
     
@@ -416,7 +466,9 @@ class ThreadNavigationCoordinator: ObservableObject {
         let playCount = videoPlayCounts[currentVideo.id, default: 0] + 1
         videoPlayCounts[currentVideo.id] = playCount
         
+        #if DEBUG
         print("📺 AUTO: Video \(currentVideo.id) played \(playCount) times")
+        #endif
         
         // Only auto-advance for contexts that support it
         guard context.autoProgressionEnabled && playCount >= maxPlaysPerVideo else { return }

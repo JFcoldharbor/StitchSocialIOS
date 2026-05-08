@@ -60,7 +60,9 @@ class GreenScreenProcessor: ObservableObject {
     // MARK: - Activation
 
     func activate() {
+        #if DEBUG
         print("🟢 GREEN SCREEN: activate() called")
+        #endif
         let req = VNGeneratePersonSegmentationRequest()
         req.qualityLevel = .balanced
         req.outputPixelFormat = kCVPixelFormatType_OneComponent8
@@ -68,12 +70,18 @@ class GreenScreenProcessor: ObservableObject {
         isActive = true
         setActiveAtomic(true)
         frameReceived = 0; frameProcessed = 0; frameDropped = 0
+        #if DEBUG
         print("🟢 GREEN SCREEN: Activated — request=\(req), qualityLevel=balanced")
+        #endif
+        #if DEBUG
         print("🟢 GREEN SCREEN: isActiveAtomic=\(isActiveAtomic)")
+        #endif
     }
 
     func deactivate() {
+        #if DEBUG
         print("🟢 GREEN SCREEN: deactivate() called — frames: received=\(frameReceived) processed=\(frameProcessed) dropped=\(frameDropped)")
+        #endif
         isActive = false
         setActiveAtomic(false)
         segmentationRequest = nil
@@ -84,7 +92,9 @@ class GreenScreenProcessor: ObservableObject {
 
     func cleanup() {
         deactivate()
+        #if DEBUG
         print("🟢 GREEN SCREEN: Cleanup complete")
+        #endif
     }
 
     // MARK: - Frame Processing
@@ -99,7 +109,9 @@ class GreenScreenProcessor: ObservableObject {
         if frameReceived == 1 {
             let w = CVPixelBufferGetWidth(pixelBuffer)
             let h = CVPixelBufferGetHeight(pixelBuffer)
+            #if DEBUG
             print("🟢 GREEN SCREEN ✅ First pixel buffer — \(w)x\(h) (will rotate to portrait)")
+            #endif
         }
         // Raw pixel buffer is landscape — rotate to portrait so Vision mask
         // aligns with the preview layer orientation.
@@ -133,7 +145,9 @@ class GreenScreenProcessor: ObservableObject {
 
         guard let request = segmentationRequest else {
             if frameReceived == 1 {
+                #if DEBUG
                 print("🟢 GREEN SCREEN ❌ processFrame — segmentationRequest is nil (was activate() called?)")
+                #endif
             }
             frameDropped += 1
             return
@@ -141,7 +155,9 @@ class GreenScreenProcessor: ObservableObject {
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             if frameReceived == 1 {
+                #if DEBUG
                 print("🟢 GREEN SCREEN ❌ processFrame — could not get image buffer from sampleBuffer")
+                #endif
             }
             frameDropped += 1
             return
@@ -151,7 +167,9 @@ class GreenScreenProcessor: ObservableObject {
         if frameReceived == 1 {
             let w = CVPixelBufferGetWidth(pixelBuffer)
             let h = CVPixelBufferGetHeight(pixelBuffer)
+            #if DEBUG
             print("🟢 GREEN SCREEN ✅ First frame received — size=\(w)x\(h)")
+            #endif
         }
 
         let sourceImage = CIImage(cvPixelBuffer: pixelBuffer).oriented(.right)
@@ -165,7 +183,9 @@ class GreenScreenProcessor: ObservableObject {
                 try handler.perform([request])
             } catch {
                 if self.frameReceived <= 3 {
+                    #if DEBUG
                     print("🟢 GREEN SCREEN ❌ Vision perform failed — \(error)")
+                    #endif
                 }
                 Task { @MainActor in self.frameDropped += 1 }
                 return
@@ -173,7 +193,9 @@ class GreenScreenProcessor: ObservableObject {
 
             guard let result = request.results?.first else {
                 if self.frameReceived <= 3 {
+                    #if DEBUG
                     print("🟢 GREEN SCREEN ❌ Vision returned no results")
+                    #endif
                 }
                 return
             }
@@ -183,7 +205,9 @@ class GreenScreenProcessor: ObservableObject {
             if self.frameProcessed == 0 {
                 let mw = CVPixelBufferGetWidth(maskBuffer)
                 let mh = CVPixelBufferGetHeight(maskBuffer)
+                #if DEBUG
                 print("🟢 GREEN SCREEN ✅ First mask generated — size=\(mw)x\(mh)")
+                #endif
             }
 
             let maskImage  = CIImage(cvPixelBuffer: maskBuffer).resized(to: sourceImage.extent)
@@ -194,10 +218,14 @@ class GreenScreenProcessor: ObservableObject {
                 self.processedFrame = composited
                 self.frameProcessed += 1
                 if self.frameProcessed == 1 {
+                    #if DEBUG
                     print("🟢 GREEN SCREEN ✅ First composited frame published — extent=\(composited.extent)")
+                    #endif
                 }
                 if self.frameProcessed % 30 == 0 {
+                    #if DEBUG
                     print("🟢 GREEN SCREEN: \(self.frameProcessed) frames processed (dropped=\(self.frameDropped))")
+                    #endif
                 }
             }
         }
@@ -209,7 +237,9 @@ class GreenScreenProcessor: ObservableObject {
         if let cached = cachedBackgroundImage, bg == lastBackground {
             return cached.resized(to: extent)
         }
+        #if DEBUG
         print("🟢 GREEN SCREEN: Rebuilding background — type=\(bg)")
+        #endif
         let image: CIImage
         switch bg {
         case .blur(let radius):
@@ -254,7 +284,9 @@ struct GreenScreenPreviewView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> MTKView {
         guard let device = MTLCreateSystemDefaultDevice() else {
+            #if DEBUG
             print("🟢 GREEN SCREEN ❌ GreenScreenPreviewView — Metal device unavailable (simulator?)")
+            #endif
             return MTKView()
         }
         let view = MTKView(frame: .zero, device: device)
@@ -266,14 +298,18 @@ struct GreenScreenPreviewView: UIViewRepresentable {
         context.coordinator.ciContext = CIContext(mtlDevice: device)
         context.coordinator.mtkView = view
         view.delegate = context.coordinator
+        #if DEBUG
         print("🟢 GREEN SCREEN ✅ MTKView created — device=\(device.name)")
+        #endif
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
         if let frame = processor.processedFrame {
             if context.coordinator.frameCount == 0 {
+                #if DEBUG
                 print("🟢 GREEN SCREEN ✅ GreenScreenPreviewView received first frame — extent=\(frame.extent)")
+                #endif
             }
             context.coordinator.currentFrame = frame
             context.coordinator.frameCount += 1
@@ -290,7 +326,9 @@ struct GreenScreenPreviewView: UIViewRepresentable {
         weak var mtkView: MTKView?
 
         func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+            #if DEBUG
             print("🟢 GREEN SCREEN: MTKView drawable size changed — \(size)")
+            #endif
         }
 
         func draw(in view: MTKView) {
@@ -300,7 +338,9 @@ struct GreenScreenPreviewView: UIViewRepresentable {
                   let commandBuffer = view.device?.makeCommandQueue()?.makeCommandBuffer()
             else {
                 if frameCount == 0 {
+                    #if DEBUG
                     print("🟢 GREEN SCREEN ❌ draw() guard failed — frame=\(currentFrame != nil) ctx=\(ciContext != nil) drawable=\(view.currentDrawable != nil)")
+                    #endif
                 }
                 return
             }

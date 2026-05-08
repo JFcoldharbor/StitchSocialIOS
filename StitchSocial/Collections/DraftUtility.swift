@@ -58,11 +58,15 @@ class DraftCleanupUtility: ObservableObject {
             }
             
             statusMessage = "Found \(draftsFound.count) drafts"
+            #if DEBUG
             print("🧹 CLEANUP: Found \(draftsFound.count) drafts for user \(userID)")
+            #endif
             
         } catch {
             errorMessage = "Failed to fetch drafts: \(error.localizedDescription)"
+            #if DEBUG
             print("❌ CLEANUP: Error fetching drafts: \(error)")
+            #endif
         }
         
         isLoading = false
@@ -76,7 +80,9 @@ class DraftCleanupUtility: ObservableObject {
             try await db.collection("collectionDrafts").document(draft.id).delete()
             draftsFound.removeAll { $0.id == draft.id }
             statusMessage = "Deleted draft: \(draft.id.prefix(8))..."
+            #if DEBUG
             print("🗑️ CLEANUP: Deleted draft \(draft.id)")
+            #endif
         } catch {
             errorMessage = "Failed to delete: \(error.localizedDescription)"
         }
@@ -108,11 +114,15 @@ class DraftCleanupUtility: ObservableObject {
             
             draftsFound.removeAll()
             statusMessage = "Deleted \(snapshot.documents.count) drafts"
+            #if DEBUG
             print("🗑️ CLEANUP: Deleted all \(snapshot.documents.count) drafts for user \(userID)")
+            #endif
             
         } catch {
             errorMessage = "Failed to delete all: \(error.localizedDescription)"
+            #if DEBUG
             print("❌ CLEANUP: Error deleting all drafts: \(error)")
+            #endif
         }
         
         isLoading = false
@@ -235,7 +245,9 @@ struct DraftRow: View {
 /// Quick function to clear all drafts - call this once to fix the issue
 func clearAllCollectionDrafts() async {
     guard let userID = Auth.auth().currentUser?.uid else {
+        #if DEBUG
         print("❌ Not logged in")
+        #endif
         return
     }
     
@@ -246,19 +258,27 @@ func clearAllCollectionDrafts() async {
             .whereField("creatorID", isEqualTo: userID)
             .getDocuments()
         
+        #if DEBUG
         print("🧹 Found \(snapshot.documents.count) drafts to delete")
+        #endif
         
         let batch = db.batch()
         for doc in snapshot.documents {
+            #if DEBUG
             print("  - Deleting: \(doc.documentID)")
+            #endif
             batch.deleteDocument(doc.reference)
         }
         
         try await batch.commit()
+        #if DEBUG
         print("✅ All drafts deleted successfully!")
+        #endif
         
     } catch {
+        #if DEBUG
         print("❌ Error clearing drafts: \(error)")
+        #endif
     }
 }
 

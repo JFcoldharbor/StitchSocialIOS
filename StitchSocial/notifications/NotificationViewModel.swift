@@ -43,7 +43,9 @@ class NotificationViewModel: ObservableObject {
 
     init(notificationService: NotificationService) {
         self.notificationService = notificationService
+        #if DEBUG
         print("🔧 NOTIFICATION VM: Initialized with service integration")
+        #endif
 
         // Start real-time listener
         startListening()
@@ -64,14 +66,18 @@ class NotificationViewModel: ObservableObject {
                     self.lastDocument = nil
                     self.hasMoreNotifications = false
                     self.startListening()
+                    #if DEBUG
                     print("🔔 NOTIFICATION VM: listener reattached on auth swap → \(newUID ?? "nil")")
+                    #endif
                 }
             }
         }
     }
     
     deinit {
+        #if DEBUG
         print("🔴 NOTIFICATION VM: DEINIT STARTED")
+        #endif
         
         // Stop listener synchronously - don't use Task
         let service = self.notificationService
@@ -79,7 +85,9 @@ class NotificationViewModel: ObservableObject {
         // Force immediate cleanup
         DispatchQueue.main.async {
             service.stopListening()
+            #if DEBUG
             print("🔴 NOTIFICATION VM: DEINIT COMPLETE")
+            #endif
         }
     }
     
@@ -87,7 +95,9 @@ class NotificationViewModel: ObservableObject {
     
     func loadNotifications() async {
         guard let userID = currentUserID else {
+            #if DEBUG
             print("⚠️ NOTIFICATION VM: No user ID")
+            #endif
             return
         }
         
@@ -108,11 +118,15 @@ class NotificationViewModel: ObservableObject {
             updateFilteredNotifications()
             updateUnreadCount()
             
+            #if DEBUG
             print("🔧 NOTIFICATION VM: Loaded \(allNotifications.count) notifications")
+            #endif
             
         } catch {
             errorMessage = "Failed to load notifications: \(error.localizedDescription)"
+            #if DEBUG
             print("❌ NOTIFICATION VM: Load failed - \(error)")
+            #endif
         }
         
         isLoading = false
@@ -140,10 +154,14 @@ class NotificationViewModel: ObservableObject {
             
             updateFilteredNotifications()
             
+            #if DEBUG
             print("🔧 NOTIFICATION VM: Loaded \(result.notifications.count) more notifications")
+            #endif
             
         } catch {
+            #if DEBUG
             print("❌ NOTIFICATION VM: Load more failed - \(error)")
+            #endif
         }
         
         isLoading = false
@@ -164,10 +182,14 @@ class NotificationViewModel: ObservableObject {
             // Reload to get updated state from Firestore
             await refreshNotifications()
             
+            #if DEBUG
             print("✅ NOTIFICATION VM: Marked as read - \(notificationID)")
+            #endif
             
         } catch {
+            #if DEBUG
             print("❌ NOTIFICATION VM: Mark as read failed - \(error)")
+            #endif
         }
     }
     
@@ -182,11 +204,15 @@ class NotificationViewModel: ObservableObject {
             // Reload to get updated state from Firestore
             await refreshNotifications()
             
+            #if DEBUG
             print("✅ NOTIFICATION VM: Marked all as read")
+            #endif
             
         } catch {
             errorMessage = "Failed to mark all as read: \(error.localizedDescription)"
+            #if DEBUG
             print("❌ NOTIFICATION VM: Mark all as read failed - \(error)")
+            #endif
         }
         
         isLoading = false
@@ -241,7 +267,9 @@ class NotificationViewModel: ObservableObject {
             )
         }
         
+        #if DEBUG
         print("🔧 NOTIFICATION VM: Filtered to \(filteredNotifications.count) notifications for \(selectedTab.displayName)")
+        #endif
     }
     
     private func updateUnreadCount() {
@@ -252,7 +280,9 @@ class NotificationViewModel: ObservableObject {
     
     private func startListening() {
         guard let userID = currentUserID else {
+            #if DEBUG
             print("⚠️ NOTIFICATION VM: Cannot start listener - no user ID")
+            #endif
             return
         }
         
@@ -264,7 +294,9 @@ class NotificationViewModel: ObservableObject {
                 self.updateFilteredNotifications()
                 self.updateUnreadCount()
                 
+                #if DEBUG
                 print("🔔 NOTIFICATION VM: Real-time update - \(notifications.count) notifications")
+                #endif
             }
         }
     }

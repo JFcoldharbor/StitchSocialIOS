@@ -328,7 +328,9 @@ struct SubscribeToJoinView: View {
             plan = try await subscriptionService.fetchCreatorPlan(creatorID: creatorID)
             _ = try await coinService.fetchBalance(userID: userID)
         } catch {
+            #if DEBUG
             print("⚠️ SUBSCRIBE: Failed to load - \(error.localizedDescription)")
+            #endif
         }
         isLoading = false
     }

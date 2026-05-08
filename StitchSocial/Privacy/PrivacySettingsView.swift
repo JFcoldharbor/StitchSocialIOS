@@ -180,7 +180,9 @@ struct PrivacySettingsView: View {
             do {
                 try await privacyService.savePrivacySettings(userID: userID, settings: settings)
             } catch {
+                #if DEBUG
                 print("⚠️ PRIVACY VIEW: Save failed: \(error)")
+                #endif
             }
             isSaving = false
         }

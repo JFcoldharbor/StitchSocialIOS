@@ -308,7 +308,9 @@ struct VideoQualityAnalyzer {
     
     /// Test duration-based compression strategy
     static func testCompressionStrategy() {
+        #if DEBUG
         print("🎬 TESTING DURATION-BASED COMPRESSION STRATEGY")
+        #endif
         
         let testCases: [(TimeInterval, UserTier, String)] = [
             (90, .rookie, "Short video - Regular user"),
@@ -324,13 +326,25 @@ struct VideoQualityAnalyzer {
             let resolution = calculateOptimalResolution(duration: duration, userTier: tier)
             let strategy = getCompressionStrategyDescription(duration: duration, userTier: tier)
             
+            #if DEBUG
             print("📊 \(description):")
+            #endif
+            #if DEBUG
             print("   Duration: \(Int(duration))s | Tier: \(tier.displayName)")
+            #endif
+            #if DEBUG
             print("   Resolution: \(Int(resolution.width))x\(Int(resolution.height))")
+            #endif
+            #if DEBUG
             print("   Strategy: \(strategy)")
+            #endif
+            #if DEBUG
             print("")
+            #endif
         }
         
+        #if DEBUG
         print("✅ Duration-based compression strategy testing complete")
+        #endif
     }
 }

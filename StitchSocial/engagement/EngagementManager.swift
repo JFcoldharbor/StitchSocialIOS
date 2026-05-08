@@ -75,7 +75,9 @@ class EngagementManager: ObservableObject {
         }
         
         startCacheCleanupTimer()
+        #if DEBUG
         print("🎯 ENGAGEMENT MANAGER: Server-validated mode + auto-cache cleanup")
+        #endif
     }
     
     deinit {
@@ -162,7 +164,9 @@ class EngagementManager: ObservableObject {
             let mode = isBurst ? "BURST" : "regular"
             let visualIncrement = result["visualIncrement"] as? Int ?? 1
             let cloutAwarded = result["cloutAwarded"] as? Int ?? 0
+            #if DEBUG
             print("🔥 HYPE (\(mode)): +\(visualIncrement) hypes, +\(cloutAwarded) clout [SERVER VALIDATED]")
+            #endif
             
             // Post UI update notification
             NotificationCenter.default.post(
@@ -186,7 +190,9 @@ class EngagementManager: ObservableObject {
         } catch {
             // Server rejected — restore hype rating
             HypeRatingService.shared.restoreRating(cost)
+            #if DEBUG
             print("❌ HYPE REJECTED BY SERVER: \(error.localizedDescription)")
+            #endif
             throw error
         }
     }
@@ -228,7 +234,9 @@ class EngagementManager: ObservableObject {
             
             updateLocalStateFromServer(videoID: videoID, userID: userID, serverState: result)
             
+            #if DEBUG
             print("❄️ COOL: +1 cool [SERVER VALIDATED]")
+            #endif
             
             NotificationCenter.default.post(
                 name: NSNotification.Name("VideoEngagementUpdated"),
@@ -239,7 +247,9 @@ class EngagementManager: ObservableObject {
             return true
             
         } catch {
+            #if DEBUG
             print("❌ COOL REJECTED BY SERVER: \(error.localizedDescription)")
+            #endif
             throw error
         }
     }
@@ -247,7 +257,9 @@ class EngagementManager: ObservableObject {
     // MARK: - 🆕 Remove All Engagement (via Cloud Function)
     
     func removeAllEngagement(videoID: String, userID: String, userTier: UserTier) async throws -> Bool {
+        #if DEBUG
         print("🗑️ REMOVE ALL: Calling server...")
+        #endif
         
         let state = getEngagementState(videoID: videoID, userID: userID)
         guard state.isWithinGracePeriod else {
@@ -272,7 +284,9 @@ class EngagementManager: ObservableObject {
             
             let removedHypes = data["removedHypes"] as? Int ?? 0
             let removedCools = data["removedCools"] as? Int ?? 0
+            #if DEBUG
             print("✅ REMOVE ALL: Removed \(removedHypes) hypes, \(removedCools) cools [SERVER VALIDATED]")
+            #endif
             
             NotificationCenter.default.post(
                 name: NSNotification.Name("VideoEngagementUpdated"),
@@ -283,7 +297,9 @@ class EngagementManager: ObservableObject {
             return true
             
         } catch {
+            #if DEBUG
             print("❌ REMOVE ALL REJECTED: \(error.localizedDescription)")
+            #endif
             throw error
         }
     }
@@ -372,10 +388,14 @@ class EngagementManager: ObservableObject {
             
             await MainActor.run {
                 engagementStates[key] = state
+                #if DEBUG
                 print("📄 Loaded engagement state from dedup doc for \(key)")
+                #endif
             }
         } catch {
+            #if DEBUG
             print("⚠️ Failed to load engagement state: \(error)")
+            #endif
         }
     }
     
@@ -434,11 +454,15 @@ class EngagementManager: ObservableObject {
         let uncachedIDs = videoIDs.filter { engagementStates["\($0)_\(userID)"] == nil }
         
         guard !uncachedIDs.isEmpty else {
+            #if DEBUG
             print("📦 Preload: All \(videoIDs.count) states already cached")
+            #endif
             return
         }
         
+        #if DEBUG
         print("📦 Preloading \(uncachedIDs.count) engagement states (skipped \(videoIDs.count - uncachedIDs.count) cached)")
+        #endif
         
         await withTaskGroup(of: Void.self) { group in
             for videoID in uncachedIDs {
@@ -448,7 +472,9 @@ class EngagementManager: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("✅ Preloading complete")
+        #endif
     }
     
     /// Auto-cleanup: evict stale entries (>1hr old) every 5 minutes
@@ -472,7 +498,9 @@ class EngagementManager: ObservableObject {
         }
         
         if !keysToRemove.isEmpty {
+            #if DEBUG
             print("🧹 Cleared \(keysToRemove.count) old engagement states from cache")
+            #endif
         }
     }
     

@@ -240,7 +240,9 @@ class ThreadService: ObservableObject {
     // MARK: - Initialization
     
     init() {
+        #if DEBUG
         print("ðŸ§µ THREAD SERVICE: Initialized thread management with hierarchy validation")
+        #endif
     }
     
     // MARK: - Thread Creation Operations
@@ -337,7 +339,9 @@ class ThreadService: ObservableObject {
             
             totalThreadsCreated += 1
             
+            #if DEBUG
             print("âœ… THREAD SERVICE: Thread created successfully - \(request.title)")
+            #endif
             
             return thread
             
@@ -346,7 +350,9 @@ class ThreadService: ObservableObject {
             let threadError = ThreadServiceError.creationFailed(error.localizedDescription)
             await recordFailure(threadError)
             
+            #if DEBUG
             print("âŒ THREAD SERVICE: Thread creation failed - \(error)")
+            #endif
             
             throw threadError
         }
@@ -490,7 +496,9 @@ class ThreadService: ObservableObject {
             
             totalRepliesCreated += 1
             
+            #if DEBUG
             print("âœ… THREAD SERVICE: Reply created successfully - \(contentType.displayName)")
+            #endif
             
             return reply
             
@@ -506,7 +514,9 @@ class ThreadService: ObservableObject {
             
             await recordFailure(threadError)
             
+            #if DEBUG
             print("âŒ THREAD SERVICE: Reply creation failed - \(error)")
+            #endif
             
             throw threadError
         }
@@ -677,14 +687,18 @@ class ThreadService: ObservableObject {
             await setOperationState(loading: false)
             await recordSuccess(.threadUpdated, duration: Date().timeIntervalSince(startTime))
             
+            #if DEBUG
             print("âœ… THREAD SERVICE: Thread updated successfully - \(threadID)")
+            #endif
             
         } catch {
             await setOperationState(loading: false)
             let threadError = ThreadServiceError.updateFailed(error.localizedDescription)
             await recordFailure(threadError)
             
+            #if DEBUG
             print("âŒ THREAD SERVICE: Thread update failed - \(error)")
+            #endif
             
             throw threadError
         }
@@ -728,7 +742,9 @@ class ThreadService: ObservableObject {
             await setOperationState(loading: false)
             await recordSuccess(.threadDeleted, duration: Date().timeIntervalSince(startTime))
             
+            #if DEBUG
             print("âœ… THREAD SERVICE: Thread deleted successfully - \(threadID)")
+            #endif
             
         } catch {
             await setOperationState(loading: false)
@@ -742,7 +758,9 @@ class ThreadService: ObservableObject {
             
             await recordFailure(threadError)
             
+            #if DEBUG
             print("âŒ THREAD SERVICE: Thread deletion failed - \(error)")
+            #endif
             
             throw threadError
         }
@@ -910,14 +928,28 @@ class ThreadService: ObservableObject {
     /// Print thread service status
     func printThreadStatus() {
         let stats = getThreadStats()
+        #if DEBUG
         print("ðŸ§µ THREAD SERVICE STATUS:")
+        #endif
+        #if DEBUG
         print("  Threads Created: \(stats.totalThreadsCreated)")
+        #endif
+        #if DEBUG
         print("  Replies Created: \(stats.totalRepliesCreated)")
+        #endif
+        #if DEBUG
         print("  Success Rate: \(String(format: "%.1f%%", stats.successRate))")
+        #endif
+        #if DEBUG
         print("  Avg Duration: \(String(format: "%.1fs", stats.averageOperationDuration))")
+        #endif
+        #if DEBUG
         print("  Current Operation: \(operationInProgress ? "Active" : "Idle")")
+        #endif
         if let error = lastError {
+            #if DEBUG
             print("  Last Error: \(error.localizedDescription)")
+            #endif
         }
     }
 }

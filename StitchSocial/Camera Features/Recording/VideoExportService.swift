@@ -56,7 +56,9 @@ class VideoExportService: ObservableObject {
             let asset = AVURLAsset(url: editState.videoURL)
             let mode = determineExportMode(editState: editState)
             exportMode = mode
+            #if DEBUG
             print("🎬 EXPORT: Mode = \(mode.rawValue)")
+            #endif
 
             let outputURL: URL
             switch mode {
@@ -70,7 +72,9 @@ class VideoExportService: ObservableObject {
 
             let thumbnailURL = try await generateThumbnail(from: outputURL)
             await logQualityComparison(original: editState.videoURL, exported: outputURL)
+            #if DEBUG
             print("✅ EXPORT: Complete — \(outputURL.lastPathComponent)")
+            #endif
             return (outputURL, thumbnailURL)
         } catch {
             exportError = error.localizedDescription
@@ -327,7 +331,9 @@ class VideoExportService: ObservableObject {
         let origSize = (try? FileManager.default.attributesOfItem(atPath: original.path)[.size] as? Int64) ?? 0
         let expSize = (try? FileManager.default.attributesOfItem(atPath: exported.path)[.size] as? Int64) ?? 0
         let ratio = origSize > 0 ? Double(expSize) / Double(origSize) * 100 : 100
+        #if DEBUG
         print("📊 EXPORT: \(ByteCountFormatter.string(fromByteCount: origSize, countStyle: .file)) → \(ByteCountFormatter.string(fromByteCount: expSize, countStyle: .file)) (\(String(format: "%.0f%%", ratio)), \(exportMode.rawValue))")
+        #endif
     }
 
     // MARK: - Helpers

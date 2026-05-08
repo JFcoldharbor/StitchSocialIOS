@@ -94,8 +94,12 @@ class HomeFeedService: ObservableObject {
         self.userService = userService
         self.canResumeSession = viewHistory.canResumeSession()
         
+        #if DEBUG
         print("🏠 HOME FEED: Initialized with view history tracking")
+        #endif
+        #if DEBUG
         print(viewHistory.debugStatus())
+        #endif
     }
     
     // MARK: - Session Resume
@@ -173,21 +177,29 @@ class HomeFeedService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
+        #if DEBUG
         print("🔍 DEEP DISCOVERY: Loading diverse feed for user \(userID)")
+        #endif
         
         let followingIDs = try await getCachedFollowingIDs(userID: userID)
         guard !followingIDs.isEmpty else {
+            #if DEBUG
             print("🔍 DEEP DISCOVERY: No following found")
+            #endif
             return []
         }
         
         allFollowerIDs = followingIDs
+        #if DEBUG
         print("🔍 DEEP DISCOVERY: Found \(followingIDs.count) following users")
+        #endif
         
         let recentlySeenIDs = viewHistory.getRecentlySeenVideoIDs()
         var excludeIDs = recentlySeenIDs
         excludeIDs.formUnion(currentFeedVideoIDs)
+        #if DEBUG
         print("🔍 DEEP DISCOVERY: Excluding \(excludeIDs.count) seen + already-loaded videos")
+        #endif
         
         var allThreads: [ThreadData] = []
         
@@ -197,7 +209,9 @@ class HomeFeedService: ObservableObject {
             excludeVideoIDs: excludeIDs
         )
         allThreads.append(contentsOf: recentThreads)
+        #if DEBUG
         print("🔍 DEEP DISCOVERY: Loaded \(recentThreads.count) recent threads")
+        #endif
         
         let mediumOldThreads = try await getMediumOldContent(
             followingIDs: followingIDs,
@@ -205,7 +219,9 @@ class HomeFeedService: ObservableObject {
             excludeVideoIDs: excludeIDs
         )
         allThreads.append(contentsOf: mediumOldThreads)
+        #if DEBUG
         print("🔍 DEEP DISCOVERY: Loaded \(mediumOldThreads.count) medium-old threads")
+        #endif
         
         let olderThreads = try await getOlderContent(
             followingIDs: followingIDs,
@@ -213,7 +229,9 @@ class HomeFeedService: ObservableObject {
             excludeVideoIDs: excludeIDs
         )
         allThreads.append(contentsOf: olderThreads)
+        #if DEBUG
         print("🔍 DEEP DISCOVERY: Loaded \(olderThreads.count) older threads")
+        #endif
         
         let deepCutThreads = try await getDeepCutContent(
             followingIDs: followingIDs,
@@ -221,12 +239,16 @@ class HomeFeedService: ObservableObject {
             excludeVideoIDs: excludeIDs
         )
         allThreads.append(contentsOf: deepCutThreads)
+        #if DEBUG
         print("🔍 DEEP DISCOVERY: Loaded \(deepCutThreads.count) deep cut threads")
+        #endif
         
         // 📢 SOCIAL SIGNALS: Load megaphone signals from people user follows
         let signals = await SocialSignalService.shared.loadActiveSignals(for: userID)
         activeSocialSignals = signals
+        #if DEBUG
         print("📢 DEEP DISCOVERY: Loaded \(signals.count) social signals for feed injection")
+        #endif
         
         let dedupedThreads = deduplicateThreads(allThreads)
         let shuffledThreads = dedupedThreads.shuffled()
@@ -237,7 +259,9 @@ class HomeFeedService: ObservableObject {
         feedStats.lastRefreshTime = Date()
         feedStats.refreshCount += 1
         
+        #if DEBUG
         print("✅ DEEP DISCOVERY: Loaded \(shuffledThreads.count) total threads with diverse time range")
+        #endif
         return shuffledThreads
     }
     
@@ -349,7 +373,9 @@ class HomeFeedService: ObservableObject {
         }
         
         followerRotationIndex += followersPerBatch
+        #if DEBUG
         print("🔄 FOLLOWER ROTATION: Using batch starting at \(startIndex)")
+        #endif
         return batch
     }
     
@@ -424,7 +450,9 @@ class HomeFeedService: ObservableObject {
                     currentFeedVideoIDs.remove(thread.parentVideo.id)
                 }
             }
+            #if DEBUG
             print("✅ DEEP DISCOVERY: Added \(shuffledNew.count) diverse threads")
+            #endif
         } else {
             hasMoreContent = false
         }
@@ -540,7 +568,9 @@ class HomeFeedService: ObservableObject {
         // Check cache first — skip Firestore if fresh
         if let cached = threadChildrenCache[threadID],
            !cached.isExpired {
+            #if DEBUG
             print("💾 THREAD CACHE HIT: \(threadID.prefix(8)) — \(cached.children.count) children (saved 1 read)")
+            #endif
             return cached.children
         }
         
@@ -619,7 +649,9 @@ class HomeFeedService: ObservableObject {
         // LRU eviction — prevent unbounded growth
         pruneThreadChildrenCache()
         
+        #if DEBUG
         print("✅ HOME FEED: Loaded \(sortedChildren.count) children for thread \(threadID) (sorted by engagement)")
+        #endif
         return sortedChildren
     }
     
@@ -628,13 +660,17 @@ class HomeFeedService: ObservableObject {
     /// Invalidate cache for a specific thread — call after hype/cool events
     func invalidateThreadChildrenCache(threadID: String) {
         threadChildrenCache.removeValue(forKey: threadID)
+        #if DEBUG
         print("🗑️ THREAD CACHE: Invalidated \(threadID.prefix(8))")
+        #endif
     }
     
     /// Invalidate all thread children caches — call on feed refresh
     func invalidateAllThreadChildrenCaches() {
         threadChildrenCache.removeAll()
+        #if DEBUG
         print("🗑️ THREAD CACHE: Cleared all entries")
+        #endif
     }
     
     /// Prune oldest entries when cache exceeds max size

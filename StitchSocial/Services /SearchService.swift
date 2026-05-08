@@ -29,7 +29,9 @@ class SearchService: ObservableObject {
     // MARK: - Initialization
     
     init() {
+        #if DEBUG
         print("🔍 SEARCH SERVICE: Simple user discovery initialized")
+        #endif
     }
     
     // MARK: - Core Search Methods - SUPER SIMPLE
@@ -37,34 +39,52 @@ class SearchService: ObservableObject {
     /// Search users - if query is empty, show suggested users
     func searchUsers(query: String, limit: Int = 50) async throws -> [BasicUserInfo] {
         
+        #if DEBUG
         print("🔍 DEBUG: ===== SearchUsers Called =====")
+        #endif
+        #if DEBUG
         print("🔍 DEBUG: Query: '\(query)'")
+        #endif
+        #if DEBUG
         print("🔍 DEBUG: Limit: \(limit)")
+        #endif
         
         isLoading = true
         defer {
             isLoading = false
+            #if DEBUG
             print("🔍 DEBUG: ===== SearchUsers Finished =====")
+            #endif
         }
         
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if DEBUG
         print("🔍 DEBUG: Trimmed query: '\(trimmedQuery)'")
+        #endif
+        #if DEBUG
         print("🔍 DEBUG: Query is empty: \(trimmedQuery.isEmpty)")
+        #endif
         
         // NEW: If empty query, show personalized suggestions
         if trimmedQuery.isEmpty {
+            #if DEBUG
             print("🔍 DEBUG: Taking getSuggestedUsers path with limit: \(limit)")
+            #endif
             return try await getSuggestedUsers(limit: limit)
         }
         
         // FIXED: If has query, do comprehensive search with proper limit
+        #if DEBUG
         print("🔍 DEBUG: Taking searchUsersByText path with limit: \(limit)")
+        #endif
         return try await searchUsersByText(query: trimmedQuery, limit: limit)
     }
     
     /// Get personalized user suggestions based on follows and activity
     func getSuggestedUsers(limit: Int = 50) async throws -> [BasicUserInfo] {
+        #if DEBUG
         print("💡 SUGGESTIONS: Generating personalized user suggestions")
+        #endif
         
         guard let currentUserID = auth.currentUser?.uid else {
             // Not logged in, show popular users
@@ -94,7 +114,9 @@ class SearchService: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("💡 SUGGESTIONS: Added \(mutualFollows.count) mutual follow suggestions")
+        #endif
         
         // 3. Fill remaining with trending/active users
         if suggestions.count < limit {
@@ -111,10 +133,14 @@ class SearchService: ObservableObject {
                 }
             }
             
+            #if DEBUG
             print("💡 SUGGESTIONS: Added \(trending.count) trending users")
+            #endif
         }
         
+        #if DEBUG
         print("✅ SUGGESTIONS: Returning \(suggestions.count) personalized suggestions")
+        #endif
         return suggestions
     }
     
@@ -125,7 +151,9 @@ class SearchService: ObservableObject {
             .getDocuments()
         
         let ids = Set(snapshot.documents.map { $0.data()["followingID"] as? String ?? "" }.filter { !$0.isEmpty })
+        #if DEBUG
         print("👥 FOLLOWS: User follows \(ids.count) people")
+        #endif
         return ids
     }
     
@@ -167,7 +195,9 @@ class SearchService: ObservableObject {
             .prefix(limit)
             .map { $0.key }
         
+        #if DEBUG
         print("🤝 MUTUAL: Found \(topCandidates.count) mutual follow candidates")
+        #endif
         
         // Fetch user details
         return try await fetchUsersByIDs(Array(topCandidates))
@@ -213,23 +243,35 @@ class SearchService: ObservableObject {
     /// Get all users for browsing - SIMPLE QUERY, NO INDEXES + DEBUG
     func getAllUsers(limit: Int = 50) async throws -> [BasicUserInfo] {
         
+        #if DEBUG
         print("🔍 DEBUG: getAllUsers called with limit: \(limit)")
+        #endif
         
         do {
             let currentUserID = auth.currentUser?.uid
+            #if DEBUG
             print("🔍 DEBUG: Current user ID: \(currentUserID ?? "nil")")
+            #endif
             
             // SIMPLE: Just get users ordered by creation date (no composite index needed)
             let query = db.collection(FirebaseSchema.Collections.users)
                 .order(by: FirebaseSchema.UserDocument.createdAt, descending: true)
                 .limit(to: limit + 10) // Extra to account for filtering current user
             
+            #if DEBUG
             print("🔍 DEBUG: Executing query on collection: \(FirebaseSchema.Collections.users)")
+            #endif
+            #if DEBUG
             print("🔍 DEBUG: Query orderBy: \(FirebaseSchema.UserDocument.createdAt)")
+            #endif
+            #if DEBUG
             print("🔍 DEBUG: Query limit: \(limit + 10)")
+            #endif
             
             let snapshot = try await query.getDocuments()
+            #if DEBUG
             print("🔍 DEBUG: Query returned \(snapshot.documents.count) documents")
+            #endif
             
             // Debug each document
             for (index, doc) in snapshot.documents.enumerated() {
@@ -238,15 +280,21 @@ class SearchService: ObservableObject {
                 let displayName = data[FirebaseSchema.UserDocument.displayName] as? String ?? "unknown"
                 let isVerified = data[FirebaseSchema.UserDocument.isVerified] as? Bool ?? false
                 let clout = data[FirebaseSchema.UserDocument.clout] as? Int ?? 0
+                #if DEBUG
                 print("🔍 DEBUG: Doc \(index): ID=\(doc.documentID), username=\(username), displayName=\(displayName), verified=\(isVerified), clout=\(clout)")
+                #endif
             }
             
             let users = processUserDocuments(snapshot.documents, currentUserID: currentUserID)
+            #if DEBUG
             print("🔍 DEBUG: After processing and filtering current user: \(users.count) users")
+            #endif
             
             // Debug processed users
             for (index, user) in users.enumerated() {
+                #if DEBUG
                 print("🔍 DEBUG: User \(index): \(user.username) (\(user.displayName)) - verified: \(user.isVerified), clout: \(user.clout)")
+                #endif
             }
             
             // Sort in memory: verified first, then by clout
@@ -255,26 +303,44 @@ class SearchService: ObservableObject {
                 if !user1.isVerified && user2.isVerified { return false }
                 return user1.clout > user2.clout
             }
+            #if DEBUG
             print("🔍 DEBUG: After sorting: \(sortedUsers.count) users")
+            #endif
             
             let limitedUsers = Array(sortedUsers.prefix(limit))
+            #if DEBUG
             print("🔍 DEBUG: After applying limit \(limit): \(limitedUsers.count) users")
+            #endif
             
             // Debug final users
             for (index, user) in limitedUsers.enumerated() {
+                #if DEBUG
                 print("🔍 DEBUG: Final User \(index): \(user.username) (\(user.displayName)) - verified: \(user.isVerified), clout: \(user.clout)")
+                #endif
             }
             
+            #if DEBUG
             print("✅ SEARCH SERVICE: Loaded \(limitedUsers.count) users for browsing")
+            #endif
             return limitedUsers
             
         } catch {
+            #if DEBUG
             print("❌ SEARCH SERVICE: Failed to load all users: \(error)")
+            #endif
+            #if DEBUG
             print("🔍 DEBUG: Error details: \(error.localizedDescription)")
+            #endif
             if let firestoreError = error as NSError? {
+                #if DEBUG
                 print("🔍 DEBUG: Error domain: \(firestoreError.domain)")
+                #endif
+                #if DEBUG
                 print("🔍 DEBUG: Error code: \(firestoreError.code)")
+                #endif
+                #if DEBUG
                 print("🔍 DEBUG: Error userInfo: \(firestoreError.userInfo)")
+                #endif
             }
             throw StitchError.processingError("Failed to load users: \(error.localizedDescription)")
         }
@@ -283,26 +349,36 @@ class SearchService: ObservableObject {
     /// Search users by text - COMPREHENSIVE SEARCH + DEBUG + FIXED LIMIT
     func searchUsersByText(query: String, limit: Int = 20) async throws -> [BasicUserInfo] {
         
+        #if DEBUG
         print("🔍 DEBUG: searchUsersByText called with query: '\(query)', limit: \(limit)")
+        #endif
         
         do {
             let currentUserID = auth.currentUser?.uid
             let lowercaseQuery = query.lowercased()
+            #if DEBUG
             print("🔍 DEBUG: Lowercase query: '\(lowercaseQuery)'")
+            #endif
+            #if DEBUG
             print("🔍 DEBUG: Current user ID: \(currentUserID ?? "nil")")
+            #endif
             
             var allUsers: [BasicUserInfo] = []
             var existingIDs = Set<String>()
             
             // PRIMARY: Search using searchableText field (efficient case-insensitive search)
+            #if DEBUG
             print("🔍 DEBUG: === SEARCHING BY searchableText ===")
+            #endif
             let searchableQuery = db.collection(FirebaseSchema.Collections.users)
                 .whereField(FirebaseSchema.UserDocument.searchableText, isGreaterThanOrEqualTo: lowercaseQuery)
                 .whereField(FirebaseSchema.UserDocument.searchableText, isLessThan: lowercaseQuery + "\u{f8ff}")
                 .limit(to: limit * 2)
             
             let searchableSnapshot = try await searchableQuery.getDocuments()
+            #if DEBUG
             print("🔍 DEBUG: searchableText query returned \(searchableSnapshot.documents.count) documents")
+            #endif
             
             let searchableUsers = processUserDocuments(searchableSnapshot.documents, currentUserID: currentUserID)
             for user in searchableUsers {
@@ -311,18 +387,24 @@ class SearchService: ObservableObject {
                     existingIDs.insert(user.id)
                 }
             }
+            #if DEBUG
             print("🔍 DEBUG: Added \(searchableUsers.count) users from searchableText")
+            #endif
             
             // FALLBACK 1: Search by username prefix (for users without searchableText)
             if allUsers.count < limit {
+                #if DEBUG
                 print("🔍 DEBUG: === FALLBACK: SEARCHING BY USERNAME ===")
+                #endif
                 let usernameQuery = db.collection(FirebaseSchema.Collections.users)
                     .whereField(FirebaseSchema.UserDocument.username, isGreaterThanOrEqualTo: lowercaseQuery)
                     .whereField(FirebaseSchema.UserDocument.username, isLessThan: lowercaseQuery + "\u{f8ff}")
                     .limit(to: limit)
                 
                 let usernameSnapshot = try await usernameQuery.getDocuments()
+                #if DEBUG
                 print("🔍 DEBUG: Username query returned \(usernameSnapshot.documents.count) documents")
+                #endif
                 
                 let usernameUsers = processUserDocuments(usernameSnapshot.documents, currentUserID: currentUserID)
                 for user in usernameUsers {
@@ -335,13 +417,17 @@ class SearchService: ObservableObject {
             
             // FALLBACK 2: In-memory search for comprehensive coverage
             if allUsers.count < limit {
+                #if DEBUG
                 print("🔍 DEBUG: === FALLBACK: IN-MEMORY SEARCH ===")
+                #endif
                 do {
                     let allUsersQuery = db.collection(FirebaseSchema.Collections.users)
                         .limit(to: 1000)  // INCREASED: from 300 to 1000 for better coverage
                     
                     let allSnapshot = try await allUsersQuery.getDocuments()
+                    #if DEBUG
                     print("🔍 DEBUG: In-memory search fetched \(allSnapshot.documents.count) documents")
+                    #endif
                     
                     let allFoundUsers = processUserDocuments(allSnapshot.documents, currentUserID: currentUserID)
                     
@@ -351,7 +437,9 @@ class SearchService: ObservableObject {
                         user.displayName.lowercased().contains(lowercaseQuery)
                     }
                     
+                    #if DEBUG
                     print("🔍 DEBUG: Memory filter found \(memoryFiltered.count) matching users")
+                    #endif
                     
                     for user in memoryFiltered {
                         if !existingIDs.contains(user.id) {
@@ -360,11 +448,15 @@ class SearchService: ObservableObject {
                         }
                     }
                 } catch {
+                    #if DEBUG
                     print("🔍 DEBUG: In-memory search failed: \(error)")
+                    #endif
                 }
             }
             
+            #if DEBUG
             print("🔍 DEBUG: Total users found before sorting: \(allUsers.count)")
+            #endif
             
             // Sort results: exact matches first, then by relevance
             let sortedUsers = allUsers.sorted { user1, user2 in
@@ -398,19 +490,29 @@ class SearchService: ObservableObject {
             }
             
             let finalUsers = Array(sortedUsers.prefix(limit))
+            #if DEBUG
             print("🔍 DEBUG: Final result count: \(finalUsers.count)")
+            #endif
             
             // Debug final results
             for (index, user) in finalUsers.enumerated() {
+                #if DEBUG
                 print("🔍 DEBUG: Final result \(index): \(user.username) (\(user.displayName)) - verified: \(user.isVerified), clout: \(user.clout)")
+                #endif
             }
             
+            #if DEBUG
             print("✅ SEARCH SERVICE: Found \(finalUsers.count) users for query: '\(query)'")
+            #endif
             return finalUsers
             
         } catch {
+            #if DEBUG
             print("❌ SEARCH SERVICE: Search failed: \(error)")
+            #endif
+            #if DEBUG
             print("🔍 DEBUG: Search error details: \(error.localizedDescription)")
+            #endif
             throw StitchError.processingError("Search failed: \(error.localizedDescription)")
         }
     }
@@ -427,7 +529,9 @@ class SearchService: ObservableObject {
             do {
                 return try await getRecentVideos(limit: limit)
             } catch {
+                #if DEBUG
                 print("⚠️ SEARCH SERVICE: Recent videos failed, returning empty array")
+                #endif
                 return []
             }
         }
@@ -436,7 +540,9 @@ class SearchService: ObservableObject {
         do {
             return try await searchVideosByTitle(query: trimmedQuery, limit: limit)
         } catch {
+            #if DEBUG
             print("⚠️ SEARCH SERVICE: Video search failed, returning empty array")
+            #endif
             return []
         }
     }
@@ -457,11 +563,15 @@ class SearchService: ObservableObject {
             let allVideos = processVideoDocuments(snapshot.documents)
             let limitedVideos = Array(allVideos.prefix(limit))
             
+            #if DEBUG
             print("✅ SEARCH SERVICE: Loaded \(limitedVideos.count) recent videos (no index required)")
+            #endif
             return limitedVideos
             
         } catch {
+            #if DEBUG
             print("❌ SEARCH SERVICE: Failed to load recent videos: \(error)")
+            #endif
             return []
         }
     }
@@ -490,11 +600,15 @@ class SearchService: ObservableObject {
             }
             
             let limitedVideos = Array(activeVideos.prefix(limit))
+            #if DEBUG
             print("✅ SEARCH SERVICE: Found \(limitedVideos.count) videos for query: '\(query)' (no index required)")
+            #endif
             return limitedVideos
             
         } catch {
+            #if DEBUG
             print("❌ SEARCH SERVICE: Video search failed: \(error)")
+            #endif
             return []
         }
     }
@@ -504,24 +618,34 @@ class SearchService: ObservableObject {
     /// Convert user documents to BasicUserInfo objects + DEBUG
     private func processUserDocuments(_ documents: [DocumentSnapshot], currentUserID: String?) -> [BasicUserInfo] {
         
+        #if DEBUG
         print("🔍 DEBUG: processUserDocuments called with \(documents.count) documents")
+        #endif
+        #if DEBUG
         print("🔍 DEBUG: Current user ID to filter: \(currentUserID ?? "nil")")
+        #endif
         
         var users: [BasicUserInfo] = []
         var filteredCount = 0
         
         for (index, document) in documents.enumerated() {
+            #if DEBUG
             print("🔍 DEBUG: Processing document \(index): \(document.documentID)")
+            #endif
             
             // Skip current user
             if let currentUserID = currentUserID, document.documentID == currentUserID {
+                #if DEBUG
                 print("🔍 DEBUG: Skipping current user: \(document.documentID)")
+                #endif
                 filteredCount += 1
                 continue
             }
             
             let data = document.data() ?? [:]
+            #if DEBUG
             print("🔍 DEBUG: Document data keys: \(Array(data.keys))")
+            #endif
             
             let username = data[FirebaseSchema.UserDocument.username] as? String ?? "unknown"
             let displayName = data[FirebaseSchema.UserDocument.displayName] as? String ?? "User"
@@ -531,10 +655,14 @@ class SearchService: ObservableObject {
             let profileImageURL = data[FirebaseSchema.UserDocument.profileImageURL] as? String
             let createdAt = (data[FirebaseSchema.UserDocument.createdAt] as? Timestamp)?.dateValue() ?? Date()
             
+            #if DEBUG
             print("🔍 DEBUG: Extracted data - username: \(username), displayName: \(displayName), tier: \(tierString), clout: \(clout), verified: \(isVerified)")
+            #endif
             
             let tier = UserTier(rawValue: tierString) ?? .rookie
+            #if DEBUG
             print("🔍 DEBUG: Converted tier: \(tier)")
+            #endif
             
             let user = BasicUserInfo(
                 id: document.documentID,
@@ -548,10 +676,14 @@ class SearchService: ObservableObject {
             )
             
             users.append(user)
+            #if DEBUG
             print("🔍 DEBUG: Added user \(users.count): \(user.username)")
+            #endif
         }
         
+        #if DEBUG
         print("🔍 DEBUG: Processed \(documents.count) documents, filtered \(filteredCount), returning \(users.count) users")
+        #endif
         return users
     }
     
@@ -637,13 +769,19 @@ class SearchService: ObservableObject {
     
     /// Test method to verify service is working
     func testSearchService() async {
+        #if DEBUG
         print("🔍 SEARCH SERVICE: Testing simple user discovery...")
+        #endif
         
         do {
             let users = try await getAllUsers(limit: 5)
+            #if DEBUG
             print("✅ SEARCH SERVICE: Successfully loaded \(users.count) users")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ SEARCH SERVICE: Test failed: \(error)")
+            #endif
         }
     }
 }

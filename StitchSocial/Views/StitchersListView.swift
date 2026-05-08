@@ -670,7 +670,9 @@ class StitchersViewModel: ObservableObject {
             hasMoreFollowers = followerIDs.count > loadedFollowerCount
             
         } catch {
+            #if DEBUG
             print("❌ STITCHERS: Failed to load followers: \(error)")
+            #endif
         }
         
         isLoadingFollowers = false
@@ -696,7 +698,9 @@ class StitchersViewModel: ObservableObject {
             await followManager.loadFollowStates(for: moreUsers.map { $0.id })
             
         } catch {
+            #if DEBUG
             print("❌ STITCHERS: Failed to load more followers: \(error)")
+            #endif
         }
         
         isLoadingMoreFollowers = false
@@ -721,7 +725,9 @@ class StitchersViewModel: ObservableObject {
             hasMoreFollowing = followingIDs.count > loadedFollowingCount
             
         } catch {
+            #if DEBUG
             print("❌ STITCHERS: Failed to load following: \(error)")
+            #endif
         }
         
         isLoadingFollowing = false
@@ -747,7 +753,9 @@ class StitchersViewModel: ObservableObject {
             await followManager.loadFollowStates(for: moreUsers.map { $0.id })
             
         } catch {
+            #if DEBUG
             print("❌ STITCHERS: Failed to load more following: \(error)")
+            #endif
         }
         
         isLoadingMoreFollowing = false
@@ -794,7 +802,9 @@ class StitchersViewModel: ObservableObject {
         // } catch {
         //     print("❌ STITCHERS: Failed to toggle block: \(error)")
         // }
+        #if DEBUG
         print("⚠️ STITCHERS: Block functionality not yet implemented")
+        #endif
     }
     
     func removeFollower(_ followerID: String) async {
@@ -806,7 +816,9 @@ class StitchersViewModel: ObservableObject {
         // } catch {
         //     print("❌ STITCHERS: Failed to remove follower: \(error)")
         // }
+        #if DEBUG
         print("⚠️ STITCHERS: Remove follower functionality not yet implemented")
+        #endif
     }
 }
 

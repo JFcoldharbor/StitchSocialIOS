@@ -158,24 +158,36 @@ struct Config {
         /// Firebase configuration validation
         static func validateConfiguration() -> Bool {
             guard !databaseName.isEmpty else {
+                #if DEBUG
                 print("❌ CONFIG: Firebase database name is empty")
+                #endif
                 return false
             }
             
             guard !fcmServerKey.isEmpty else {
+                #if DEBUG
                 print("❌ CONFIG: FCM server key is empty")
+                #endif
                 return false
             }
             
+            #if DEBUG
             print("✅ CONFIG: Firebase database configured - \(databaseName)")
+            #endif
+            #if DEBUG
             print("✅ CONFIG: FCM server key configured - \(fcmServerKey.prefix(20))...")
+            #endif
             
             if performanceMonitoringEnabled {
+                #if DEBUG
                 print("✅ CONFIG: Performance Monitoring enabled (sample rate: \(traceSamplingRate))")
+                #endif
             }
             
             if let rtdbURL = realtimeDatabaseURL {
+                #if DEBUG
                 print("✅ CONFIG: Realtime Database configured - \(rtdbURL)")
+                #endif
             }
             
             return true
@@ -400,39 +412,85 @@ struct Config {
     static func printConfigurationStatus() {
         let validation = validateConfiguration()
         
+        #if DEBUG
         print("🔧 CONFIG STATUS:")
+        #endif
+        #if DEBUG
         print("   Environment: \(Environment.current.displayName)")
+        #endif
+        #if DEBUG
         print("   App Version: \(App.version) (\(App.buildNumber))")
+        #endif
+        #if DEBUG
         print("   AI Enabled: \(Features.enableAIAnalysis)")
+        #endif
+        #if DEBUG
         print("   OpenAI Key: \(API.OpenAI.apiKey.isEmpty ? "❌ Missing" : "✅ Configured (\(API.OpenAI.apiKey.count) chars)")")
+        #endif
+        #if DEBUG
         print("   Firebase DB: \(Firebase.databaseName)")
+        #endif
+        #if DEBUG
         print("   FCM Key: \(Firebase.fcmServerKey.isEmpty ? "❌ Missing" : "✅ Configured")")
+        #endif
+        #if DEBUG
         print("   Push Notifications: \(Features.enablePushNotifications ? "✅ Enabled" : "❌ Disabled")")
+        #endif
+        #if DEBUG
         print("   Performance Monitoring: \(Features.enablePerformanceMonitoring ? "✅ Enabled" : "❌ Disabled")")
+        #endif
+        #if DEBUG
         print("   Realtime Database: \(Features.enableRealtimeDatabase ? "✅ Enabled" : "❌ Disabled")")
+        #endif
+        #if DEBUG
         print("   Bundle ID: \(App.bundleID)")
+        #endif
+        #if DEBUG
         print("   Debug Logging: \(Features.enableDebugLogging ? "✅" : "❌")")
+        #endif
         
         if Features.enableRealtimeDatabase {
+            #if DEBUG
             print("   Realtime Features:")
+            #endif
+            #if DEBUG
             print("      - Viewer Counts: \(Features.enableLiveViewerCounts ? "✅" : "❌")")
+            #endif
+            #if DEBUG
             print("      - User Presence: \(Features.enableUserPresence ? "✅" : "❌")")
+            #endif
+            #if DEBUG
             print("      - Live Comments: \(Features.enableLiveComments ? "✅" : "❌")")
+            #endif
+            #if DEBUG
             print("      - Live Reactions: \(Features.enableLiveReactions ? "✅" : "❌")")
+            #endif
+            #if DEBUG
             print("      - Trending: \(Features.enableTrendingScores ? "✅" : "❌")")
+            #endif
+            #if DEBUG
             print("      - Leaderboard: \(Features.enableLeaderboard ? "✅" : "❌")")
+            #endif
         }
         
         if !validation.isValid {
+            #if DEBUG
             print("   ⚠️ Issues Found:")
+            #endif
             for issue in validation.issues {
+                #if DEBUG
                 print("      - \(issue)")
+                #endif
             }
         } else {
+            #if DEBUG
             print("   ✅ Configuration Valid")
+            #endif
         }
         
+        #if DEBUG
         print("FIREBASE: Configuration validated")
+        #endif
     }
 }
 
@@ -447,11 +505,17 @@ struct ConfigValidationResult {
     /// Print validation summary
     func printSummary() {
         if isValid {
+            #if DEBUG
             print("✅ CONFIG: All validation checks passed")
+            #endif
         } else {
+            #if DEBUG
             print("❌ CONFIG: Validation failed with \(issues.count) issue(s):")
+            #endif
             for issue in issues {
+                #if DEBUG
                 print("   - \(issue)")
+                #endif
             }
         }
     }

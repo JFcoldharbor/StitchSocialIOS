@@ -1028,10 +1028,14 @@ class PromoVideoExporter {
             DispatchQueue.main.async {
                 switch exporter.status {
                 case .completed:
+                    #if DEBUG
                     print("✅ PROMO: Export completed — \(outputURL.lastPathComponent)")
+                    #endif
                     completion(.success(outputURL))
                 case .failed:
+                    #if DEBUG
                     print("❌ PROMO: Export failed — \(exporter.error?.localizedDescription ?? "")")
+                    #endif
                     completion(.failure(exporter.error ?? PromoExportError.exporterFailed))
                 default:
                     completion(.failure(PromoExportError.exporterFailed))

@@ -116,7 +116,9 @@ class AutoSplitEngine: ObservableObject {
         guard newDuration > 0 else { return }
         duration = newDuration
         generateAutoSegments()
+        #if DEBUG
         print("📤 AUTO SPLIT: Duration set to \(String(format: "%.1f", newDuration))s, generated \(segments.count) segments")
+        #endif
     }
     
     // MARK: - Auto-Segment Generation

@@ -98,7 +98,9 @@ struct ContextualVideoOverlay: View {
     @State private var showingViewers = false
     @State private var selectedUserID: String? {
         didSet {
+            #if DEBUG
             print("Ã°Å¸â€Â STATE: selectedUserID changed from \(oldValue ?? "nil") to \(selectedUserID ?? "nil")")
+            #endif
         }
     }
     
@@ -428,20 +430,26 @@ struct ContextualVideoOverlay: View {
         if context == .carousel {
             // In carousel, can reply up to depth 19 (so reply creates depth 20 max)
             guard video.conversationDepth < 19 else {
+                #if DEBUG
                 print("ðŸš« CAROUSEL: At max depth - show spinoff instead")
+                #endif
                 return false
             }
             
             // PARTICIPANT CHECK: Only conversation participants can reply
             // Third parties should see spinoff, not reply
             if !isConversationParticipant {
+                #if DEBUG
                 print("ðŸš« CAROUSEL: Not a participant - show spinoff instead")
+                #endif
                 return false
             }
             
             // Participant CAN reply, but NOT to their own video
             if isUserVideo {
+                #if DEBUG
                 print("ðŸš« CAROUSEL: Own video - no self-stitch in conversations")
+                #endif
                 return false
             }
             
@@ -450,12 +458,16 @@ struct ContextualVideoOverlay: View {
         
         // Original logic for other contexts
         guard video.conversationDepth <= 1 else {
+            #if DEBUG
             print("ðŸš« STITCH: Blocked - depth \(video.conversationDepth) > 1")
+            #endif
             return false
         }
         if isUserVideo {
             let allowed = allowsSelfReply
+            #if DEBUG
             print("ðŸŽ¬ STITCH: Own video - context: \(context), allowsSelfReply: \(allowed)")
+            #endif
             return allowed
         }
         return true
@@ -584,7 +596,9 @@ struct ContextualVideoOverlay: View {
                             ))
                         }
                     } catch {
+                        #if DEBUG
                         print("Ã¢Å¡Â Ã¯Â¸Â CACHE: Failed to load user \(userID): \(error)")
+                        #endif
                     }
                     return nil
                 }
@@ -601,7 +615,9 @@ struct ContextualVideoOverlay: View {
         await MainActor.run {
             NotificationCenter.default.post(name: NSNotification.Name("UserDataCacheUpdated"), object: nil)
         }
+        #if DEBUG
         print("Ã¢Å“â€¦ CACHE: Loaded \(userIDs.count) users concurrently")
+        #endif
     }
     
     private static func clearExpiredCache() {
@@ -696,12 +712,16 @@ struct ContextualVideoOverlay: View {
                 viewingUserID: userIDToShow
             )
                 .onAppear {
+                    #if DEBUG
                     print("Ã°Å¸â€œÂ± FULLSCREEN: CreatorProfileView appeared for userID: \(userIDToShow)")
+                    #endif
                     NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                     NotificationCenter.default.post(name: NSNotification.Name("FullscreenProfileOpened"), object: nil)
                 }
                 .onDisappear {
+                    #if DEBUG
                     print("Ã°Å¸â€œÂ± FULLSCREEN: CreatorProfileView disappeared")
+                    #endif
                     selectedUserID = nil
                     NotificationCenter.default.post(name: NSNotification.Name("FullscreenProfileClosed"), object: nil)
                 }
@@ -738,7 +758,9 @@ struct ContextualVideoOverlay: View {
                     currentVideo = updatedVideo
                     currentTitle = updatedVideo.title
                     videoDescription = updatedVideo.description.isEmpty ? nil : updatedVideo.description
+                    #if DEBUG
                     print("Ã¢Å“ÂÃ¯Â¸Â EDIT: Video updated - \(updatedVideo.title)")
+                    #endif
                 },
                 onDismiss: {
                     showingEditSheet = false
@@ -864,12 +886,16 @@ struct ContextualVideoOverlay: View {
                     isUserVideo: isUserVideo,
                     canEdit: canEditVideo,
                     onViewersTap: {
+                        #if DEBUG
                         print("Ã°Å¸â€˜ÂÃ¯Â¸Â VIEWS: Tapped views button")
+                        #endif
                         showingViewers = true
                         onAction?(.viewers)
                     },
                     onEditTap: {
+                        #if DEBUG
                         print("Ã¢Å“ÂÃ¯Â¸Â EDIT: Opening edit sheet from profile")
+                        #endif
                         showingEditSheet = true
                         onAction?(.edit)
                     }
@@ -1042,10 +1068,14 @@ struct ContextualVideoOverlay: View {
                 await MainActor.run {
                     resolvedThreadData = data
                 }
+                #if DEBUG
                 print("📦 THREAD CACHE: Loaded \(threadID) (\(data.childVideos.count) children)")
+                #endif
             } catch {
                 // Non-fatal — share button just won't show Thread Collage
+                #if DEBUG
                 print("⚠️ THREAD CACHE: Failed to load \(threadID): \(error.localizedDescription)")
+                #endif
             }
         }
     }
@@ -1061,10 +1091,14 @@ struct ContextualVideoOverlay: View {
             Self.getCachedUserData(userID: userID) == nil
         }
         guard !usersToLoad.isEmpty else {
+            #if DEBUG
             print("Ã¢Å“â€¦ PRELOAD: All users already cached")
+            #endif
             return
         }
+        #if DEBUG
         print("Ã°Å¸Å½Â¬ PRELOAD: Loading \(usersToLoad.count) users eagerly")
+        #endif
         await Self.loadUserDataBatch(userIDs: usersToLoad)
     }
     
@@ -1095,7 +1129,9 @@ struct ContextualVideoOverlay: View {
                     engagement.viewCount = viewCount
                     engagement.lastEngagementAt = Date()
                     videoEngagement = engagement
+                    #if DEBUG
                     print("Ã°Å¸â€â€ž ENGAGEMENT: Updated counts - H:\(hypeCount) C:\(coolCount) V:\(viewCount)")
+                    #endif
                 }
             }
         }
@@ -1128,9 +1164,13 @@ struct ContextualVideoOverlay: View {
                 currentVideo = freshVideo
                 currentTitle = freshVideo.title
             }
+            #if DEBUG
             print("Ã¢Å“â€¦ CONTEXTUAL OVERLAY: Loaded fresh engagement data - \(freshVideo.hypeCount) hypes, \(freshVideo.coolCount) cools, \(freshVideo.viewCount) views")
+            #endif
         } catch {
+            #if DEBUG
             print("Ã¢Å¡Â Ã¯Â¸Â CONTEXTUAL OVERLAY: Failed to load engagement data - \(error)")
+            #endif
         }
     }
     
@@ -1143,9 +1183,13 @@ struct ContextualVideoOverlay: View {
                 userID: currentUserID,
                 watchTime: 5.0
             )
+            #if DEBUG
             print("CONTEXTUAL OVERLAY: View tracked after 5 seconds for video \(video.id)")
+            #endif
         } catch {
+            #if DEBUG
             print("CONTEXTUAL OVERLAY: Failed to track view - \(error)")
+            #endif
         }
     }
     
@@ -1165,7 +1209,9 @@ struct ContextualVideoOverlay: View {
                 stitchCount: video.replyCount,
                 videoURL: video.videoURL
             )
+            #if DEBUG
             print("Ã°Å¸Å½Â¬ STITCH CONTEXT: Stitching to THREAD (depth 0) Ã¢â€ â€™ will create depth 1 child")
+            #endif
             return .stitchToThread(threadID: video.id, threadInfo: threadInfo)
         } else {
             let videoInfo = CameraVideoInfo(
@@ -1175,7 +1221,9 @@ struct ContextualVideoOverlay: View {
                 thumbnailURL: video.thumbnailURL,
                 videoURL: video.videoURL
             )
+            #if DEBUG
             print("Ã°Å¸Å½Â¬ STITCH CONTEXT: Replying to CHILD (depth \(video.conversationDepth)) Ã¢â€ â€™ will create depth \(video.conversationDepth + 1)")
+            #endif
             return .replyToVideo(videoID: video.id, videoInfo: videoInfo)
         }
     }

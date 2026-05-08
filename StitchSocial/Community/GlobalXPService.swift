@@ -104,7 +104,9 @@ class GlobalXPService: ObservableObject {
         // Initialize daily tap usage
         resetTapUsageIfNewDay()
         
+        #if DEBUG
         print("✅ GLOBAL XP: Loaded for \(userID) — Lv \(global.globalLevel), +\(global.tapMultiplierBonus) taps, +\(global.permanentCloutBonus) clout")
+        #endif
         return global
     }
     
@@ -164,7 +166,9 @@ class GlobalXPService: ObservableObject {
         globalXPCache = CachedItem(value: updated, cachedAt: Date(), ttl: globalTTL)
         applyToPublished(updated)
         
+        #if DEBUG
         print("✅ GLOBAL XP: Recalculated — \(totalGlobalXP) XP, Lv \(globalLevel), \(activeCount) communities, +\(tapBonus) taps, +\(newCloutBonus) clout")
+        #endif
         return updated
     }
     
@@ -207,7 +211,9 @@ class GlobalXPService: ObservableObject {
         
         awardedMilestones.insert(level)
         
+        #if DEBUG
         print("🏆 GLOBAL CLOUT: +\(amount) clout awarded to \(userID) at global Lv \(level)")
+        #endif
     }
     
     /// Load previously awarded milestones to prevent double payouts on re-login
@@ -224,7 +230,9 @@ class GlobalXPService: ObservableObject {
                 }
             }
         } catch {
+            #if DEBUG
             print("⚠️ GLOBAL XP: Failed to load milestone history: \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -325,9 +333,13 @@ class GlobalXPService: ObservableObject {
             }
             
             try await batch.commit()
+            #if DEBUG
             print("✅ GLOBAL XP: Synced tap usage for \(tapUsageCache.count) communities")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ GLOBAL XP: Failed to sync tap usage: \(error.localizedDescription)")
+            #endif
         }
     }
     

@@ -84,7 +84,9 @@ struct ContentView: View {
             initializeApp()
         }
         .onChange(of: authService.authState) { oldState, newState in
+            #if DEBUG
             print("🔐 CONTENTVIEW: Auth state changed from \(oldState) to \(newState)")
+            #endif
             if newState == .unauthenticated {
                 selectedTab = .discovery
                 showingOnboarding = false
@@ -101,12 +103,18 @@ struct ContentView: View {
                                 "platform": "ios",
                                 "isActive": true
                             ], merge: true)
+                            #if DEBUG
                             print("📱 FCM: Token stored for user: \(currentUser.id)")
+                            #endif
                         } catch {
+                            #if DEBUG
                             print("📱 FCM: Failed to store token: \(error)")
+                            #endif
                         }
                     } else {
+                        #if DEBUG
                         print("📱 FCM: No token available yet at auth time")
+                        #endif
                     }
                 }
                 Task {
@@ -290,7 +298,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .navigateToProfile)) { notification in
             if let userID = notification.userInfo?["userID"] as? String {
                 selectedTab = .notifications
+                #if DEBUG
                 print("👤 NOTIFICATION: Navigate to profile \(userID)")
+                #endif
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToThread)) { notification in
@@ -339,7 +349,9 @@ struct ContentView: View {
             AnnouncementOverlayView(
                 announcement: announcement,
                 onComplete: {
+                    #if DEBUG
                     print("📢 ANNOUNCEMENT: User completed viewing")
+                    #endif
                     Task {
                         guard let userId = authService.currentUser?.id else { return }
                         try? await announcementService.markAsCompleted(
@@ -369,12 +381,16 @@ struct ContentView: View {
     // MARK: - Video Creation Callback
     
     private func handleVideoCreated(_ videoMetadata: CoreVideoMetadata) {
+        #if DEBUG
         print("VIDEO CREATED: \(videoMetadata.title)")
+        #endif
         createdVideoTitle = videoMetadata.title
         homeFeedRefreshTrigger.toggle()
         showingSuccessMessage = true
         selectedTab = .home
+        #if DEBUG
         print("FEED REFRESH: Triggered")
+        #endif
 
         // ONBOARDING: First video posted — complete onboarding flow
         if OnboardingState.shared.shouldShow {
@@ -389,9 +405,13 @@ struct ContentView: View {
             do {
                 let configValidation = Config.validateConfiguration()
                 if !configValidation.isValid {
+                    #if DEBUG
                     print("CONFIG WARNING: Configuration issues found:")
+                    #endif
                     for issue in configValidation.issues {
+                        #if DEBUG
                         print("   - \(issue)")
+                        #endif
                     }
                 }
                 
@@ -420,7 +440,9 @@ struct ContentView: View {
     private func checkForAnnouncements(userId: String) async {
         do {
             guard let userInfo = try await userService.getUser(id: userId) else {
+                #if DEBUG
                 print("⚠️ ANNOUNCEMENTS: Could not load user info")
+                #endif
                 return
             }
             currentUserInfo = userInfo
@@ -438,43 +460,61 @@ struct ContentView: View {
             )
             
             let pendingCount = AnnouncementService.shared.pendingAnnouncements.count
+            #if DEBUG
             print("📢 ANNOUNCEMENTS: Checked for user \(userId), \(pendingCount) pending")
+            #endif
             
         } catch {
+            #if DEBUG
             print("⚠️ ANNOUNCEMENTS: Failed to check - \(error.localizedDescription)")
+            #endif
         }
     }
     
     // MARK: - Firebase Initialization
     
     private func initializeFirebase() async throws {
+        #if DEBUG
         print("FIREBASE: Verifying initialization...")
+        #endif
     }
     
     // MARK: - Authentication
     
     private func checkAuthenticationState() async throws {
+        #if DEBUG
         print("AUTH: Checking authentication state...")
+        #endif
         try await Task.sleep(nanoseconds: 100_000_000)
         
         if let currentUser = authService.currentUser {
+            #if DEBUG
             print("AUTH: User authenticated - \(currentUser.id)")
+            #endif
             try await loadUserData(userID: currentUser.id)
         } else {
+            #if DEBUG
             print("AUTH: No authenticated user")
+            #endif
         }
     }
     
     private func loadUserData(userID: String) async throws {
         do {
             if let user = try await userService.getUser(id: userID) {
+                #if DEBUG
                 print("USER DATA: Loaded - \(user.username)")
+                #endif
             } else {
+                #if DEBUG
                 print("USER DATA WARNING: User profile not found in database")
+                #endif
             }
         } catch let error as StitchError {
             if case .networkError(let message) = error, message.contains("timeout") {
+                #if DEBUG
                 print("USER DATA WARNING: Load timeout - proceeding")
+                #endif
             } else {
                 throw error
             }
@@ -516,7 +556,9 @@ struct ContentView: View {
     // MARK: - Error Handling
     
     private func handleInitializationError(_ error: Error) async {
+        #if DEBUG
         print("INIT ERROR: \(error)")
+        #endif
         
         let errorDescription: String
         if let stitchError = error as? StitchError {

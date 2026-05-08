@@ -111,14 +111,18 @@ class ThreadViewModel: ObservableObject {
                     self.isLoading = false
                 }
                 
+                #if DEBUG
                 print("✅ THREAD VIEWMODEL: Loaded thread \(threadID) with \(allThreadVideos.count) videos")
+                #endif
                 
             } catch {
                 await MainActor.run {
                     self.errorMessage = error.localizedDescription
                     self.isLoading = false
                 }
+                #if DEBUG
                 print("❌ THREAD VIEWMODEL: Failed to load thread: \(error)")
+                #endif
             }
         }
     }
@@ -178,7 +182,9 @@ class ThreadViewModel: ObservableObject {
     
     /// Get all videos in thread using Firebase query - TEST DATA VERSION
     private func getAllVideosInThread(threadID: String) async throws -> [CoreVideoMetadata] {
+        #if DEBUG
         print("🧪 THREAD VIEWMODEL: Loading TEST DATA - 20 children + 10 stepchildren")
+        #endif
         
         var testVideos: [CoreVideoMetadata] = []
         
@@ -252,7 +258,9 @@ class ThreadViewModel: ObservableObject {
             testVideos.append(stepchildVideo)
         }
         
+        #if DEBUG
         print("🧪 TEST DATA: Generated \(testVideos.count) videos (20 children + 10 stepchildren)")
+        #endif
         return testVideos
     }
     
@@ -298,7 +306,9 @@ class ThreadViewModel: ObservableObject {
                     participants.append(user)
                 }
             } catch {
+                #if DEBUG
                 print("⚠️ THREAD VIEWMODEL: Failed to load participant \(creatorID): \(error)")
+                #endif
             }
         }
         

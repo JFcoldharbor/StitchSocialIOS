@@ -71,7 +71,9 @@ class SmoothSwipeManager: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("✅ OPTIMIZED: Setup \(videos.count) videos with single active player")
+        #endif
     }
     
     /// Get current video
@@ -124,7 +126,9 @@ class SmoothSwipeManager: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("✅ OPTIMIZED: Switched to video \(newIndex + 1)/\(videos.count)")
+        #endif
         return true
     }
     
@@ -166,7 +170,9 @@ class SmoothSwipeManager: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("✅ OPTIMIZED: Switched to video \(newIndex + 1)/\(videos.count)")
+        #endif
         return true
     }
     
@@ -205,7 +211,9 @@ class SmoothSwipeManager: ObservableObject {
             // CRITICAL: Keep paused to save resources
             nextPlayer.pause()
             nextPlayer.isMuted = true
+            #if DEBUG
             print("✅ OPTIMIZED: Preloaded next player (paused)")
+            #endif
         }
     }
     
@@ -232,7 +240,9 @@ class SmoothSwipeManager: ObservableObject {
     
     /// Clean up all players and resources
     func cleanup() {
+        #if DEBUG
         print("🧹 OPTIMIZED: Starting cleanup...")
+        #endif
         
         // Stop and clean current player
         currentPlayer?.pause()
@@ -250,7 +260,9 @@ class SmoothSwipeManager: ObservableObject {
         // Reset state
         currentVideoIndex = 0
         
+        #if DEBUG
         print("✅ OPTIMIZED: Cleanup complete - all players stopped")
+        #endif
     }
     
     /// Clean up all players
@@ -263,7 +275,9 @@ class SmoothSwipeManager: ObservableObject {
         preloadedNextPlayer?.replaceCurrentItem(with: nil)
         preloadedNextPlayer = nil
         
+        #if DEBUG
         print("🧹 OPTIMIZED: All players cleaned up")
+        #endif
     }
     
     // MARK: - Performance Monitoring
@@ -449,10 +463,20 @@ extension View {
 
 extension SmoothSwipeManager {
     func helloWorldTest() {
+        #if DEBUG
         print("👋 OPTIMIZED SWIPE: Hello World - Single player navigation ready")
+        #endif
+        #if DEBUG
         print("⚡ OPTIMIZED SWIPE: Transition duration: \(Int(transitionDuration * 1000))ms")
+        #endif
+        #if DEBUG
         print("🔄 OPTIMIZED SWIPE: Pre-load distance: 1 video (optimized)")
+        #endif
+        #if DEBUG
         print("🎬 OPTIMIZED SWIPE: Using system audio session (no conflicts)")
+        #endif
+        #if DEBUG
         print("💾 OPTIMIZED SWIPE: Memory efficient: Only 1-2 players max")
+        #endif
     }
 }

@@ -165,9 +165,17 @@ struct UserProgressionCalculator {
         let badges = calculateBadgeEligibility(userStats: mockStats)
         let progressScore = calculateProgressionScore(userStats: mockStats, accountAge: 30 * 24 * 60 * 60)
         
+        #if DEBUG
         print("USER PROGRESSION CALCULATOR: Test completed")
+        #endif
+        #if DEBUG
         print("Tier Advancement: \(tierAdvancement?.displayName ?? "None")")
+        #endif
+        #if DEBUG
         print("Badge Count: \(badges.count)")
+        #endif
+        #if DEBUG
         print("Progress Score: \(String(format: "%.1f", progressScore))")
+        #endif
     }
 }

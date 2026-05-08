@@ -361,7 +361,9 @@ class AnnouncementService: ObservableObject {
     ]
     
     private init() {
+        #if DEBUG
         print("📢 ANNOUNCEMENT SERVICE: Initialized with repeat support")
+        #endif
     }
     
     // MARK: - Fetch Announcements (UPDATED with repeat logic)
@@ -370,7 +372,9 @@ class AnnouncementService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
+        #if DEBUG
         print("📢 FETCH: Looking for announcements for user \(userId)")
+        #endif
         
         let snapshot: QuerySnapshot
         do {
@@ -378,11 +382,15 @@ class AnnouncementService: ObservableObject {
                 .whereField("isActive", isEqualTo: true)
                 .getDocuments()
         } catch {
+            #if DEBUG
             print("📢 FETCH: ❌ Query FAILED: \(error)")
+            #endif
             throw error
         }
         
+        #if DEBUG
         print("📢 FETCH: Found \(snapshot.documents.count) active announcements")
+        #endif
         
         var activeAnnouncements: [Announcement] = []
         
@@ -392,7 +400,9 @@ class AnnouncementService: ObservableObject {
                 
                 // Check if still active (not expired)
                 guard announcement.isCurrentlyActive else {
+                    #if DEBUG
                     print("📢 FETCH: ⏭️ Skipping '\(announcement.title)' - not currently active/expired")
+                    #endif
                     continue
                 }
                 
@@ -401,13 +411,17 @@ class AnnouncementService: ObservableObject {
                 // and has expired, this user should never see it
                 let announcementAgeDays = Calendar.current.dateComponents([.day], from: announcement.startDate, to: Date()).day ?? 0
                 if announcementAgeDays > accountAge && announcement.isExpired {
+                    #if DEBUG
                     print("📢 FETCH: ⏭️ Skipping '\(announcement.title)' - user joined after announcement ended")
+                    #endif
                     continue
                 }
                 
                 // Check if user is in target audience
                 guard isUserInAudience(announcement.targetAudience, userTier: userTier, accountAge: accountAge, userId: userId) else {
+                    #if DEBUG
                     print("📢 FETCH: ⏭️ Skipping '\(announcement.title)' - user not in target audience")
+                    #endif
                     continue
                 }
                 
@@ -418,21 +432,29 @@ class AnnouncementService: ObservableObject {
                 let canShow = canShowAnnouncement(announcement: announcement, status: status)
                 
                 if canShow {
+                    #if DEBUG
                     print("📢 FETCH: ✅ Adding '\(announcement.title)' to pending list")
+                    #endif
                     activeAnnouncements.append(announcement)
                 } else {
+                    #if DEBUG
                     print("📢 FETCH: ⏭️ Skipping '\(announcement.title)' - repeat rules not met")
+                    #endif
                 }
                 
             } catch {
+                #if DEBUG
                 print("📢 FETCH: ❌ Failed to decode announcement \(doc.documentID): \(error)")
+                #endif
             }
         }
         
         // Sort by priority
         pendingAnnouncements = activeAnnouncements.sorted { $0.priority.sortOrder < $1.priority.sortOrder }
         
+        #if DEBUG
         print("📢 FETCH: Final pending count = \(pendingAnnouncements.count)")
+        #endif
         
         return pendingAnnouncements
     }
@@ -444,13 +466,17 @@ class AnnouncementService: ObservableObject {
         
         // If no status, user has never seen it - show it
         guard let status = status else {
+            #if DEBUG
             print("📢 REPEAT: No status - first time showing")
+            #endif
             return true
         }
         
         // Check if permanently dismissed
         if status.permanentlyDismissed {
+            #if DEBUG
             print("📢 REPEAT: Permanently dismissed - skip")
+            #endif
             return false
         }
         
@@ -459,7 +485,9 @@ class AnnouncementService: ObservableObject {
         case .once:
             // Only show if never completed
             let canShow = status.completedAt == nil
+            #if DEBUG
             print("📢 REPEAT [once]: completed=\(status.completedAt != nil), canShow=\(canShow)")
+            #endif
             return canShow
             
         case .daily:
@@ -477,7 +505,9 @@ class AnnouncementService: ObservableObject {
     private func canShowDaily(announcement: Announcement, status: UserAnnouncementStatus, now: Date) -> Bool {
         // Check lifetime cap
         if let maxTotal = announcement.maxTotalShows, status.totalShowCount >= maxTotal {
+            #if DEBUG
             print("📢 REPEAT [daily]: Lifetime cap reached (\(status.totalShowCount)/\(maxTotal))")
+            #endif
             return false
         }
         
@@ -492,13 +522,17 @@ class AnnouncementService: ObservableObject {
             let lastDateStart = calendar.startOfDay(for: lastDate)
             if todayStart > lastDateStart {
                 showsTodayCount = 0 // New day, reset count
+                #if DEBUG
                 print("📢 REPEAT [daily]: New day - resetting daily count")
+                #endif
             }
         }
         
         // Check daily limit
         if showsTodayCount >= announcement.maxDailyShows {
+            #if DEBUG
             print("📢 REPEAT [daily]: Daily limit reached (\(showsTodayCount)/\(announcement.maxDailyShows))")
+            #endif
             return false
         }
         
@@ -506,12 +540,16 @@ class AnnouncementService: ObservableObject {
         if announcement.minHoursBetweenShows > 0, let lastShown = status.lastShownAt {
             let hoursSinceLastShow = now.timeIntervalSince(lastShown) / 3600
             if hoursSinceLastShow < announcement.minHoursBetweenShows {
+                #if DEBUG
                 print("📢 REPEAT [daily]: Too soon - \(String(format: "%.1f", hoursSinceLastShow))h since last show (min: \(announcement.minHoursBetweenShows)h)")
+                #endif
                 return false
             }
         }
         
+        #if DEBUG
         print("📢 REPEAT [daily]: ✅ Can show (today: \(showsTodayCount)/\(announcement.maxDailyShows))")
+        #endif
         return true
     }
     
@@ -519,7 +557,9 @@ class AnnouncementService: ObservableObject {
     private func canShowScheduled(announcement: Announcement, status: UserAnnouncementStatus, now: Date) -> Bool {
         // Check lifetime cap
         if let maxTotal = announcement.maxTotalShows, status.totalShowCount >= maxTotal {
+            #if DEBUG
             print("📢 REPEAT [scheduled]: Lifetime cap reached")
+            #endif
             return false
         }
         
@@ -527,12 +567,16 @@ class AnnouncementService: ObservableObject {
         if let lastShown = status.lastShownAt {
             let hoursSinceLastShow = now.timeIntervalSince(lastShown) / 3600
             if hoursSinceLastShow < announcement.minHoursBetweenShows {
+                #if DEBUG
                 print("📢 REPEAT [scheduled]: Too soon - \(String(format: "%.1f", hoursSinceLastShow))h < \(announcement.minHoursBetweenShows)h")
+                #endif
                 return false
             }
         }
         
+        #if DEBUG
         print("📢 REPEAT [scheduled]: ✅ Can show")
+        #endif
         return true
     }
     
@@ -555,7 +599,9 @@ class AnnouncementService: ObservableObject {
             }
             
             if showsTodayCount >= announcement.maxDailyShows {
+                #if DEBUG
                 print("📢 REPEAT [persistent]: Daily limit reached")
+                #endif
                 return false
             }
         }
@@ -564,12 +610,16 @@ class AnnouncementService: ObservableObject {
         if announcement.minHoursBetweenShows > 0, let lastShown = status.lastShownAt {
             let hoursSinceLastShow = now.timeIntervalSince(lastShown) / 3600
             if hoursSinceLastShow < announcement.minHoursBetweenShows {
+                #if DEBUG
                 print("📢 REPEAT [persistent]: Too soon")
+                #endif
                 return false
             }
         }
         
+        #if DEBUG
         print("📢 REPEAT [persistent]: ✅ Can show")
+        #endif
         return true
     }
     
@@ -603,7 +653,9 @@ class AnnouncementService: ObservableObject {
             }
             return try doc.data(as: UserAnnouncementStatus.self)
         } catch {
+            #if DEBUG
             print("📢 STATUS: Error getting status for \(statusId): \(error)")
+            #endif
             return nil
         }
     }
@@ -638,7 +690,9 @@ class AnnouncementService: ObservableObject {
                 "showTimestamps": FieldValue.arrayUnion([Timestamp(date: now)])
             ])
             
+            #if DEBUG
             print("📢 STATUS: Updated show count for \(statusId)")
+            #endif
         } else {
             // Create new status
             let status = UserAnnouncementStatus(
@@ -659,7 +713,9 @@ class AnnouncementService: ObservableObject {
                 permanentlyDismissed: false
             )
             try userStatusCollection.document(statusId).setData(from: status)
+            #if DEBUG
             print("📢 STATUS: Created new status for \(statusId)")
+            #endif
         }
     }
     
@@ -708,18 +764,24 @@ class AnnouncementService: ObservableObject {
         
         try await userStatusCollection.document(statusId).setData(updateData, merge: true)
         
+        #if DEBUG
         print("📢 STATUS: Marked as completed - \(statusId)")
+        #endif
         
         // Remove from pending list
         pendingAnnouncements.removeAll { $0.id == announcementId }
         
         // Check if there are more announcements
         if pendingAnnouncements.isEmpty {
+            #if DEBUG
             print("📢 STATUS: No more announcements, closing overlay")
+            #endif
             isShowingAnnouncement = false
             currentAnnouncement = nil
         } else {
+            #if DEBUG
             print("📢 STATUS: \(pendingAnnouncements.count) more announcement(s) to show")
+            #endif
             try? await Task.sleep(nanoseconds: 300_000_000)
             await MainActor.run {
                 showNextAnnouncementIfNeeded()
@@ -739,7 +801,9 @@ class AnnouncementService: ObservableObject {
             "dismissedAt": Timestamp(date: Date())
         ], merge: true)
         
+        #if DEBUG
         print("📢 STATUS: Permanently dismissed - \(statusId)")
+        #endif
         
         // Remove from pending list
         pendingAnnouncements.removeAll { $0.id == announcementId }
@@ -764,7 +828,9 @@ class AnnouncementService: ObservableObject {
     
     func showNextAnnouncementIfNeeded() {
         guard !pendingAnnouncements.isEmpty else {
+            #if DEBUG
             print("📢 DISPLAY: No pending announcements")
+            #endif
             isShowingAnnouncement = false
             currentAnnouncement = nil
             return
@@ -772,27 +838,39 @@ class AnnouncementService: ObservableObject {
         
         currentAnnouncement = pendingAnnouncements.first
         isShowingAnnouncement = true
+        #if DEBUG
         print("📢 DISPLAY: Showing announcement '\(currentAnnouncement?.title ?? "unknown")'")
+        #endif
     }
     
     /// Check and show announcements on app launch
     func checkForCriticalAnnouncements(userId: String, userTier: String, accountAge: Int) async {
+        #if DEBUG
         print("📢 CHECK: Starting announcement check for user \(userId)")
+        #endif
         
         do {
             let pending = try await fetchPendingAnnouncements(for: userId, userTier: userTier, accountAge: accountAge)
             
+            #if DEBUG
             print("📢 CHECK: Found \(pending.count) pending announcements")
+            #endif
             
             if let firstAnnouncement = pending.first {
+                #if DEBUG
                 print("📢 CHECK: ✅ Will show '\(firstAnnouncement.title)' (repeat mode: \(firstAnnouncement.repeatMode.rawValue))")
+                #endif
                 currentAnnouncement = firstAnnouncement
                 isShowingAnnouncement = true
             } else {
+                #if DEBUG
                 print("📢 CHECK: No announcements to show")
+                #endif
             }
         } catch {
+            #if DEBUG
             print("❌ CHECK: Error checking announcements: \(error)")
+            #endif
         }
     }
     
@@ -818,12 +896,20 @@ class AnnouncementService: ObservableObject {
         minHoursBetweenShows: Double = 0,
         maxTotalShows: Int? = nil
     ) async throws -> Announcement {
+        #if DEBUG
         print("📢 CREATE: Attempting to create announcement")
+        #endif
+        #if DEBUG
         print("📢 CREATE: Creator email = \(creatorEmail)")
+        #endif
+        #if DEBUG
         print("📢 CREATE: Repeat mode = \(repeatMode.rawValue)")
+        #endif
         
         guard authorizedCreatorEmails.contains(creatorEmail.lowercased()) else {
+            #if DEBUG
             print("📢 CREATE: ❌ Unauthorized creator: \(creatorEmail)")
+            #endif
             throw AnnouncementError.unauthorizedCreator
         }
         
@@ -855,8 +941,12 @@ class AnnouncementService: ObservableObject {
         
         try announcementsCollection.document(announcementId).setData(from: announcement)
         
+        #if DEBUG
         print("✅ ANNOUNCEMENT: Created '\(title)' with id \(announcementId)")
+        #endif
+        #if DEBUG
         print("✅ ANNOUNCEMENT: Repeat=\(repeatMode.rawValue), MaxDaily=\(maxDailyShows), MinHours=\(minHoursBetweenShows)")
+        #endif
         return announcement
     }
     
@@ -870,7 +960,9 @@ class AnnouncementService: ObservableObject {
             "updatedAt": Timestamp(date: Date())
         ])
         
+        #if DEBUG
         print("🔕 Deactivated announcement: \(announcementId)")
+        #endif
     }
     
     func getAllAnnouncements() async throws -> [Announcement] {

@@ -105,7 +105,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
                 Task { @MainActor in
                     self.isSessionRunning = running
                     self.discoverLenses()
+                    #if DEBUG
                     print("📱 CAMERA: Session \(running ? "started" : "failed")")
+                    #endif
                 }
                 continuation.resume()
             }
@@ -129,7 +131,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
                 Task { @MainActor in
                     self.isSessionRunning = false
                     self.availableLenses = []
+                    #if DEBUG
                     print("📱 CAMERA: Session stopped")
+                    #endif
                 }
                 continuation.resume()
             }
@@ -166,7 +170,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
 
     private func addVideoInput() {
         guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+            #if DEBUG
             print("❌ CAMERA: No camera found"); return
+            #endif
         }
         do {
             let input = try AVCaptureDeviceInput(device: camera)
@@ -178,26 +184,36 @@ class CinematicCameraManager: NSObject, ObservableObject {
                     self.maxZoomFactor = min(camera.maxAvailableVideoZoomFactor, 10.0)
                     self.activeLens = .wide
                 }
+                #if DEBUG
                 print("📱 CAMERA: Video input added")
+                #endif
             }
         } catch {
+            #if DEBUG
             print("❌ CAMERA: Video input failed — \(error)")
+            #endif
         }
     }
 
     private func addAudioInput() {
         guard let mic = AVCaptureDevice.default(for: .audio) else {
+            #if DEBUG
             print("❌ CAMERA: No audio device"); return
+            #endif
         }
         do {
             let input = try AVCaptureDeviceInput(device: mic)
             if captureSession.canAddInput(input) {
                 captureSession.addInput(input)
                 Task { @MainActor in self.audioInput = input }
+                #if DEBUG
                 print("📱 CAMERA: Audio input added")
+                #endif
             }
         } catch {
+            #if DEBUG
             print("❌ CAMERA: Audio input failed — \(error)")
+            #endif
         }
     }
 
@@ -206,7 +222,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
         if captureSession.canAddOutput(output) {
             captureSession.addOutput(output)
             Task { @MainActor in self.movieOutput = output }
+            #if DEBUG
             print("📱 CAMERA: Movie output added")
+            #endif
         }
     }
 
@@ -222,7 +240,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
                 applyRotation(to: conn)
             }
             Task { @MainActor in self.videoDataOutput = output }
+            #if DEBUG
             print("📱 CAMERA: Video data output added")
+            #endif
         }
     }
 
@@ -233,7 +253,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
         if let conn = movieOutput.connection(with: .video) {
             applyRotation(to: conn)
         }
+        #if DEBUG
         print("📱 CAMERA: Orientation set to portrait")
+        #endif
     }
 
     private func applyRotation(to connection: AVCaptureConnection) {
@@ -267,7 +289,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
         }
 
         availableLenses = found
+        #if DEBUG
         print("📱 CAMERA: Available lenses: \(found.map { $0.rawValue })")
+        #endif
     }
 
     // MARK: - Switch Lens
@@ -294,7 +318,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
                     }
                 }
             } catch {
+                #if DEBUG
                 print("❌ CAMERA: Lens switch failed — \(error)")
+                #endif
             }
             self.captureSession.commitConfiguration()
             self.applyPortraitRotation()
@@ -345,7 +371,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
                     newInput = input
                 }
             } catch {
+                #if DEBUG
                 print("❌ CAMERA: Switch failed — \(error)")
+                #endif
             }
             self.captureSession.commitConfiguration()
 
@@ -378,7 +406,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
             device.unlockForConfiguration()
             isTorchOn = on
         } catch {
+            #if DEBUG
             print("❌ CAMERA: Torch failed — \(error)")
+            #endif
         }
     }
 
@@ -393,7 +423,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
             device.unlockForConfiguration()
             currentZoomFactor = clamped
         } catch {
+            #if DEBUG
             print("❌ CAMERA: Zoom failed — \(error)")
+            #endif
         }
     }
 
@@ -417,7 +449,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
             }
             device.unlockForConfiguration()
         } catch {
+            #if DEBUG
             print("❌ CAMERA: Focus failed — \(error)")
+            #endif
         }
     }
 }
@@ -448,7 +482,9 @@ extension CinematicCameraManager: AVCaptureFileOutputRecordingDelegate {
     ) {
         Task { @MainActor in
             self.isRecording = true
+            #if DEBUG
             print("✅ CAMERA: Recording started")
+            #endif
         }
     }
 
@@ -461,7 +497,9 @@ extension CinematicCameraManager: AVCaptureFileOutputRecordingDelegate {
         Task { @MainActor in
             self.isRecording = false
             if let error {
+                #if DEBUG
                 print("❌ CAMERA: Recording failed — \(error)")
+                #endif
                 self.recordingCompletion?(nil)
             } else {
                 // Log dimensions using modern async API

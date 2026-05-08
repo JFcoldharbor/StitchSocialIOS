@@ -143,37 +143,51 @@ struct MainTabContainer: View {
     // MARK: - INSTAGRAM/TIKTOK PRELOADING PATTERN
     
     private func handleTabSelection(_ tab: MainAppTab) {
+        #if DEBUG
         print("🏷️ TAB SWITCH: From \(selectedTab.title) to \(tab.title)")
+        #endif
         selectedTab = tab
         navigationCoordinator.selectTab(tab)
     }
     
     private func handleTabChange(from oldTab: MainAppTab, to newTab: MainAppTab) {
+        #if DEBUG
         print("🎬 TAB CHANGED: \(oldTab.title) → \(newTab.title)")
+        #endif
         
         // Trigger preload for destination tab BEFORE user arrives
         switch newTab {
         case .home:
             if !hasPreloadedHome {
+                #if DEBUG
                 print("🎬 PRELOAD TRIGGER: HomeFeed first load")
+                #endif
                 hasPreloadedHome = true
                 // HomeFeed will preload on its own .onAppear
             } else {
+                #if DEBUG
                 print("🎬 PRELOAD TRIGGER: HomeFeed return - triggering preload")
+                #endif
                 // PHASE 1 FIX: Use unified notification
                 NotificationCenter.default.post(name: .preloadHomeFeed, object: nil)
             }
             
         case .discovery:
+            #if DEBUG
             print("🎬 PRELOAD TRIGGER: Discovery (handles own preloading)")
+            #endif
             // Discovery already preloads on appear
             
         case .progression:
+            #if DEBUG
             print("🎬 PRELOAD TRIGGER: Profile (handles own preloading)")
+            #endif
             // Profile uses VideoPreloadingService for grid videos
             
         case .notifications:
+            #if DEBUG
             print("🎬 PRELOAD TRIGGER: Notifications (no video preload needed)")
+            #endif
             break
         }
     }
@@ -198,14 +212,20 @@ struct RecordingCoverView: View {
             controller: controller,
             onVideoCreated: { videoMetadata in
                 guard !isProcessingVideoCreation else {
+                    #if DEBUG
                     print("MAIN TAB: Video creation already processing, ignoring duplicate call")
+                    #endif
                     return
                 }
                 
                 isProcessingVideoCreation = true
                 
+                #if DEBUG
                 print("MAIN TAB: Video upload completed - \(videoMetadata.title)")
+                #endif
+                #if DEBUG
                 print("MAIN TAB: Profile update handled by VideoCoordinator, not duplicating")
+                #endif
                 
                 showingRecording = false
                 

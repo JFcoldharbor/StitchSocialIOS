@@ -75,7 +75,9 @@ final class ARFaceFilterEngine: NSObject, ObservableObject {
     override init() {
         super.init()
         isSupported = ARFaceTrackingConfiguration.isSupported
+        #if DEBUG
         print("🎭 AR FACE: Supported = \(isSupported)")
+        #endif
     }
 
     // MARK: - ARSCNView Factory
@@ -104,12 +106,16 @@ final class ARFaceFilterEngine: NSObject, ObservableObject {
         }
         arSession = view.session
         view.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+        #if DEBUG
         print("🎭 AR FACE: Session started")
+        #endif
     }
 
     func pauseSession() {
         sceneView?.session.pause()
+        #if DEBUG
         print("🎭 AR FACE: Session paused")
+        #endif
     }
 
     // MARK: - Filter Activation
@@ -146,7 +152,9 @@ final class ARFaceFilterEngine: NSObject, ObservableObject {
             if activeOverlay == overlay {
                 contentNode?.addChildNode(node)
             }
+            #if DEBUG
             print("🎭 AR FACE: Loaded node for \(overlay.rawValue)")
+            #endif
         }
     }
 
@@ -202,7 +210,9 @@ final class ARFaceFilterEngine: NSObject, ObservableObject {
                 try data.write(to: cacheURL)
                 modelURL = cacheURL
             } catch {
+                #if DEBUG
                 print("🎭 AR FACE: Failed to download model \(filterID): \(error)")
+                #endif
                 return nil
             }
         }

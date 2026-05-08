@@ -83,7 +83,9 @@ class CameraPermissionsManager: ObservableObject {
                 await handlePermissionDenied()
             }
             
+            #if DEBUG
             print("📹 PERMISSIONS: Recording permissions - Camera: \(cameraGranted), Microphone: \(microphoneGranted)")
+            #endif
             return allGranted
             
         } catch {
@@ -93,7 +95,9 @@ class CameraPermissionsManager: ObservableObject {
                 self.showingPermissionAlert = true
             }
             
+            #if DEBUG
             print("❌ PERMISSIONS: Permission request failed - \(error.localizedDescription)")
+            #endif
             return false
         }
     }

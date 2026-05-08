@@ -53,9 +53,15 @@ class NotificationService: ObservableObject {
 
     init() {
         self.functions = Functions.functions(region: "us-central1")
+        #if DEBUG
         print("📬 NOTIFICATION SERVICE: Initialized")
+        #endif
+        #if DEBUG
         print("🔧 REGION: us-central1")
+        #endif
+        #if DEBUG
         print("🔧 PREFIX: \(functionPrefix)")
+        #endif
     }
 
     // MARK: - Authenticated Function Calls
@@ -68,16 +74,24 @@ class NotificationService: ObservableObject {
         }
 
         let functionName = "\(functionPrefix)\(name)"
+        #if DEBUG
         print("📞 CALLING: \(functionName)")
+        #endif
+        #if DEBUG
         print("🔑 AUTH UID: \(user.uid)")
+        #endif
 
         do {
             let callable = functions.httpsCallable(functionName)
             let result = try await callable.call(data)
+            #if DEBUG
             print("✅ SUCCESS: \(functionName)")
+            #endif
             return result.data
         } catch {
+            #if DEBUG
             print("❌ ERROR: \(functionName) failed - \(error)")
+            #endif
             throw error
         }
     }
@@ -111,11 +125,15 @@ class NotificationService: ObservableObject {
     // MARK: - Test Functions
 
     func sendTestPush() async throws {
+        #if DEBUG
         print("🧪 TEST: Sending test push notification")
+        #endif
         let result = try await callFunction(name: "sendTestPush")
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool, success {
+            #if DEBUG
             print("✅ TEST PUSH: Sent successfully")
+            #endif
         } else {
             throw NSError(domain: "NotificationService", code: 500, userInfo: [
                 NSLocalizedDescriptionKey: "Test push failed"
@@ -124,14 +142,18 @@ class NotificationService: ObservableObject {
     }
 
     func checkToken() async throws -> [String: Any] {
+        #if DEBUG
         print("🔍 CHECK: Verifying FCM token")
+        #endif
         let result = try await callFunction(name: "checkToken")
         guard let tokenData = result as? [String: Any] else {
             throw NSError(domain: "NotificationService", code: 500, userInfo: [
                 NSLocalizedDescriptionKey: "Invalid token check response"
             ])
         }
+        #if DEBUG
         print("✅ TOKEN CHECK: \(tokenData)")
+        #endif
         return tokenData
     }
 
@@ -144,7 +166,9 @@ class NotificationService: ObservableObject {
         videoTitle: String,
         threadID: String? = nil
     ) async throws {
+        #if DEBUG
         print("🔥 ENGAGEMENT: Sending \(engagementType) notification")
+        #endif
         var data: [String: Any] = [
             "recipientID": recipientID,
             "videoID": videoID,
@@ -155,7 +179,9 @@ class NotificationService: ObservableObject {
         let result = try await callFunction(name: "sendEngagement", data: data)
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool, success {
+            #if DEBUG
             print("✅ ENGAGEMENT: Notification sent")
+            #endif
         }
     }
 
@@ -167,7 +193,9 @@ class NotificationService: ObservableObject {
         videoTitle: String,
         threadID: String? = nil
     ) async throws {
+        #if DEBUG
         print("💬 REPLY: Sending reply notification")
+        #endif
         var data: [String: Any] = [
             "recipientID": recipientID,
             "videoID": videoID,
@@ -177,16 +205,22 @@ class NotificationService: ObservableObject {
         let result = try await callFunction(name: "sendReply", data: data)
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool, success {
+            #if DEBUG
             print("✅ REPLY: Notification sent")
+            #endif
         }
     }
 
     func sendFollowNotification(to recipientID: String) async throws {
+        #if DEBUG
         print("👤 FOLLOW: Sending follow notification")
+        #endif
         let result = try await callFunction(name: "sendFollow", data: ["recipientID": recipientID])
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool, success {
+            #if DEBUG
             print("✅ FOLLOW: Notification sent")
+            #endif
         }
     }
 
@@ -197,7 +231,9 @@ class NotificationService: ObservableObject {
         mentionContext: String = "video",
         threadID: String? = nil
     ) async throws {
+        #if DEBUG
         print("📌 MENTION: Sending mention notification")
+        #endif
         var data: [String: Any] = [
             "recipientID": recipientID,
             "videoID": videoID,
@@ -208,7 +244,9 @@ class NotificationService: ObservableObject {
         let result = try await callFunction(name: "sendMention", data: data)
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool, success {
+            #if DEBUG
             print("✅ MENTION: Notification sent")
+            #endif
         }
     }
 
@@ -222,11 +260,21 @@ class NotificationService: ObservableObject {
         threadUserIDs: [String],
         threadID: String? = nil
     ) async throws {
+        #if DEBUG
         print("🧵 STITCH: Sending stitch notification")
+        #endif
+        #if DEBUG
         print("   • Video: \(videoID)")
+        #endif
+        #if DEBUG
         print("   • Original Creator: \(originalCreatorID)")
+        #endif
+        #if DEBUG
         print("   • Parent Creator: \(parentCreatorID ?? "none")")
+        #endif
+        #if DEBUG
         print("   • Thread Users: \(threadUserIDs.count)")
+        #endif
 
         var data: [String: Any] = [
             "videoID": videoID,
@@ -240,7 +288,9 @@ class NotificationService: ObservableObject {
         let result = try await callFunction(name: "sendStitch", data: data)
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool, success {
+            #if DEBUG
             print("✅ STITCH: Notifications sent to \(threadUserIDs.count + 1) users")
+            #endif
         }
     }
 
@@ -255,7 +305,9 @@ class NotificationService: ObservableObject {
         engagerIDs: [String],
         threadID: String? = nil
     ) async throws {
+        #if DEBUG
         print("🏆 MILESTONE: Sending milestone notification")
+        #endif
         var data: [String: Any] = [
             "milestone": milestone,
             "videoID": videoID,
@@ -269,7 +321,9 @@ class NotificationService: ObservableObject {
         let result = try await callFunction(name: "sendMilestone", data: data)
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool, success {
+            #if DEBUG
             print("✅ MILESTONE: Notifications sent to \(followerIDs.count + engagerIDs.count + 1) users")
+            #endif
         }
     }
 
@@ -283,7 +337,9 @@ class NotificationService: ObservableObject {
         followerIDs: [String],
         threadID: String? = nil
     ) async throws {
+        #if DEBUG
         print("🎬 NEW VIDEO: Notifying \(followerIDs.count) followers")
+        #endif
         var data: [String: Any] = [
             "creatorID": creatorID,
             "creatorUsername": creatorUsername,
@@ -296,7 +352,9 @@ class NotificationService: ObservableObject {
         let result = try await callFunction(name: "sendNewVideo", data: data)
         if let resultData = result as? [String: Any],
            let success = resultData["success"] as? Bool, success {
+            #if DEBUG
             print("✅ NEW VIDEO: Notifications sent to \(followerIDs.count) followers")
+            #endif
         }
     }
 
@@ -314,7 +372,9 @@ class NotificationService: ObservableObject {
     ) async throws {
         let cooldownKey = "tip_\(fromUserID)_\(creatorID)"
         guard await checkCooldown(key: cooldownKey, intervalSeconds: 60) else {
+            #if DEBUG
             print("⏱ TIP NOTIF: Cooldown active (\(fromUsername) → \(creatorID))")
+            #endif
             return
         }
 
@@ -339,7 +399,9 @@ class NotificationService: ObservableObject {
 
         try await writeNotification(notification)
         await updateCooldown(key: cooldownKey)
+        #if DEBUG
         print("✅ TIP NOTIF: \(amountText) tip notification written for \(creatorID)")
+        #endif
     }
 
     // MARK: - Subscription Notification
@@ -371,7 +433,9 @@ class NotificationService: ObservableObject {
         )
 
         try await writeNotification(notification)
+        #if DEBUG
         print("✅ SUB NOTIF: Subscription notification written for \(creatorID)")
+        #endif
     }
 
     // MARK: - Re-Engagement Notifications
@@ -381,7 +445,9 @@ class NotificationService: ObservableObject {
         notificationType: String,
         payload: [String: Any]
     ) async throws -> ReEngagementResult {
+        #if DEBUG
         print("🔄 RE-ENGAGEMENT: Sending \(notificationType) to user \(userID)")
+        #endif
 
         let data: [String: Any] = [
             "userId": userID,
@@ -401,7 +467,9 @@ class NotificationService: ObservableObject {
         if !success {
             if let reason = resultData["reason"] as? String, reason == "cooldown" {
                 let hoursRemaining = resultData["hoursRemaining"] as? String ?? "unknown"
+                #if DEBUG
                 print("⏸ RE-ENGAGEMENT: Cooldown active (\(hoursRemaining)h remaining)")
+                #endif
                 return ReEngagementResult(
                     success: false, notificationId: nil, pushSent: false,
                     reason: .cooldown, hoursRemaining: Double(hoursRemaining) ?? 0
@@ -412,7 +480,9 @@ class NotificationService: ObservableObject {
 
         let notificationId = resultData["notificationId"] as? String
         let pushSent = resultData["pushSent"] as? Bool ?? false
+        #if DEBUG
         print("✅ RE-ENGAGEMENT: Sent successfully - Push: \(pushSent)")
+        #endif
         return ReEngagementResult(success: true, notificationId: notificationId, pushSent: pushSent, reason: nil, hoursRemaining: nil)
     }
 
@@ -449,14 +519,18 @@ class NotificationService: ObservableObject {
         let result = try await callFunction(name: "sendNewEpisode", data: data)
         if let resultData = result as? [String: Any],
            let notified = resultData["notified"] as? Int {
+            #if DEBUG
             print("✅ NEW EPISODE: Notifications sent to \(notified) followers/subscribers")
+            #endif
         }
     }
 
     // MARK: - Resend Read Notifications
 
     func resendReadNotifications(limit: Int = 5) async throws -> ResendResult {
+        #if DEBUG
         print("🔁 RESEND: Resending up to \(limit) read notifications")
+        #endif
 
         guard let userID = Auth.auth().currentUser?.uid else {
             throw NSError(domain: "NotificationService", code: 401, userInfo: [
@@ -477,14 +551,18 @@ class NotificationService: ObservableObject {
 
         if !success {
             if let reason = resultData["reason"] as? String, reason == "no_token" {
+                #if DEBUG
                 print("⚠️ RESEND: No FCM token found")
+                #endif
                 return ResendResult(success: false, resent: 0, reason: .noToken)
             }
             return ResendResult(success: false, resent: 0, reason: .unknown)
         }
 
         let resent = resultData["resent"] as? Int ?? 0
+        #if DEBUG
         print("✅ RESEND: Successfully resent \(resent) notifications")
+        #endif
         return ResendResult(success: true, resent: resent, reason: nil)
     }
 
@@ -495,7 +573,9 @@ class NotificationService: ObservableObject {
         limit: Int = 20,
         lastDocument: DocumentSnapshot? = nil
     ) async throws -> NotificationLoadResult {
+        #if DEBUG
         print("📨 LOAD: Fetching \(limit) notifications for user \(userID)")
+        #endif
 
         var query = db.collection(notificationsCollection)
             .whereField("recipientID", isEqualTo: userID)
@@ -526,7 +606,9 @@ class NotificationService: ObservableObject {
         }
 
         let hasMore = snapshot.documents.count == limit
+        #if DEBUG
         print("✅ LOAD: Loaded \(notifications.count) notifications, hasMore: \(hasMore)")
+        #endif
 
         return NotificationLoadResult(
             notifications: notifications,
@@ -538,14 +620,18 @@ class NotificationService: ObservableObject {
     // MARK: - Mark as Read
 
     func markAsRead(_ notificationID: String) async throws {
+        #if DEBUG
         print("✅ MARK READ: Notification \(notificationID)")
+        #endif
         try await db.collection(notificationsCollection)
             .document(notificationID)
             .updateData(["isRead": true, "readAt": FieldValue.serverTimestamp()])
     }
 
     func markAllAsRead(for userID: String) async throws {
+        #if DEBUG
         print("✅ MARK ALL READ: User \(userID)")
+        #endif
 
         let snapshot = try await db.collection(notificationsCollection)
             .whereField("recipientID", isEqualTo: userID)
@@ -557,7 +643,9 @@ class NotificationService: ObservableObject {
             batch.updateData(["isRead": true, "readAt": FieldValue.serverTimestamp()], forDocument: document.reference)
         }
         try await batch.commit()
+        #if DEBUG
         print("✅ MARK ALL READ: Updated \(snapshot.documents.count) notifications")
+        #endif
     }
 
     // MARK: - Clear Notifications
@@ -569,7 +657,9 @@ class NotificationService: ObservableObject {
             ])
         }
 
+        #if DEBUG
         print("🗑️ CLEAR ALL: Clearing notifications for user \(userID)")
+        #endif
 
         let result = try await callFunction(name: "clearAllNotifications", data: ["userId": userID])
 
@@ -581,7 +671,9 @@ class NotificationService: ObservableObject {
         }
 
         let deleted = resultData["deleted"] as? Int ?? 0
+        #if DEBUG
         print("✅ CLEAR ALL: Deleted \(deleted) notifications")
+        #endif
         return deleted
     }
 
@@ -598,12 +690,16 @@ class NotificationService: ObservableObject {
                 guard self != nil else { return }
 
                 if let error = error {
+                    #if DEBUG
                     print("❌ LISTENER: Error - \(error)")
+                    #endif
                     return
                 }
 
                 guard let snapshot = snapshot else {
+                    #if DEBUG
                     print("⚠️ LISTENER: No snapshot")
+                    #endif
                     return
                 }
 
@@ -627,23 +723,37 @@ class NotificationService: ObservableObject {
                 onUpdate(notifications)
             }
 
+        #if DEBUG
         print("👂 LISTENER: Started for user \(userID)")
+        #endif
     }
 
     func stopListening() {
         notificationListener?.remove()
         notificationListener = nil
+        #if DEBUG
         print("🛑 LISTENER: Stopped")
+        #endif
     }
 
     // MARK: - Debug
 
     func debugConfiguration() {
+        #if DEBUG
         print("🔍 DEBUG: Notification Service Configuration")
+        #endif
+        #if DEBUG
         print("  - Database: \(Config.Firebase.databaseName)")
+        #endif
+        #if DEBUG
         print("  - Region: us-central1")
+        #endif
+        #if DEBUG
         print("  - Function Prefix: \(functionPrefix)")
+        #endif
+        #if DEBUG
         print("  - User: \(Auth.auth().currentUser?.uid ?? "none")")
+        #endif
     }
 
     // MARK: - Private: Cooldown Helpers

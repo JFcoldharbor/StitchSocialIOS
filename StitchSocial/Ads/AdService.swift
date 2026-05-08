@@ -221,7 +221,9 @@ class AdService: ObservableObject {
         availableOpportunities.removeAll { $0.id == opportunity.id }
         activePartnerships.append(partnership)
         
+        #if DEBUG
         print("✅ AD: Partnership created with \(opportunity.campaign.brandName)")
+        #endif
         return partnership
     }
     
@@ -237,7 +239,9 @@ class AdService: ObservableObject {
         opportunitiesCache = nil
         availableOpportunities.removeAll { $0.id == opportunity.id }
         
+        #if DEBUG
         print("❌ AD: Declined opportunity from \(opportunity.campaign.brandName)")
+        #endif
     }
     
     // MARK: - Get Ad for Thread (Viewer Side)
@@ -248,7 +252,9 @@ class AdService: ObservableObject {
         // Subscribers skip ads — this is a key subscription perk
         let isSubscribed = try await checkSubscriptionStatus(viewerID: viewerID, creatorID: creatorID)
         if isSubscribed {
+            #if DEBUG
             print("💎 AD: Viewer is subscribed - skipping ad")
+            #endif
             return nil
         }
         
@@ -396,7 +402,9 @@ class AdService: ObservableObject {
         // Invalidate business campaigns cache
         businessCampaignsCache = nil
         
+        #if DEBUG
         print("📢 AD: Campaign '\(title)' created by business \(businessName)")
+        #endif
         
         // Trigger auto-matching (would be Cloud Function in production)
         // For now, mark that matching is needed
@@ -486,7 +494,9 @@ class AdService: ObservableObject {
                 "updatedAt": Timestamp()
             ])
         businessCampaignsCache = nil
+        #if DEBUG
         print("⏸ AD: Campaign \(campaignID) paused")
+        #endif
     }
     
     @MainActor
@@ -498,7 +508,9 @@ class AdService: ObservableObject {
                 "updatedAt": Timestamp()
             ])
         businessCampaignsCache = nil
+        #if DEBUG
         print("▶️ AD: Campaign \(campaignID) resumed")
+        #endif
     }
     
     // MARK: - Matching Algorithm
@@ -578,7 +590,9 @@ class AdService: ObservableObject {
         creatorStatsCache.removeAll()
         
         activePartnerships.removeAll { $0.id == partnership.id }
+        #if DEBUG
         print("🔚 AD: Partnership ended with \(partnership.brandName)")
+        #endif
     }
     
     // MARK: - Cache Management
@@ -597,7 +611,9 @@ class AdService: ObservableObject {
         businessStats = nil
         businessCampaigns = []
         
+        #if DEBUG
         print("🧹 AD: All caches cleared")
+        #endif
     }
     
     /// Force refresh — invalidates all caches, next fetch hits Firestore.

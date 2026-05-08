@@ -86,7 +86,9 @@ class VersionGateService: ObservableObject {
         // Skip if cache is still valid
         if let lastCheck = lastCheckTime,
            Date().timeIntervalSince(lastCheck) < cacheTTL {
+            #if DEBUG
             print("✅ VERSION GATE: Cache valid — skipping check (build \(currentBuild))")
+            #endif
             return
         }
         
@@ -99,7 +101,9 @@ class VersionGateService: ObservableObject {
             
             guard let data = doc.data() else {
                 // No config doc exists yet — allow app to proceed
+                #if DEBUG
                 print("⚠️ VERSION GATE: No config/appVersion doc found — skipping gate")
+                #endif
                 needsUpdate = false
                 lastCheckTime = Date()
                 return
@@ -120,15 +124,21 @@ class VersionGateService: ObservableObject {
             // Compare
             if currentBuild < minBuild {
                 needsUpdate = true
+                #if DEBUG
                 print("🚨 VERSION GATE: Update required! Running build \(currentBuild), minimum \(minBuild)")
+                #endif
             } else {
                 needsUpdate = false
+                #if DEBUG
                 print("✅ VERSION GATE: Build \(currentBuild) >= minimum \(minBuild) — OK")
+                #endif
             }
             
         } catch {
             // On error, don't block the app — fail open
+            #if DEBUG
             print("⚠️ VERSION GATE: Check failed — \(error.localizedDescription). Allowing app to proceed.")
+            #endif
             needsUpdate = false
             lastCheckTime = Date()
         }

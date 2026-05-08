@@ -670,14 +670,20 @@ final class CachedPlayerUIView: UIView {
         let playbackURL: URL
         if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
             playbackURL = cachedURL
+            #if DEBUG
             print("💾 CAROUSEL: Playing from disk cache — \(video.id.prefix(8))")
+            #endif
         } else if let remoteURL = URL(string: video.videoURL) {
             playbackURL = remoteURL
+            #if DEBUG
             print("🌐 CAROUSEL: Streaming from network — \(video.id.prefix(8))")
+            #endif
             // Cache in background for next play
             Task { await VideoDiskCache.shared.cacheVideo(from: video.videoURL) }
         } else {
+            #if DEBUG
             print("❌ CAROUSEL: Invalid URL: \(video.videoURL)")
+            #endif
             return
         }
         
@@ -700,7 +706,9 @@ final class CachedPlayerUIView: UIView {
                         self.player?.play()
                     }
                 } else if item.status == .failed {
+                    #if DEBUG
                     print("❌ CAROUSEL: Player item failed — \(item.error?.localizedDescription ?? "unknown")")
+                    #endif
                 }
             }
         }
@@ -723,7 +731,9 @@ final class CachedPlayerUIView: UIView {
         ) { [weak self] _ in
             self?.pendingPlay = false
             self?.player?.pause()
+            #if DEBUG
             print("🛑 CAROUSEL: Killed by killAllVideoPlayers")
+            #endif
         }
     }
     

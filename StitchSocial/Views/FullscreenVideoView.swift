@@ -119,7 +119,9 @@ struct FullscreenVideoView: View {
             
             // MEMORY: Mark initial video as protected
             preloadService.markAsCurrentlyPlaying(video.id)
+            #if DEBUG
             print("🧠 MEMORY: Marked \(video.id.prefix(8)) as currently playing")
+            #endif
 
             // ONBOARDING: User arrived in fullscreen — advance from tapFullscreen
             OnboardingState.shared.advance(from: .tapHint)
@@ -130,7 +132,9 @@ struct FullscreenVideoView: View {
             
             // MEMORY: Clear protection when leaving fullscreen
             preloadService.clearCurrentlyPlaying()
+            #if DEBUG
             print("ðŸ§  MEMORY: Cleared currently playing on dismiss")
+            #endif
         }
     }
     
@@ -246,7 +250,9 @@ struct FullscreenVideoView: View {
         Button(action: {
             // Pause all playback before dismissing
             preloadService.pauseAllPlayback()
+            #if DEBUG
             print("â¸ï¸ FULLSCREEN: Paused on close button")
+            #endif
             onDismiss?()
         }) {
             Image(systemName: "xmark")
@@ -272,7 +278,9 @@ struct FullscreenVideoView: View {
     }
     
     private func handleOverlayAction(_ action: ContextualOverlayAction) {
+        #if DEBUG
         print("FULLSCREEN: Overlay action - \(action)")
+        #endif
 
         // ONBOARDING: Detect thread and stitch taps to advance steps
         switch action {
@@ -290,7 +298,9 @@ struct FullscreenVideoView: View {
         let shouldPause = pauseActions.contains { actionString.contains($0) }
         if shouldPause {
             preloadService.pauseAllPlayback()
+            #if DEBUG
             print("⏸️ FULLSCREEN: Paused all playback for action: \(action)")
+            #endif
         }
     }
     
@@ -339,7 +349,9 @@ struct FullscreenVideoView: View {
         if shouldDismiss {
             // CRITICAL: Pause all playback before dismissing
             preloadService.pauseAllPlayback()
+            #if DEBUG
             print("â¸ï¸ FULLSCREEN: Paused all playback on dismiss")
+            #endif
             
             // Animate out and dismiss
             isDismissing = true
@@ -396,13 +408,17 @@ struct FullscreenVideoView: View {
         // MEMORY: Update currently playing when navigating within thread
         let newVideoID = allVideos[index].id
         preloadService.markAsCurrentlyPlaying(newVideoID)
+        #if DEBUG
         print("ðŸ§  MEMORY: Updated currently playing to \(newVideoID.prefix(8))")
+        #endif
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             isAnimating = false
         }
         
+        #if DEBUG
         print("FULLSCREEN: Moved to \(index + 1)/\(allVideos.count)")
+        #endif
     }
     
     private func snapBack() {
@@ -441,14 +457,18 @@ struct FullscreenVideoView: View {
                     preloadService.markAsCurrentlyPlaying(startingVideoID)
                 }
                 
+                #if DEBUG
                 print("âœ… FULLSCREEN: Loaded thread - \(threadData.childVideos.count) replies")
+                #endif
                 
             } catch {
                 await MainActor.run {
                     self.loadError = error.localizedDescription
                     self.isLoadingThread = false
                 }
+                #if DEBUG
                 print("âŒ FULLSCREEN: Load error - \(error)")
+                #endif
             }
         }
     }
@@ -460,7 +480,9 @@ struct FullscreenVideoView: View {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
+            #if DEBUG
             print("âŒ FULLSCREEN: Audio setup failed")
+            #endif
         }
     }
     
@@ -468,7 +490,9 @@ struct FullscreenVideoView: View {
         do {
             try AVAudioSession.sharedInstance().setActive(false)
         } catch {
+            #if DEBUG
             print("âŒ FULLSCREEN: Audio cleanup failed")
+            #endif
         }
     }
     
@@ -484,7 +508,9 @@ struct FullscreenVideoView: View {
                 triggerReplyHaptic()
             }
         } catch {
+            #if DEBUG
             print("Haptic engine setup failed: \(error)")
+            #endif
         }
     }
     
@@ -513,7 +539,9 @@ struct FullscreenVideoView: View {
             
             isPlayingHaptic = true
         } catch {
+            #if DEBUG
             print("Failed to play haptic: \(error)")
+            #endif
         }
     }
     
@@ -699,10 +727,14 @@ struct VideoPlayerComponent: View {
         let playbackURL: URL
         if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
             playbackURL = cachedURL
+            #if DEBUG
             print("💾 VIDEO PLAYER: Disk cache hit — \(video.id.prefix(8))")
+            #endif
         } else {
             playbackURL = videoURL
+            #if DEBUG
             print("🌐 VIDEO PLAYER: Cache miss, streaming — \(video.id.prefix(8))")
+            #endif
             Task.detached(priority: .utility) {
                 await VideoDiskCache.shared.cacheVideo(from: video.videoURL)
             }

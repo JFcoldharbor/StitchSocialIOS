@@ -120,7 +120,9 @@ struct SpatialThreadMapView: View {
         let centerPosition = OrbitalLayoutCalculator.getCenterPosition(containerSize: geometry.size)
         
         return Button(action: {
+            #if DEBUG
             print("🎬 ORBITAL: Parent video tapped")
+            #endif
             onParentTapped?()
         }) {
             VStack(spacing: 12) {
@@ -323,7 +325,9 @@ struct SpatialThreadMapView: View {
         let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
         impactFeedback.impactOccurred()
         
+        #if DEBUG
         print("🔵 ORBITAL: Child selected - \(childData.creatorName)")
+        #endif
     }
     
     private func previousPage() {
@@ -340,7 +344,9 @@ struct SpatialThreadMapView: View {
             }
         }
         
+        #if DEBUG
         print("◀️ ORBITAL: Previous page - \(currentPage + 1)")
+        #endif
     }
     
     private func nextPage() {
@@ -357,7 +363,9 @@ struct SpatialThreadMapView: View {
             }
         }
         
+        #if DEBUG
         print("▶️ ORBITAL: Next page - \(currentPage + 1)")
+        #endif
     }
 }
 
@@ -371,13 +379,19 @@ struct SpatialThreadMapView: View {
             parentThread: CoreVideoMetadata.sampleThread,
             children: CoreVideoMetadata.sampleChildren,
             onChildSelected: { child in
+                #if DEBUG
                 print("Selected child: \(child.creatorName)")
+                #endif
             },
             onEngagement: { video, type in
+                #if DEBUG
                 print("Engagement: \(type) on \(video.creatorName)")
+                #endif
             },
             onParentTapped: {
+                #if DEBUG
                 print("Parent video tapped!")
+                #endif
             }
         )
     }

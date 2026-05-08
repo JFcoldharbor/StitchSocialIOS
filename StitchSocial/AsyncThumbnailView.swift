@@ -111,7 +111,9 @@ struct AsyncThumbnailView: View {
                     self.loadingFailed = true
                     self.isLoading = false
                 }
+                #if DEBUG
                 print("THUMBNAIL LOAD ERROR: \(error.localizedDescription)")
+                #endif
             }
         }
     }

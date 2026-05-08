@@ -126,7 +126,9 @@ class StreamChatService: ObservableObject {
                 .order(by: "createdAt", descending: false)
                 .addSnapshotListener { [weak self] snapshot, error in
                     if let error {
+                        #if DEBUG
                         print("⚠️ CHAT: Listener error — \(error.localizedDescription)")
+                        #endif
                         return
                     }
                     guard let snapshot else { return }
@@ -149,7 +151,9 @@ class StreamChatService: ObservableObject {
                     }
                 }
             
+            #if DEBUG
             print("💬 CHAT: Listening on communities/\(communityID)/streams/\(streamID)/chat")
+            #endif
         }
     }
     
@@ -192,7 +196,9 @@ class StreamChatService: ObservableObject {
             .document(msg.id)
             .setData(msg.firestoreData) { error in
                 if let error {
+                    #if DEBUG
                     print("⚠️ CHAT: Send failed — \(error.localizedDescription)")
+                    #endif
                 }
             }
     }

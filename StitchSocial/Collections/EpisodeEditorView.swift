@@ -464,7 +464,9 @@ struct EpisodeEditorView: View {
                           "updatedAt": FieldValue.serverTimestamp()], merge: true)
             // Reload segments to reflect updated title
             await loadExistingSegments()
+            #if DEBUG
             print("✅ EPISODE EDITOR: Segment \(segID.prefix(8)) renamed to '\(newTitle)'")
+            #endif
         }
     }
     
@@ -581,10 +583,14 @@ struct EpisodeEditorView: View {
                 episodeCoverURL = downloadURL.absoluteString
                 isUploadingCover = false
             }
+            #if DEBUG
             print("📸 EPISODE EDITOR: Cover uploaded → \(downloadURL.absoluteString.prefix(50))...")
+            #endif
         } catch {
             await MainActor.run { isUploadingCover = false }
+            #if DEBUG
             print("❌ EPISODE EDITOR: Cover upload failed: \(error)")
+            #endif
         }
     }
     
@@ -606,7 +612,9 @@ struct EpisodeEditorView: View {
             let asset = AVURLAsset(url: movie.url)
             let dur = try await asset.load(.duration)
             let seconds = CMTimeGetSeconds(dur)
+            #if DEBUG
             print("📤 EPISODE EDITOR: Video picked — \(String(format: "%.1f", seconds))s")
+            #endif
             await MainActor.run {
                 self.videoURL = movie.url
                 self.videoDuration = seconds
@@ -716,9 +724,13 @@ struct EpisodeEditorView: View {
         do {
             try await db.collection("videoCollections").document(episode.id)
                 .setData(draftData, merge: true)
+            #if DEBUG
             print("💾 EPISODE EDITOR: Draft saved")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ EPISODE EDITOR: Draft save failed: \(error)")
+            #endif
         }
     }
     
@@ -726,15 +738,21 @@ struct EpisodeEditorView: View {
     
     private func handleFinalize() async {
         guard let localVideoURL = videoURL else {
+            #if DEBUG
             print("❌ EPISODE EDITOR: No videoURL set")
+            #endif
             return
         }
+        #if DEBUG
         print("📤 EPISODE EDITOR: handleFinalize() started")
+        #endif
         
         // Protect upload from background termination
         var bgTaskID: UIBackgroundTaskIdentifier = .invalid
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "EpisodeFinalize") {
+            #if DEBUG
             print("⚠️ EPISODE EDITOR: Background time expiring, saving draft...")
+            #endif
             Task { await self.saveDraft() }
             UIApplication.shared.endBackgroundTask(bgTaskID)
             bgTaskID = .invalid
@@ -747,13 +765,17 @@ struct EpisodeEditorView: View {
         
         let (finalSegments, finalAdSlots, totalDuration) = engine.finalizeData()
         guard !finalSegments.isEmpty else {
+            #if DEBUG
             print("❌ EPISODE EDITOR: No segments to finalize")
+            #endif
             uploadPhase = "error"
             uploadDetail = "No segments found"
             return
         }
         
+        #if DEBUG
         print("📤 EPISODE EDITOR: \(finalSegments.count) segments, \(String(format: "%.0f", totalDuration))s total")
+        #endif
         
         uploadPhase = "uploading"
         uploadProgress = 0
@@ -777,7 +799,9 @@ struct EpisodeEditorView: View {
                 // 1. Export this segment as its own file
                 uploadDetail = "Splitting \(i+1)/\(totalSegs)..."
                 uploadProgress = Double(i) / Double(totalSegs) * 40
+                #if DEBUG
                 print("📤 EPISODE EDITOR: Splitting segment \(i+1) [\(String(format: "%.1f", seg.startTime))s → \(String(format: "%.1f", seg.endTime))s]")
+                #endif
                 
                 let segURL = FileManager.default.temporaryDirectory
                     .appendingPathComponent("\(segId).mov")
@@ -785,7 +809,9 @@ struct EpisodeEditorView: View {
                 // AVAssetExportPresetPassthrough — no re-encode, preserves original 4K quality
                 // Use .mov output — matches iPhone source format, no container conversion needed
                 guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
+                    #if DEBUG
                     print("⚠️ EPISODE EDITOR: Could not create export session for segment \(i+1)")
+                    #endif
                     continue
                 }
                 
@@ -802,11 +828,15 @@ struct EpisodeEditorView: View {
                 await exportSession.export()
                 
                 guard exportSession.status == .completed else {
+                    #if DEBUG
                     print("⚠️ EPISODE EDITOR: Split failed for segment \(i+1): \(exportSession.error?.localizedDescription ?? "unknown")")
+                    #endif
                     continue
                 }
                 
+                #if DEBUG
                 print("📤 EPISODE EDITOR: Segment \(i+1) split ✅")
+                #endif
                 
                 // 2. Generate thumbnail for this segment
                 let thumbURL = await generateSegmentThumbnail(from: segURL, segId: segId)
@@ -863,7 +893,9 @@ struct EpisodeEditorView: View {
                 batch.setData(segData, forDocument: db.collection("videos").document(segId))
                 
                 await MainActor.run { /* mark progress */ }
+                #if DEBUG
                 print("📤 EPISODE EDITOR: Segment \(i+1) uploaded ✅")
+                #endif
                 
                 // Cleanup temp file
                 try? FileManager.default.removeItem(at: segURL)
@@ -907,9 +939,13 @@ struct EpisodeEditorView: View {
                 "publishedAt": publishIntent.publishedAt.map { Timestamp(date: $0) } ?? (FieldValue.serverTimestamp() as Any),
             ] as [String: Any], forDocument: db.collection("videoCollections").document(episode.id), merge: true)
             
+            #if DEBUG
             print("📤 EPISODE EDITOR: Committing batch...")
+            #endif
             try await batch.commit()
+            #if DEBUG
             print("📤 EPISODE EDITOR: Done! ✅")
+            #endif
             
             uploadPhase = "done"
             uploadProgress = 100
@@ -945,7 +981,9 @@ struct EpisodeEditorView: View {
         } catch {
             uploadPhase = "error"
             uploadDetail = "Failed: \(error.localizedDescription)"
+            #if DEBUG
             print("❌ EPISODE EDITOR: Finalize failed: \(error)")
+            #endif
         }
     }
     
@@ -975,7 +1013,9 @@ struct EpisodeEditorView: View {
         return try await withCheckedThrowingContinuation { continuation in
             let task = ref.putFile(from: localURL, metadata: meta) { _, error in
                 if let error = error {
+                    #if DEBUG
                     print("❌ UPLOAD: Failed \(path): \(error.localizedDescription)")
+                    #endif
                     continuation.resume(throwing: error)
                     return
                 }

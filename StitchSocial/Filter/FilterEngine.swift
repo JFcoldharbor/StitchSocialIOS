@@ -65,12 +65,16 @@ final class FilterEngine: ObservableObject {
 
             // Pre-warm CIFilter instances for color filters
             renderer.prewarm(filters.filter { $0.type == .ciFilter })
+            #if DEBUG
             print("✅ FILTER ENGINE: Loaded \(filters.count) filters")
+            #endif
         } catch {
             // Fallback to built-in defaults if Firestore fails
             availableFilters = FilterSeed.defaultFilters.filter { $0.platforms.contains(.ios) }
             isLoaded = true
+            #if DEBUG
             print("⚠️ FILTER ENGINE: Firestore failed, using defaults")
+            #endif
         }
     }
 
@@ -130,7 +134,9 @@ final class FilterRenderer {
                 filterCache[m.id] = f
             }
         }
+        #if DEBUG
         print("🔥 FILTER RENDERER: Pre-warmed \(filterCache.count) filters")
+        #endif
     }
 
     // MARK: - Apply

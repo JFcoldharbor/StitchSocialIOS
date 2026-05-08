@@ -52,7 +52,9 @@ class LocalDraftManager: ObservableObject {
             await loadDrafts()
         }
         
+        #if DEBUG
         print("ðŸ“ DRAFT MANAGER: Initialized at \(draftsDirectory.path)")
+        #endif
     }
     
     // MARK: - Public Interface
@@ -82,7 +84,9 @@ class LocalDraftManager: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("ðŸ’¾ DRAFT MANAGER: Saved draft \(editState.draftID)")
+        #endif
     }
     
     /// Auto-save draft (debounced)
@@ -121,7 +125,9 @@ class LocalDraftManager: ObservableObject {
         // Remove from memory
         drafts.removeAll { $0.draftID == id }
         
+        #if DEBUG
         print("ðŸ—‘ï¸ DRAFT MANAGER: Deleted draft \(id)")
+        #endif
     }
     
     /// Load all drafts from disk
@@ -149,7 +155,9 @@ class LocalDraftManager: ObservableObject {
                         try? fileManager.removeItem(at: fileURL)
                     }
                 } catch {
+                    #if DEBUG
                     print("âš ï¸ DRAFT MANAGER: Failed to load draft from \(fileURL.lastPathComponent): \(error)")
+                    #endif
                 }
             }
             
@@ -158,10 +166,14 @@ class LocalDraftManager: ObservableObject {
             
             drafts = loadedDrafts
             
+            #if DEBUG
             print("ðŸ“‚ DRAFT MANAGER: Loaded \(drafts.count) drafts")
+            #endif
             
         } catch {
+            #if DEBUG
             print("âŒ DRAFT MANAGER: Failed to load drafts: \(error)")
+            #endif
         }
     }
     
@@ -178,7 +190,9 @@ class LocalDraftManager: ObservableObject {
         }
         
         if deletedCount > 0 {
+            #if DEBUG
             print("ðŸ§¹ DRAFT MANAGER: Cleaned up \(deletedCount) old drafts")
+            #endif
         }
     }
     
@@ -243,7 +257,9 @@ class LocalDraftManager: ObservableObject {
         // Persist to disk
         try? await saveDraft(drafts[index])
         
+        #if DEBUG
         print("📋 DRAFT MANAGER: Updated \(draftID.prefix(8)) status → \(status.displayName)")
+        #endif
     }
     
     /// Find drafts that were interrupted mid-upload (app was killed)
@@ -252,7 +268,9 @@ class LocalDraftManager: ObservableObject {
         let interrupted = drafts.filter { $0.uploadStatus == DraftUploadStatus.uploading || $0.uploadStatus == DraftUploadStatus.readyToUpload }
         
         if !interrupted.isEmpty {
+            #if DEBUG
             print("🔄 DRAFT MANAGER: Found \(interrupted.count) interrupted uploads to recover")
+            #endif
         }
         
         return interrupted
@@ -267,7 +285,9 @@ class LocalDraftManager: ObservableObject {
         }
         
         if !completed.isEmpty {
+            #if DEBUG
             print("🧹 DRAFT MANAGER: Cleaned up \(completed.count) completed uploads")
+            #endif
         }
     }
     

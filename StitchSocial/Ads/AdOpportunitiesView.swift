@@ -391,7 +391,9 @@ struct AdOpportunitiesView: View {
             _ = try await adService.fetchActivePartnerships(for: user.id)
             _ = try await adService.fetchCreatorStats(creatorID: user.id)
         } catch {
+            #if DEBUG
             print("❌ AD: Failed to load data - \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -401,7 +403,9 @@ struct AdOpportunitiesView: View {
                 _ = try await adService.acceptOpportunity(opportunity, creatorTier: user.tier)
                 showingCampaignDetail = false
             } catch {
+                #if DEBUG
                 print("❌ AD: Failed to accept - \(error.localizedDescription)")
+                #endif
             }
         }
     }
@@ -412,7 +416,9 @@ struct AdOpportunitiesView: View {
                 try await adService.declineOpportunity(opportunity)
                 showingCampaignDetail = false
             } catch {
+                #if DEBUG
                 print("❌ AD: Failed to decline - \(error.localizedDescription)")
+                #endif
             }
         }
     }

@@ -49,7 +49,9 @@ class BatchingService: ObservableObject {
     
     init() {
         setupAutoFlush()
+        #if DEBUG
         print("📦 BATCHING SERVICE: Initialized with auto-flush every \(autoFlushInterval)s")
+        #endif
     }
     
     deinit {
@@ -74,7 +76,9 @@ class BatchingService: ObservableObject {
         totalBatchesSaved += max(0, videoIDs.count - uniqueIDs.chunked(into: maxReadBatchSize).count)
         updateQueueStats()
         
+        #if DEBUG
         print("📦 BATCHING: Loaded \(allVideos.count) videos from \(uniqueIDs.chunked(into: maxReadBatchSize).count) batches")
+        #endif
         return allVideos
     }
     
@@ -99,7 +103,9 @@ class BatchingService: ObservableObject {
             allThreads.append(threadData)
         }
         
+        #if DEBUG
         print("📦 BATCHING: Loaded \(allThreads.count) threads with children")
+        #endif
         return allThreads
     }
     
@@ -116,7 +122,9 @@ class BatchingService: ObservableObject {
         }
         
         totalBatchesSaved += max(0, userIDs.count - uniqueIDs.chunked(into: maxReadBatchSize).count)
+        #if DEBUG
         print("📦 BATCHING: Loaded \(allUsers.count) users from batches")
+        #endif
         return allUsers
     }
     
@@ -144,7 +152,9 @@ class BatchingService: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("📦 BATCHING: Queued engagement update for \(videoID) - queue size: \(writeQueue.count)")
+        #endif
     }
     
     /// Queue view tracking for batched writing
@@ -159,7 +169,9 @@ class BatchingService: ObservableObject {
         writeQueue.append(operation)
         queueStats.pendingWrites = writeQueue.count
         
+        #if DEBUG
         print("📦 BATCHING: Queued view tracking for \(videoID) - duration: \(String(format: "%.1f", duration))s")
+        #endif
     }
     
     /// Queue user interaction tracking
@@ -178,7 +190,9 @@ class BatchingService: ObservableObject {
         writeQueue.append(operation)
         queueStats.pendingWrites = writeQueue.count
         
+        #if DEBUG
         print("📦 BATCHING: Queued \(interactionType.rawValue) interaction for \(videoID)")
+        #endif
     }
     
     /// Flush all pending write operations
@@ -196,7 +210,9 @@ class BatchingService: ObservableObject {
         writeQueue.removeAll()
         queueStats.pendingWrites = 0
         
+        #if DEBUG
         print("📦 BATCHING: Flushing \(operationsToProcess.count) write operations")
+        #endif
         
         try await processWriteBatch(operations: operationsToProcess)
         
@@ -204,7 +220,9 @@ class BatchingService: ObservableObject {
         queueStats.totalFlushes += 1
         updateQueueStats()
         
+        #if DEBUG
         print("✅ BATCHING: Flush complete - \(operationsToProcess.count) operations processed")
+        #endif
     }
     
     // MARK: - Configuration
@@ -212,14 +230,18 @@ class BatchingService: ObservableObject {
     /// Configure batch sizes for optimization
     func configureBatchSize(reads: Int, writes: Int) {
         // Note: In a real implementation, these would be stored as instance variables
+        #if DEBUG
         print("📦 BATCHING: Configured batch sizes - reads: \(reads), writes: \(writes)")
+        #endif
     }
     
     /// Set auto-flush interval
     func setFlushInterval(seconds: TimeInterval) {
         flushTimer?.invalidate()
         setupAutoFlush(interval: seconds)
+        #if DEBUG
         print("📦 BATCHING: Auto-flush interval set to \(seconds)s")
+        #endif
     }
     
     // MARK: - Performance Monitoring
@@ -355,7 +377,9 @@ class BatchingService: ObservableObject {
         }
         
         try await batch.commit()
+        #if DEBUG
         print("📦 BATCHING: Processed \(updates.count) engagement updates")
+        #endif
     }
     
     private func processViewTrackingBatch(trackings: [ViewTrackingRecord]) async throws {
@@ -377,7 +401,9 @@ class BatchingService: ObservableObject {
         }
         
         try await batch.commit()
+        #if DEBUG
         print("📦 BATCHING: Processed \(trackings.count) view trackings")
+        #endif
     }
     
     private func processUserInteractionBatch(interactions: [UserInteractionRecord]) async throws {
@@ -398,7 +424,9 @@ class BatchingService: ObservableObject {
         }
         
         try await batch.commit()
+        #if DEBUG
         print("📦 BATCHING: Processed \(interactions.count) user interactions")
+        #endif
     }
     
     private func setupAutoFlush(interval: TimeInterval = 2.0) {
@@ -621,7 +649,9 @@ extension BatchingService {
     
     /// Integration with VideoService for enhanced batching
     func enhanceVideoService(_ videoService: VideoService) {
+        #if DEBUG
         print("📦 BATCHING: Enhanced VideoService with advanced batching capabilities")
+        #endif
     }
     
     /// Integration with HomeFeedService for optimized feed loading
@@ -640,7 +670,9 @@ extension BatchingService {
             allThreads.append(contentsOf: threads)
         }
         
+        #if DEBUG
         print("📦 BATCHING: Optimized feed loading - \(allThreads.count) threads from \(followingUserIDs.count) users")
+        #endif
         return allThreads
     }
     
@@ -657,11 +689,23 @@ extension BatchingService {
     
     /// Debug information for development
     func logBatchingStatus() {
+        #if DEBUG
         print("📦 BATCHING STATUS:")
+        #endif
+        #if DEBUG
         print("📊 Read Queue: \(readQueue.count) operations")
+        #endif
+        #if DEBUG
         print("📊 Write Queue: \(writeQueue.count) operations")
+        #endif
+        #if DEBUG
         print("📊 Active Operations: \(activeOperations)")
+        #endif
+        #if DEBUG
         print("📊 Total Batches Saved: \(totalBatchesSaved)")
+        #endif
+        #if DEBUG
         print("📊 Performance: \(getPerformanceStats().efficiencyRating)")
+        #endif
     }
 }

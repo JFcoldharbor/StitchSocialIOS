@@ -46,9 +46,13 @@ class FeedCache {
             memoryCache = threadsToCache
             memoryCacheTimestamp = now
             
+            #if DEBUG
             print("💾 FEED CACHE: Saved \(threadsToCache.count) threads for offline viewing")
+            #endif
         } catch {
+            #if DEBUG
             print("❌ FEED CACHE: Failed to save - \(error)")
+            #endif
         }
     }
     
@@ -64,14 +68,18 @@ class FeedCache {
         
         // Check timestamp first (cheap)
         guard let timestamp = UserDefaults.standard.object(forKey: cacheTimestampKey) as? TimeInterval else {
+            #if DEBUG
             print("📭 FEED CACHE: No cached feed found")
+            #endif
             return nil
         }
         
         // Check expiration
         if isCacheExpired(timestamp) {
             let cacheAge = Date().timeIntervalSince1970 - timestamp
+            #if DEBUG
             print("⏰ FEED CACHE: Cache expired (\(Int(cacheAge/3600))h old)")
+            #endif
             clearCache()
             return nil
         }
@@ -90,10 +98,14 @@ class FeedCache {
             memoryCacheTimestamp = timestamp
             
             let cacheAge = Date().timeIntervalSince1970 - timestamp
+            #if DEBUG
             print("✅ FEED CACHE: Loaded \(threads.count) cached threads (age: \(Int(cacheAge/60))min)")
+            #endif
             return threads
         } catch {
+            #if DEBUG
             print("❌ FEED CACHE: Failed to decode - \(error)")
+            #endif
             clearCache()
             return nil
         }
@@ -141,7 +153,9 @@ class FeedCache {
         UserDefaults.standard.removeObject(forKey: cacheTimestampKey)
         memoryCache = nil
         memoryCacheTimestamp = nil
+        #if DEBUG
         print("🗑️ FEED CACHE: Cleared")
+        #endif
     }
 }
 
@@ -169,9 +183,13 @@ class NetworkMonitor: ObservableObject {
                 self?.connectionType = self?.getConnectionType(path) ?? .unknown
                 
                 if path.status != .satisfied {
+                    #if DEBUG
                     print("📵 NETWORK: Offline - using cached content")
+                    #endif
                 } else {
+                    #if DEBUG
                     print("📶 NETWORK: Online via \(self?.connectionType ?? .unknown)")
+                    #endif
                 }
             }
         }

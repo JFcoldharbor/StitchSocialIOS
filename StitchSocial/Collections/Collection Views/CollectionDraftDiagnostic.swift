@@ -227,7 +227,9 @@ struct CollectionDraftDiagnostic: View {
                         .document(doc.documentID)
                         .updateData(["visibility": "public"])
                     fixedCount += 1
+                    #if DEBUG
                     print("🔧 Fixed draft \(doc.documentID): set visibility to 'public'")
+                    #endif
                 }
             }
             

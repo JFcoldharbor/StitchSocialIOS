@@ -100,7 +100,9 @@ class StreamQueueService: ObservableObject {
             multiplier: 0.5
         )
         
+        #if DEBUG
         print("📹 QUEUE: Video comment submitted by @\(authorUsername) (Lv \(authorLevel))")
+        #endif
         return comment
     }
     
@@ -150,7 +152,9 @@ class StreamQueueService: ObservableObject {
                 multiplier: xpMultiplier
             )
             
+            #if DEBUG
             print("✅ QUEUE: Accepted @\(comment.authorUsername)'s video comment")
+            #endif
         }
     }
     
@@ -186,7 +190,9 @@ class StreamQueueService: ObservableObject {
         pendingComments.removeAll { $0.id == commentID }
         queueCount = pendingComments.count
         
+        #if DEBUG
         print("❌ QUEUE: Rejected video comment \(commentID)")
+        #endif
     }
     
     // MARK: - Queue Listener (Creator Device Only)

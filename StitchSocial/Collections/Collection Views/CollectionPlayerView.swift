@@ -271,7 +271,9 @@ struct CollectionPlayerView: View {
             }
         } catch {
             // Non-fatal — overlay shows 0 instead of live count
+            #if DEBUG
             print("⚠️ COLLECTION PLAYER: Could not refresh viewCount for segment \(segment.id.prefix(8)): \(error.localizedDescription)")
+            #endif
         }
     }
 
@@ -354,10 +356,14 @@ struct CollectionPlayerView: View {
                     let w = geometry.size.width
                     if x < w * 0.30 {
                         playerCoordinator.seekRelative(-10)
+                        #if DEBUG
                         print("⏪ DOUBLE TAP: Seek -10s")
+                        #endif
                     } else if x > w * 0.70 {
                         playerCoordinator.seekRelative(10)
+                        #if DEBUG
                         print("⏩ DOUBLE TAP: Seek +10s")
+                        #endif
                     }
                 }
         )
@@ -434,10 +440,14 @@ struct CollectionPlayerView: View {
                     
                     if shouldAdvance {
                         currentSegmentIndex += 1
+                        #if DEBUG
                         print("➡️ COLLECTION PLAYER: Advanced to segment \(currentSegmentIndex + 1)")
+                        #endif
                     } else if shouldGoBack {
                         currentSegmentIndex -= 1
+                        #if DEBUG
                         print("⬅️ COLLECTION PLAYER: Back to segment \(currentSegmentIndex + 1)")
+                        #endif
                     }
                     
                     dragOffset = 0
@@ -657,11 +667,15 @@ struct CollectionSegmentPlayer: View {
             }
         }
         .onAppear {
+            #if DEBUG
             print("🎬 SEGMENT PLAYER: onAppear for \(video.id.prefix(8)), isActive: \(isActive)")
+            #endif
             setupPlayer()
         }
         .onDisappear {
+            #if DEBUG
             print("🎬 SEGMENT PLAYER: onDisappear for \(video.id.prefix(8))")
+            #endif
             player?.pause()
             player = nil
         }
@@ -671,10 +685,14 @@ struct CollectionSegmentPlayer: View {
             if newValue {
                 player?.seek(to: .zero)
                 player?.play()
+                #if DEBUG
                 print("▶️ SEGMENT PLAYER: Playing \(video.id.prefix(8))")
+                #endif
             } else {
                 player?.pause()
+                #if DEBUG
                 print("⏸️ SEGMENT PLAYER: Paused \(video.id.prefix(8))")
+                #endif
             }
         }
         .onReceive(coordinator.seekSubject) { command in
@@ -690,7 +708,9 @@ struct CollectionSegmentPlayer: View {
             } else {
                 player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
                            toleranceBefore: .zero, toleranceAfter: .zero)
+                #if DEBUG
                 print("⏩ SEGMENT PLAYER: Seeked \(command.seconds > 0 ? "+" : "")\(Int(command.seconds))s → \(String(format: "%.1f", target))s")
+                #endif
             }
         }
         .onReceive(coordinator.playbackSubject) { _ in
@@ -701,7 +721,9 @@ struct CollectionSegmentPlayer: View {
     
     private func setupPlayer() {
         guard !video.videoURL.isEmpty else {
+            #if DEBUG
             print("❌ SEGMENT PLAYER: Empty video URL")
+            #endif
             hasError = true
             errorMessage = "No video URL"
             isLoading = false
@@ -712,14 +734,20 @@ struct CollectionSegmentPlayer: View {
         let playbackURL: URL
         if let cachedURL = VideoDiskCache.shared.getCachedURL(for: video.videoURL) {
             playbackURL = cachedURL
+            #if DEBUG
             print("💾 SEGMENT PLAYER: Playing from disk cache — \(video.id.prefix(8))")
+            #endif
         } else if let remoteURL = URL(string: video.videoURL) {
             playbackURL = remoteURL
+            #if DEBUG
             print("🌐 SEGMENT PLAYER: Streaming from network — \(video.id.prefix(8))")
+            #endif
             // Cache in background for next play
             Task { await VideoDiskCache.shared.cacheVideo(from: video.videoURL) }
         } else {
+            #if DEBUG
             print("❌ SEGMENT PLAYER: Invalid URL: \(video.videoURL)")
+            #endif
             hasError = true
             errorMessage = "Invalid video URL"
             isLoading = false
@@ -736,14 +764,20 @@ struct CollectionSegmentPlayer: View {
             .sink { status in
                 switch status {
                 case .readyToPlay:
+                    #if DEBUG
                     print("✅ SEGMENT PLAYER: Ready to play \(video.id.prefix(8))")
+                    #endif
                     isLoading = false
                     if isActive {
                         newPlayer.play()
+                        #if DEBUG
                         print("▶️ SEGMENT PLAYER: Auto-playing \(video.id.prefix(8))")
+                        #endif
                     }
                 case .failed:
+                    #if DEBUG
                     print("❌ SEGMENT PLAYER: Failed to load \(video.id.prefix(8))")
+                    #endif
                     hasError = true
                     errorMessage = playerItem.error?.localizedDescription ?? "Unknown error"
                     isLoading = false
@@ -761,7 +795,9 @@ struct CollectionSegmentPlayer: View {
         ) { _ in
             if isActive {
                 coordinator.didReachEnd()
+                #if DEBUG
                 print("⏭️ SEGMENT PLAYER: Reached end, signaling advance for \(video.id.prefix(8))")
+                #endif
             }
         }
         

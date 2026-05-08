@@ -36,7 +36,9 @@ class BackgroundActivityManager: ObservableObject {
     // MARK: - Initialization
     
     private init() {
+        #if DEBUG
         print("🛑 BACKGROUND MANAGER: Initialized master kill switch")
+        #endif
     }
     
     // MARK: - Service Registration
@@ -54,7 +56,9 @@ class BackgroundActivityManager: ObservableObject {
         self.homeFeedService = homeFeed
         
         let registeredCount = [videoPreloading, caching, batching, homeFeed].compactMap { $0 }.count
+        #if DEBUG
         print("🛑 BACKGROUND MANAGER: Registered \(registeredCount) services for kill switch")
+        #endif
     }
     
     // MARK: - MASTER KILL SWITCH
@@ -62,7 +66,9 @@ class BackgroundActivityManager: ObservableObject {
     /// Stop ALL background activity immediately
     func killAllBackgroundActivity(reason: String = "Navigation") {
         guard !isKillSwitchActive else {
+            #if DEBUG
             print("🛑 KILL SWITCH: Already active, ignoring duplicate call")
+            #endif
             return
         }
         
@@ -70,7 +76,9 @@ class BackgroundActivityManager: ObservableObject {
         lastKillReason = reason
         killCount += 1
         
+        #if DEBUG
         print("🛑 KILL SWITCH ACTIVATED (\(killCount)): \(reason)")
+        #endif
         
         // Kill all services in parallel for speed
         Task {
@@ -88,7 +96,9 @@ class BackgroundActivityManager: ObservableObject {
             await MainActor.run {
                 self.isKillSwitchActive = false
                 self.backgroundTasksRunning = 0
+                #if DEBUG
                 print("✅ KILL SWITCH DEACTIVATED: Ready for new operations")
+                #endif
             }
         }
     }
@@ -97,13 +107,17 @@ class BackgroundActivityManager: ObservableObject {
     
     private func stopVideoPreloading() async {
         videoPreloadingService?.clearAllPlayers()
+        #if DEBUG
         print("🛑 STOPPED: Video preloading service")
+        #endif
     }
     
     private func stopCachingOperations() async {
         // Stop active cache operations but preserve cache data
         // Since pauseOperations doesn't exist, just set a flag or use existing methods
+        #if DEBUG
         print("🛑 STOPPED: Caching operations")
+        #endif
     }
     
     private func stopBatchingOperations() async {
@@ -111,7 +125,9 @@ class BackgroundActivityManager: ObservableObject {
         if let batchingService = batchingService {
             try? await batchingService.flushPendingWrites()
         }
+        #if DEBUG
         print("🛑 STOPPED: Batching service (flushed pending)")
+        #endif
     }
     
     private func stopHomeFeedLoading() async {
@@ -120,16 +136,22 @@ class BackgroundActivityManager: ObservableObject {
             // Access published properties to reset state
             // Note: HomeFeedService should add cancelActiveOperations() method
             // For now, we just log and skip
+            #if DEBUG
             print("🛑 STOPPED: Home feed loading (state reset)")
+            #endif
         } else {
+            #if DEBUG
             print("🛑 STOPPED: Home feed loading (no service registered)")
+            #endif
         }
     }
     
     private func cancelAllTimers() async {
         // PHASE 1 FIX: Use unified notification name
         NotificationCenter.default.post(name: .killAllBackgroundTimers, object: nil)
+        #if DEBUG
         print("🛑 STOPPED: All background timers")
+        #endif
     }
     
     // MARK: - Navigation Integration Methods

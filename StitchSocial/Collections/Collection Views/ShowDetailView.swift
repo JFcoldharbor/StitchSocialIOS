@@ -658,7 +658,9 @@ struct ShowDetailView: View {
             selectedSeasonId = loadedSeasons.first?.id
         } catch {
             // Fallback: use initialEpisodes passed in
+            #if DEBUG
             print("❌ SHOW DETAIL: Load failed, using initial episodes: \(error)")
+            #endif
         }
         isLoading = false
     }

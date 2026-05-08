@@ -190,14 +190,18 @@ class VideoProcessingService: ObservableObject {
             // STEP 2: Detect video orientation
             await updateProgress(0.15, task: "Detecting video orientation...")
             let orientation = try await detectVideoOrientation(videoURL: videoURL)
+            #if DEBUG
             print("🎬 PROCESSING SERVICE: Detected orientation: \(orientation.rawValue)")
+            #endif
             
             // STEP 3: Basic video analysis
             await updateProgress(0.2, task: "Analyzing video...")
             let asset = AVAsset(url: videoURL)
             let duration = try await asset.load(.duration).seconds
             
+            #if DEBUG
             print("🎯 PROCESSING SERVICE: \(String(format: "%.1f", duration))s \(orientation.rawValue) video for \(userTier.displayName)")
+            #endif
             
             // STEP 4: Choose optimal preset based on orientation and user tier
             await updateProgress(0.3, task: "Selecting compression preset...")
@@ -223,7 +227,9 @@ class VideoProcessingService: ObservableObject {
             exportSession.outputFileType = .mp4
             exportSession.shouldOptimizeForNetworkUse = true
             
+            #if DEBUG
             print("✅ PROCESSING SERVICE: Using preset \(exportPreset) for \(orientation.rawValue) video - NO CUSTOM COMPOSITION")
+            #endif
             
             // STEP 7: Export with progress monitoring
             await updateProgress(0.5, task: "Compressing video...")
@@ -275,11 +281,21 @@ class VideoProcessingService: ObservableObject {
                             let compressedSize = self.getFileSize(outputURL)
                             let compressionRatio = originalSize > 0 ? Double(originalSize) / Double(compressedSize) : 1.0
                             
+                            #if DEBUG
                             print("✅ ORIENTATION-AWARE COMPRESSION: \(self.formatFileSize(originalSize)) → \(self.formatFileSize(compressedSize))")
+                            #endif
+                            #if DEBUG
                             print("✅ COMPRESSION RATIO: \(String(format: "%.1fx", compressionRatio))")
+                            #endif
+                            #if DEBUG
                             print("✅ PROCESSING TIME: \(String(format: "%.1fs", processingTime))")
+                            #endif
+                            #if DEBUG
                             print("✅ PRESET USED: \(exportPreset)")
+                            #endif
+                            #if DEBUG
                             print("✅ ORIENTATION: \(orientation.rawValue)")
+                            #endif
                             
                             self.recordProcessingMetrics(
                                 duration: processingTime,
@@ -368,7 +384,9 @@ class VideoProcessingService: ObservableObject {
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         
         guard let videoTrack = videoTracks.first else {
+            #if DEBUG
             print("⚠️ PROCESSING SERVICE: No video track found, defaulting to portrait")
+            #endif
             return .portrait
         }
         
@@ -383,7 +401,9 @@ class VideoProcessingService: ObservableObject {
         
         let orientation = VideoOrientation.from(width: width, height: height)
         
+        #if DEBUG
         print("🎬 ORIENTATION DETECTION: \(Int(width))x\(Int(height)) → \(orientation.rawValue)")
+        #endif
         
         return orientation
     }
@@ -520,18 +540,24 @@ class VideoProcessingService: ObservableObject {
     private func validateCompressedVideoSync(_ videoURL: URL) -> Bool {
         // Check file exists
         guard FileManager.default.fileExists(atPath: videoURL.path) else {
+            #if DEBUG
             print("❌ VALIDATION: Output file does not exist")
+            #endif
             return false
         }
         
         // Check file size is reasonable
         let fileSize = getFileSize(videoURL)
         guard fileSize > 1024 else { // At least 1KB
+            #if DEBUG
             print("❌ VALIDATION: File size too small: \(fileSize) bytes")
+            #endif
             return false
         }
         
+        #if DEBUG
         print("✅ VALIDATION: Basic checks passed - Size: \(formatFileSize(fileSize))")
+        #endif
         return true
     }
     
@@ -543,32 +569,42 @@ class VideoProcessingService: ObservableObject {
         // Check basic playability
         let isPlayable = try await asset.load(.isPlayable)
         guard isPlayable else {
+            #if DEBUG
             print("❌ VALIDATION: Video is not playable")
+            #endif
             return false
         }
         
         // Check duration is reasonable
         let duration = try await asset.load(.duration).seconds
         guard duration > 0.1 else {
+            #if DEBUG
             print("❌ VALIDATION: Video duration too short: \(duration)s")
+            #endif
             return false
         }
         
         // Check video tracks exist
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         guard !videoTracks.isEmpty else {
+            #if DEBUG
             print("❌ VALIDATION: No video tracks found")
+            #endif
             return false
         }
         
         // Check file size is reasonable
         let fileSize = getFileSize(videoURL)
         guard fileSize > 1024 else { // At least 1KB
+            #if DEBUG
             print("❌ VALIDATION: File size too small: \(fileSize) bytes")
+            #endif
             return false
         }
         
+        #if DEBUG
         print("✅ VALIDATION: Video passed all checks - Duration: \(String(format: "%.1f", duration))s, Size: \(formatFileSize(fileSize))")
+        #endif
         return true
     }
     
@@ -902,7 +938,9 @@ class VideoProcessingService: ObservableObject {
             let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey])
             return Int64(resourceValues.fileSize ?? 0)
         } catch {
+            #if DEBUG
             print("⚠️ FILE SIZE: Could not get file size for \(url.lastPathComponent)")
+            #endif
             return 0
         }
     }
@@ -935,7 +973,9 @@ class VideoProcessingService: ObservableObject {
             processingMetrics.removeFirst()
         }
         
+        #if DEBUG
         print("📊 PROCESSING SERVICE: Metrics - Duration: \(String(format: "%.2f", duration))s, Quality: \(String(format: "%.1f", qualityScore))%")
+        #endif
     }
     
     func clearError() {

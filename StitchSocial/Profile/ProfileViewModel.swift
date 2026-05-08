@@ -109,7 +109,9 @@ class ProfileViewModel: ObservableObject {
         self.animationController = ProfileAnimationController()
         
         // ðŸ”§ DEBUG: Confirm viewingUserID is received in init
+        #if DEBUG
         print("ðŸ”§ PROFILEVIEWMODEL INIT: viewingUserID = \(viewingUserID ?? "nil")")
+        #endif
         
         // Setup NotificationCenter observers for profile refresh
         setupNotificationObservers()
@@ -129,12 +131,16 @@ class ProfileViewModel: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("PROFILE VIEWMODEL: NotificationCenter observers setup complete")
+        #endif
     }
     
     /// Handle profile refresh notifications from EditProfileView
     private func handleProfileRefreshNotification(_ notification: Notification) async {
+        #if DEBUG
         print("PROFILE VIEWMODEL: Received RefreshProfile notification - triggering refresh")
+        #endif
         
         // Clear cache and extended data to force fresh data load
         cachedUserProfile = nil
@@ -151,9 +157,13 @@ class ProfileViewModel: ObservableObject {
            let currentUserID = currentUser?.id {
             
             if notificationUserID == currentUserID {
+                #if DEBUG
                 print("PROFILE VIEWMODEL: Profile refresh confirmed for user \(currentUserID)")
+                #endif
             } else {
+                #if DEBUG
                 print("PROFILE VIEWMODEL: Profile refresh notification for different user, ignoring")
+                #endif
             }
         }
     }
@@ -161,7 +171,9 @@ class ProfileViewModel: ObservableObject {
     /// Cleanup NotificationCenter observers
     private nonisolated func cleanupNotificationObservers() {
         NotificationCenter.default.removeObserver(self)
+        #if DEBUG
         print("PROFILE VIEWMODEL: NotificationCenter observers cleaned up")
+        #endif
     }
     
     // MARK: - Deinitialization
@@ -172,7 +184,9 @@ class ProfileViewModel: ObservableObject {
             if let uid { BadgeService.shared.stopListening(userID: uid) }
         }
         cleanupNotificationObservers()
+        #if DEBUG
         print("PROFILE VIEWMODEL: Deinitializing with proper cleanup")
+        #endif
     }
     
     // MARK: - INSTANT LOADING IMPLEMENTATION
@@ -183,23 +197,31 @@ class ProfileViewModel: ObservableObject {
         let userIDToLoad: String
         if let viewingUserID = viewingUserID {
             userIDToLoad = viewingUserID
+            #if DEBUG
             print("ðŸ” PROFILE: Loading OTHER user profile - \(userIDToLoad)")
+            #endif
         } else {
             guard let currentUserID = authService.currentUserID else {
                 errorMessage = "Authentication required"
                 return
             }
             userIDToLoad = currentUserID
+            #if DEBUG
             print("ðŸ‘¤ PROFILE: Loading OWN user profile - \(currentUserID)")
+            #endif
         }
         
+        #if DEBUG
         print("PROFILE: Starting instant load for user \(userIDToLoad)")
+        #endif
         
         // STEP 1: Check cache for instant display
         if let cached = getCachedProfile(userID: userIDToLoad) {
             currentUser = cached
             isShowingPlaceholder = false
+            #if DEBUG
             print("PROFILE CACHE HIT: Instant display for \(userIDToLoad)")
+            #endif
             
             // Load enhancements in background
             Task {
@@ -216,7 +238,9 @@ class ProfileViewModel: ObservableObject {
             await loadRealProfileInBackground(userID: userIDToLoad)
         }
         
+        #if DEBUG
         print("PROFILE: UI ready with placeholder")
+        #endif
     }
     
     /// Show placeholder profile for instant display
@@ -232,19 +256,25 @@ class ProfileViewModel: ObservableObject {
         )
         
         isShowingPlaceholder = true
+        #if DEBUG
         print("PROFILE PLACEHOLDER: Showing placeholder")
+        #endif
     }
     
     /// Load real profile data in background
     private func loadRealProfileInBackground(userID: String) async {
         do {
+            #if DEBUG
             print("PROFILE BACKGROUND: Loading real profile data...")
+            #endif
             
             if let userProfile = try await userService.getUser(id: userID) {
                 await MainActor.run {
                     self.currentUser = userProfile
                     self.isShowingPlaceholder = false
+                    #if DEBUG
                     print("PROFILE BACKGROUND: UI updated with fresh profile data - \(userProfile.displayName)")
+                    #endif
                 }
                 
                 // Cache for future instant loads
@@ -262,13 +292,17 @@ class ProfileViewModel: ObservableObject {
                     await loadEnhancementsInBackground(userID: userID)
                 }
                 
+                #if DEBUG
                 print("PROFILE BACKGROUND: Real profile loaded and cached")
+                #endif
             } else {
                 await MainActor.run {
                     self.errorMessage = "Profile not found"
                     self.isShowingPlaceholder = false
                 }
+                #if DEBUG
                 print("PROFILE BACKGROUND: Profile not found in database")
+                #endif
             }
             
         } catch {
@@ -276,7 +310,9 @@ class ProfileViewModel: ObservableObject {
                 self.errorMessage = error.localizedDescription
                 self.isShowingPlaceholder = false
             }
+            #if DEBUG
             print("PROFILE ERROR: Failed to load profile - \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -288,7 +324,9 @@ class ProfileViewModel: ObservableObject {
                     self.userBio = extendedProfile.bio.isEmpty ? nil : extendedProfile.bio
                     self.isUserPrivate = extendedProfile.isPrivate
                 }
+                #if DEBUG
                 print("PROFILE EXTENDED: Loaded bio and privacy settings")
+                #endif
             }
             // Decode signalStats from user doc — sourced from existing read, zero extra cost
             let db = Firestore.firestore(database: Config.Firebase.databaseName)
@@ -304,13 +342,17 @@ class ProfileViewModel: ObservableObject {
                 }
             }
         } catch {
+            #if DEBUG
             print("PROFILE EXTENDED ERROR: Failed to load extended data - \(error.localizedDescription)")
+            #endif
         }
     }
     
     /// Load profile enhancements in background (videos, social data)
     private func loadEnhancementsInBackground(userID: String) async {
+        #if DEBUG
         print("PROFILE ENHANCEMENTS: Loading additional data for \(userID)...")
+        #endif
         
         // Load all enhancements concurrently
         await withTaskGroup(of: Void.self) { group in
@@ -340,7 +382,9 @@ class ProfileViewModel: ObservableObject {
             }
         }
         
+        #if DEBUG
         print("PROFILE ENHANCEMENTS: Background loading complete for \(userID)")
+        #endif
     }
     
     // MARK: - Pinned Videos Methods (NEW)
@@ -350,7 +394,9 @@ class ProfileViewModel: ObservableObject {
         let targetUserID = userID ?? currentUser?.id
         guard let targetUserID = targetUserID else { return }
         
+        #if DEBUG
         print("ðŸ“Œ PINNED: Loading pinned videos for user \(targetUserID)")
+        #endif
         
         do {
             let db = Firestore.firestore(database: Config.Firebase.databaseName)
@@ -361,7 +407,9 @@ class ProfileViewModel: ObservableObject {
                 .getDocument()
             
             guard let userData = userDoc.data() else {
+                #if DEBUG
                 print("ðŸ“Œ PINNED: No user data found")
+                #endif
                 return
             }
             
@@ -373,7 +421,9 @@ class ProfileViewModel: ObservableObject {
             }
             
             guard !pinnedIDs.isEmpty else {
+                #if DEBUG
                 print("ðŸ“Œ PINNED: No pinned videos")
+                #endif
                 await MainActor.run {
                     self.pinnedVideos = []
                 }
@@ -403,37 +453,49 @@ class ProfileViewModel: ObservableObject {
                 self.pinnedVideos = orderedVideos
             }
             
+            #if DEBUG
             print("ðŸ“Œ PINNED: Loaded \(orderedVideos.count) pinned videos")
+            #endif
             
         } catch {
+            #if DEBUG
             print("ðŸ“Œ PINNED ERROR: \(error.localizedDescription)")
+            #endif
         }
     }
     
     /// Pin a video to profile (threads only, max 3)
     func pinVideo(_ video: CoreVideoMetadata) async -> Bool {
         guard let userID = currentUser?.id else {
+            #if DEBUG
             print("ðŸ“Œ PIN ERROR: No current user")
+            #endif
             return false
         }
         
         // Validation: threads only
         guard video.conversationDepth == 0 else {
+            #if DEBUG
             print("ðŸ“Œ PIN ERROR: Only threads can be pinned (depth must be 0)")
+            #endif
             errorMessage = "Only threads can be pinned to your profile"
             return false
         }
         
         // Validation: max 3 pinned
         guard pinnedVideoIDs.count < Self.maxPinnedVideos else {
+            #if DEBUG
             print("ðŸ“Œ PIN ERROR: Maximum \(Self.maxPinnedVideos) pinned videos allowed")
+            #endif
             errorMessage = "You can only pin up to \(Self.maxPinnedVideos) videos"
             return false
         }
         
         // Validation: not already pinned
         guard !pinnedVideoIDs.contains(video.id) else {
+            #if DEBUG
             print("ðŸ“Œ PIN ERROR: Video already pinned")
+            #endif
             return false
         }
         
@@ -460,11 +522,15 @@ class ProfileViewModel: ObservableObject {
                 self.userVideos.removeAll { $0.id == video.id }
             }
             
+            #if DEBUG
             print("ðŸ“Œ PIN SUCCESS: Pinned video \(video.id)")
+            #endif
             return true
             
         } catch {
+            #if DEBUG
             print("ðŸ“Œ PIN ERROR: \(error.localizedDescription)")
+            #endif
             errorMessage = "Failed to pin video: \(error.localizedDescription)"
             return false
         }
@@ -473,12 +539,16 @@ class ProfileViewModel: ObservableObject {
     /// Unpin a video from profile
     func unpinVideo(_ video: CoreVideoMetadata) async -> Bool {
         guard let userID = currentUser?.id else {
+            #if DEBUG
             print("ðŸ“Œ UNPIN ERROR: No current user")
+            #endif
             return false
         }
         
         guard pinnedVideoIDs.contains(video.id) else {
+            #if DEBUG
             print("ðŸ“Œ UNPIN ERROR: Video not pinned")
+            #endif
             return false
         }
         
@@ -505,11 +575,15 @@ class ProfileViewModel: ObservableObject {
                 self.insertVideoChronologically(video)
             }
             
+            #if DEBUG
             print("ðŸ“Œ UNPIN SUCCESS: Unpinned video \(video.id)")
+            #endif
             return true
             
         } catch {
+            #if DEBUG
             print("ðŸ“Œ UNPIN ERROR: \(error.localizedDescription)")
+            #endif
             errorMessage = "Failed to unpin video: \(error.localizedDescription)"
             return false
         }
@@ -540,11 +614,15 @@ class ProfileViewModel: ObservableObject {
     private func loadUserVideosLazily(userID: String? = nil) async {
         let targetUserID = userID ?? currentUser?.id
         guard let targetUserID = targetUserID else {
+            #if DEBUG
             print("PROFILE VIDEOS ERROR: No user ID available")
+            #endif
             return
         }
         
+        #if DEBUG
         print("PROFILE VIDEOS: Loading videos for user \(targetUserID)")
+        #endif
         
         // CACHE: Serve cached videos instantly while Firestore loads
         let cachedVideos = cachingService.getCachedVideosForUser(targetUserID)
@@ -552,7 +630,9 @@ class ProfileViewModel: ObservableObject {
             let filtered = cachedVideos.filter { !pinnedVideoIDs.contains($0.id) && !$0.isCollectionSegment }
             self.userVideos = filtered
             self.isLoadingVideos = false
+            #if DEBUG
             print("PROFILE CACHE: Instant display of \(filtered.count) cached videos")
+            #endif
         } else {
             self.isLoadingVideos = true
         }
@@ -585,7 +665,9 @@ class ProfileViewModel: ObservableObject {
             self.hasMoreVideos = hasMore
             self.isLoadingVideos = false
             
+            #if DEBUG
             print("PROFILE VIDEOS: Loaded \(filteredVideos.count) videos for \(targetUserID) (hasMore: \(hasMore))")
+            #endif
             
         } catch {
             // If Firestore fails but we had cache, keep showing cached data
@@ -593,7 +675,9 @@ class ProfileViewModel: ObservableObject {
                 self.isLoadingVideos = false
                 self.hasMoreVideos = false
             }
+            #if DEBUG
             print("PROFILE VIDEOS ERROR: \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -601,11 +685,15 @@ class ProfileViewModel: ObservableObject {
     func loadMoreVideos() async {
         guard let user = currentUser else { return }
         guard hasMoreVideos && !isLoadingMoreVideos else {
+            #if DEBUG
             print("PROFILE PAGINATION: Skipping - hasMore: \(hasMoreVideos), isLoading: \(isLoadingMoreVideos)")
+            #endif
             return
         }
         guard let lastDoc = lastVideoDocument else {
+            #if DEBUG
             print("PROFILE PAGINATION: No cursor document")
+            #endif
             return
         }
         
@@ -645,13 +733,17 @@ class ProfileViewModel: ObservableObject {
                 self.isLoadingMoreVideos = false
             }
             
+            #if DEBUG
             print("PROFILE PAGINATION: Loaded \(filteredNewVideos.count) more videos, total: \(userVideos.count)")
+            #endif
             
         } catch {
             await MainActor.run {
                 self.isLoadingMoreVideos = false
             }
+            #if DEBUG
             print("PROFILE PAGINATION ERROR: \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -720,13 +812,17 @@ class ProfileViewModel: ObservableObject {
                 self.isLoadingFollowing = false
             }
             
+            #if DEBUG
             print("PROFILE FOLLOWING: Loaded \(followingUsers.count)/\(followingIDs.count) following users")
+            #endif
             
         } catch {
             await MainActor.run {
                 self.isLoadingFollowing = false
             }
+            #if DEBUG
             print("PROFILE FOLLOWING ERROR: \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -754,13 +850,17 @@ class ProfileViewModel: ObservableObject {
                 self.isLoadingMoreFollowing = false
             }
             
+            #if DEBUG
             print("PROFILE FOLLOWING: Loaded more - \(self.loadedFollowingCount)/\(allFollowingIDs.count)")
+            #endif
             
         } catch {
             await MainActor.run {
                 self.isLoadingMoreFollowing = false
             }
+            #if DEBUG
             print("PROFILE FOLLOWING ERROR: \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -791,13 +891,17 @@ class ProfileViewModel: ObservableObject {
                 self.isLoadingFollowers = false
             }
             
+            #if DEBUG
             print("PROFILE FOLLOWERS: Loaded \(followers.count)/\(followerIDs.count) followers")
+            #endif
             
         } catch {
             await MainActor.run {
                 self.isLoadingFollowers = false
             }
+            #if DEBUG
             print("PROFILE FOLLOWERS ERROR: \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -825,13 +929,17 @@ class ProfileViewModel: ObservableObject {
                 self.isLoadingMoreFollowers = false
             }
             
+            #if DEBUG
             print("PROFILE FOLLOWERS: Loaded more - \(self.loadedFollowerCount)/\(allFollowerIDs.count)")
+            #endif
             
         } catch {
             await MainActor.run {
                 self.isLoadingMoreFollowers = false
             }
+            #if DEBUG
             print("PROFILE FOLLOWERS ERROR: \(error.localizedDescription)")
+            #endif
         }
     }
 
@@ -862,7 +970,9 @@ class ProfileViewModel: ObservableObject {
     private func cacheProfile(_ profile: BasicUserInfo) {
         cachedUserProfile = profile
         profileCacheTime = Date()
+        #if DEBUG
         print("PROFILE CACHE: Stored profile for \(profile.username)")
+        #endif
     }
     
     // MARK: - Data Loading (Original Methods for Compatibility)
@@ -886,7 +996,9 @@ class ProfileViewModel: ObservableObject {
     func refreshProfile() async {
         guard let currentUserID = authService.currentUserID else { return }
         
+        #if DEBUG
         print("PROFILE: Manual refresh triggered - clearing cache")
+        #endif
         
         // Clear cache to force fresh data
         cachedUserProfile = nil
@@ -898,7 +1010,9 @@ class ProfileViewModel: ObservableObject {
         
         // Reload profile completely
         await loadProfile()
+        #if DEBUG
         print("PROFILE: Refresh complete with fresh data")
+        #endif
     }
     
     func deleteVideo(_ video: CoreVideoMetadata) async -> Bool {
@@ -910,11 +1024,15 @@ class ProfileViewModel: ObservableObject {
             pinnedVideos.removeAll { $0.id == video.id }
             pinnedVideoIDs.removeAll { $0 == video.id }
             
+            #if DEBUG
             print("PROFILE: Video deleted successfully")
+            #endif
             return true
         } catch {
             errorMessage = "Failed to delete video: \(error.localizedDescription)"
+            #if DEBUG
             print("PROFILE ERROR: Delete failed - \(error.localizedDescription)")
+            #endif
             return false
         }
     }
@@ -985,18 +1103,26 @@ class ProfileViewModel: ObservableObject {
             if isFollowing {
                 try await userService.unfollowUser(followerID: currentUserID, followingID: user.id)
                 isFollowing = false
+                #if DEBUG
                 print("PROFILE: Unfollowed user \(user.username)")
+                #endif
             } else {
                 try await userService.followUser(followerID: currentUserID, followingID: user.id)
                 isFollowing = true
+                #if DEBUG
                 print("PROFILE: Followed user \(user.username)")
+                #endif
                 
                 // Send follow notification via Cloud Function
                 do {
                     try await notificationService.sendFollowNotification(to: user.id)
+                    #if DEBUG
                     print("PROFILE: Follow notification sent to \(user.username)")
+                    #endif
                 } catch {
+                    #if DEBUG
                     print("PROFILE: Follow notification failed (non-fatal) - \(error)")
+                    #endif
                 }
             }
         } catch {
@@ -1036,11 +1162,23 @@ extension ProfileViewModel {
     
     /// Test profile functionality
     func helloWorldTest() {
+        #if DEBUG
         print("PROFILE VIEW MODEL: Hello World - Ready for instant profile loading!")
+        #endif
+        #if DEBUG
         print("PROFILE Features: Instant display, lazy content loading, cached profiles")
+        #endif
+        #if DEBUG
         print("PROFILE Performance: <50ms profile display, background enhancements")
+        #endif
+        #if DEBUG
         print("PROFILE Notifications: NotificationCenter integration active")
+        #endif
+        #if DEBUG
         print("PROFILE Pinning: Up to \(Self.maxPinnedVideos) threads can be pinned")
+        #endif
+        #if DEBUG
         print("PROFILE Pagination: Infinite scroll with \(initialVideoLimit) initial + \(paginationBatchSize) per batch")
+        #endif
     }
 }

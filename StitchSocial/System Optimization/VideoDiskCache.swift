@@ -87,7 +87,9 @@ class VideoDiskCache {
             // Update access time for LRU
             cacheIndex[remoteURL]?.lastAccessedAt = Date()
             
+            #if DEBUG
             print("💾 VIDEO CACHE: Hit for \(remoteURL.suffix(20))")
+            #endif
             return entry.localURL
         }
     }
@@ -137,10 +139,14 @@ class VideoDiskCache {
                 totalCachedBytes += fileSize
             }
             
+            #if DEBUG
             print("💾 VIDEO CACHE: Cached \(formatBytes(fileSize)) for \(remoteURLString.suffix(20))")
+            #endif
             
         } catch {
+            #if DEBUG
             print("⚠️ VIDEO CACHE: Download failed for \(remoteURLString.suffix(20)): \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -162,7 +168,9 @@ class VideoDiskCache {
             cacheIndex.removeAll()
             totalCachedBytes = 0
         }
+        #if DEBUG
         print("🗑️ VIDEO CACHE: Cleared all cached videos")
+        #endif
     }
     
     /// Remove expired entries
@@ -178,7 +186,9 @@ class VideoDiskCache {
             }
             
             if !expired.isEmpty {
+                #if DEBUG
                 print("🧹 VIDEO CACHE: Cleaned \(expired.count) expired entries")
+                #endif
             }
         }
     }
@@ -195,7 +205,9 @@ class VideoDiskCache {
                 cacheIndex.removeValue(forKey: key)
             }
             
+            #if DEBUG
             print("🔴 VIDEO CACHE: Emergency cleanup - kept \(keepCount), removed \(toRemove.count)")
+            #endif
         }
     }
     
@@ -223,7 +235,9 @@ class VideoDiskCache {
         guard let entry = cacheIndex.removeValue(forKey: key) else { return }
         try? FileManager.default.removeItem(at: entry.localURL)
         totalCachedBytes -= entry.fileSize
+        #if DEBUG
         print("💾 VIDEO CACHE: Evicted \(formatBytes(entry.fileSize)) - \(key.suffix(20))")
+        #endif
     }
     
     /// Rebuild cache index from files on disk (app relaunch)
@@ -246,7 +260,9 @@ class VideoDiskCache {
             }
         }
         
+        #if DEBUG
         print("💾 VIDEO CACHE: Rebuilt index - \(formatBytes(totalCachedBytes)) on disk")
+        #endif
     }
     
     private func formatBytes(_ bytes: Int64) -> String {

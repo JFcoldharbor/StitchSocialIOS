@@ -59,7 +59,9 @@ class SuggestionService: ObservableObject {
         self.followManager = followManager ?? FollowManager.shared
         self.userService = userService ?? UserService()
         
+        #if DEBUG
         print("💡 SUGGESTION SERVICE: Initialized with user tracking")
+        #endif
     }
     
     // MARK: - Main Methods
@@ -69,11 +71,15 @@ class SuggestionService: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         
+        #if DEBUG
         print("💡 SUGGESTION: Getting suggestions (shown: \(shownUserIDs.count))")
+        #endif
         
         // Get current user to filter out people they follow
         guard let currentUserID = Auth.auth().currentUser?.uid else {
+            #if DEBUG
             print("❌ SUGGESTION: No auth user")
+            #endif
             return []
         }
         
@@ -83,7 +89,9 @@ class SuggestionService: ObservableObject {
         // Use SearchService's getSuggestedUsers method
         let allSuggestions = try await searchService.getSuggestedUsers(limit: fetchLimit)
         
+        #if DEBUG
         print("💡 SUGGESTION: Got \(allSuggestions.count) raw suggestions")
+        #endif
         
         // ✅ FIX: Filter out already shown AND already following
         let followingIDs = try await userService.getFollowingIDs(userID: currentUserID)
@@ -96,7 +104,9 @@ class SuggestionService: ObservableObject {
             return notShown && notFollowing && notSelf
         }
         
+        #if DEBUG
         print("💡 SUGGESTION: Filtered to \(filteredSuggestions.count) new suggestions")
+        #endif
         
         // Take only what we need
         let finalSuggestions = Array(filteredSuggestions.prefix(limit))
@@ -108,19 +118,25 @@ class SuggestionService: ObservableObject {
         
         // ✅ FIX: Reset tracking if we've shown too many
         if shownUserIDs.count > maxShownBeforeReset {
+            #if DEBUG
             print("💡 SUGGESTION: Resetting shown users (had \(shownUserIDs.count))")
+            #endif
             shownUserIDs.removeAll()
         }
         
         lastRefreshTime = Date()
         
+        #if DEBUG
         print("💡 SUGGESTION: Returning \(finalSuggestions.count) unique suggestions")
+        #endif
         return finalSuggestions
     }
     
     /// Refresh suggestions manually (clears shown tracking)
     func refreshSuggestions(limit: Int = 10) async throws -> [BasicUserInfo] {
+        #if DEBUG
         print("💡 SUGGESTION: Manual refresh - clearing shown users")
+        #endif
         
         // ✅ FIX: Clear shown users on manual refresh for truly new content
         shownUserIDs.removeAll()
@@ -149,7 +165,9 @@ class SuggestionService: ObservableObject {
                 return currentVideoIndex > 0 && currentVideoIndex % 15 == 0
             }
         } catch {
+            #if DEBUG
             print("❌ SUGGESTION: Error checking show condition: \(error)")
+            #endif
             return false
         }
     }
@@ -161,7 +179,9 @@ class SuggestionService: ObservableObject {
             let followingIDs = try await userService.getFollowingIDs(userID: userID)
             return followingIDs.count
         } catch {
+            #if DEBUG
             print("❌ SUGGESTION: Error getting following count: \(error)")
+            #endif
             return 0
         }
     }
@@ -186,7 +206,9 @@ class SuggestionService: ObservableObject {
         if let cachedAt = mutualCachedAt,
            Date().timeIntervalSince(cachedAt) < mutualCacheTTL,
            !mutualSuggestions.isEmpty {
+            #if DEBUG
             print("👥 SUGGESTIONS: Returning cached \(mutualSuggestions.count) mutual suggestions")
+            #endif
             return
         }
         
@@ -200,7 +222,9 @@ class SuggestionService: ObservableObject {
         if let precomputed = await loadPrecomputedSuggestions(userID: userID) {
             mutualSuggestions = precomputed
             mutualCachedAt = Date()
+            #if DEBUG
             print("👥 SUGGESTIONS: Loaded \(precomputed.count) pre-computed mutual suggestions")
+            #endif
             return
         }
         
@@ -208,7 +232,9 @@ class SuggestionService: ObservableObject {
         let computed = await computeMutualFollowers(userID: userID)
         mutualSuggestions = computed
         mutualCachedAt = Date()
+        #if DEBUG
         print("👥 SUGGESTIONS: Computed \(computed.count) mutual suggestions client-side")
+        #endif
     }
     
     /// Read pre-computed suggestions from socialSignals subcollection — 1 doc read.
@@ -242,7 +268,9 @@ class SuggestionService: ObservableObject {
                 )
             }
         } catch {
+            #if DEBUG
             print("⚠️ SUGGESTIONS: Pre-computed read failed: \(error)")
+            #endif
             return nil
         }
     }
@@ -318,7 +346,9 @@ class SuggestionService: ObservableObject {
                 )
             }
         } catch {
+            #if DEBUG
             print("⚠️ SUGGESTIONS: Mutual compute failed: \(error)")
+            #endif
             return []
         }
     }
@@ -350,7 +380,9 @@ class SuggestionService: ObservableObject {
                     results[doc.documentID] = doc.data()
                 }
             } catch {
+                #if DEBUG
                 print("⚠️ SUGGESTIONS: Batch profile fetch failed: \(error)")
+                #endif
             }
         }
         
@@ -381,9 +413,13 @@ class SuggestionService: ObservableObject {
         do {
             try await batch.commit()
             PrivacyService.shared.invalidateFollowingCache()
+            #if DEBUG
             print("👥 SUGGESTIONS: Followed \(suggestionID)")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ SUGGESTIONS: Follow failed: \(error)")
+            #endif
             if let index = mutualSuggestions.firstIndex(where: { $0.id == suggestionID }) {
                 mutualSuggestions[index].isFollowed = false
             }
@@ -401,7 +437,9 @@ class SuggestionService: ObservableObject {
     /// Reset shown user tracking (for testing)
     func resetShownUsers() {
         shownUserIDs.removeAll()
+        #if DEBUG
         print("💡 SUGGESTION: Manually reset shown users")
+        #endif
     }
     
     /// Get stats for debugging

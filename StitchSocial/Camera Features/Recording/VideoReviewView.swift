@@ -362,7 +362,9 @@ struct VideoReviewView: View {
     // MARK: - Actions
     
     private func startAutoPlayback() {
+        #if DEBUG
         print("🔍 PLAYBACK DEBUG 1: startAutoPlayback called")
+        #endif
         // Use .playAndRecord to coexist with camera session if it's still active.
         // .defaultToSpeaker routes audio to speaker instead of earpiece.
         do {
@@ -370,14 +372,22 @@ struct VideoReviewView: View {
                 .playAndRecord, mode: .default,
                 options: [.defaultToSpeaker, .allowBluetooth])
             try AVAudioSession.sharedInstance().setActive(true)
+            #if DEBUG
             print("🔍 PLAYBACK DEBUG 2: Audio session set ✅")
+            #endif
         } catch {
+            #if DEBUG
             print("🔍 PLAYBACK DEBUG 2: Audio session FAILED — \(error)")
+            #endif
         }
+        #if DEBUG
         print("🔍 PLAYBACK DEBUG 3: Player status = \(editState.player.status.rawValue), currentItem = \(editState.player.currentItem != nil)")
+        #endif
         editState.play()
         isPlaying = true
+        #if DEBUG
         print("🔍 PLAYBACK DEBUG 4: play() called, rate = \(editState.player.rate)")
+        #endif
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: editState.player.currentItem,
@@ -400,15 +410,21 @@ struct VideoReviewView: View {
             object: editState.player.currentItem
         )
         
+        #if DEBUG
         print("â¸ï¸ VIDEO REVIEW: Stopped playback on disappear")
+        #endif
     }
     
     private func saveDraft() async {
         do {
             try await draftManager.saveDraft(editState.state)
+            #if DEBUG
             print("ðŸ’¾ REVIEW: Draft saved")
+            #endif
         } catch {
+            #if DEBUG
             print("âŒ REVIEW: Failed to save draft: \(error)")
+            #endif
         }
     }
     
@@ -451,13 +467,17 @@ struct VideoReviewView: View {
             !editState.state.isProcessingComplete || editState.state.hasTextOverlays
         )
         if needsExport {
+            #if DEBUG
             print("📤 REVIEW: Exporting — overlays=\(editState.state.textOverlays.count)")
+            #endif
             editState.startProcessing()
             do {
                 let result = try await exportService.exportVideo(editState: editState.state)
                 editState.finishProcessing(videoURL: result.videoURL, thumbnailURL: result.thumbnailURL)
             } catch {
+                #if DEBUG
                 print("❌ REVIEW: Export failed: \(error)")
+                #endif
                 exportService.exportError = error.localizedDescription
                 showingExportError = true
                 return
@@ -554,10 +574,16 @@ class VideoEditStateManager: ObservableObject {
     
     init(initialState: VideoEditState) {
         self.state = initialState
+        #if DEBUG
         print("🔍 PLAYER DEBUG 1: Creating AVPlayer for \(initialState.videoURL.lastPathComponent)")
+        #endif
+        #if DEBUG
         print("🔍 PLAYER DEBUG 2: File exists = \(FileManager.default.fileExists(atPath: initialState.videoURL.path))")
+        #endif
         self.player = AVPlayer(url: initialState.videoURL)
+        #if DEBUG
         print("🔍 PLAYER DEBUG 3: AVPlayer created, status = \(player.status.rawValue)")
+        #endif
         
         // Track playback position at 30fps for smooth playhead
         timeObserver = player.addPeriodicTimeObserver(
@@ -570,7 +596,9 @@ class VideoEditStateManager: ObservableObject {
                 self.isPlaying = (self.player.rate > 0)
             }
         }
+        #if DEBUG
         print("🔍 PLAYER DEBUG 4: Time observer added")
+        #endif
         
         Task {
             await loadVideoProperties()
@@ -604,7 +632,9 @@ class VideoEditStateManager: ObservableObject {
                     height: abs(transformedSize.height)
                 )
                 
+                #if DEBUG
                 print("📐 VIDEO REVIEW: naturalSize=\(naturalSize), corrected=\(size), duration=\(String(format: "%.1f", duration))s")
+                #endif
                 
                 // Update state with actual properties
                 await MainActor.run {
@@ -620,7 +650,9 @@ class VideoEditStateManager: ObservableObject {
                 }
             }
         } catch {
+            #if DEBUG
             print("❌ VIDEO REVIEW: Failed to load video properties: \(error)")
+            #endif
         }
     }
     
@@ -645,14 +677,22 @@ class VideoEditStateManager: ObservableObject {
                     state.addCaption(caption)
                 }
                 
+                #if DEBUG
                 print("âœ… VIDEO REVIEW: Auto-generated \(captions.count) captions")
+                #endif
             }
         } catch CaptionError.noAudioTrack {
+            #if DEBUG
             print("â„¹ï¸ VIDEO REVIEW: No audio track - skipping auto-captions")
+            #endif
         } catch CaptionError.authorizationDenied {
+            #if DEBUG
             print("âš ï¸ VIDEO REVIEW: Speech recognition not authorized - skipping auto-captions")
+            #endif
         } catch {
+            #if DEBUG
             print("âš ï¸ VIDEO REVIEW: Auto-caption failed: \(error)")
+            #endif
         }
     }
     

@@ -252,7 +252,9 @@ struct ProfileView: View {
                 video: presentation.video,
                 overlayContext: presentation.context,
                 onDismiss: {
+                    #if DEBUG
                     print("ðŸ“± PROFILE: Dismissing fullscreen")
+                    #endif
                     NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
                     videoPresentation = nil
                 }
@@ -343,7 +345,9 @@ struct ProfileView: View {
             allCollectionsSheet
         }
         .onChange(of: videoPresentation) { oldValue, newValue in
+            #if DEBUG
             print("ðŸ” DEBUG: videoPresentation changed to \(newValue?.id ?? "nil")")
+            #endif
         }
         .alert("Delete Video", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
@@ -511,10 +515,14 @@ struct ProfileView: View {
                 // Remove from local array — instant UI update
                 userCollections.removeAll { $0.id == collection.id }
                 
+                #if DEBUG
                 print("PROFILE: Deleted collection \(collection.id)")
+                #endif
             } catch {
                 collectionError = "Failed to delete collection: \(error.localizedDescription)"
+                #if DEBUG
                 print("PROFILE: Failed to delete collection: \(error)")
+                #endif
             }
         }
     }
@@ -554,7 +562,9 @@ struct ProfileView: View {
                 teenLocked = true
             }
         } catch {
+            #if DEBUG
             print("ProfileView: ageGate read failed — \(error.localizedDescription)")
+            #endif
         }
     }
 
@@ -599,9 +609,13 @@ struct ProfileView: View {
             }
             userCollections = merged
             
+            #if DEBUG
             print("PROFILE: Loaded \(merged.count) total collections (\(showEpisodes.count) from shows)")
+            #endif
         } catch {
+            #if DEBUG
             print("âŒ PROFILE: Failed to load collections: \(error)")
+            #endif
         }
         
         isLoadingCollections = false
@@ -1158,7 +1172,9 @@ struct ProfileView: View {
                 Task {
                     let success = await viewModel.pinVideo(video)
                     if success {
+                        #if DEBUG
                         print("ðŸ“Œ PROFILE: Pinned video \(video.id)")
+                        #endif
                     }
                 }
             },
@@ -1166,7 +1182,9 @@ struct ProfileView: View {
                 Task {
                     let success = await viewModel.unpinVideo(video)
                     if success {
+                        #if DEBUG
                         print("ðŸ“Œ PROFILE: Unpinned video \(video.id)")
+                        #endif
                     }
                 }
             },
@@ -1184,7 +1202,9 @@ struct ProfileView: View {
     // MARK: - Video Navigation (FIXED - Routes to ThreadView or FullscreenVideoView)
     
     private func openVideoInFullscreen(video: CoreVideoMetadata) {
+        #if DEBUG
         print("\u{1F4F1} PROFILE: Tapped video \(video.id.prefix(8)) depth=\(video.conversationDepth)")
+        #endif
         
         // Kill all players first
         NotificationCenter.default.post(name: .killAllVideoPlayers, object: nil)
@@ -1222,7 +1242,9 @@ struct ProfileView: View {
     private func deleteVideo(_ video: CoreVideoMetadata) async {
         let success = await viewModel.deleteVideo(video)
         if success {
+            #if DEBUG
             print("Video deleted successfully")
+            #endif
         }
     }
     
@@ -1232,7 +1254,9 @@ struct ProfileView: View {
         
         let success = await viewModel.deleteVideo(video)
         if success {
+            #if DEBUG
             print("Video deleted successfully: \(video.title)")
+            #endif
         }
         
         isDeletingVideo = false

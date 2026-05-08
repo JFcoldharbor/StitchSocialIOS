@@ -754,7 +754,9 @@ struct SettingsView: View {
             _ = try await HypeCoinService.shared.fetchBalance(userID: user.id)
             _ = try await SubscriptionService.shared.fetchMySubscriptions(userID: user.id)
         } catch {
+            #if DEBUG
             print("⚠️ SETTINGS: Failed to load data - \(error.localizedDescription)")
+            #endif
         }
     }
     

@@ -92,7 +92,9 @@ class PrivacyService: ObservableObject {
         await privacyTask
         await followingTask
         
+        #if DEBUG
         print("🔒 PRIVACY: Session loaded — ageGroup=\(cachedAgeGroup.rawValue), following=\(cachedFollowingIDs.count)")
+        #endif
     }
     
     // MARK: - Privacy Settings CRUD
@@ -107,9 +109,13 @@ class PrivacyService: ObservableObject {
             currentPrivacy = settings
             cachedAgeGroup = settings.ageGroup
             
+            #if DEBUG
             print("🔒 PRIVACY: Loaded settings for \(userID) — visibility=\(settings.accountVisibility.rawValue)")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ PRIVACY: Failed to load settings: \(error)")
+            #endif
             currentPrivacy = .default
             cachedAgeGroup = .adult
         }
@@ -125,7 +131,9 @@ class PrivacyService: ObservableObject {
         currentPrivacy = settings
         cachedAgeGroup = settings.ageGroup
         
+        #if DEBUG
         print("🔒 PRIVACY: Saved settings for \(userID)")
+        #endif
     }
     
     // MARK: - Following List Cache
@@ -141,16 +149,22 @@ class PrivacyService: ObservableObject {
             cachedFollowingIDs = Set(snapshot.documents.map { $0.documentID })
             followingListFetchedAt = Date()
             
+            #if DEBUG
             print("🔒 PRIVACY: Cached \(cachedFollowingIDs.count) following IDs")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ PRIVACY: Failed to load following list: \(error)")
+            #endif
         }
     }
     
     /// Invalidate following cache (called on follow/unfollow)
     func invalidateFollowingCache() {
         followingListFetchedAt = nil
+        #if DEBUG
         print("🔒 PRIVACY: Following cache invalidated")
+        #endif
     }
     
     /// Refresh following list if stale (>10 min) or invalidated
@@ -199,9 +213,13 @@ class PrivacyService: ObservableObject {
                     creatorPrivacyCacheTimestamps[doc.documentID] = now
                 }
                 
+                #if DEBUG
                 print("🔒 PRIVACY: Batch-cached \(snapshot.documents.count) creator privacy settings")
+                #endif
             } catch {
+                #if DEBUG
                 print("⚠️ PRIVACY: Batch fetch failed: \(error)")
+                #endif
             }
         }
     }
@@ -290,7 +308,9 @@ class PrivacyService: ObservableObject {
         creatorPrivacyCache.removeAll()
         creatorPrivacyCacheTimestamps.removeAll()
         currentPrivacy = .default
+        #if DEBUG
         print("🔒 PRIVACY: Session cleared")
+        #endif
     }
     
     // MARK: - Private Helpers

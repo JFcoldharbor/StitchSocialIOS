@@ -674,7 +674,9 @@ struct ThreadView: View {
                     self.currentLaneAnchorID = childVideo.id
                 }
             } catch {
+                #if DEBUG
                 print("❌ LANE: Failed to load conversation — \(error.localizedDescription)")
+                #endif
             }
         }
     }

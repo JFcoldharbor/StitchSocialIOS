@@ -93,7 +93,9 @@ class AgoraStreamService: NSObject, ObservableObject {
         agoraEngine?.setParameters("{\"rtc.video.degradation_preference\": 0}")
         agoraEngine?.setAudioProfile(.default)
         
+        #if DEBUG
         print("✅ AGORA: Engine initialized (480p@24fps)")
+        #endif
     }
     
     // MARK: - Start Broadcasting (Creator)
@@ -134,7 +136,9 @@ class AgoraStreamService: NSObject, ObservableObject {
             connectionState = .connecting
         }
         
+        #if DEBUG
         print("✅ AGORA: Joining channel '\(channelName)' as broadcaster")
+        #endif
     }
     
     // MARK: - Join as Viewer
@@ -166,7 +170,9 @@ class AgoraStreamService: NSObject, ObservableObject {
             connectionState = .connecting
         }
         
+        #if DEBUG
         print("✅ AGORA: Joining channel '\(channelName)' as viewer")
+        #endif
     }
     
     // MARK: - Leave Channel
@@ -188,7 +194,9 @@ class AgoraStreamService: NSObject, ObservableObject {
         isCameraOff = false
         connectionState = .disconnected
         
+        #if DEBUG
         print("✅ AGORA: Left channel")
+        #endif
     }
     
     // MARK: - Controls
@@ -214,7 +222,9 @@ class AgoraStreamService: NSObject, ObservableObject {
         leaveChannel()
         AgoraRtcEngineKit.destroy()
         agoraEngine = nil
+        #if DEBUG
         print("✅ AGORA: Engine destroyed")
+        #endif
     }
 }
 
@@ -226,7 +236,9 @@ extension AgoraStreamService: AgoraRtcEngineDelegate {
         DispatchQueue.main.async {
             self.isJoined = true
             self.connectionState = .connected
+            #if DEBUG
             print("✅ AGORA: Joined channel '\(channel)' uid=\(uid)")
+            #endif
         }
     }
     
@@ -251,7 +263,9 @@ extension AgoraStreamService: AgoraRtcEngineDelegate {
                 }
             }
             
+            #if DEBUG
             print("✅ AGORA: Remote user \(uid) joined (viewers: \(self.viewerCount))")
+            #endif
         }
     }
     
@@ -266,7 +280,9 @@ extension AgoraStreamService: AgoraRtcEngineDelegate {
                 self.remoteUID = 0
             }
             
+            #if DEBUG
             print("✅ AGORA: Remote user \(uid) left (viewers: \(self.viewerCount))")
+            #endif
         }
     }
     

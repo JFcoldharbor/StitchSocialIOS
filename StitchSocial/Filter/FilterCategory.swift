@@ -141,7 +141,9 @@ struct FilterSeed {
             batch.setData(filter.toFirestore(), forDocument: ref)
         }
         try? await batch.commit()
+        #if DEBUG
         print("🌱 FILTERS: Seeded \(filters.count) filters to Firestore")
+        #endif
     }
 
     static let defaultFilters: [FilterManifest] = [

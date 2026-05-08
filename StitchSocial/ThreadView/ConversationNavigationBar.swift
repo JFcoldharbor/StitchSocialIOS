@@ -31,7 +31,9 @@ struct ConversationNavigationBar: View {
                             messageCount: getMessageCount(for: reply)
                         )
                         .onTapGesture {
+                            #if DEBUG
                             print("🎬 NAV BAR: Selected reply from \(reply.creatorName)")
+                            #endif
                             onSelectReply(reply)
                         }
                     }

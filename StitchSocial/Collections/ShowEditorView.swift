@@ -483,7 +483,9 @@ struct ShowEditorView: View {
         show.totalEpisodes = episodesBySeasonId.values.flatMap { $0 }.count
         do {
             try await showService.saveShow(show)
+            #if DEBUG
             print(isNew ? "✅ SHOW EDITOR: Created new show \(show.id)" : "✅ SHOW EDITOR: Updated show \(show.id)")
+            #endif
             onSave?(show)
         }
         catch { print("❌ SHOW EDITOR: Save failed: \(error)") }
@@ -647,10 +649,14 @@ struct ShowEditorView: View {
                 show.coverImageURL = downloadURL.absoluteString
                 isUploadingCover = false
             }
+            #if DEBUG
             print("📸 SHOW EDITOR: Cover uploaded")
+            #endif
         } catch {
             await MainActor.run { isUploadingCover = false }
+            #if DEBUG
             print("❌ SHOW EDITOR: Cover upload failed: \(error)")
+            #endif
         }
     }
     
@@ -685,10 +691,14 @@ struct ShowEditorView: View {
                 show.coverImageURL = downloadURL.absoluteString
                 isUploadingCover = false
             }
+            #if DEBUG
             print("📸 SHOW EDITOR: Cover uploaded from Files")
+            #endif
         } catch {
             await MainActor.run { isUploadingCover = false }
+            #if DEBUG
             print("❌ SHOW EDITOR: File import failed: \(error)")
+            #endif
         }
     }
     

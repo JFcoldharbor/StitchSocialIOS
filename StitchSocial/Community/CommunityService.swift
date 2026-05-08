@@ -123,9 +123,13 @@ class CommunityService: ObservableObject {
             isMemberCache[cacheKey] = CachedItem(value: true, cachedAt: Date(), ttl: membershipTTL)
             communityListCache = nil
             
+            #if DEBUG
             print("✅ COMMUNITY: Auto-joined \(username) to Stitch Social official")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ COMMUNITY: Auto-join failed - \(error.localizedDescription)")
+            #endif
         }
     }
     // MARK: - Create Community (Influencer+ Only)
@@ -187,7 +191,9 @@ class CommunityService: ObservableObject {
         self.currentCommunity = community
         self.currentMembership = ownerMembership
         
+        #if DEBUG
         print("✅ COMMUNITY: Created for \(creatorUsername), owner membership added")
+        #endif
         return community
     }
     
@@ -212,7 +218,9 @@ class CommunityService: ObservableObject {
             let existingDoc = try await existingRef.getDocument()
             
             if existingDoc.exists {
+                #if DEBUG
                 print("ℹ️ COMMUNITY: Already exists for \(creatorUsername), skipping auto-create")
+                #endif
                 return
             }
             
@@ -246,9 +254,13 @@ class CommunityService: ObservableObject {
             isMemberCache[cacheKey] = CachedItem(value: true, cachedAt: Date(), ttl: membershipTTL)
             communityListCache = nil
             
+            #if DEBUG
             print("✅ COMMUNITY: Auto-created (inactive) for \(creatorUsername), owner membership added")
+            #endif
         } catch {
+            #if DEBUG
             print("⚠️ COMMUNITY: Auto-create failed for \(creatorUsername): \(error.localizedDescription)")
+            #endif
         }
     }
     
@@ -284,7 +296,9 @@ class CommunityService: ObservableObject {
         communityCache[creatorID] = CachedItem(value: community, cachedAt: Date(), ttl: communityTTL)
         self.currentCommunity = community
         
+        #if DEBUG
         print("✅ COMMUNITY: Activated for \(creatorID)")
+        #endif
         return community
     }
     
@@ -301,7 +315,9 @@ class CommunityService: ObservableObject {
         
         communityCache.removeValue(forKey: creatorID)
         
+        #if DEBUG
         print("⏸️ COMMUNITY: Deactivated for \(creatorID)")
+        #endif
     }
     
     // MARK: - Fetch Community Status (For Settings UI)
@@ -368,7 +384,9 @@ class CommunityService: ObservableObject {
         // Invalidate cache
         communityCache.removeValue(forKey: creatorID)
         
+        #if DEBUG
         print("✅ COMMUNITY: Updated \(creatorID)")
+        #endif
     }
     
     // MARK: - Join Community (Subscribe Required)
@@ -472,7 +490,9 @@ class CommunityService: ObservableObject {
         
         self.currentMembership = membership
         
+        #if DEBUG
         print("✅ COMMUNITY: \(username) joined \(creatorID)")
+        #endif
         return membership
     }
     
@@ -508,7 +528,9 @@ class CommunityService: ObservableObject {
         
         self.currentMembership = nil
         
+        #if DEBUG
         print("❌ COMMUNITY: \(userID) left \(creatorID)")
+        #endif
     }
     
     // MARK: - Check Membership (Cached)
@@ -652,7 +674,9 @@ class CommunityService: ObservableObject {
         self.myCommunities = listItems
         communityListCache = CachedItem(value: listItems, cachedAt: Date(), ttl: listTTL)
         
+        #if DEBUG
         print("✅ COMMUNITY: Loaded \(listItems.count) communities for \(userID)")
+        #endif
         return listItems
     }
     
@@ -700,7 +724,9 @@ class CommunityService: ObservableObject {
         self.allCommunities = items
         allCommunitiesCache = CachedItem(value: items, cachedAt: Date(), ttl: listTTL)
         
+        #if DEBUG
         print("✅ COMMUNITY: Loaded \(items.count) public communities")
+        #endif
         return items
     }
     
@@ -747,7 +773,9 @@ class CommunityService: ObservableObject {
         membershipCache.removeValue(forKey: cacheKey)
         isMemberCache[cacheKey] = CachedItem(value: false, cachedAt: Date(), ttl: membershipTTL)
         
+        #if DEBUG
         print("🚫 COMMUNITY: Banned \(userID) from \(creatorID)")
+        #endif
     }
     
     @MainActor
@@ -762,7 +790,9 @@ class CommunityService: ObservableObject {
         membershipCache.removeValue(forKey: cacheKey)
         isMemberCache.removeValue(forKey: cacheKey)
         
+        #if DEBUG
         print("✅ COMMUNITY: Unbanned \(userID) from \(creatorID)")
+        #endif
     }
     
     // MARK: - Set Moderator (Creator Only)
@@ -786,7 +816,9 @@ class CommunityService: ObservableObject {
         // Invalidate cache
         membershipCache.removeValue(forKey: "\(userID)_\(creatorID)")
         
+        #if DEBUG
         print("✅ COMMUNITY: \(userID) mod status = \(isMod) in \(creatorID)")
+        #endif
     }
     
     // MARK: - Feature Gate Check (Cached via Membership)
