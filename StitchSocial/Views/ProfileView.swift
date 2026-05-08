@@ -12,6 +12,7 @@
 
 import SwiftUI
 import PhotosUI
+import FirebaseFirestore
 
 struct ProfileView: View {
     
@@ -121,10 +122,14 @@ struct ProfileView: View {
     
     // MARK: - Main Body
 
+    @State private var showingBirthdayPrompt = false
+    @State private var showingUnder13Block = false
+    @State private var teenLocked = false
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            
+
             if viewModel.isLoading {
                 loadingView
             } else if let error = viewModel.errorMessage {
@@ -133,6 +138,36 @@ struct ProfileView: View {
                 profileContent(user: user)
             } else {
                 noUserView
+            }
+
+            // Age-gate overlays — only on the user's own profile.
+            if viewModel.isOwnProfile, let user = viewModel.currentUser {
+                if showingUnder13Block {
+                    Under13BlockedView(onAcknowledged: {
+                        showingUnder13Block = false
+                        // Sign-out already happened in the prompt.
+                    })
+                    .transition(.opacity)
+                } else if teenLocked {
+                    TeenLockedView(
+                        displayName: user.displayName,
+                        onSignOut: { teenLocked = false }
+                    )
+                    .transition(.opacity)
+                } else if showingBirthdayPrompt {
+                    BirthdayPromptView(
+                        userID: user.id,
+                        onCompleted: { group in
+                            showingBirthdayPrompt = false
+                            if group == .teen { teenLocked = true }
+                        },
+                        onUnder13: {
+                            showingBirthdayPrompt = false
+                            showingUnder13Block = true
+                        }
+                    )
+                    .transition(.opacity)
+                }
             }
             
             // Close button for viewing other user's profile
@@ -178,6 +213,7 @@ struct ProfileView: View {
         .task(id: viewingUserID) {
             await viewModel.loadProfile()
             await loadCollections()
+            await evaluateAgeGate()
         }
 .onAppear {
             if let user = viewModel.currentUser {
@@ -483,8 +519,47 @@ struct ProfileView: View {
         }
     }
     
+    // MARK: - Age Gate (force DOB on first own-profile load)
+
+    private func evaluateAgeGate() async {
+        guard viewModel.isOwnProfile, let user = viewModel.currentUser else { return }
+
+        // Read the user doc directly so we don't depend on whatever cached
+        // BasicUserInfo the VM exposes.  Self-attest birthdate lives at
+        // users/{id}.privacySettings.birthdate.
+        let db = Firestore.firestore(database: Config.Firebase.databaseName)
+        do {
+            let snap = try await db.collection("users").document(user.id).getDocument()
+            let privacy = snap.get("privacySettings") as? [String: Any]
+            let blocked = privacy?["ageGroup"] as? String == "blocked"
+
+            if blocked {
+                showingUnder13Block = true
+                return
+            }
+
+            let dob = (privacy?["birthdate"] as? Timestamp)?.dateValue()
+            guard let dob = dob else {
+                // Missing — show prompt
+                showingBirthdayPrompt = true
+                return
+            }
+
+            // Have DOB — re-derive lane locally for gate decisions.  Server
+            // is authoritative via custom claim; this is just for UX.
+            let age = Calendar.current.dateComponents([.year], from: dob, to: Date()).year ?? 0
+            if age < 13 {
+                showingUnder13Block = true
+            } else if age < 18 {
+                teenLocked = true
+            }
+        } catch {
+            print("ProfileView: ageGate read failed — \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Collections Loading
-    
+
     private func loadCollections() async {
         guard let userID = viewModel.currentUser?.id else { return }
         

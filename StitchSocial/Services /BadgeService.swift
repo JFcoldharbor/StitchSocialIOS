@@ -136,13 +136,27 @@ final class BadgeService: ObservableObject {
     // from the same user doc snapshot that triggered tier advancement.
     // CACHING: earnedBadgeCache check prevents duplicate awards without a read.
     func evaluateTierBadge(userID: String, newTierRaw: String) async {
-        let badgeID = "tier_\(newTierRaw)"   // e.g. "tier_rising", "tier_elite"
+        // Founder/co-founder don't have a `tier_founder` catalog entry —
+        // their tier badge is `tier_founder_crest`. They also get the
+        // identity badge `founder_badge`. Both live as `isManuallyAwarded`
+        // so the auto-evaluator never touches them.
+        let toAward: [String]
+        switch newTierRaw {
+        case "founder", "co_founder":
+            toAward = ["tier_founder_crest", "founder_badge"]
+        default:
+            toAward = ["tier_\(newTierRaw)"]
+        }
+
         let alreadyEarned = Set(earnedBadges(for: userID).map { $0.id })
-        guard !alreadyEarned.contains(badgeID),
-              BadgeDefinition.findBadge(id: badgeID) != nil else { return }
-        await batchWrite(userID: userID, badges: [
-            EarnedBadge(id: badgeID, earnedAt: Date(), isPinned: false, isNew: true)
-        ])
+        let now = Date()
+        let pending: [EarnedBadge] = toAward.compactMap { id in
+            guard !alreadyEarned.contains(id),
+                  BadgeDefinition.findBadge(id: id) != nil else { return nil }
+            return EarnedBadge(id: id, earnedAt: now, isPinned: false, isNew: true)
+        }
+        guard !pending.isEmpty else { return }
+        await batchWrite(userID: userID, badges: pending)
     }
 
     // MARK: - Pin / Unpin

@@ -115,13 +115,10 @@ struct ContentView: View {
             }
         }
         .fullScreenCover(isPresented: $showingRecording) {
-            RecordingView(
-                recordingContext: .newThread,
+            StableRecordingCover(
+                showingRecording: $showingRecording,
                 onVideoCreated: { videoMetadata in
                     handleVideoCreated(videoMetadata)
-                },
-                onCancel: {
-                    showingRecording = false
                 }
             )
         }
@@ -646,3 +643,5 @@ struct ThreadNavItem: Identifiable {
         .environmentObject(AuthService())
         .preferredColorScheme(.dark)
 }
+
+//

@@ -722,14 +722,11 @@ struct ContextualVideoOverlay: View {
             )
         }
         .fullScreenCover(isPresented: $showingStitchRecording) {
-            RecordingView(
-                recordingContext: getStitchRecordingContext(),
-                onVideoCreated: { videoMetadata in
-                    showingStitchRecording = false
+            StitchRecordingCover(
+                isPresented: $showingStitchRecording,
+                getContext: { [self] in getStitchRecordingContext() },
+                onVideoCreated: { _ in
                     Task { await loadVideoEngagement() }
-                },
-                onCancel: {
-                    showingStitchRecording = false
                 }
             )
         }
@@ -1165,7 +1162,8 @@ struct ContextualVideoOverlay: View {
                 creatorID: video.creatorID,
                 thumbnailURL: video.thumbnailURL,
                 participantCount: 1,
-                stitchCount: video.replyCount
+                stitchCount: video.replyCount,
+                videoURL: video.videoURL
             )
             print("Ã°Å¸Å½Â¬ STITCH CONTEXT: Stitching to THREAD (depth 0) Ã¢â€ â€™ will create depth 1 child")
             return .stitchToThread(threadID: video.id, threadInfo: threadInfo)
@@ -1174,7 +1172,8 @@ struct ContextualVideoOverlay: View {
                 title: video.title,
                 creatorName: video.creatorName,
                 creatorID: video.creatorID,
-                thumbnailURL: video.thumbnailURL
+                thumbnailURL: video.thumbnailURL,
+                videoURL: video.videoURL
             )
             print("Ã°Å¸Å½Â¬ STITCH CONTEXT: Replying to CHILD (depth \(video.conversationDepth)) Ã¢â€ â€™ will create depth \(video.conversationDepth + 1)")
             return .replyToVideo(videoID: video.id, videoInfo: videoInfo)

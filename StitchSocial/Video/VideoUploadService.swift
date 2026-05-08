@@ -492,26 +492,81 @@ class VideoUploadService: ObservableObject {
                 let imageGenerator = AVAssetImageGenerator(asset: asset)
                 imageGenerator.appliesPreferredTrackTransform = true
                 imageGenerator.maximumSize = CGSize(width: 1080, height: 1920)
-                
-                // Use custom thumbnail time if set, otherwise default to 0.5s
-                let time = CMTime(seconds: thumbnailTime ?? 0.5, preferredTimescale: 600)
-                
-                do {
-                    let cgImage = try imageGenerator.copyCGImage(at: time, actualTime: nil)
-                    let image = UIImage(cgImage: cgImage)
-                    
-                    guard let jpegData = image.jpegData(compressionQuality: 0.9) else {
-                        continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed to convert to JPEG"))
-                        return
+
+                // Build candidate sample times. If the caller specified a
+                // custom time, honor it directly — they want that exact
+                // frame. Otherwise sample 1s / 25% / 50% and keep the
+                // brightest, which avoids the black-poster problem when
+                // the camera hasn't finished autoexposing in the first
+                // ~0.5s of recording.
+                let durationSeconds = max(0.1, CMTimeGetSeconds(asset.duration))
+                let candidates: [CMTime] = {
+                    if let custom = thumbnailTime {
+                        return [CMTime(seconds: custom, preferredTimescale: 600)]
                     }
-                    
-                    continuation.resume(returning: jpegData)
-                    
-                } catch {
-                    continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed: \(error.localizedDescription)"))
+                    let raw: [TimeInterval] = [
+                        min(1.0, durationSeconds * 0.5),
+                        durationSeconds * 0.25,
+                        durationSeconds * 0.5
+                    ]
+                    // Dedupe + clamp to valid range.
+                    let unique = Array(Set(raw.map { Int($0 * 100) })).map { TimeInterval($0) / 100 }
+                    return unique
+                        .filter { $0 >= 0 && $0 <= durationSeconds }
+                        .map { CMTime(seconds: $0, preferredTimescale: 600) }
+                }()
+
+                var bestImage: UIImage?
+                var bestBrightness: Double = -1
+
+                for time in candidates {
+                    if let cg = try? imageGenerator.copyCGImage(at: time, actualTime: nil) {
+                        let img = UIImage(cgImage: cg)
+                        let brightness = Self.averageLuminance(of: cg)
+                        if brightness > bestBrightness {
+                            bestBrightness = brightness
+                            bestImage = img
+                        }
+                    }
                 }
+
+                guard let chosen = bestImage,
+                      let jpegData = chosen.jpegData(compressionQuality: 0.9) else {
+                    continuation.resume(throwing: UploadError.thumbnailGenerationFailed("Failed to extract any usable frame"))
+                    return
+                }
+                continuation.resume(returning: jpegData)
             }
         }
+    }
+
+    /// Cheap average-luminance estimate for a CGImage. Downsamples to a
+    /// 16×16 grid via CGContext, sums R+G+B per pixel, returns the mean
+    /// in 0...255. Used to skip black/near-black frames when picking a
+    /// thumbnail.
+    private static func averageLuminance(of cgImage: CGImage) -> Double {
+        let width = 16, height = 16
+        let bytesPerRow = width * 4
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let space = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: &pixels,
+            width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: bytesPerRow,
+            space: space,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { return 0 }
+        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var sum: UInt64 = 0
+        let total = width * height
+        for i in 0..<total {
+            let r = pixels[i * 4 + 0]
+            let g = pixels[i * 4 + 1]
+            let b = pixels[i * 4 + 2]
+            // Approx luma weights.
+            sum &+= UInt64(r) * 76 + UInt64(g) * 150 + UInt64(b) * 29
+        }
+        return Double(sum) / Double(total * 255)
     }
     
     private func extractTechnicalMetadata(from videoURL: URL) async throws -> TechnicalMetadata {

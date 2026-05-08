@@ -97,6 +97,13 @@ class UserService: ObservableObject {
         // Award Rookie welcome badge — single batch write, idempotency guarded in BadgeService
         await BadgeService.shared.awardRookieBadge(userID: id)
 
+        // If a special-user entry promoted this signup directly to founder/
+        // co_founder, award their identity + tier badges immediately.
+        // evaluateTierBadge handles both founder badges and is idempotent.
+        if initialTier == .founder || initialTier == .coFounder {
+            await BadgeService.shared.evaluateTierBadge(userID: id, newTierRaw: initialTier.rawValue)
+        }
+
         let user = BasicUserInfo(
             id: id,
             username: finalUsername,

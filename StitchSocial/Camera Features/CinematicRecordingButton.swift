@@ -2,8 +2,14 @@
 //  CinematicRecordingButton.swift
 //  StitchSocial
 //
-//  UPDATED: Tap to start, tap to stop. No hold required.
-//  onPressStart fires on first tap, onPressEnd fires on second tap.
+//  Layer 1.5: Recording Button — Dual Input
+//
+//  MODES:
+//  - Tap: tap once to start, tap again to stop
+//  - Hold: press and hold to record, release to stop
+//  - Both work simultaneously without conflict via isHoldActive flag
+//
+//  THREADING: Pure SwiftUI, no background work
 //
 
 import SwiftUI
@@ -18,6 +24,9 @@ struct CinematicRecordingButton: View {
 
     @State private var pulseAnimation = false
     @State private var scaleAnimation = false
+    @State private var isHoldActive = false
+
+    private let holdThreshold: TimeInterval = 0.3
 
     private var buttonSize: CGFloat { compactMode ? 66 : 80 }
     private var ringWidth: CGFloat { compactMode ? 5 : 6 }
@@ -29,18 +38,18 @@ struct CinematicRecordingButton: View {
 
     private var progressColor: Color {
         if progress >= 0.9 { return .red }
-        else if progress >= 0.8 { return .yellow }
-        else { return .white }
+        if progress >= 0.8 { return .yellow }
+        return .white
     }
 
     var body: some View {
         ZStack {
-            // Outer track ring
+            // Outer track
             Circle()
                 .stroke(Color.white.opacity(0.2), lineWidth: ringWidth)
                 .frame(width: buttonSize + 12, height: buttonSize + 12)
 
-            // Progress ring
+            // Progress arc
             Circle()
                 .trim(from: 0, to: progress)
                 .stroke(progressColor, lineWidth: ringWidth)
@@ -48,7 +57,7 @@ struct CinematicRecordingButton: View {
                 .rotationEffect(.degrees(-90))
                 .animation(.linear(duration: 0.1), value: progress)
 
-            // Main circle
+            // Main button
             Circle()
                 .fill(
                     LinearGradient(
@@ -121,35 +130,51 @@ struct CinematicRecordingButton: View {
             radius: 16, x: 0, y: 6
         )
         .shadow(color: Color.black.opacity(0.4), radius: 12, x: 0, y: 25)
-        // TAP to toggle start/stop
-        .onTapGesture {
-            guard progress < 1.0 else { return }
-            withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) {
-                scaleAnimation = true
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                scaleAnimation = false
-            }
-            if isRecording {
-                onPressEnd()
-            } else {
-                onPressStart()
-            }
-        }
+        // DUAL GESTURE: Long press (hold to record) + Tap (toggle)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: holdThreshold)
+                .onEnded { _ in
+                    guard progress < 1.0, !isRecording else { return }
+                    isHoldActive = true
+                    bounce()
+                    onPressStart()
+                }
+                .sequenced(before: DragGesture(minimumDistance: 0)
+                    .onEnded { _ in
+                        guard isHoldActive, isRecording else { return }
+                        isHoldActive = false
+                        onPressEnd()
+                    }
+                )
+        )
+        .simultaneousGesture(
+            TapGesture()
+                .onEnded {
+                    guard !isHoldActive, progress < 1.0 else { return }
+                    bounce()
+                    if isRecording { onPressEnd() } else { onPressStart() }
+                }
+        )
         .disabled(progress >= 1.0)
-        .onAppear { if isRecording { startAnimations() } }
-        .onChange(of: isRecording) { _, newValue in
-            newValue ? startAnimations() : stopAnimations()
+        .onAppear { if isRecording { startPulse() } }
+        .onChange(of: isRecording) { _, active in
+            active ? startPulse() : stopPulse()
+            if !active { isHoldActive = false }
         }
     }
 
-    private func startAnimations() {
+    // MARK: - Animations
+
+    private func bounce() {
+        withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) { scaleAnimation = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { scaleAnimation = false }
+    }
+
+    private func startPulse() {
         withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
             pulseAnimation = true
         }
     }
 
-    private func stopAnimations() {
-        pulseAnimation = false
-    }
+    private func stopPulse() { pulseAnimation = false }
 }

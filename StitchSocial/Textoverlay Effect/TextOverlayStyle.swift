@@ -30,7 +30,7 @@ enum OverlayFont: String, CaseIterable, Codable {
         case .defaultSans:  return "HelveticaNeue"
         case .futura:       return "Futura-Bold"
         case .georgia:      return "Georgia"
-        case .helvetica:    return "Helvetica Neue"
+        case .helvetica:    return "HelveticaNeue"   // PostScript name (no space)
         case .avenir:       return "AvenirNext-Bold"
         case .didot:        return "Didot"
         case .typewriter:   return "AmericanTypewriter"
@@ -60,40 +60,89 @@ enum OverlayFont: String, CaseIterable, Codable {
 // MARK: - Typography Style
 
 enum TextOverlayStyle: String, CaseIterable, Codable {
-    case boldPill   = "Bold Pill"
-    case outline    = "Outline"
-    case neon       = "Neon"
-    case typewriter = "Typewriter"
-    case gradient   = "Gradient"
+    case boldPill    = "Bold Pill"
+    case outline     = "Outline"
+    case neon        = "Neon"
+    case typewriter  = "Typewriter"
+    case gradient    = "Gradient"
+    // Phase 4 additions
+    case ribbon      = "Ribbon"
+    case shadow      = "Shadow"
+    case glitch      = "Glitch"
+    case handwritten = "Script"
+    case sticker     = "Sticker"
 
     var defaultBgColor: UIColor {
         switch self {
-        case .boldPill:   return .white
-        case .outline:    return .clear
-        case .neon:       return UIColor.black.withAlphaComponent(0.5)
-        case .typewriter: return UIColor.black.withAlphaComponent(0.75)
-        case .gradient:   return .clear
+        case .boldPill:    return .white
+        case .outline:     return .clear
+        case .neon:        return UIColor.black.withAlphaComponent(0.5)
+        case .typewriter:  return UIColor.black.withAlphaComponent(0.75)
+        case .gradient:    return .clear
+        case .ribbon:      return UIColor.systemRed
+        case .shadow:      return .clear
+        case .glitch:      return .clear
+        case .handwritten: return .clear
+        case .sticker:     return UIColor.systemPink
         }
     }
 
     var defaultTextColor: UIColor {
         switch self {
-        case .boldPill:   return .black
-        case .outline:    return .white
-        case .neon:       return .cyan
-        case .typewriter: return .white
-        case .gradient:   return .white
+        case .boldPill:    return .black
+        case .outline:     return .white
+        case .neon:        return .cyan
+        case .typewriter:  return .white
+        case .gradient:    return .white
+        case .ribbon:      return .white
+        case .shadow:      return .white
+        case .glitch:      return .white
+        case .handwritten: return .white
+        case .sticker:     return .white
         }
     }
 
     /// Suggested font per style
     var defaultFont: OverlayFont {
         switch self {
-        case .boldPill:   return .futura
-        case .outline:    return .defaultSans
-        case .neon:       return .avenir
-        case .typewriter: return .typewriter
-        case .gradient:   return .didot
+        case .boldPill:    return .futura
+        case .outline:     return .defaultSans
+        case .neon:        return .avenir
+        case .typewriter:  return .typewriter
+        case .gradient:    return .didot
+        case .ribbon:      return .gillSans
+        case .shadow:      return .futura
+        case .glitch:      return .helvetica
+        case .handwritten: return .defaultSans   // overridden in renderer
+        case .sticker:     return .avenir
+        }
+    }
+}
+
+// MARK: - Entrance Animation
+
+/// One-shot entrance animation played when the overlay first appears.
+/// Applied in both preview (SwiftUI) and export (CAAnimation) so what you
+/// see in review is what gets baked into the MP4.
+enum OverlayAnimation: String, CaseIterable, Codable {
+    case none      = "None"
+    case fadeIn    = "Fade"
+    case popIn     = "Pop"
+    case slideUp   = "Slide Up"
+    case bounce    = "Bounce"
+    case typewriter = "Type"
+
+    var displayName: String { rawValue }
+
+    /// How long the entrance lasts after it begins.
+    var duration: TimeInterval {
+        switch self {
+        case .none:       return 0
+        case .fadeIn:     return 0.35
+        case .popIn:      return 0.45
+        case .slideUp:    return 0.45
+        case .bounce:     return 0.55
+        case .typewriter: return 1.2  // varies by length, capped here
         }
     }
 }
@@ -137,6 +186,9 @@ struct TextOverlay: Identifiable, Codable, Equatable {
     // Time range (nil = full duration)
     var startTime: TimeInterval? = nil
     var endTime: TimeInterval?   = nil
+
+    // Entrance animation (one-shot, plays at startTime or t=0).
+    var animation: OverlayAnimation = .none
 
     var textColor: UIColor {
         UIColor(red: textColorRed, green: textColorGreen,

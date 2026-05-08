@@ -41,6 +41,11 @@ struct ShowEditorView: View {
     @State private var isUploadingCover = false
     @State private var showingFilePicker = false
     @State private var scheduleConfig: ShowScheduleConfig = .default
+
+    // Delete-confirmation state — moves the destructive action behind an
+    // overflow menu + alert so a stray tap can't wipe a season/episode.
+    @State private var seasonPendingDelete: Season?
+    @State private var episodePendingDelete: (VideoCollection, String)?
     
     init(show: Show, isNew: Bool, onSave: ((Show) -> Void)? = nil, onDismiss: @escaping () -> Void) {
         self._show = State(initialValue: show)
@@ -79,6 +84,42 @@ struct ShowEditorView: View {
             if let c = show.scheduleConfig { scheduleConfig = c }
             if !isNew { await loadFullShow() }
             isLoading = false
+        }
+        .confirmationDialog(
+            "Delete \"\(seasonPendingDelete?.title ?? "")\"?",
+            isPresented: Binding(
+                get: { seasonPendingDelete != nil },
+                set: { if !$0 { seasonPendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Season", role: .destructive) {
+                if let s = seasonPendingDelete {
+                    Task { await deleteSeason(s) }
+                    seasonPendingDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { seasonPendingDelete = nil }
+        } message: {
+            Text("This removes the season and all its episodes. This can't be undone.")
+        }
+        .confirmationDialog(
+            "Delete \"\(episodePendingDelete?.0.title.isEmpty == false ? episodePendingDelete!.0.title : "Episode")\"?",
+            isPresented: Binding(
+                get: { episodePendingDelete != nil },
+                set: { if !$0 { episodePendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Episode", role: .destructive) {
+                if let (ep, seasonId) = episodePendingDelete {
+                    Task { await deleteEpisode(ep, seasonId: seasonId) }
+                    episodePendingDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { episodePendingDelete = nil }
+        } message: {
+            Text("This removes the episode and all its uploaded segments. This can't be undone.")
         }
         .fullScreenCover(item: $selectedEpisode) { item in
             EpisodeEditorView(
@@ -325,8 +366,20 @@ struct ShowEditorView: View {
                             .font(.system(size: 10)).foregroundColor(.gray)
                     }
                     Spacer()
-                    Button { Task { await deleteSeason(season) } } label: {
-                        Image(systemName: "trash").font(.system(size: 12)).foregroundColor(.red.opacity(0.6))
+                    // Overflow menu — replaces the inline trash so the delete
+                    // action isn't sitting half a thumb away from the chevron.
+                    Menu {
+                        Button(role: .destructive) {
+                            seasonPendingDelete = season
+                        } label: {
+                            Label("Delete Season", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.gray)
+                            .padding(.horizontal, 8)
+                            .contentShape(Rectangle())
                     }
                     Image(systemName: "chevron.right").font(.system(size: 11)).foregroundColor(.gray)
                         .rotationEffect(.degrees(expandedSeason == season.id ? 90 : 0))
@@ -385,8 +438,20 @@ struct ShowEditorView: View {
                 Button { selectedEpisode = ShowEditorViewEpisodeNavItem(id: ep.id, episode: ep, seasonId: seasonId) } label: {
                     Text("Edit").font(.system(size: 10, weight: .medium)).foregroundColor(.pink)
                 }
-                Button { Task { await deleteEpisode(ep, seasonId: seasonId) } } label: {
-                    Image(systemName: "trash").font(.system(size: 10)).foregroundColor(.red.opacity(0.5))
+                // Overflow menu instead of inline trash — same anti-misclick
+                // pattern as the season row above.
+                Menu {
+                    Button(role: .destructive) {
+                        episodePendingDelete = (ep, seasonId)
+                    } label: {
+                        Label("Delete Episode", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.gray)
+                        .padding(.horizontal, 6)
+                        .contentShape(Rectangle())
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 7)

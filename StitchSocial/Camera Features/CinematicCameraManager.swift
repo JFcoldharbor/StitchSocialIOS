@@ -2,19 +2,28 @@
 //  CinematicCameraManager.swift
 //  StitchSocial
 //
-//  Camera manager - recording, preview, zoom, multi-lens, torch
+//  Layer 1: Camera Session Manager
 //
-//  CACHING: availableLenses discovered once at session start and cached
-//  in-memory. No re-discovery on lens switch — avoids repeated
-//  DiscoverySession allocations. Cleared on stopSession().
+//  ARCHITECTURE:
+//  - All AVFoundation work runs on dedicated sessionQueue (never main thread)
+//  - @Published state updates dispatch to MainActor
+//  - Session configured once via isConfigured flag (prevents FigXPC -17281)
+//  - start/stop are truly awaitable via CheckedContinuation
+//  - Lens discovery cached for session lifetime
+//  - Preview layer is lazy singleton shared across UIViewRepresentable instances
+//
+//  CACHING: isConfigured flag, availableLenses array
+//  CLEANUP: isConfigured + lenses reset on stop, torch off
+//  THREADING: sessionQueue for AVFoundation, frameQueue for green screen
+//
 
 import Foundation
 import SwiftUI
-import AVFoundation
+@preconcurrency import AVFoundation
 
 // MARK: - Lens Type
 
-enum CameraLens: String, CaseIterable {
+enum CameraLens: String, CaseIterable, Sendable {
     case ultraWide = "0.5x"
     case wide      = "1x"
     case tele2x    = "2x"
@@ -32,6 +41,8 @@ enum CameraLens: String, CaseIterable {
     var displayLabel: String { rawValue }
 }
 
+// MARK: - Camera Manager
+
 @MainActor
 class CinematicCameraManager: NSObject, ObservableObject {
 
@@ -44,8 +55,7 @@ class CinematicCameraManager: NSObject, ObservableObject {
     @Published var maxZoomFactor: CGFloat = 10.0
     @Published var isTorchOn = false
 
-    // MARK: - Multi-Lens State
-    // CACHING: discovered once, reused for session lifetime
+    // MARK: - Multi-Lens State (cached for session lifetime)
     @Published var availableLenses: [CameraLens] = []
     @Published var activeLens: CameraLens = .wide
 
@@ -54,88 +64,202 @@ class CinematicCameraManager: NSObject, ObservableObject {
     private var videoInput: AVCaptureDeviceInput?
     private var audioInput: AVCaptureDeviceInput?
     private var movieOutput: AVCaptureMovieFileOutput?
-    private var videoDataOutput: AVCaptureVideoDataOutput?   // green screen frames
+    private var videoDataOutput: AVCaptureVideoDataOutput?
     private var currentDevice: AVCaptureDevice?
-    private let sessionQueue = DispatchQueue(label: "camera.session")
-    // Dedicated serial queue for frame delivery — keeps sessionQueue free
+
+    // MARK: - Queues (off main thread)
+    private let sessionQueue = DispatchQueue(label: "camera.session", qos: .userInitiated)
     private let frameQueue = DispatchQueue(label: "camera.frames", qos: .userInteractive)
+
+    // MARK: - Session Cache Flag
+    private var isConfigured = false
 
     // MARK: - Recording
     private var recordingCompletion: ((URL?) -> Void)?
 
-    // MARK: - Preview Layer
-    // NOTE: Returns same session — no new allocation on repeated access
-    var previewLayer: AVCaptureVideoPreviewLayer {
+    // MARK: - Preview Layer (lazy singleton)
+    lazy var previewLayer: AVCaptureVideoPreviewLayer = {
         let layer = AVCaptureVideoPreviewLayer(session: captureSession)
         layer.videoGravity = .resizeAspectFill
         return layer
-    }
+    }()
 
     override init() {
         super.init()
-        print("📱 CAMERA: Initialized")
     }
 
-    // MARK: - Session Management
+    // MARK: - Session Start (awaitable)
 
     func startSession() async {
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            // All AVFoundation work stays on sessionQueue — never touch main thread
-            self.setupSession()
-            if !self.captureSession.isRunning {
-                self.captureSession.startRunning()
-            }
-            let isRunning = self.captureSession.isRunning
-            // Only @Published state update needs MainActor
-            Task { @MainActor in
-                self.isSessionRunning = isRunning
-                self.discoverAvailableLenses()
-                print("📱 CAMERA: Session \(isRunning ? "started" : "failed")")
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            sessionQueue.async { [weak self] in
+                guard let self else { continuation.resume(); return }
+
+                self.configureSessionIfNeeded()
+
+                if !self.captureSession.isRunning {
+                    self.captureSession.startRunning()
+                }
+
+                let running = self.captureSession.isRunning
+                Task { @MainActor in
+                    self.isSessionRunning = running
+                    self.discoverLenses()
+                    print("📱 CAMERA: Session \(running ? "started" : "failed")")
+                }
+                continuation.resume()
             }
         }
     }
 
+    // MARK: - Session Stop (awaitable)
+
     func stopSession() async {
-        // Cleanup: turn off torch before stopping
         if isTorchOn { setTorch(false) }
 
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            if self.captureSession.isRunning {
-                self.captureSession.stopRunning()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            sessionQueue.async { [weak self] in
+                guard let self else { continuation.resume(); return }
+
+                if self.captureSession.isRunning {
+                    self.captureSession.stopRunning()
+                }
+                self.isConfigured = false
+
+                Task { @MainActor in
+                    self.isSessionRunning = false
+                    self.availableLenses = []
+                    print("📱 CAMERA: Session stopped")
+                }
+                continuation.resume()
             }
-            Task { @MainActor in
-                self.isSessionRunning = false
-                self.availableLenses = [] // clear cache on session end
-                print("📱 CAMERA: Session stopped")
+        }
+    }
+
+    // MARK: - Session Configuration (cached — runs once)
+
+    private func configureSessionIfNeeded() {
+        guard !isConfigured else { return }
+
+        captureSession.beginConfiguration()
+
+        if captureSession.canSetSessionPreset(.high) {
+            captureSession.sessionPreset = .high
+        }
+
+        // Clear stale inputs/outputs
+        captureSession.inputs.forEach { captureSession.removeInput($0) }
+        captureSession.outputs.forEach { captureSession.removeOutput($0) }
+
+        addVideoInput()
+        addAudioInput()
+        addMovieOutput()
+        addVideoDataOutput()
+
+        captureSession.commitConfiguration()
+        applyPortraitRotation()
+
+        isConfigured = true
+    }
+
+    // MARK: - Input/Output Setup
+
+    private func addVideoInput() {
+        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
+            print("❌ CAMERA: No camera found"); return
+        }
+        do {
+            let input = try AVCaptureDeviceInput(device: camera)
+            if captureSession.canAddInput(input) {
+                captureSession.addInput(input)
+                Task { @MainActor in
+                    self.videoInput = input
+                    self.currentDevice = camera
+                    self.maxZoomFactor = min(camera.maxAvailableVideoZoomFactor, 10.0)
+                    self.activeLens = .wide
+                }
+                print("📱 CAMERA: Video input added")
             }
+        } catch {
+            print("❌ CAMERA: Video input failed — \(error)")
+        }
+    }
+
+    private func addAudioInput() {
+        guard let mic = AVCaptureDevice.default(for: .audio) else {
+            print("❌ CAMERA: No audio device"); return
+        }
+        do {
+            let input = try AVCaptureDeviceInput(device: mic)
+            if captureSession.canAddInput(input) {
+                captureSession.addInput(input)
+                Task { @MainActor in self.audioInput = input }
+                print("📱 CAMERA: Audio input added")
+            }
+        } catch {
+            print("❌ CAMERA: Audio input failed — \(error)")
+        }
+    }
+
+    private func addMovieOutput() {
+        let output = AVCaptureMovieFileOutput()
+        if captureSession.canAddOutput(output) {
+            captureSession.addOutput(output)
+            Task { @MainActor in self.movieOutput = output }
+            print("📱 CAMERA: Movie output added")
+        }
+    }
+
+    private func addVideoDataOutput() {
+        let output = AVCaptureVideoDataOutput()
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        output.alwaysDiscardsLateVideoFrames = true
+        output.setSampleBufferDelegate(self, queue: frameQueue)
+
+        if captureSession.canAddOutput(output) {
+            captureSession.addOutput(output)
+            if let conn = output.connection(with: .video) {
+                applyRotation(to: conn)
+            }
+            Task { @MainActor in self.videoDataOutput = output }
+            print("📱 CAMERA: Video data output added")
+        }
+    }
+
+    // MARK: - Orientation (iOS 17+ rotation angle)
+
+    private func applyPortraitRotation() {
+        guard let movieOutput else { return }
+        if let conn = movieOutput.connection(with: .video) {
+            applyRotation(to: conn)
+        }
+        print("📱 CAMERA: Orientation set to portrait")
+    }
+
+    private func applyRotation(to connection: AVCaptureConnection) {
+        if connection.isVideoRotationAngleSupported(90) {
+            connection.videoRotationAngle = 90
         }
     }
 
     // MARK: - Lens Discovery (cached)
 
-    private func discoverAvailableLenses() {
+    private func discoverLenses() {
         let position: AVCaptureDevice.Position = currentDevice?.position ?? .back
         var found: [CameraLens] = []
 
         let session = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [
-                .builtInUltraWideCamera,
-                .builtInWideAngleCamera,
-                .builtInTelephotoCamera
-            ],
+            deviceTypes: [.builtInUltraWideCamera, .builtInWideAngleCamera, .builtInTelephotoCamera],
             mediaType: .video,
             position: position
         )
 
-        let deviceTypes = session.devices.map { $0.deviceType }
+        let types = session.devices.map { $0.deviceType }
 
-        if deviceTypes.contains(.builtInUltraWideCamera) { found.append(.ultraWide) }
-        found.append(.wide) // always available
-        if deviceTypes.contains(.builtInTelephotoCamera) {
+        if types.contains(.builtInUltraWideCamera) { found.append(.ultraWide) }
+        found.append(.wide)
+        if types.contains(.builtInTelephotoCamera) {
             found.append(.tele2x)
-            // 3x only on Pro models (zoom factor >= 3)
             if let tele = session.devices.first(where: { $0.deviceType == .builtInTelephotoCamera }),
                tele.maxAvailableVideoZoomFactor >= 3 {
                 found.append(.tele3x)
@@ -150,12 +274,8 @@ class CinematicCameraManager: NSObject, ObservableObject {
 
     func switchToLens(_ lens: CameraLens) async {
         guard availableLenses.contains(lens), lens != activeLens else { return }
-
         let position: AVCaptureDevice.Position = currentDevice?.position ?? .back
-        guard let newCamera = AVCaptureDevice.default(lens.deviceType, for: .video, position: position) else {
-            print("❌ CAMERA: Lens \(lens.rawValue) not available")
-            return
-        }
+        guard let newCamera = AVCaptureDevice.default(lens.deviceType, for: .video, position: position) else { return }
 
         sessionQueue.async { [weak self] in
             guard let self else { return }
@@ -174,19 +294,81 @@ class CinematicCameraManager: NSObject, ObservableObject {
                     }
                 }
             } catch {
-                print("❌ CAMERA: Lens switch failed - \(error)")
+                print("❌ CAMERA: Lens switch failed — \(error)")
             }
             self.captureSession.commitConfiguration()
-            Task { @MainActor in self.setPortraitOrientation() }
-            print("📱 CAMERA: Switched to \(lens.rawValue) lens")
+            self.applyPortraitRotation()
+        }
+    }
+
+    // MARK: - Recording
+
+    func startRecording(completion: @escaping (URL?) -> Void) {
+        guard let movieOutput, !movieOutput.isRecording, captureSession.isRunning, !isRecording else {
+            completion(nil); return
+        }
+
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("video_\(Int(Date().timeIntervalSince1970)).mov")
+        try? FileManager.default.removeItem(at: outputURL)
+
+        if let conn = movieOutput.connection(with: .video) {
+            applyRotation(to: conn)
+        }
+
+        recordingCompletion = completion
+        sessionQueue.async { movieOutput.startRecording(to: outputURL, recordingDelegate: self) }
+    }
+
+    func stopRecording() {
+        guard let movieOutput, movieOutput.isRecording else { return }
+        sessionQueue.async { movieOutput.stopRecording() }
+    }
+
+    // MARK: - Camera Switch
+
+    func switchCamera() async {
+        let current = currentDevice?.position ?? .back
+        let next: AVCaptureDevice.Position = current == .back ? .front : .back
+        guard let newCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: next) else { return }
+
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            self.captureSession.beginConfiguration()
+            if let old = self.videoInput { self.captureSession.removeInput(old) }
+
+            var newInput: AVCaptureDeviceInput?
+            do {
+                let input = try AVCaptureDeviceInput(device: newCamera)
+                if self.captureSession.canAddInput(input) {
+                    self.captureSession.addInput(input)
+                    newInput = input
+                }
+            } catch {
+                print("❌ CAMERA: Switch failed — \(error)")
+            }
+            self.captureSession.commitConfiguration()
+
+            // Re-apply rotation on all connections
+            if let conn = self.movieOutput?.connection(with: .video) { self.applyRotation(to: conn) }
+            if let conn = self.videoDataOutput?.connection(with: .video) { self.applyRotation(to: conn) }
+
+            guard let input = newInput else { return }
+            Task { @MainActor in
+                self.videoInput = input
+                self.currentDevice = newCamera
+                self.maxZoomFactor = min(newCamera.maxAvailableVideoZoomFactor, 10.0)
+                self.currentZoomFactor = 1.0
+                self.activeLens = .wide
+                self.availableLenses = next == .front ? [.wide] : self.availableLenses
+                if next == .front { self.isTorchOn = false }
+            }
         }
     }
 
     // MARK: - Torch
 
-    func toggleTorch() {
-        setTorch(!isTorchOn)
-    }
+    func toggleTorch() { setTorch(!isTorchOn) }
 
     func setTorch(_ on: Bool) {
         guard let device = currentDevice, device.hasTorch, device.isTorchAvailable else { return }
@@ -195,199 +377,12 @@ class CinematicCameraManager: NSObject, ObservableObject {
             device.torchMode = on ? .on : .off
             device.unlockForConfiguration()
             isTorchOn = on
-            print("📱 CAMERA: Torch \(on ? "ON" : "OFF")")
         } catch {
-            print("❌ CAMERA: Torch failed - \(error)")
+            print("❌ CAMERA: Torch failed — \(error)")
         }
     }
 
-    // MARK: - Session Setup
-
-    private func setupSession() {
-        captureSession.beginConfiguration()
-        if captureSession.canSetSessionPreset(.hd1920x1080) {
-            captureSession.sessionPreset = .hd1920x1080
-        }
-        for input in captureSession.inputs { captureSession.removeInput(input) }
-        for output in captureSession.outputs { captureSession.removeOutput(output) }
-        setupVideoInput()
-        setupAudioInput()
-        setupMovieOutput()
-        setupVideoDataOutput()   // green screen frame tap
-        captureSession.commitConfiguration()
-        setPortraitOrientation()
-    }
-
-    private func setPortraitOrientation() {
-        guard let movieOutput else { return }
-        if let connection = movieOutput.connection(with: .video),
-           connection.isVideoOrientationSupported {
-            connection.videoOrientation = .portrait
-            print("📱 CAMERA: Orientation set to portrait")
-        }
-    }
-
-    private func setupVideoInput() {
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-            print("❌ CAMERA: No camera found")
-            return
-        }
-        do {
-            let input = try AVCaptureDeviceInput(device: camera)
-            if captureSession.canAddInput(input) {
-                captureSession.addInput(input)
-                videoInput = input
-                currentDevice = camera
-                let maxZoom = min(camera.maxAvailableVideoZoomFactor, 10.0)
-                // @Published update deferred to MainActor — called after startRunning
-                Task { @MainActor in
-                    self.maxZoomFactor = maxZoom
-                    self.activeLens = .wide
-                }
-                print("📱 CAMERA: Video input added")
-            }
-        } catch {
-            print("❌ CAMERA: Video input failed - \(error)")
-        }
-    }
-
-    private func setupAudioInput() {
-        guard let audioDevice = AVCaptureDevice.default(for: .audio) else {
-            print("❌ CAMERA: No audio device")
-            return
-        }
-        do {
-            let input = try AVCaptureDeviceInput(device: audioDevice)
-            if captureSession.canAddInput(input) {
-                captureSession.addInput(input)
-                audioInput = input
-                print("📱 CAMERA: Audio input added")
-            }
-        } catch {
-            print("❌ CAMERA: Audio input failed - \(error)")
-        }
-    }
-
-    private func setupMovieOutput() {
-        let output = AVCaptureMovieFileOutput()
-        if captureSession.canAddOutput(output) {
-            captureSession.addOutput(output)
-            movieOutput = output
-            print("📱 CAMERA: Movie output added")
-        }
-    }
-
-    private func setupVideoDataOutput() {
-        let output = AVCaptureVideoDataOutput()
-        // kCVPixelFormatType_32BGRA — required by CIImage + Vision
-        output.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-        ]
-        // Drop frames if processor is busy — never block the session queue
-        output.alwaysDiscardsLateVideoFrames = true
-        output.setSampleBufferDelegate(self, queue: frameQueue)
-
-        if captureSession.canAddOutput(output) {
-            captureSession.addOutput(output)
-            videoDataOutput = output
-            // Mirror orientation so Vision mask aligns with preview
-            if let connection = output.connection(with: .video),
-               connection.isVideoOrientationSupported {
-                connection.videoOrientation = .portrait
-            }
-            print("📱 CAMERA: Video data output added")
-        }
-    }
-
-    // MARK: - Recording
-
-    func startRecording(completion: @escaping (URL?) -> Void) {
-        guard let movieOutput else {
-            print("❌ CAMERA: No movie output")
-            completion(nil)
-            return
-        }
-
-        print("🔍 START CHECK: movieOutput.isRecording=\(movieOutput.isRecording) isRecording=\(isRecording) session.isRunning=\(captureSession.isRunning)")
-
-        guard !movieOutput.isRecording else {
-            print("⚠️ CAMERA: Already recording — skipping")
-            completion(nil)
-            return
-        }
-        guard captureSession.isRunning else {
-            print("⚠️ CAMERA: Session not running")
-            completion(nil)
-            return
-        }
-        guard !isRecording else {
-            print("⚠️ CAMERA: isRecording flag true — skipping")
-            completion(nil)
-            return
-        }
-
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("video_\(Int(Date().timeIntervalSince1970)).mov")
-        try? FileManager.default.removeItem(at: outputURL)
-
-        if let connection = movieOutput.connection(with: .video),
-           connection.isVideoOrientationSupported {
-            connection.videoOrientation = .portrait
-        }
-
-        recordingCompletion = completion
-        sessionQueue.async { movieOutput.startRecording(to: outputURL, recordingDelegate: self) }
-        print("📱 CAMERA: startRecording dispatched")
-    }
-
-    func stopRecording() {
-        guard let movieOutput, movieOutput.isRecording else {
-            print("⚠️ CAMERA: stopRecording called but not recording")
-            return
-        }
-        sessionQueue.async { movieOutput.stopRecording() }
-        print("📱 CAMERA: stopRecording dispatched")
-    }
-
-    // MARK: - Camera Controls
-
-    func switchCamera() async {
-        let currentPosition = currentDevice?.position ?? .back
-        let newPosition: AVCaptureDevice.Position = currentPosition == .back ? .front : .back
-
-        guard let newCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) else {
-            print("❌ CAMERA: No camera for position \(newPosition)")
-            return
-        }
-
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            self.captureSession.beginConfiguration()
-            if let old = self.videoInput { self.captureSession.removeInput(old) }
-            do {
-                let input = try AVCaptureDeviceInput(device: newCamera)
-                if self.captureSession.canAddInput(input) {
-                    self.captureSession.addInput(input)
-                    Task { @MainActor in
-                        self.videoInput = input
-                        self.currentDevice = newCamera
-                        self.maxZoomFactor = min(newCamera.maxAvailableVideoZoomFactor, 10.0)
-                        self.currentZoomFactor = 1.0
-                        self.activeLens = .wide
-                        // Re-discover lenses for new position
-                        self.discoverAvailableLenses()
-                        // Turn off torch on camera flip (front has no torch)
-                        if newPosition == .front { self.isTorchOn = false }
-                    }
-                }
-            } catch {
-                print("❌ CAMERA: Camera switch failed - \(error)")
-            }
-            self.captureSession.commitConfiguration()
-            Task { @MainActor in self.setPortraitOrientation() }
-            print("📱 CAMERA: Switched to \(newPosition == .back ? "back" : "front")")
-        }
-    }
+    // MARK: - Zoom
 
     func setZoom(_ factor: CGFloat) async {
         guard let device = currentDevice else { return }
@@ -398,17 +393,11 @@ class CinematicCameraManager: NSObject, ObservableObject {
             device.unlockForConfiguration()
             currentZoomFactor = clamped
         } catch {
-            print("❌ CAMERA: Zoom failed - \(error)")
+            print("❌ CAMERA: Zoom failed — \(error)")
         }
     }
 
-    func handleZoomDrag(translation: CGSize, in view: UIView) async {
-        let delta = (-translation.height * 0.01)
-        await setZoom(currentZoomFactor + delta)
-    }
-
-    func startZoomGesture() { print("📱 CAMERA: Zoom gesture started at \(currentZoomFactor)x") }
-    func endZoomGesture()   { print("📱 CAMERA: Zoom gesture ended at \(currentZoomFactor)x") }
+    // MARK: - Focus & Exposure
 
     func focusAt(point: CGPoint, in view: UIView) async {
         guard let device = currentDevice else { return }
@@ -427,25 +416,21 @@ class CinematicCameraManager: NSObject, ObservableObject {
                 device.exposureMode = .autoExpose
             }
             device.unlockForConfiguration()
-            print("📱 CAMERA: Focus + exposure set")
         } catch {
-            print("❌ CAMERA: Focus failed - \(error)")
+            print("❌ CAMERA: Focus failed — \(error)")
         }
     }
 }
 
-// MARK: - Video Data Delegate (Green Screen frames)
+// MARK: - Video Data Delegate (Green Screen)
 
 extension CinematicCameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
-
     nonisolated func captureOutput(
         _ output: AVCaptureOutput,
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
         guard GreenScreenProcessor.shared.isActiveAtomic else { return }
-        // Extract pixel buffer on frameQueue — CVPixelBuffer is Sendable,
-        // CMSampleBuffer is not. ARC retains pixelBuffer automatically.
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         Task { @MainActor in
             GreenScreenProcessor.shared.processPixelBuffer(pixelBuffer)
@@ -453,9 +438,9 @@ extension CinematicCameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 }
 
+// MARK: - Recording Delegate
 
 extension CinematicCameraManager: AVCaptureFileOutputRecordingDelegate {
-
     nonisolated func fileOutput(
         _ output: AVCaptureFileOutput,
         didStartRecordingTo fileURL: URL,
@@ -476,13 +461,14 @@ extension CinematicCameraManager: AVCaptureFileOutputRecordingDelegate {
         Task { @MainActor in
             self.isRecording = false
             if let error {
-                print("❌ CAMERA: Recording failed - \(error)")
+                print("❌ CAMERA: Recording failed — \(error)")
                 self.recordingCompletion?(nil)
             } else {
-                let asset = AVAsset(url: outputFileURL)
-                if let track = asset.tracks(withMediaType: .video).first {
-                    let size = track.naturalSize
-                    print("✅ CAMERA: Done — \(size.width)x\(size.height)")
+                // Log dimensions using modern async API
+                let asset = AVURLAsset(url: outputFileURL)
+                if let track = try? await asset.loadTracks(withMediaType: .video).first {
+                    let size = try? await track.load(.naturalSize)
+                    if let size { print("✅ CAMERA: Done — \(size.width)x\(size.height)") }
                 }
                 self.recordingCompletion?(outputFileURL)
             }

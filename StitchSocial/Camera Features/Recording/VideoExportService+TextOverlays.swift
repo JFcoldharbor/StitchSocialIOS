@@ -60,8 +60,11 @@ extension VideoExportService {
         videoLayer.frame = CGRect(origin: .zero, size: renderSize)
         parentLayer.addSublayer(videoLayer)
 
-        // Build a CALayer for each overlay
-        for overlay in overlays {
+        // Skip empty stickers (see buildCombinedAnimationTool for rationale).
+        let visibleOverlays = overlays.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        for overlay in visibleOverlays {
             let layer = buildTextLayer(overlay: overlay, renderSize: renderSize, duration: duration)
             parentLayer.addSublayer(layer)
         }
@@ -80,19 +83,27 @@ extension VideoExportService {
         duration: CMTime
     ) -> CALayer {
 
-        let font = UIFont(name: overlay.font.postScriptName, size: overlay.fontSize * overlay.scale)
-            ?? UIFont.systemFont(ofSize: overlay.fontSize * overlay.scale,
-                                 weight: overlay.isBold ? .bold : .semibold)
+        // Resolve font matching the preview's overlay.font.swiftUIFont(...).
+        // .handwritten always uses SnellRoundhand-Bold to match TextStickerView.
+        // .typewriter falls back to a monospaced system font if Courier-style
+        // fonts aren't available — same behavior as preview's monospaced design.
+        let font = resolveFont(for: overlay)
 
-        // Measure text to size background layer
+        // Measure at base font size only — scale is applied as a transform on
+        // the container so padding scales uniformly (matches preview's
+        // .scaleEffect(overlay.scale) behavior).
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         let textSize = (overlay.text as NSString).size(withAttributes: attrs)
-        let padding: CGFloat = 16
-        let layerW = textSize.width  + padding * 2
-        let layerH = textSize.height + padding
 
-        // Position from normalizedX/Y (0…1 of render size)
-        // CoreAnimation isGeometryFlipped = true so y is already in video space
+        // Per-style padding matching TextStickerView.
+        let (hPad, vPad): (CGFloat, CGFloat) = paddingFor(style: overlay.style)
+        let layerW = textSize.width  + hPad * 2
+        let layerH = textSize.height + vPad * 2
+
+        // Position from normalizedX/Y (0…1 of render size).
+        // CoreAnimation isGeometryFlipped = true on the parent so y is in
+        // video pixel space (0=top, height=bottom), matching SwiftUI's
+        // .position(x:y:) coordinate system in the preview.
         let cx = overlay.normalizedX * renderSize.width
         let cy = overlay.normalizedY * renderSize.height
         let frame = CGRect(
@@ -102,18 +113,97 @@ extension VideoExportService {
             height: layerH
         )
 
-        // Container layer (handles bg + rotation)
+        // Container layer — applies rotation AND scale so chrome (padding,
+        // backgrounds, borders) scales with the text. anchorPoint stays at
+        // (0.5, 0.5) so transforms pivot around the center.
         let container = CALayer()
         container.frame = frame
-        container.transform = CATransform3DMakeRotation(
-            overlay.rotation * .pi / 180, 0, 0, 1
-        )
+        container.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        let rotationRad = overlay.rotation * .pi / 180
+        let scaleT = CATransform3DMakeScale(overlay.scale, overlay.scale, 1)
+        let rotateT = CATransform3DMakeRotation(rotationRad, 0, 0, 1)
+        container.transform = CATransform3DConcat(scaleT, rotateT)
 
-        // Background
+        // Per-style chrome (background, border, drop shadow).
+        applyStyleChrome(to: container, overlay: overlay, layerH: layerH)
+
+        // Text layer(s) — gradient and glitch use multiple layers; others
+        // use a single CATextLayer.
+        addTextLayers(to: container, overlay: overlay, font: font, textSize: textSize, hPad: hPad, vPad: vPad)
+
+        // Visibility timing. If start/end are set the layer stays opacity 0
+        // until startTime, then fades to 1, then fades back to 0 at endTime.
+        // If no time range set, the layer is always visible (opacity stays
+        // at default 1 — no animation needed).
+        if let start = overlay.startTime, let end = overlay.endTime {
+            installVisibilityAnimation(on: container, start: start, end: end, totalDuration: duration)
+        }
+
+        // Phase 3 — entrance animation if the user picked one.
+        installEntranceAnimation(on: container, overlay: overlay)
+
+        return container
+    }
+
+    // MARK: - Font resolution
+
+    private func resolveFont(for overlay: TextOverlay) -> UIFont {
+        // Handwritten style is locked to script font regardless of overlay.font
+        // (matches preview which hardcodes SnellRoundhand-Bold).
+        if overlay.style == .handwritten {
+            return UIFont(name: "SnellRoundhand-Bold", size: overlay.fontSize)
+                ?? UIFont.italicSystemFont(ofSize: overlay.fontSize)
+        }
+
+        // Default sans / Typewriter use system designs in preview; mirror that
+        // by falling back to system fonts with matching weight/design.
+        if overlay.font == .defaultSans {
+            return UIFont.systemFont(
+                ofSize: overlay.fontSize,
+                weight: overlay.isBold ? .bold : .semibold
+            )
+        }
+        if overlay.font == .typewriter {
+            // .system(...design: .monospaced) in preview → use monospaced system.
+            if #available(iOS 13.0, *) {
+                let weight: UIFont.Weight = overlay.isBold ? .bold : .regular
+                return UIFont.monospacedSystemFont(ofSize: overlay.fontSize, weight: weight)
+            }
+            return UIFont(name: "Menlo", size: overlay.fontSize)
+                ?? UIFont.systemFont(ofSize: overlay.fontSize, weight: overlay.isBold ? .bold : .regular)
+        }
+
+        return UIFont(name: overlay.font.postScriptName, size: overlay.fontSize)
+            ?? UIFont.systemFont(ofSize: overlay.fontSize, weight: overlay.isBold ? .bold : .semibold)
+    }
+
+    private func paddingFor(style: TextOverlayStyle) -> (h: CGFloat, v: CGFloat) {
+        switch style {
+        case .boldPill:    return (14, 7)
+        case .outline:     return (8, 4)
+        case .neon:        return (14, 7)
+        case .typewriter:  return (12, 6)
+        case .gradient:    return (8, 4)
+        case .ribbon:      return (18, 8)
+        case .shadow:      return (8, 4)
+        case .glitch:      return (8, 4)
+        case .handwritten: return (8, 4)
+        case .sticker:     return (14, 8)
+        }
+    }
+
+    // MARK: - Style chrome
+
+    private func applyStyleChrome(to container: CALayer, overlay: TextOverlay, layerH: CGFloat) {
         switch overlay.style {
-        case .boldPill, .typewriter:
+        case .boldPill:
             container.backgroundColor = overlay.bgColor.cgColor
-            container.cornerRadius = overlay.style == .boldPill ? layerH / 2 : 4
+            container.cornerRadius = layerH / 2
+
+        case .typewriter:
+            container.backgroundColor = overlay.bgColor.cgColor
+            container.cornerRadius = 4
+
         case .neon:
             container.backgroundColor = overlay.bgColor.cgColor
             container.cornerRadius = 8
@@ -121,72 +211,217 @@ extension VideoExportService {
             container.shadowRadius = 12
             container.shadowOpacity = 0.9
             container.shadowOffset = .zero
-        case .outline, .gradient:
+
+        case .outline, .gradient, .shadow, .glitch, .handwritten:
             container.backgroundColor = UIColor.clear.cgColor
+
+        case .ribbon:
+            // Stroke a notched-banner shape behind the text via CAShapeLayer.
+            let shape = CAShapeLayer()
+            shape.frame = container.bounds
+            shape.path = ribbonPath(in: container.bounds).cgPath
+            shape.fillColor = overlay.bgColor.cgColor
+            container.addSublayer(shape)
+
+        case .sticker:
+            container.backgroundColor = overlay.bgColor.cgColor
+            container.cornerRadius = 12
+            container.borderColor = UIColor.white.cgColor
+            container.borderWidth = 4
         }
+    }
 
-        // Text layer
-        let textLayer = CATextLayer()
-        textLayer.frame = CGRect(
-            x: padding,
-            y: padding / 2,
-            width: textSize.width,
-            height: textSize.height
-        )
-        textLayer.string = overlay.text
-        textLayer.font = CTFontCreateWithName(font.fontName as CFString, font.pointSize, nil)
-        textLayer.fontSize = font.pointSize
-        textLayer.foregroundColor = overlay.textColor.cgColor
-        textLayer.alignmentMode = .center
-        textLayer.isWrapped = false
-        textLayer.contentsScale = UIScreen.main.scale
+    private func ribbonPath(in rect: CGRect) -> UIBezierPath {
+        let notch = min(10, rect.height / 2)
+        let p = UIBezierPath()
+        p.move(to: CGPoint(x: 0, y: 0))
+        p.addLine(to: CGPoint(x: rect.maxX - notch, y: 0))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        p.addLine(to: CGPoint(x: rect.maxX - notch, y: rect.maxY))
+        p.addLine(to: CGPoint(x: 0, y: rect.maxY))
+        p.addLine(to: CGPoint(x: notch, y: rect.midY))
+        p.close()
+        return p
+    }
 
-        // Gradient text — apply gradient mask
-        if overlay.style == .gradient {
-            let gradLayer = CAGradientLayer()
-            gradLayer.frame = textLayer.bounds
-            gradLayer.colors = [
+    // MARK: - Text layers
+
+    private func addTextLayers(
+        to container: CALayer,
+        overlay: TextOverlay,
+        font: UIFont,
+        textSize: CGSize,
+        hPad: CGFloat,
+        vPad: CGFloat
+    ) {
+        let textFrame = CGRect(x: hPad, y: vPad, width: textSize.width, height: textSize.height)
+
+        switch overlay.style {
+        case .gradient:
+            // CAGradientLayer masked by the text shape.
+            let textMask = makeTextLayer(text: overlay.text, font: font, color: .white, frame: textFrame)
+            let grad = CAGradientLayer()
+            grad.frame = textFrame
+            grad.colors = [
                 overlay.textColor.cgColor,
                 overlay.textColor.withAlphaComponent(0.5).cgColor
             ]
-            gradLayer.startPoint = CGPoint(x: 0, y: 0)
-            gradLayer.endPoint   = CGPoint(x: 1, y: 1)
-            gradLayer.mask = textLayer
-            container.addSublayer(gradLayer)
-        } else {
-            container.addSublayer(textLayer)
+            grad.startPoint = CGPoint(x: 0, y: 0)
+            grad.endPoint = CGPoint(x: 1, y: 1)
+            grad.mask = textMask
+            container.addSublayer(grad)
+
+        case .glitch:
+            // RGB-split: cyan offset left, red offset right, white in center.
+            let cyan = makeTextLayer(text: overlay.text, font: font, color: .cyan, frame: textFrame.offsetBy(dx: -2, dy: 0))
+            let red = makeTextLayer(text: overlay.text, font: font, color: .red, frame: textFrame.offsetBy(dx: 2, dy: 0))
+            let main = makeTextLayer(text: overlay.text, font: font, color: overlay.textColor, frame: textFrame)
+            container.addSublayer(cyan)
+            container.addSublayer(red)
+            container.addSublayer(main)
+
+        case .outline:
+            // Re-create the preview's three-direction shadow trick with a
+            // single text layer — only one shadow direction is supported by
+            // CALayer, so we fake the rest by stacking offset copies.
+            let dirs: [(CGFloat, CGFloat)] = [(1, 1), (-1, -1), (1, -1), (-1, 1)]
+            for (dx, dy) in dirs {
+                let stroke = makeTextLayer(text: overlay.text, font: font, color: overlay.textColor, frame: textFrame.offsetBy(dx: dx, dy: dy))
+                stroke.opacity = 0.6
+                container.addSublayer(stroke)
+            }
+            let main = makeTextLayer(text: overlay.text, font: font, color: overlay.textColor, frame: textFrame)
+            container.addSublayer(main)
+
+        case .shadow:
+            let main = makeTextLayer(text: overlay.text, font: font, color: overlay.textColor, frame: textFrame)
+            main.shadowColor = UIColor.black.cgColor
+            main.shadowOpacity = 0.85
+            main.shadowOffset = CGSize(width: 4, height: 4)
+            main.shadowRadius = 0
+            container.addSublayer(main)
+
+        default:
+            // .boldPill, .typewriter, .neon, .ribbon, .handwritten, .sticker
+            let main = makeTextLayer(text: overlay.text, font: font, color: overlay.textColor, frame: textFrame)
+            container.addSublayer(main)
         }
+    }
 
-        // Outline style — shadow trick for stroke
-        if overlay.style == .outline {
-            textLayer.shadowColor  = overlay.textColor.cgColor
-            textLayer.shadowRadius = 0
-            textLayer.shadowOpacity = 1
-            textLayer.shadowOffset = CGSize(width: 1.5, height: 1.5)
+    private func makeTextLayer(text: String, font: UIFont, color: UIColor, frame: CGRect) -> CATextLayer {
+        let layer = CATextLayer()
+        layer.frame = frame
+        layer.string = text
+        layer.font = CTFontCreateWithName(font.fontName as CFString, font.pointSize, nil)
+        layer.fontSize = font.pointSize
+        layer.foregroundColor = color.cgColor
+        layer.alignmentMode = .center
+        layer.isWrapped = false
+        layer.contentsScale = UIScreen.main.scale
+        return layer
+    }
+
+    // MARK: - Visibility / entrance animations
+
+    private func installVisibilityAnimation(on layer: CALayer, start: TimeInterval, end: TimeInterval, totalDuration: CMTime) {
+        let showAt = CABasicAnimation(keyPath: "opacity")
+        showAt.fromValue = 0; showAt.toValue = 1
+        showAt.beginTime = start; showAt.duration = 0.01
+        showAt.fillMode = .forwards; showAt.isRemovedOnCompletion = false
+
+        let hideAt = CABasicAnimation(keyPath: "opacity")
+        hideAt.fromValue = 1; hideAt.toValue = 0
+        hideAt.beginTime = end; hideAt.duration = 0.01
+        hideAt.fillMode = .forwards; hideAt.isRemovedOnCompletion = false
+
+        let group = CAAnimationGroup()
+        group.animations = [showAt, hideAt]
+        group.duration = CMTimeGetSeconds(totalDuration)
+        group.fillMode = .forwards
+        group.isRemovedOnCompletion = false
+        layer.opacity = 0
+        layer.add(group, forKey: "visibility")
+    }
+
+    // Phase 3 — entrance animation. Plays once at the overlay's startTime
+    // (or t=0 if no time range was set). Each style maps to a CAAnimation
+    // pattern that approximates the SwiftUI preview behavior.
+    private func installEntranceAnimation(on layer: CALayer, overlay: TextOverlay) {
+        guard overlay.animation != .none else { return }
+
+        let beginAt = overlay.startTime ?? 0
+        let dur = overlay.animation.duration
+
+        switch overlay.animation {
+        case .none:
+            return
+
+        case .fadeIn:
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0; fade.toValue = 1
+            fade.beginTime = beginAt; fade.duration = dur
+            fade.fillMode = .forwards; fade.isRemovedOnCompletion = false
+            layer.add(fade, forKey: "entrance")
+
+        case .popIn:
+            // Scale 0 → 1.1 → 1 with opacity 0 → 1.
+            let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+            scale.values = [0.0, 1.15, 0.95, 1.0]
+            scale.keyTimes = [0, 0.55, 0.8, 1.0]
+            scale.beginTime = beginAt; scale.duration = dur
+            scale.fillMode = .forwards; scale.isRemovedOnCompletion = false
+
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0; fade.toValue = 1
+            fade.beginTime = beginAt; fade.duration = dur * 0.4
+            fade.fillMode = .forwards; fade.isRemovedOnCompletion = false
+
+            layer.add(scale, forKey: "entranceScale")
+            layer.add(fade, forKey: "entranceFade")
+
+        case .slideUp:
+            let slide = CABasicAnimation(keyPath: "transform.translation.y")
+            slide.fromValue = 60; slide.toValue = 0
+            slide.beginTime = beginAt; slide.duration = dur
+            slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            slide.fillMode = .forwards; slide.isRemovedOnCompletion = false
+
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0; fade.toValue = 1
+            fade.beginTime = beginAt; fade.duration = dur * 0.6
+            fade.fillMode = .forwards; fade.isRemovedOnCompletion = false
+
+            layer.add(slide, forKey: "entranceSlide")
+            layer.add(fade, forKey: "entranceFade")
+
+        case .bounce:
+            let bounce = CAKeyframeAnimation(keyPath: "transform.scale")
+            bounce.values = [0.0, 1.3, 0.85, 1.1, 0.97, 1.0]
+            bounce.keyTimes = [0, 0.4, 0.6, 0.75, 0.9, 1.0]
+            bounce.beginTime = beginAt; bounce.duration = dur
+            bounce.fillMode = .forwards; bounce.isRemovedOnCompletion = false
+
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0; fade.toValue = 1
+            fade.beginTime = beginAt; fade.duration = dur * 0.3
+            fade.fillMode = .forwards; fade.isRemovedOnCompletion = false
+
+            layer.add(bounce, forKey: "entranceBounce")
+            layer.add(fade, forKey: "entranceFade")
+
+        case .typewriter:
+            // A coarse approximation: reveal in 5 steps via opacity stair-step.
+            // True per-character reveal would require splitting the text into
+            // per-glyph CATextLayers; this is the cheap version that still
+            // reads as a "typing" fade in for short overlays.
+            let steps = CAKeyframeAnimation(keyPath: "opacity")
+            steps.values = [0.0, 0.0, 0.4, 0.7, 1.0]
+            steps.keyTimes = [0, 0.05, 0.4, 0.7, 1.0]
+            steps.beginTime = beginAt; steps.duration = dur
+            steps.calculationMode = .discrete
+            steps.fillMode = .forwards; steps.isRemovedOnCompletion = false
+            layer.add(steps, forKey: "entranceType")
         }
-
-        // Time visibility — hide outside startTime…endTime if set
-        if let start = overlay.startTime, let end = overlay.endTime {
-            let showAt  = CABasicAnimation(keyPath: "opacity")
-            showAt.fromValue = 0; showAt.toValue = 1
-            showAt.beginTime = start; showAt.duration = 0.01
-            showAt.fillMode = .forwards; showAt.isRemovedOnCompletion = false
-
-            let hideAt  = CABasicAnimation(keyPath: "opacity")
-            hideAt.fromValue = 1; hideAt.toValue = 0
-            hideAt.beginTime = end; hideAt.duration = 0.01
-            hideAt.fillMode = .forwards; hideAt.isRemovedOnCompletion = false
-
-            let group = CAAnimationGroup()
-            group.animations = [showAt, hideAt]
-            group.duration = CMTimeGetSeconds(duration)
-            group.fillMode = .forwards
-            group.isRemovedOnCompletion = false
-            container.opacity = 0
-            container.add(group, forKey: "visibility")
-        }
-
-        return container
     }
 
     // MARK: - Combined: Text Overlays + Captions in one animationTool
@@ -208,8 +443,20 @@ extension VideoExportService {
         videoLayer.frame = CGRect(origin: .zero, size: renderSize)
         parentLayer.addSublayer(videoLayer)
 
+        // Skip overlays whose text is empty or whitespace-only — these are
+        // ghost stickers from a tap-to-create that the user never typed
+        // into, and would render as a tiny invisible chrome rectangle.
+        let visibleOverlays = overlays.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let droppedCount = overlays.count - visibleOverlays.count
+        if droppedCount > 0 {
+            print("📝 EXPORT: dropped \(droppedCount) empty text overlay(s)")
+        }
+        print("📝 EXPORT: rendering \(visibleOverlays.count) text overlay(s), \(captions.count) caption(s) at renderSize=\(renderSize)")
+
         // Text overlay stickers
-        for overlay in overlays {
+        for overlay in visibleOverlays {
             let layer = buildTextLayer(overlay: overlay, renderSize: renderSize, duration: duration)
             parentLayer.addSublayer(layer)
         }
@@ -234,20 +481,16 @@ extension VideoExportService {
         duration: CMTime
     ) -> CALayer {
 
-        // Resolve font and colors from preset or legacy style
-        let preset = caption.preset
-        let fontSize: CGFloat = preset?.fontSize ?? caption.style.fontSize
-        let font: UIFont = preset?.uiFont ??
-            UIFont.systemFont(ofSize: fontSize,
-                              weight: caption.style.fontWeight == "bold" ? .bold : .semibold)
-        let textColor: UIColor = preset?.textUIColor ?? .white
-        let bgColor:   UIColor = preset?.bgUIColor   ?? UIColor.black.withAlphaComponent(0.55)
-        let bgType:    CaptionBgType = preset?.bgType ?? .pill
+        // Standard caption: white text, black pill background, bold 22pt.
+        // Matches StandardCaptionText in the preview 1:1.
+        let fontSize: CGFloat = 22
+        let font = UIFont.systemFont(ofSize: fontSize, weight: .bold)
+        let textColor = UIColor.white
+        let bgColor = UIColor.black.withAlphaComponent(0.6)
 
-        // Use safe Y offset to avoid ContextualVideoOverlay metadata
+        let cx = renderSize.width / 2
         let cy = renderSize.height * caption.position.safeOffset
 
-        // Measure text
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         let maxWidth = renderSize.width * 0.85
         let textSize = (caption.text as NSString).boundingRect(
@@ -256,43 +499,22 @@ extension VideoExportService {
             attributes: attrs, context: nil
         ).size
 
-        // Build container based on bgType
-        let hPad: CGFloat = bgType == .none ? 0 : 20
-        let vPad: CGFloat = bgType == .none ? 0 : 10
-        let layerW = bgType == .fullBar
-            ? renderSize.width
-            : min(textSize.width + hPad * 2, renderSize.width * 0.92)
+        let hPad: CGFloat = 16
+        let vPad: CGFloat = 8
+        let layerW = min(textSize.width + hPad * 2, renderSize.width * 0.92)
         let layerH = textSize.height + vPad * 2
 
         let frame = CGRect(
-            x: (renderSize.width - layerW) / 2,
+            x: cx - layerW / 2,
             y: cy - layerH / 2,
             width: layerW, height: layerH
         )
 
         let container = CALayer()
         container.frame = frame
+        container.backgroundColor = bgColor.cgColor
+        container.cornerRadius = layerH / 2  // pill
 
-        switch bgType {
-        case .pill:
-            container.backgroundColor = bgColor.cgColor
-            container.cornerRadius = layerH / 2
-        case .fullBar:
-            container.backgroundColor = bgColor.cgColor
-            container.cornerRadius = 0
-        case .highlightWord:
-            // Build stacked word-highlight layers
-            return buildWordHighlightLayer(caption: caption, preset: preset!,
-                                           font: font, renderSize: renderSize,
-                                           cy: cy, duration: duration)
-        case .blur, .outline:
-            container.backgroundColor = bgColor.cgColor
-            container.cornerRadius = 10
-        case .none:
-            container.backgroundColor = UIColor.clear.cgColor
-        }
-
-        // Text layer
         let textLayer = CATextLayer()
         textLayer.frame = CGRect(x: hPad, y: vPad,
                                  width: layerW - hPad * 2, height: textSize.height)
@@ -305,90 +527,9 @@ extension VideoExportService {
         textLayer.contentsScale = UIScreen.main.scale
         container.addSublayer(textLayer)
 
-        // Stroke layer (if preset has stroke)
-        if let preset = preset, preset.strokeWidth > 0 {
-            let strokeLayer = CATextLayer()
-            strokeLayer.frame = textLayer.frame
-            strokeLayer.string = caption.text
-            strokeLayer.font = textLayer.font
-            strokeLayer.fontSize = textLayer.fontSize
-            strokeLayer.foregroundColor = preset.strokeUIColor.cgColor
-            strokeLayer.alignmentMode = .center
-            strokeLayer.isWrapped = true
-            strokeLayer.contentsScale = UIScreen.main.scale
-            // Insert behind text
-            container.insertSublayer(strokeLayer, at: 0)
-        }
-
         animateVisibility(layer: container, startTime: caption.startTime,
                           endTime: caption.endTime, totalDuration: duration)
         return container
-    }
-
-    // Word-highlight layer for Insta Bold / Karaoke presets
-    private func buildWordHighlightLayer(
-        caption: VideoCaption,
-        preset: CaptionStylePreset,
-        font: UIFont,
-        renderSize: CGSize,
-        cy: CGFloat,
-        duration: CMTime
-    ) -> CALayer {
-        let words = caption.text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-        let maxPerLine = 3
-        var lines: [[String]] = []
-        var current: [String] = []
-        for word in words {
-            current.append(word)
-            if current.count >= maxPerLine { lines.append(current); current = [] }
-        }
-        if !current.isEmpty { lines.append(current) }
-
-        let lineH: CGFloat = font.lineHeight + 14
-        let totalH = CGFloat(lines.count) * lineH + CGFloat(max(lines.count - 1, 0)) * 4
-        let stackFrame = CGRect(x: 0, y: cy - totalH / 2,
-                                width: renderSize.width, height: totalH)
-
-        let stack = CALayer()
-        stack.frame = stackFrame
-
-        for (li, line) in lines.enumerated() {
-            let lineY = CGFloat(li) * (lineH + 4)
-            // Measure total line width
-            var lineWidth: CGFloat = 0
-            let wordWidths: [CGFloat] = line.map { word in
-                let w = (word as NSString).size(withAttributes: [.font: font]).width + 18
-                lineWidth += w + 6
-                return w
-            }
-            lineWidth -= 6
-
-            var xCursor = (renderSize.width - lineWidth) / 2
-            for (wi, word) in line.enumerated() {
-                let wW = wordWidths[wi]
-                let pill = CALayer()
-                pill.frame = CGRect(x: xCursor, y: lineY, width: wW, height: lineH)
-                pill.backgroundColor = preset.bgUIColor.cgColor
-                pill.cornerRadius = lineH / 2
-
-                let tl = CATextLayer()
-                tl.frame = CGRect(x: 6, y: (lineH - font.lineHeight) / 2,
-                                  width: wW - 12, height: font.lineHeight + 4)
-                tl.string = word
-                tl.font = CTFontCreateWithName(font.fontName as CFString, font.pointSize, nil)
-                tl.fontSize = font.pointSize
-                tl.foregroundColor = preset.textUIColor.cgColor
-                tl.alignmentMode = .center
-                tl.contentsScale = UIScreen.main.scale
-                pill.addSublayer(tl)
-                stack.addSublayer(pill)
-                xCursor += wW + 6
-            }
-        }
-
-        animateVisibility(layer: stack, startTime: caption.startTime,
-                          endTime: caption.endTime, totalDuration: duration)
-        return stack
     }
 
     // Shared visibility animation helper
@@ -411,40 +552,5 @@ extension VideoExportService {
         group.isRemovedOnCompletion = false
         layer.opacity = 0
         layer.add(group, forKey: "visibility")
-    }
-
-    // MARK: - Render Size Helper
-
-    func getRenderSize(from composition: AVMutableComposition) async throws -> CGSize {
-        guard let videoTrack = try await composition.loadTracks(withMediaType: .video).first else {
-            return CGSize(width: 1080, height: 1920)
-        }
-        let naturalSize = try await videoTrack.load(.naturalSize)
-        let transform   = try await videoTrack.load(.preferredTransform)
-        let transformed = naturalSize.applying(transform)
-        return CGSize(width: abs(transformed.width), height: abs(transformed.height))
-    }
-
-    // MARK: - Base VideoComposition (orientation only)
-
-    func buildBaseVideoComposition(
-        from composition: AVMutableComposition,
-        renderSize: CGSize
-    ) async throws -> AVMutableVideoComposition {
-        let vc = AVMutableVideoComposition()
-        vc.renderSize    = renderSize
-        vc.frameDuration = CMTime(value: 1, timescale: 30)
-
-        let instruction = AVMutableVideoCompositionInstruction()
-        instruction.timeRange = CMTimeRange(start: .zero, duration: composition.duration)
-
-        if let track = try await composition.loadTracks(withMediaType: .video).first {
-            let transform = try await track.load(.preferredTransform)
-            let li = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-            li.setTransform(transform, at: .zero)
-            instruction.layerInstructions = [li]
-        }
-        vc.instructions = [instruction]
-        return vc
     }
 }

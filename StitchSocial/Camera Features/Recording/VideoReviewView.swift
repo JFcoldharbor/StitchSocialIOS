@@ -9,6 +9,7 @@
 
 import SwiftUI
 import AVKit
+import AVFoundation
 
 struct VideoReviewView: View {
     
@@ -59,12 +60,9 @@ struct VideoReviewView: View {
             CaptionOverlayView(
                 captions: editState.state.captions,
                 currentTime: editState.currentPlaybackTime,
-                videoSize: editState.state.videoSize,
                 enabled: editState.state.captionsEnabled,
-                globalPreset: editState.state.globalCaptionPreset,
                 globalPosition: editState.state.globalCaptionPosition
             )
-            .allowsHitTesting(false)
 
             // ── Text overlay canvas ────────────────────────────────────
             TextOverlayCanvasView(editState: editState, selectedOverlayID: $selectedOverlayID, editingOverlayID: $editingOverlayID)
@@ -98,6 +96,11 @@ struct VideoReviewView: View {
                 panelOverlay(panel)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+
+            // ── Text editor floating toolbar ───────────────────────────
+            // Pinned above the keyboard at screen level so the toolbar is
+            // always reachable regardless of where the sticker sits.
+            TextEditorOverlay(editState: editState, editingOverlayID: $editingOverlayID)
 
             // ── Processing overlay ─────────────────────────────────────
             if editState.state.isProcessing {
@@ -165,13 +168,23 @@ struct VideoReviewView: View {
         VStack(spacing: 20) {
             ForEach(EditPanel.allCases, id: \.self) { panel in
                 Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
-                        if activePanel == panel {
+                    if panel == .text {
+                        // Text: skip panel, immediately add centered sticker + enter edit
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
                             activePanel = nil
-                        } else {
-                            activePanel = panel
-                            // pause while editing
-                            editState.pause(); isPlaying = false
+                        }
+                        var new = TextOverlay(text: "", style: .boldPill)
+                        new.font = .futura
+                        new.normalizedX = 0.5
+                        new.normalizedY = 0.3  // upper third — stays above keyboard
+                        editState.addOverlay(new)
+                        selectedOverlayID = new.id
+                        editingOverlayID  = new.id
+                        editState.pause(); isPlaying = false
+                    } else {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                            activePanel = activePanel == panel ? nil : panel
+                            if activePanel != nil { editState.pause(); isPlaying = false }
                         }
                     }
                 } label: {
@@ -228,8 +241,17 @@ struct VideoReviewView: View {
                         .shadow(color: .white.opacity(0.3), radius: 12)
                 )
             }
-            .disabled(editState.state.isProcessing || !editState.isPropertiesLoaded)
-            .opacity(editState.isPropertiesLoaded ? 1 : 0.5)
+            .disabled(editState.state.isProcessing || !editState.isPropertiesLoaded || !editState.captionsReady)
+            .opacity((editState.isPropertiesLoaded && editState.captionsReady) ? 1 : 0.5)
+            .overlay(alignment: .trailing) {
+                if !editState.captionsReady && editState.isPropertiesLoaded {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.black)
+                        .scaleEffect(0.7)
+                        .offset(x: 36)
+                }
+            }
         }
         .padding(.horizontal, 20)
     }
@@ -275,16 +297,15 @@ struct VideoReviewView: View {
     }
     
     // MARK: - Video Preview
-    
+
     private var videoPreview: some View {
         GeometryReader { geometry in
             ZStack {
-                // Fullscreen video player
-                VideoPlayer(player: editState.player)
-                    .disabled(true)
+                // Direct AVPlayerLayer — no AVKit wrapper, no .disabled interference
+                AVPlayerLayerView(player: editState.player)
                     .frame(width: geometry.size.width, height: geometry.size.height)
-                
-                // Tap to pause (like TikTok) - no visible indicator
+
+                // Tap to play/pause
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -296,7 +317,7 @@ struct VideoReviewView: View {
                             isPlaying = true
                         }
                     }
-                
+
                 // Processing overlay
                 if editState.state.isProcessing {
                     processingOverlay
@@ -341,11 +362,22 @@ struct VideoReviewView: View {
     // MARK: - Actions
     
     private func startAutoPlayback() {
-        // Start playing immediately
+        print("🔍 PLAYBACK DEBUG 1: startAutoPlayback called")
+        // Use .playAndRecord to coexist with camera session if it's still active.
+        // .defaultToSpeaker routes audio to speaker instead of earpiece.
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playAndRecord, mode: .default,
+                options: [.defaultToSpeaker, .allowBluetooth])
+            try AVAudioSession.sharedInstance().setActive(true)
+            print("🔍 PLAYBACK DEBUG 2: Audio session set ✅")
+        } catch {
+            print("🔍 PLAYBACK DEBUG 2: Audio session FAILED — \(error)")
+        }
+        print("🔍 PLAYBACK DEBUG 3: Player status = \(editState.player.status.rawValue), currentItem = \(editState.player.currentItem != nil)")
         editState.play()
         isPlaying = true
-        
-        // Loop video playback
+        print("🔍 PLAYBACK DEBUG 4: play() called, rate = \(editState.player.rate)")
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: editState.player.currentItem,
@@ -384,6 +416,16 @@ struct VideoReviewView: View {
         // Block until video properties are loaded (prevents race condition)
         guard editState.isPropertiesLoaded else {
             exportService.exportError = "Still loading video. Please wait a moment."
+            showingExportError = true
+            return
+        }
+
+        // Block until auto-caption generation has completed (success or failure).
+        // Without this gate the export can fire with an empty captions array
+        // while SFSpeechRecognizer is still running in the background, and the
+        // captions never get baked into the MP4.
+        guard editState.captionsReady else {
+            exportService.exportError = "Generating captions… try again in a second."
             showingExportError = true
             return
         }
@@ -439,6 +481,35 @@ struct VideoReviewView: View {
     }
 }
 
+// MARK: - AVPlayerLayerView
+// Direct AVPlayerLayer rendering — avoids VideoPlayer wrapper issues.
+// Re-attaches layer on every updateUIView so frame is always correct.
+
+struct AVPlayerLayerView: UIViewRepresentable {
+    let player: AVPlayer
+
+    func makeUIView(context: Context) -> UIView {
+        let view = PlayerView()
+        view.backgroundColor = .black
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = .resizeAspectFill
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        guard let view = uiView as? PlayerView else { return }
+        DispatchQueue.main.async {
+            view.playerLayer.frame = view.bounds
+        }
+    }
+
+    // UIView subclass that exposes its backing layer as AVPlayerLayer
+    class PlayerView: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    }
+}
+
 // MARK: - Edit Panel
 
 enum EditPanel: String, CaseIterable {
@@ -473,6 +544,7 @@ class VideoEditStateManager: ObservableObject {
     
     @Published var state: VideoEditState
     @Published var isPropertiesLoaded = false
+    @Published var captionsReady = false
     @Published var currentPlaybackTime: TimeInterval = 0
     @Published var isPlaying = false
     let player: AVPlayer
@@ -482,7 +554,10 @@ class VideoEditStateManager: ObservableObject {
     
     init(initialState: VideoEditState) {
         self.state = initialState
+        print("🔍 PLAYER DEBUG 1: Creating AVPlayer for \(initialState.videoURL.lastPathComponent)")
+        print("🔍 PLAYER DEBUG 2: File exists = \(FileManager.default.fileExists(atPath: initialState.videoURL.path))")
         self.player = AVPlayer(url: initialState.videoURL)
+        print("🔍 PLAYER DEBUG 3: AVPlayer created, status = \(player.status.rawValue)")
         
         // Track playback position at 30fps for smooth playhead
         timeObserver = player.addPeriodicTimeObserver(
@@ -495,6 +570,7 @@ class VideoEditStateManager: ObservableObject {
                 self.isPlaying = (self.player.rate > 0)
             }
         }
+        print("🔍 PLAYER DEBUG 4: Time observer added")
         
         Task {
             await loadVideoProperties()
@@ -550,8 +626,16 @@ class VideoEditStateManager: ObservableObject {
     
     private func autoGenerateCaptions() async {
         // Only auto-generate if no captions exist
-        guard state.captions.isEmpty else { return }
-        
+        guard state.captions.isEmpty else {
+            await MainActor.run { captionsReady = true }
+            return
+        }
+
+        // captionsReady stays false until this Task finishes (success OR failure).
+        // The Next button reads this flag so the user can't fire export on an
+        // empty captions array while the speech recognizer is still running.
+        defer { Task { @MainActor in self.captionsReady = true } }
+
         do {
             let captions = try await autoCaptionService.generateCaptions(from: state.videoURL)
             

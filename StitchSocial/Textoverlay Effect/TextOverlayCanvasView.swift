@@ -71,8 +71,14 @@ struct TextOverlayCanvasView: View {
                     .simultaneousGesture(magnifyGesture(for: overlay))
                     .simultaneousGesture(rotateGesture(for: overlay))
                     .onTapGesture {
-                        selectedOverlayID = overlay.id
-                        editingOverlayID  = overlay.id
+                        // Tap-to-select on first tap, tap-to-edit when
+                        // already selected. Lets users drag/resize without
+                        // re-opening the keyboard every time.
+                        if isSelected {
+                            editingOverlayID = overlay.id
+                        } else {
+                            selectedOverlayID = overlay.id
+                        }
                     }
                     // Selection ring
                     .overlay(
@@ -99,6 +105,9 @@ struct TextOverlayCanvasView: View {
         new.normalizedY = min(max(location.y / geo.size.height, 0.1), 0.9)
         editState.addOverlay(new)
         selectedOverlayID = new.id
+        // Brand-new stickers go straight into edit mode so the keyboard
+        // appears immediately. After the user commits, subsequent taps
+        // follow the select-then-edit pattern.
         editingOverlayID  = new.id
     }
 
@@ -127,21 +136,23 @@ struct TextOverlayCanvasView: View {
     }
 }
 
-// MARK: - Inline Editor (with persistent floating toolbar)
+// MARK: - Inline Editor
+//
+// Renders the live sticker preview + an invisible TextField that owns the
+// keyboard. The actual control bar (Done / style / font / colors) lives
+// in VideoReviewView as a screen-level overlay so it pins above the
+// keyboard regardless of where the sticker is placed on the video.
 
 struct InlineOverlayEditor: View {
     @Binding var overlay: TextOverlay
     let onCommit: () -> Void
     @FocusState private var focused: Bool
-    @State private var keyboardHeight: CGFloat = 0
 
     var body: some View {
         ZStack {
-            // Live sticker preview — updates as user types
             TextStickerView(overlay: overlay, isSelected: true)
                 .allowsHitTesting(false)
 
-            // Transparent text field — owns the keyboard
             TextField("", text: $overlay.text, axis: .vertical)
                 .focused($focused)
                 .opacity(0.001)
@@ -153,25 +164,53 @@ struct InlineOverlayEditor: View {
         }
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focused = true }
-            observeKeyboard()
         }
         .onDisappear { onCommit() }
         .onChange(of: focused) { _, isFocused in if !isFocused { onCommit() } }
-        // Floating control bar sits above keyboard
-        .overlay(alignment: .bottom) {
-            if keyboardHeight > 0 {
-                FloatingTextControls(overlay: $overlay, onDone: {
-                    focused = false
-                }, onDelete: {
-                    overlay.text = ""
-                    focused = false
-                })
-                .offset(y: -(keyboardHeight))
+    }
+}
+
+// MARK: - Screen-level Editor Overlay
+//
+// Placed at the bottom of VideoReviewView's main ZStack so the floating
+// toolbar pins above the keyboard, no matter where the sticker is.
+
+struct TextEditorOverlay: View {
+    @ObservedObject var editState: VideoEditStateManager
+    @Binding var editingOverlayID: UUID?
+    @State private var keyboardHeight: CGFloat = 0
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            if let id = editingOverlayID,
+               let overlay = editState.state.textOverlays.first(where: { $0.id == id }),
+               keyboardHeight > 0 {
+                FloatingTextControls(
+                    overlay: Binding(
+                        get: { editState.state.textOverlays.first { $0.id == id } ?? overlay },
+                        set: { updated in editState.updateOverlay(id: id) { o in o = updated } }
+                    ),
+                    onDone: {
+                        // Releasing focus on the editor commits via the editor's
+                        // onChange(of: focused). We just clear the editing id
+                        // here so the editor switches back to the static sticker.
+                        editingOverlayID = nil
+                    },
+                    onDelete: {
+                        editState.removeOverlay(id: id)
+                        editingOverlayID = nil
+                    }
+                )
+                .padding(.bottom, keyboardHeight)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
-                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: keyboardHeight)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .ignoresSafeArea(.keyboard)
+        .onAppear { observeKeyboard() }
+        .onDisappear {
+            NotificationCenter.default.removeObserver(self)
+        }
     }
 
     private func observeKeyboard() {
@@ -180,12 +219,18 @@ struct InlineOverlayEditor: View {
             object: nil, queue: .main
         ) { n in
             let frame = n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect ?? .zero
-            withAnimation { keyboardHeight = frame.height }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                keyboardHeight = frame.height
+            }
         }
         NotificationCenter.default.addObserver(
             forName: UIResponder.keyboardWillHideNotification,
             object: nil, queue: .main
-        ) { _ in withAnimation { keyboardHeight = 0 } }
+        ) { _ in
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                keyboardHeight = 0
+            }
+        }
     }
 }
 
@@ -295,7 +340,31 @@ struct FloatingTextControls: View {
 
             thinDivider
 
-            // ── Row 4: Text color + BG color ───────────────────────────
+            // ── Row 4: Animation chips ─────────────────────────────────
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.4))
+                    ForEach(OverlayAnimation.allCases, id: \.rawValue) { anim in
+                        Button { overlay.animation = anim } label: {
+                            Text(anim.displayName)
+                                .font(.system(size: 12, weight: overlay.animation == anim ? .bold : .medium))
+                                .foregroundColor(overlay.animation == anim ? .black : .white)
+                                .padding(.horizontal, 12).padding(.vertical, 6)
+                                .background(Capsule().fill(
+                                    overlay.animation == anim ? Color.white : Color.white.opacity(0.15)
+                                ))
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            .frame(height: 38)
+
+            thinDivider
+
+            // ── Row 5: Text color + BG color ───────────────────────────
             HStack(spacing: 0) {
                 // Text colors
                 ScrollView(.horizontal, showsIndicators: false) {

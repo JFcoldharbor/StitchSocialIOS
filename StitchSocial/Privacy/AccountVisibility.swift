@@ -16,6 +16,7 @@
 //
 
 import Foundation
+import FirebaseFirestore
 
 // MARK: - Account Visibility
 
@@ -87,15 +88,20 @@ struct UserPrivacySettings: Codable {
     var defaultStitchVisibility: ContentVisibility
     var ageGroup: AgeGroup
     var ageVerifiedAt: Date?
-    
+    /// User's date of birth — required for ageGroup assignment.  Self-attest
+    /// for now; a Cloud Function (`onUserBirthdateSet`) re-derives ageGroup
+    /// server-side and writes a custom auth claim `audienceLane`.
+    var birthdate: Date?
+
     static let `default` = UserPrivacySettings(
         accountVisibility: .public,
         discoverabilityMode: .public,
         defaultStitchVisibility: .public,
         ageGroup: .adult,
-        ageVerifiedAt: nil
+        ageVerifiedAt: nil,
+        birthdate: nil
     )
-    
+
     /// Convert to Firestore map
     var firestoreData: [String: Any] {
         var data: [String: Any] = [
@@ -107,9 +113,12 @@ struct UserPrivacySettings: Codable {
         if let verified = ageVerifiedAt {
             data["ageVerifiedAt"] = verified
         }
+        if let dob = birthdate {
+            data["birthdate"] = dob
+        }
         return data
     }
-    
+
     /// Parse from Firestore map
     static func from(firestoreMap: [String: Any]?) -> UserPrivacySettings {
         guard let map = firestoreMap else { return .default }
@@ -118,7 +127,8 @@ struct UserPrivacySettings: Codable {
             discoverabilityMode: DiscoverabilityMode(rawValue: map["discoverabilityMode"] as? String ?? "") ?? .public,
             defaultStitchVisibility: ContentVisibility(rawValue: map["defaultStitchVisibility"] as? String ?? "") ?? .public,
             ageGroup: AgeGroup(rawValue: map["ageGroup"] as? String ?? "") ?? .adult,
-            ageVerifiedAt: map["ageVerifiedAt"] as? Date
+            ageVerifiedAt: map["ageVerifiedAt"] as? Date,
+            birthdate: (map["birthdate"] as? Timestamp)?.dateValue() ?? (map["birthdate"] as? Date)
         )
     }
 }

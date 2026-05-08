@@ -64,36 +64,9 @@ struct MainTabContainer: View {
         .environmentObject(videoService)
         .environmentObject(navigationCoordinator)
         .fullScreenCover(isPresented: $showingRecording) {
-            RecordingView(
-                recordingContext: RecordingContext.newThread,
-                onVideoCreated: { videoMetadata in
-                    guard !isProcessingVideoCreation else {
-                        print("MAIN TAB: Video creation already processing, ignoring duplicate call")
-                        return
-                    }
-                    
-                    isProcessingVideoCreation = true
-                    
-                    print("MAIN TAB: Video upload completed - \(videoMetadata.title)")
-                    print("MAIN TAB: Profile update handled by VideoCoordinator, not duplicating")
-                    
-                    showingRecording = false
-                    
-                    // PHASE 1 FIX: Use unified notification
-                    NotificationCenter.default.post(
-                        name: .refreshFeeds,
-                        object: nil,
-                        userInfo: ["newVideoID": videoMetadata.id]
-                    )
-                    
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        isProcessingVideoCreation = false
-                    }
-                },
-                onCancel: {
-                    showingRecording = false
-                    isProcessingVideoCreation = false
-                }
+            RecordingCoverView(
+                isProcessingVideoCreation: $isProcessingVideoCreation,
+                showingRecording: $showingRecording
             )
         }
         .sheet(isPresented: $navigationCoordinator.showingProfileSheet) {
@@ -208,6 +181,51 @@ struct MainTabContainer: View {
 
 // MARK: - REMOVED: Notification.Name extension
 // Now in NotificationNames.swift - single source of truth
+
+// MARK: - Stable Recording Cover
+// Isolates RecordingView from MainTabContainer state changes.
+// Without this, fullScreenCover recreates RecordingView every time
+// the parent body re-evaluates (e.g. when gallery sheet dismisses),
+// destroying the @StateObject RecordingController.
+
+struct RecordingCoverView: View {
+    @Binding var isProcessingVideoCreation: Bool
+    @Binding var showingRecording: Bool
+    @StateObject private var controller = RecordingController(recordingContext: .newThread)
+    
+    var body: some View {
+        RecordingView(
+            controller: controller,
+            onVideoCreated: { videoMetadata in
+                guard !isProcessingVideoCreation else {
+                    print("MAIN TAB: Video creation already processing, ignoring duplicate call")
+                    return
+                }
+                
+                isProcessingVideoCreation = true
+                
+                print("MAIN TAB: Video upload completed - \(videoMetadata.title)")
+                print("MAIN TAB: Profile update handled by VideoCoordinator, not duplicating")
+                
+                showingRecording = false
+                
+                NotificationCenter.default.post(
+                    name: .refreshFeeds,
+                    object: nil,
+                    userInfo: ["newVideoID": videoMetadata.id]
+                )
+                
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    isProcessingVideoCreation = false
+                }
+            },
+            onCancel: {
+                showingRecording = false
+                isProcessingVideoCreation = false
+            }
+        )
+    }
+}
 
 // MARK: - Preview
 

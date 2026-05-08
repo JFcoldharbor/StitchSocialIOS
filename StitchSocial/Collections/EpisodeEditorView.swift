@@ -456,11 +456,10 @@ struct EpisodeEditorView: View {
         let segID = seg.id
         editingSegmentID = nil
         
-        // Write to Firestore subcollection
+        // Rename now targets top-level videos/{segId} (matches new write path).
         Task {
             let db = Firestore.firestore(database: Config.Firebase.databaseName)
-            try? await db.collection("videoCollections").document(episode.id)
-                .collection("segments").document(segID)
+            try? await db.collection("videos").document(segID)
                 .setData(["segmentTitle": newTitle, "title": newTitle,
                           "updatedAt": FieldValue.serverTimestamp()], merge: true)
             // Reload segments to reflect updated title
@@ -856,8 +855,12 @@ struct EpisodeEditorView: View {
                     "recordingSource": "cameraRoll",
                     "hashtags": [] as [String],
                 ]
-                // Subcollection: videoCollections/{episodeId}/segments/{segId}
-                batch.setData(segData, forDocument: db.collection("videoCollections").document(episode.id).collection("segments").document(segId))
+                // Top-level videos/{segId} — engagement (Cloud Function processEngagement,
+                // refreshSegmentViewCount, ThreadView) all read/write here. The subcollection
+                // path was a silent dead-end for hype/cool/view/reply.
+                // isCollectionSegment + collectionID are already in segData so feed filters
+                // (ProfileViewModel, DiscoveryViewModel, getUserVideos) exclude these.
+                batch.setData(segData, forDocument: db.collection("videos").document(segId))
                 
                 await MainActor.run { /* mark progress */ }
                 print("📤 EPISODE EDITOR: Segment \(i+1) uploaded ✅")

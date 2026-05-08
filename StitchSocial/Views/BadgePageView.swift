@@ -80,11 +80,30 @@ struct BadgePageView: View {
     private var earnedIDs: Set<String> { Set(earned.map(\.id)) }
     private var boost: Double          { svc.hypeBoostMultiplier(for: userID) }
 
-    /// Catalogue — ALL badges grouped by category (earned + locked)
-    private var sections: [(BadgeCategory, [BadgeDefinition])] {
+    /// All earned badge definitions (with EarnedBadge metadata) — pinned
+    /// first, then by recency. The "hero" grid above the locked catalog.
+    private var earnedDefs: [(def: BadgeDefinition, eb: EarnedBadge)] {
+        let earnedMap = Dictionary(uniqueKeysWithValues: earned.map { ($0.id, $0) })
+        let pairs = BadgeDefinition.allBadges.compactMap { def -> (BadgeDefinition, EarnedBadge)? in
+            guard let eb = earnedMap[def.id] else { return nil }
+            if let cat = filterCat, def.category != cat { return nil }
+            return (def, eb)
+        }
+        return pairs.sorted {
+            // Pinned first, then newer earnedAt first
+            if $0.1.isPinned != $1.1.isPinned { return $0.1.isPinned && !$1.1.isPinned }
+            return $0.1.earnedAt > $1.1.earnedAt
+        }
+    }
+
+    /// Locked catalog grouped by category — earned badges filtered OUT
+    /// since they get the hero grid above.
+    private var lockedSections: [(BadgeCategory, [BadgeDefinition])] {
         let cats: [BadgeCategory] = filterCat.map { [$0] } ?? BadgeCategory.allCases
         return cats.compactMap { cat in
-            let items = BadgeDefinition.allBadges.filter { $0.category == cat }
+            let items = BadgeDefinition.allBadges.filter {
+                $0.category == cat && !earnedIDs.contains($0.id)
+            }
             return items.isEmpty ? nil : (cat, items)
         }
     }
@@ -114,18 +133,27 @@ struct BadgePageView: View {
                     filterBar
                         .padding(.top, 16)
 
-                    // Category sections
-                    ForEach(sections, id: \.0.rawValue) { cat, items in
-                        categorySection(cat: cat, items: items)
+                    // EARNED — hero grid. Earned badges deserve the headline,
+                    // not the bottom of horizontal scrollers. Pinned floats
+                    // to the top, "NEW" dot still drives the unread state.
+                    if !earnedDefs.isEmpty {
+                        earnedHeroSection
                     }
 
-                    // In-progress (only show when no earned in filter, or always)
+                    // In-progress
                     if !inProgress.isEmpty {
                         inProgressSection
                     }
 
+                    // Locked catalog — only badges the user hasn't earned
+                    // yet, grouped by category. Smaller cards so the earned
+                    // grid stays the visual anchor.
+                    ForEach(lockedSections, id: \.0.rawValue) { cat, items in
+                        categorySection(cat: cat, items: items)
+                    }
+
                     // Empty state
-                    if sections.isEmpty && inProgress.isEmpty {
+                    if earnedDefs.isEmpty && lockedSections.isEmpty && inProgress.isEmpty {
                         emptyState
                             .frame(maxWidth: .infinity)
                             .padding(.top, 60)
@@ -252,6 +280,127 @@ struct BadgePageView: View {
             }
         }
         .padding(.top, 28)
+    }
+
+    // MARK: - EARNED hero section
+    //
+    // Larger cards, golden frame, pinned-first ordering, "EARNED" pill,
+    // and a 2-column adaptive grid. The point is: when a user opens this
+    // page they immediately see their accomplishments, not a wall of
+    // locked greys.
+
+    private var earnedHeroSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Text("EARNED")
+                    .font(.system(size: 11, weight: .heavy))
+                    .foregroundColor(Color(hex: "fbbf24"))
+                    .tracking(1.6)
+                Text("\(earnedDefs.count)")
+                    .font(.system(size: 11, weight: .heavy))
+                    .foregroundColor(.white.opacity(0.35))
+                Rectangle()
+                    .fill(LinearGradient(colors: [Color(hex: "fbbf24").opacity(0.5), .clear],
+                                         startPoint: .leading, endPoint: .trailing))
+                    .frame(height: 1)
+            }
+            .padding(.horizontal, 20)
+
+            LazyVGrid(
+                columns: [GridItem(.flexible(), spacing: 12),
+                          GridItem(.flexible(), spacing: 12)],
+                spacing: 12
+            ) {
+                ForEach(earnedDefs, id: \.def.id) { pair in
+                    earnedHeroCard(def: pair.def, eb: pair.eb)
+                        .onTapGesture {
+                            selected = pair.def
+                            if isOwner, pair.eb.isNew {
+                                Task { await svc.markSeen(userID: userID, badgeID: pair.def.id) }
+                            }
+                        }
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.top, 28)
+    }
+
+    private func earnedHeroCard(def: BadgeDefinition, eb: EarnedBadge) -> some View {
+        ZStack {
+            // Strong rarity glow — earned cards are loud on purpose.
+            RoundedRectangle(cornerRadius: 22)
+                .fill(RadialGradient(
+                    gradient: Gradient(colors: [def.rarity.uiColor.opacity(0.32), .clear]),
+                    center: .center, startRadius: 0, endRadius: 110
+                ))
+                .blur(radius: 6)
+                .padding(-8)
+
+            // Card body — gold-tinted gradient overlay so earned reads
+            // distinct from the locked dark cards below.
+            RoundedRectangle(cornerRadius: 22)
+                .fill(LinearGradient(
+                    colors: [Color(hex: "fbbf24").opacity(0.06), Color(hex: "0a0a10")],
+                    startPoint: .top, endPoint: .bottom
+                ))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22)
+                        .stroke(def.rarity.uiColor.opacity(0.7), lineWidth: 1.8)
+                )
+
+            VStack(spacing: 8) {
+                // Top row: pinned crown + EARNED pill + NEW dot
+                HStack(alignment: .top, spacing: 6) {
+                    if eb.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(Color(hex: "fbbf24"))
+                            .rotationEffect(.degrees(45))
+                    }
+                    Spacer()
+                    if eb.isNew {
+                        Text("NEW")
+                            .font(.system(size: 8, weight: .heavy))
+                            .foregroundColor(.black)
+                            .tracking(0.6)
+                            .padding(.horizontal, 5).padding(.vertical, 1.5)
+                            .background(Color.orange)
+                            .clipShape(Capsule())
+                    }
+                }
+                .padding([.top, .horizontal], 11)
+
+                BadgeArtwork(id: def.id, size: 78)
+                    .shadow(color: def.rarity.uiColor.opacity(0.85),
+                            radius: def.rarity.glowRadius)
+                    .padding(.top, 2)
+
+                Text(def.name.replacingOccurrences(of: " — .*", with: "", options: .regularExpression))
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+                    .padding(.horizontal, 10)
+
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(def.category.uiAccent)
+                        .frame(width: 5, height: 5)
+                    Text(def.rarity.label.uppercased())
+                        .font(.system(size: 8.5, weight: .heavy))
+                        .foregroundColor(def.rarity.uiColor)
+                        .tracking(0.9)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(def.rarity.uiColor.opacity(0.14))
+                .overlay(Capsule().stroke(def.rarity.uiColor.opacity(0.35), lineWidth: 1))
+                .clipShape(Capsule())
+                .padding(.bottom, 14)
+            }
+        }
+        .frame(height: 192)
     }
 
     // MARK: - Badge card (matches mockup BadgeCard)

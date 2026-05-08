@@ -542,7 +542,8 @@ struct PersistedThreadInfo: Codable {
     let thumbnailURL: String?
     let participantCount: Int
     let stitchCount: Int
-    
+    var videoURL: String? = nil   // backwards-compatible: pre-existing drafts decode with nil
+
     func toThreadInfo() -> ThreadInfo {
         return ThreadInfo(
             title: title,
@@ -550,10 +551,11 @@ struct PersistedThreadInfo: Codable {
             creatorID: creatorID,
             thumbnailURL: thumbnailURL,
             participantCount: participantCount,
-            stitchCount: stitchCount
+            stitchCount: stitchCount,
+            videoURL: videoURL
         )
     }
-    
+
     static func from(_ info: ThreadInfo) -> PersistedThreadInfo {
         return PersistedThreadInfo(
             title: info.title,
@@ -561,7 +563,8 @@ struct PersistedThreadInfo: Codable {
             creatorID: info.creatorID,
             thumbnailURL: info.thumbnailURL,
             participantCount: info.participantCount,
-            stitchCount: info.stitchCount
+            stitchCount: info.stitchCount,
+            videoURL: info.videoURL
         )
     }
 }
@@ -571,22 +574,25 @@ struct PersistedVideoInfo: Codable {
     let creatorName: String
     let creatorID: String
     let thumbnailURL: String?
-    
+    var videoURL: String? = nil   // backwards-compatible: pre-existing drafts decode with nil
+
     func toCameraVideoInfo() -> CameraVideoInfo {
         return CameraVideoInfo(
             title: title,
             creatorName: creatorName,
             creatorID: creatorID,
-            thumbnailURL: thumbnailURL
+            thumbnailURL: thumbnailURL,
+            videoURL: videoURL
         )
     }
-    
+
     static func from(_ info: CameraVideoInfo) -> PersistedVideoInfo {
         return PersistedVideoInfo(
             title: info.title,
             creatorName: info.creatorName,
             creatorID: info.creatorID,
-            thumbnailURL: info.thumbnailURL
+            thumbnailURL: info.thumbnailURL,
+            videoURL: info.videoURL
         )
     }
 }
@@ -647,6 +653,15 @@ enum VideoFilter: String, Codable, CaseIterable {
     }
 }
 
+/// Per-word timing extracted from speech recognition. Preserved so word-
+/// highlight presets (Insta Bold, Karaoke) can animate each word in sync
+/// with the audio in both the live preview and the exported MP4.
+struct WordTiming: Codable, Equatable {
+    var text: String
+    var startTime: TimeInterval
+    var endTime: TimeInterval
+}
+
 /// Video caption/text overlay
 struct VideoCaption: Codable, Identifiable {
     let id: String
@@ -656,6 +671,18 @@ struct VideoCaption: Codable, Identifiable {
     var position: CaptionPosition
     var style: CaptionStyle
     var preset: CaptionStylePreset?   // nil = use legacy CaptionStyle
+
+    // Per-caption overrides for free positioning and resizing in the
+    // review view. Nil means "fall back to the position enum default."
+    // Coordinates are normalized 0…1 against the rendered video size,
+    // so they're resolution-independent and survive serialization.
+    var positionX: Double?
+    var positionY: Double?
+    var scale: Double
+
+    // Per-word timestamps from speech recognition (nil for manually-added
+    // captions). Drives karaoke-style activation in word-highlight presets.
+    var words: [WordTiming]?
 
     var endTime: TimeInterval {
         startTime + duration
@@ -667,7 +694,11 @@ struct VideoCaption: Codable, Identifiable {
         duration: TimeInterval = 3.0,
         position: CaptionPosition = .bottom,
         style: CaptionStyle = .standard,
-        preset: CaptionStylePreset? = CaptionStylePreset.instaBoldStacked
+        preset: CaptionStylePreset? = CaptionStylePreset.instaBoldStacked,
+        positionX: Double? = nil,
+        positionY: Double? = nil,
+        scale: Double = 1.0,
+        words: [WordTiming]? = nil
     ) {
         self.id = UUID().uuidString
         self.text = text
@@ -676,6 +707,31 @@ struct VideoCaption: Codable, Identifiable {
         self.position = position
         self.style = style
         self.preset = preset
+        self.positionX = positionX
+        self.positionY = positionY
+        self.scale = scale
+        self.words = words
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, text, startTime, duration, position, style, preset
+        case positionX, positionY, scale, words
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        startTime = try c.decode(TimeInterval.self, forKey: .startTime)
+        duration = try c.decode(TimeInterval.self, forKey: .duration)
+        position = try c.decode(CaptionPosition.self, forKey: .position)
+        style = try c.decode(CaptionStyle.self, forKey: .style)
+        preset = try c.decodeIfPresent(CaptionStylePreset.self, forKey: .preset)
+        // Backward-compat defaults for drafts saved before per-caption fields existed.
+        positionX = try c.decodeIfPresent(Double.self, forKey: .positionX)
+        positionY = try c.decodeIfPresent(Double.self, forKey: .positionY)
+        scale = try c.decodeIfPresent(Double.self, forKey: .scale) ?? 1.0
+        words = try c.decodeIfPresent([WordTiming].self, forKey: .words)
     }
 }
 

@@ -274,11 +274,11 @@ struct ImportSegmentsView: View {
                 
                 let fileSize = (try? FileManager.default.attributesOfItem(atPath: seg.localURL.path)[.size] as? Int) ?? 0
                 
-                // Segment Firestore doc → subcollection: videoCollections/{episodeId}/segments/{segId}
-                // CACHING: CollectionCacheManager should cache these on first player load
-                //          (already handled via getVideosByCollection → CollectionCacheManager)
-                let segRef = db.collection("videoCollections").document(episodeId)
-                    .collection("segments").document(segId)
+                // Segment Firestore doc → top-level videos/{segId}.
+                // Engagement (hype/cool/view/reply) only works against top-level docs;
+                // the prior subcollection path silently dropped all engagement writes.
+                // isCollectionSegment + collectionID below tag this for feed filters.
+                let segRef = db.collection("videos").document(segId)
                 batch.setData([
                     "id": segId, "title": seg.title, "description": "",
                     "videoURL": videoURL, "thumbnailURL": thumbURL,
