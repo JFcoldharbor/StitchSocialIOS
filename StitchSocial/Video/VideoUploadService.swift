@@ -425,7 +425,39 @@ class VideoUploadService: ObservableObject {
         #if DEBUG
         print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ UPLOAD SERVICE: Video document created - \(createdVideo.id)")
         #endif
-        
+
+        // MARK: - Optional Place / Location Attachment
+        // Written as a follow-up update so the VideoService.create* signatures
+        // stay untouched. Field is named `place` (not `location`) to avoid
+        // colliding with the user-profile `location` string used elsewhere.
+        if let place = metadata.location {
+            do {
+                try await db.collection("videos").document(createdVideo.id).updateData([
+                    "place": [
+                        "id": place.id,
+                        "name": place.name,
+                        "address": place.address,
+                        "latitude": place.latitude,
+                        "longitude": place.longitude,
+                        "placeType": place.placeType.rawValue,
+                    ],
+                    // Denormalized fields for indexing — Firestore can't query
+                    // into a nested map without composite indexes, so the
+                    // searchable copy lives at the top level.
+                    "placeName": place.name,
+                    "placeID": place.id,
+                ])
+                #if DEBUG
+                print("📍 UPLOAD SERVICE: Attached place \"\(place.name)\" to \(createdVideo.id)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("⚠️ UPLOAD SERVICE: Failed to attach place — \(error)")
+                #endif
+                // Non-fatal — video upload still succeeded
+            }
+        }
+
         // MARK: - Hype Rating Regen for posting
         Task {
             let isInApp = recordingSource.lowercased() == "in_app" || recordingSource.lowercased() == "in-app"
@@ -785,13 +817,18 @@ struct VideoUploadMetadata {
     let hashtags: [String]
     let creatorID: String
     let creatorName: String
-    
+    /// Optional place attached to the post (restaurant, monument, etc).
+    /// When set, VideoUploadService writes it under the `place` map on the
+    /// video Firestore doc after the doc is initially created.
+    let location: VideoLocation?
+
     init(
         title: String,
         description: String = "",
         hashtags: [String] = [],
         creatorID: String,
-        creatorName: String
+        creatorName: String,
+        location: VideoLocation? = nil
     ) {
         self.videoID = UUID().uuidString
         self.title = title
@@ -799,6 +836,7 @@ struct VideoUploadMetadata {
         self.hashtags = hashtags
         self.creatorID = creatorID
         self.creatorName = creatorName
+        self.location = location
     }
 }
 

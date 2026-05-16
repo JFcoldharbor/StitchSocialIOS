@@ -15,31 +15,73 @@ enum HypeCoinPackage: String, CaseIterable, Codable {
     case plus = "plus"
     case pro = "pro"
     case max = "max"
-    
+
+    // Source of truth: stitch-landing wallet page COIN_PACKAGES.
+    // Same on both rails — iOS price differs, coin count does not.
     var coins: Int {
         switch self {
         case .starter: return 100
-        case .basic: return 250
-        case .plus: return 500
-        case .pro: return 1000
-        case .max: return 2500
+        case .basic:   return 275
+        case .plus:    return 600
+        case .pro:     return 1_300
+        case .max:     return 3_500
         }
     }
-    
-    var price: Double {
+
+    /// Web (Stripe) USD price — what we charge on stitchsocial.me.
+    /// Same coins as iOS, lower price → that's the whole "save on web" pitch.
+    var webPrice: Double {
         switch self {
         case .starter: return 1.99
-        case .basic: return 4.99
-        case .plus: return 9.99
-        case .pro: return 19.99
-        case .max: return 49.99
+        case .basic:   return 4.99
+        case .plus:    return 9.99
+        case .pro:     return 19.99
+        case .max:     return 49.99
         }
     }
-    
+
+    /// iOS (Apple IAP) USD price — Apple's standard price tiers.
+    /// Set in App Store Connect; this value is the canonical display fallback
+    /// used when StoreKit hasn't loaded the localized `Product.displayPrice` yet.
+    var iosPrice: Double {
+        switch self {
+        case .starter: return 2.99
+        case .basic:   return 6.99
+        case .plus:    return 14.99
+        case .pro:     return 29.99
+        case .max:     return 69.99
+        }
+    }
+
+    /// Apple IAP product ID — must match App Store Connect entries exactly.
+    /// App Store Connect uses `small/medium/large/mega` for the tier suffix;
+    /// our internal enum keeps `basic/plus/pro/max` for back-compat with
+    /// existing web routing, so we map deliberately here.
+    var appleProductID: String {
+        let suffix: String
+        switch self {
+        case .starter: suffix = "starter"
+        case .basic:   suffix = "small"
+        case .plus:    suffix = "medium"
+        case .pro:     suffix = "large"
+        case .max:     suffix = "mega"
+        }
+        return "com.coldharbor.StitchSocial.coins.\(suffix)"
+    }
+
+    /// Dollars saved by purchasing this pack on web instead of in-app.
+    var webSavings: Double {
+        return iosPrice - webPrice
+    }
+
+    /// Legacy alias — historical call sites used `.price` to mean web price.
+    /// Keep for back-compat; new code should call `.webPrice` or `.iosPrice` explicitly.
+    var price: Double { webPrice }
+
     var cashValue: Double {
         return Double(coins) / 100.0
     }
-    
+
     var displayName: String {
         switch self {
         case .starter: return "Starter"
@@ -49,7 +91,7 @@ enum HypeCoinPackage: String, CaseIterable, Codable {
         case .max: return "Max"
         }
     }
-    
+
     /// Web purchase URL path
     var webPath: String {
         return "/purchase/coins/\(rawValue)"

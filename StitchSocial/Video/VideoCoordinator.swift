@@ -193,7 +193,8 @@ class VideoCoordinator: ObservableObject {
         taggedUserIDs: [String] = [],
         recordingSource: String = "unknown",
         hashtags: [String] = [],
-        customThumbnailTime: TimeInterval? = nil
+        customThumbnailTime: TimeInterval? = nil,
+        location: VideoLocation? = nil
     ) async throws -> CoreVideoMetadata {
         
         guard !isProcessing else {
@@ -269,7 +270,8 @@ class VideoCoordinator: ObservableObject {
                 manualDescription: manualDescription,
                 taggedUserIDs: taggedUserIDs,
                 recordingSource: recordingSource,
-                hashtags: hashtags
+                hashtags: hashtags,
+                location: location
             )
             
             // PHASE 4: NOTIFICATIONS
@@ -572,27 +574,29 @@ class VideoCoordinator: ObservableObject {
         manualDescription: String?,
         taggedUserIDs: [String],
         recordingSource: String,
-        hashtags: [String]
+        hashtags: [String],
+        location: VideoLocation? = nil
     ) async throws -> CoreVideoMetadata {
-        
+
         currentPhase = .integrating
         currentTask = "Creating video document..."
         await updateProgress(0.9)
-        
+
         let finalTitle = manualTitle ?? analysisResult?.title ?? getDefaultTitle(for: recordingContext)
         let finalDescription = manualDescription ?? analysisResult?.description ?? getDefaultDescription(for: recordingContext)
-        
+
         let smartHashtags = generateSmartHashtags(
             aiHashtags: analysisResult?.hashtags,
             recordingContext: recordingContext
         )
-        
+
         let metadata = VideoUploadMetadata(
             title: finalTitle,
             description: finalDescription,
             hashtags: smartHashtags,
             creatorID: userID,
-            creatorName: ""
+            creatorName: "",
+            location: location
         )
         
         #if DEBUG

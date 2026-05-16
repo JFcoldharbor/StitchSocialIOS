@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import StoreKit
 
 struct WalletView: View {
     
@@ -15,13 +16,15 @@ struct WalletView: View {
     let userTier: UserTier
     
     @ObservedObject private var coinService = HypeCoinService.shared
+    @ObservedObject private var iapService = HypeCoinIAPService.shared
     @Environment(\.dismiss) private var dismiss
-    
+
     @State private var selectedTab = 0
     @State private var showingCashOut = false
     @State private var showingManageAccount = false
     @State private var errorMessage: String?
     @State private var showingError = false
+    @State private var purchasingPackage: HypeCoinPackage?
     
     private let tabs = ["Balance", "Buy Coins", "History"]
     
@@ -59,6 +62,7 @@ struct WalletView: View {
         }
         .task {
             await loadData()
+            await iapService.loadProducts()
         }
         .alert("Error", isPresented: $showingError) {
             Button("OK") { }
@@ -223,63 +227,101 @@ struct WalletView: View {
     }
     
     // MARK: - Buy Coins Tab
-    
+
     private var buyCoinsTab: some View {
         ScrollView {
             VStack(spacing: 24) {
-                // Manage Account button
-                Button(action: { showingManageAccount = true }) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "globe")
-                            .font(.system(size: 20))
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Manage Account")
-                                .font(.headline)
-                            
-                            Text("Purchase Hype Coins securely")
-                                .font(.caption)
-                                .opacity(0.8)
-                        }
-                        
-                        Spacer()
-                        
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 14))
-                    }
-                    .foregroundColor(.white)
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        LinearGradient(
-                            colors: [.cyan, .blue],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .cornerRadius(12)
-                }
-                .padding(.top, 20)
-                
-                // Coin packages preview
+                // Hero: web discount banner (same coins, lower price on web)
+                webDiscountBanner
+                    .padding(.top, 20)
+
+                // In-app IAP packs
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Available Packages")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                    
+                    HStack {
+                        Text("Or buy in-app")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Spacer()
+                        Text("Instant")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+
                     ForEach(HypeCoinPackage.allCases, id: \.self) { package in
-                        CoinPackageDisplayCard(package: package)
+                        IAPPackageCard(
+                            package: package,
+                            product: iapService.product(for: package),
+                            isPurchasing: purchasingPackage == package,
+                            onBuy: { purchase(package) }
+                        )
                     }
                 }
-                
-                // Info text
-                Text("Tap 'Manage Account' to securely purchase coins. Your balance syncs automatically.")
+
+                // Disclosure
+                Text("In-app prices reflect Apple's transaction fees. Buying on web saves you up to $\(Int(HypeCoinPackage.max.webSavings)) on the largest pack.")
                     .font(.caption)
                     .foregroundColor(.gray)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
             }
             .padding()
+        }
+    }
+
+    // MARK: - Web Discount Banner
+
+    private var webDiscountBanner: some View {
+        Button(action: { showingManageAccount = true }) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: "tag.fill")
+                        .font(.system(size: 18))
+                    Text("Save up to $\(Int(HypeCoinPackage.max.webSavings)) on web")
+                        .font(.system(size: 18, weight: .bold))
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundColor(.white)
+
+                Text("Same coins, better deal on stitchsocial.me. Your balance syncs back automatically.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                LinearGradient(
+                    colors: [.purple, .blue],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .cornerRadius(14)
+        }
+    }
+
+    // MARK: - IAP Purchase
+
+    private func purchase(_ package: HypeCoinPackage) {
+        guard purchasingPackage == nil else { return }
+        purchasingPackage = package
+
+        Task {
+            defer { purchasingPackage = nil }
+            do {
+                let success = try await iapService.purchase(package)
+                if success {
+                    // The Firestore listener in HypeCoinCoordinator will surface the
+                    // success animation; we just force a sync as a belt-and-braces refresh.
+                    try? await HypeCoinService.shared.syncBalance(userID: userID)
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+                showingError = true
+            }
         }
     }
     
@@ -366,34 +408,53 @@ struct WalletView: View {
     }
 }
 
-// MARK: - Coin Package Display Card (No Purchase - Web Only)
+// MARK: - IAP Package Card (Apple in-app purchase)
 
-struct CoinPackageDisplayCard: View {
+struct IAPPackageCard: View {
     let package: HypeCoinPackage
-    
+    let product: Product?
+    let isPurchasing: Bool
+    let onBuy: () -> Void
+
+    /// Prefer Apple's localized display price (handles currency + locale).
+    /// Fall back to our raw USD figure only when StoreKit hasn't loaded yet.
+    private var displayPrice: String {
+        if let product = product { return product.displayPrice }
+        return "$\(String(format: "%.2f", package.iosPrice))"
+    }
+
     var body: some View {
-        HStack {
-            // Coin amount
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 4) {
-                    HypeCoinView(size: 28)
-                    Text("\(package.coins)")
-                        .font(.title3)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                    Text("coins")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                }
-                
+        HStack(spacing: 12) {
+            HypeCoinView(size: 32)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(package.coins) coins")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                Text(package.displayName)
+                    .font(.caption)
+                    .foregroundColor(.gray)
             }
-            
+
             Spacer()
-            
-            // Price
-            Text("$\(String(format: "%.2f", package.price))")
-                .font(.headline)
-                .foregroundColor(.yellow)
+
+            Button(action: onBuy) {
+                if isPurchasing {
+                    ProgressView()
+                        .tint(.black)
+                        .frame(minWidth: 70)
+                } else {
+                    Text(displayPrice)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(.black)
+                        .frame(minWidth: 70)
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 14)
+            .background(product == nil ? Color.gray : Color.yellow)
+            .cornerRadius(20)
+            .disabled(product == nil || isPurchasing)
         }
         .padding()
         .background(Color.gray.opacity(0.15))

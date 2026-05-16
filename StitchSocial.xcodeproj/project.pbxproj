@@ -25,10 +25,12 @@
 		676A0EB42E50E4E700709431 /* FirebaseFunctions in Frameworks */ = {isa = PBXBuildFile; productRef = 676A0EB32E50E4E700709431 /* FirebaseFunctions */; };
 		676A0EB62E50E4E700709431 /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 676A0EB52E50E4E700709431 /* FirebaseMessaging */; };
 		676A0EB82E50E4E700709431 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 676A0EB72E50E4E700709431 /* FirebaseStorage */; };
+		6786455F2FB81CBD0002DDBC /* StoreKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6786455E2FB81CBD0002DDBC /* StoreKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		676A0E292E50E40600709431 /* StitchSocial.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StitchSocial.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6786455E2FB81CBD0002DDBC /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -36,6 +38,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				StitchSocial.storekit,
 			);
 			target = 676A0E282E50E40600709431 /* StitchSocial */;
 		};
@@ -60,6 +63,7 @@
 				673BA8E92EADCB1300BF0F3C /* FirebaseFirestoreCombine-Community in Frameworks */,
 				676A0EB62E50E4E700709431 /* FirebaseMessaging in Frameworks */,
 				676A0EB02E50E4E700709431 /* FirebaseDatabase in Frameworks */,
+				6786455F2FB81CBD0002DDBC /* StoreKit.framework in Frameworks */,
 				676A0EB82E50E4E700709431 /* FirebaseStorage in Frameworks */,
 				676A0EB42E50E4E700709431 /* FirebaseFunctions in Frameworks */,
 				676A0EA82E50E4E700709431 /* FirebaseAnalytics in Frameworks */,
@@ -85,6 +89,7 @@
 			isa = PBXGroup;
 			children = (
 				676A0E2B2E50E40600709431 /* StitchSocial */,
+				6786455D2FB81CBC0002DDBC /* Frameworks */,
 				676A0E2A2E50E40600709431 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -95,6 +100,14 @@
 				676A0E292E50E40600709431 /* StitchSocial.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		6786455D2FB81CBC0002DDBC /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				6786455E2FB81CBD0002DDBC /* StoreKit.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */

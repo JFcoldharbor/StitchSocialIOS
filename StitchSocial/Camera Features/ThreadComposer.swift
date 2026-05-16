@@ -47,6 +47,8 @@ struct ThreadComposer: View {
     @State private var errorMessage = ""
     @State private var newHashtagText = ""
     @State private var showingUserTagSheet = false
+    @State private var selectedLocation: VideoLocation? = nil
+    @State private var showingLocationPicker = false
     @State private var selectedThumbnailTime: TimeInterval? = nil
     @State private var videoDuration: TimeInterval = 0
     
@@ -117,6 +119,11 @@ struct ThreadComposer: View {
                 alreadyTaggedIDs: taggedUserIDs
             )
         }
+        .sheet(isPresented: $showingLocationPicker) {
+            LocationPickerView { picked in
+                selectedLocation = picked
+            }
+        }
     }
     
     private var mainContent: some View {
@@ -130,6 +137,7 @@ struct ThreadComposer: View {
                     descriptionEditor
                     hashtagEditor
                     userTagEditor
+                    locationEditor
                     AnnouncementSection(
                         isAnnouncement: $isAnnouncement, announcementPriority: $announcementPriority,
                         announcementType: $announcementType, minimumWatchSeconds: $minimumWatchSeconds,
@@ -287,7 +295,46 @@ struct ThreadComposer: View {
             }
         }
     }
-    
+
+    private var locationEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Location").font(.subheadline).fontWeight(.semibold).foregroundColor(.white)
+                Spacer()
+                if selectedLocation != nil {
+                    Button(action: { selectedLocation = nil }) {
+                        Text("Remove").font(.caption).foregroundColor(.red)
+                    }
+                }
+                Button(action: { showingLocationPicker = true }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: selectedLocation == nil ? "mappin.circle" : "mappin.circle.fill").font(.caption)
+                        Text(selectedLocation == nil ? "Add" : "Change").font(.caption)
+                    }
+                    .foregroundColor(.cyan)
+                }
+            }
+            if let place = selectedLocation {
+                HStack(spacing: 8) {
+                    Image(systemName: place.placeType.iconName)
+                        .font(.caption)
+                        .foregroundColor(.cyan)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(place.name).font(.caption).foregroundColor(.white).lineLimit(1)
+                        if !place.address.isEmpty {
+                            Text(place.address).font(.caption2).foregroundColor(.gray).lineLimit(1)
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color.gray.opacity(0.15))
+                .cornerRadius(8)
+            }
+        }
+    }
+
     private var postButton: some View {
         Button(action: { createVideo() }) {
             HStack {
@@ -438,7 +485,8 @@ struct ThreadComposer: View {
                     taggedUserIDs: taggedUserIDs,
                     recordingSource: recordingSource,
                     hashtags: hashtags,
-                    customThumbnailTime: selectedThumbnailTime
+                    customThumbnailTime: selectedThumbnailTime,
+                    location: selectedLocation
                 )
                 
                 await MainActor.run {

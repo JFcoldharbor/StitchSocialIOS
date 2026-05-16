@@ -16,6 +16,10 @@
 	<array>
 		<string>CloudKit</string>
 	</array>
+	<key>com.apple.developer.storekit.custom-purchase-link.allowed-regions</key>
+	<array>
+		<string>jp</string>
+	</array>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
 	<key>com.apple.security.files.user-selected.read-only</key>

@@ -1,0 +1,138 @@
+{
+  "identifier" : "A8F3D9C2-1B4E-4F7A-9C8D-3E2B1A5F6D7C",
+  "nonRenewingSubscriptions" : [],
+  "products" : [
+    {
+      "displayPrice" : "2.99",
+      "familyShareable" : false,
+      "internalID" : "B1C2D3E4-1111-4444-AAAA-100000000000",
+      "localizations" : [
+        {
+          "description" : "100 Hype Coins. Use them to tip creators, support threads, and unlock features.",
+          "displayName" : "Starter Pack",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.coldharbor.StitchSocial.coins.starter",
+      "referenceName" : "Coins Starter — 100 Hype Coins",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "6.99",
+      "familyShareable" : false,
+      "internalID" : "B1C2D3E4-2222-4444-AAAA-275000000000",
+      "localizations" : [
+        {
+          "description" : "275 Hype Coins. Tip more creators and amplify the conversations you love.",
+          "displayName" : "Small Pack",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.coldharbor.StitchSocial.coins.small",
+      "referenceName" : "Coins Small — 275 Hype Coins",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "14.99",
+      "familyShareable" : false,
+      "internalID" : "B1C2D3E4-3333-4444-AAAA-600000000000",
+      "localizations" : [
+        {
+          "description" : "600 Hype Coins. Most popular. Tip generously and stand out as a top supporter.",
+          "displayName" : "Medium Pack",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.coldharbor.StitchSocial.coins.medium",
+      "referenceName" : "Coins Medium — 600 Hype Coins",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "29.99",
+      "familyShareable" : false,
+      "internalID" : "B1C2D3E4-4444-4444-AAAA-130000000000",
+      "localizations" : [
+        {
+          "description" : "1,300 Hype Coins. For power supporters and active creators boosting their reach.",
+          "displayName" : "Large Pack",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.coldharbor.StitchSocial.coins.large",
+      "referenceName" : "Coins Large — 1,300 Hype Coins",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "69.99",
+      "familyShareable" : false,
+      "internalID" : "B1C2D3E4-5555-4444-AAAA-350000000000",
+      "localizations" : [
+        {
+          "description" : "3,500 Hype Coins. The biggest pack — unlock everything, support the most creators.",
+          "displayName" : "Mega Pack",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.coldharbor.StitchSocial.coins.mega",
+      "referenceName" : "Coins Mega — 3,500 Hype Coins",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Load Products"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Purchase"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Verification"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Store Sync"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Subscription Status"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Transaction"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Manage Subscriptions Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Refund Request Sheet"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Offer Code Redeem Sheet"
+      }
+    ]
+  },
+  "subscriptionGroups" : [],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}
