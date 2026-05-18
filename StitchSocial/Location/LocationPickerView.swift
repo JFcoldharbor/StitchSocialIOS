@@ -33,6 +33,8 @@ struct LocationPickerView: View {
     @State private var results: [VideoLocation] = []
     @State private var nearbyResults: [VideoLocation] = []
     @State private var searchTask: Task<Void, Never>?
+    @State private var nearbyDidLoad = false
+    @State private var nearbyErrorMessage: String?
 
     // MARK: - Body
 
@@ -107,8 +109,18 @@ struct LocationPickerView: View {
     private var nearbyList: some View {
         if !service.canUseDeviceLocation {
             grantPrompt
-        } else if nearbyResults.isEmpty && !service.isSearching {
+        } else if let errMsg = nearbyErrorMessage {
+            nearbyErrorView(errMsg)
+        } else if nearbyResults.isEmpty && !nearbyDidLoad {
             emptyNearby
+        } else if nearbyResults.isEmpty {
+            // Loaded but no places nearby — distinct from "still loading".
+            VStack(spacing: 8) {
+                Image(systemName: "mappin.slash").font(.system(size: 36)).foregroundColor(.gray)
+                Text("No places nearby").foregroundColor(.gray)
+                Text("Try searching for a name above.").font(.caption).foregroundColor(.gray)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -120,6 +132,38 @@ struct LocationPickerView: View {
                 .padding(.vertical, 4)
             }
         }
+    }
+
+    /// Friendly error UI for transient MapKit failures (rate-limited, offline,
+    /// `MKErrorGEOError=-8`). Tap to retry — no auto-retry loop, since that'd
+    /// hammer the service while it's already telling us to back off.
+    private func nearbyErrorView(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "wifi.exclamationmark")
+                .font(.system(size: 36))
+                .foregroundColor(.orange)
+            Text("Couldn't load nearby places")
+                .foregroundColor(.white)
+            Text(message)
+                .font(.caption)
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            Button("Try Again") {
+                nearbyErrorMessage = nil
+                nearbyDidLoad = false
+                Task { await primeNearby() }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(Color.cyan)
+            .foregroundColor(.black)
+            .cornerRadius(10)
+            Text("You can also search by name above.")
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var grantPrompt: some View {
@@ -264,10 +308,17 @@ struct LocationPickerView: View {
             let loc = try await service.fetchCurrentLocation()
             let places = try await service.nearby(loc)
             self.nearbyResults = places
+            self.nearbyDidLoad = true
+            self.nearbyErrorMessage = nil
         } catch {
             #if DEBUG
             print("⚠️ LOCATION: Nearby fetch failed — \(error)")
             #endif
+            // MKErrorGEOError=-8 means Apple's service is rate-limited or
+            // temporarily unavailable. Surface a retry UI instead of an empty
+            // list — the picker is still usable via manual search.
+            self.nearbyErrorMessage = "Apple's location service is busy. Try again or search by name."
+            self.nearbyDidLoad = true
         }
     }
 }

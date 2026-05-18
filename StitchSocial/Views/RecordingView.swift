@@ -139,22 +139,30 @@ struct RecordingView: View {
                         }
                     )
 
-                case .galleryReview:
-                    if let editState = galleryEditState {
-                        VideoReviewView(
-                            initialState: editState,
-                            onContinueToThread: { finalState in
-                                navigationPath.append(.threadComposer(finalState))
-                            },
-                            onCancel: {
-                                galleryVideoURL = nil
-                                galleryEditState = nil
-                                navigationPath.removeAll()
-                            }
-                        )
-                        .navigationTransition(.zoom(sourceID: "galleryButton", in: galleryZoom))
-                        .navigationBarHidden(true)
-                    }
+                case .galleryReview(let url):
+                    // Derive the edit state from the URL in the path itself.
+                    // The previous version read from @State galleryEditState
+                    // which races with SwiftUI's destination evaluation on the
+                    // first push — state hadn't propagated yet so `if let`
+                    // returned nothing, leaving a blank screen. The second
+                    // attempt worked because state lingered from the first
+                    // try. Reading from the typed path case fixes this.
+                    VideoReviewView(
+                        initialState: galleryEditState ?? VideoEditState(
+                            videoURL: url, videoDuration: 60.0,
+                            videoSize: CGSize(width: 1080, height: 1920)
+                        ),
+                        onContinueToThread: { finalState in
+                            navigationPath.append(.threadComposer(finalState))
+                        },
+                        onCancel: {
+                            galleryVideoURL = nil
+                            galleryEditState = nil
+                            navigationPath.removeAll()
+                        }
+                    )
+                    .navigationTransition(.zoom(sourceID: "galleryButton", in: galleryZoom))
+                    .navigationBarHidden(true)
                 }
             }
         }

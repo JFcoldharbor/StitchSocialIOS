@@ -80,7 +80,7 @@ struct ThreadComposer: View {
     @State private var isLandscapeVideo: Bool = false
     
     private let maxTitleLength = 100
-    private let maxDescriptionLength = 500
+    private let maxDescriptionLength = 150
     private let maxHashtags = 10
     private let maxTaggedUsers = 10
     
@@ -473,6 +473,13 @@ struct ThreadComposer: View {
         
         Task {
             do {
+                #if DEBUG
+                if let loc = selectedLocation {
+                    print("📍 COMPOSER: Posting with location → \(loc.name) (\(loc.id))")
+                } else {
+                    print("📍 COMPOSER: Posting without location")
+                }
+                #endif
                 let createdVideo = try await videoCoordinator.processVideoCreation(
                     recordedVideoURL: recordedVideoURL,
                     recordingContext: recordingContext,

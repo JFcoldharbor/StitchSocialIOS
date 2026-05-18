@@ -177,15 +177,26 @@ struct BusinessAdDashboardView: View {
             } else {
                 LazyVStack(spacing: 12) {
                     ForEach(adService.businessCampaigns) { campaign in
-                        BusinessCampaignCard(
-                            campaign: campaign,
-                            onPause: { pauseCampaign(campaign) },
-                            onResume: { resumeCampaign(campaign) }
-                        )
+                        Button {
+                            selectedCampaign = campaign
+                        } label: {
+                            BusinessCampaignCard(
+                                campaign: campaign,
+                                onPause: { pauseCampaign(campaign) },
+                                onResume: { resumeCampaign(campaign) }
+                            )
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding()
             }
+        }
+        .sheet(item: $selectedCampaign) { campaign in
+            CampaignAnalyticsView(
+                campaign: campaign,
+                onDismiss: { selectedCampaign = nil }
+            )
         }
     }
     
@@ -616,9 +627,22 @@ struct CreateCampaignView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("Cancel") { dismiss() }
-                        .foregroundColor(.gray)
+                        .foregroundColor(.white)
+                        .font(.body.weight(.semibold))
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.white.opacity(0.7))
+                            .font(.title3)
+                    }
                 }
             }
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbarBackground(Color.black, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .alert("Error", isPresented: $showError) {
                 Button("OK") {}
             } message: {

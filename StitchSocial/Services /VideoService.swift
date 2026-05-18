@@ -1664,7 +1664,7 @@ class VideoService: ObservableObject {
         let isCollectionSegment = data["isCollectionSegment"] as? Bool ?? false
         let replyTimestamp = data["replyTimestamp"] as? TimeInterval
         
-        return CoreVideoMetadata(
+        var video = CoreVideoMetadata(
             id: id,
             title: title,
             description: description,
@@ -1701,8 +1701,11 @@ class VideoService: ObservableObject {
             recordingSource: recordingSource,
             hashtags: hashtags
         )
+        // Decode optional place attached at upload time. Nil for legacy videos.
+        video.place = VideoLocation.decode(from: data["place"] as? [String: Any])
+        return video
     }
-    
+
     /// Calculate video temperature
     private func calculateVideoTemperature(
         hypeCount: Int,

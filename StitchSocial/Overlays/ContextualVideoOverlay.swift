@@ -132,6 +132,21 @@ struct ContextualVideoOverlay: View {
     @State private var showingEditSheet = false
     @State private var currentVideo: CoreVideoMetadata?
     @State private var currentTitle: String = ""
+
+    // MARK: - Report State
+    //
+    // Drives the ReportSheetView for user-initiated content reporting.
+    // To trigger from anywhere in the overlay, set:
+    //     reportTargetType = "video" (or "user")
+    //     reportTargetID = video.id (or userID)
+    //     showingReportSheet = true
+    //
+    // The action emit path is also supported — onAction?(.report(video.id))
+    // — but parent switch handlers currently `default: break` on .report,
+    // so the sheet won't show unless wired. Use the local state path here.
+    @State private var showingReportSheet = false
+    @State private var reportTargetType: String = "video"
+    @State private var reportTargetID: String = ""
     
     // MARK: - Initializer
     init(
@@ -195,6 +210,25 @@ struct ContextualVideoOverlay: View {
                 Spacer()
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
+                        if let place = video.place {
+                            LocationChip(location: place) {
+                                // TODO v2: navigate to place feed for this placeID
+                            }
+                            .onAppear {
+                                #if DEBUG
+                                print("📍 OVERLAY: Chip rendered for \(video.id) → \(place.name)")
+                                #endif
+                            }
+                        } else {
+                            // Diagnostic: surfaces in Xcode console so we can tell whether
+                            // it's a decode miss (mapper bug) vs a Firestore write miss
+                            // (place field absent on the doc).
+                            Color.clear.frame(width: 0, height: 0).onAppear {
+                                #if DEBUG
+                                print("📍 OVERLAY: No place on \(video.id) (title=\(video.title.prefix(40)))")
+                                #endif
+                            }
+                        }
                         if !video.title.isEmpty {
                             Text(video.title)
                                 .font(.system(size: 13, weight: .medium))
@@ -734,12 +768,24 @@ struct ContextualVideoOverlay: View {
             )
         }
         .sheet(isPresented: $showingViewers) {
-            WhoViewedSheet(
-                videoID: video.id,
-                onDismiss: {
-                    showingViewers = false
-                }
-            )
+            // Owner-only: full creator analytics (impressions, retention,
+            // daily curve, peak hour, plus a Viewers tab that reuses the
+            // existing WhoViewedSheet body).
+            // Other viewers (somehow reaching this sheet) get the basic
+            // viewers list — they shouldn't see retention curves on
+            // someone else's video.
+            if video.creatorID == currentUserID {
+                VideoAnalyticsSheet(
+                    videoID: video.id,
+                    videoDuration: video.duration,
+                    onDismiss: { showingViewers = false }
+                )
+            } else {
+                WhoViewedSheet(
+                    videoID: video.id,
+                    onDismiss: { showingViewers = false }
+                )
+            }
         }
         .fullScreenCover(isPresented: $showingStitchRecording) {
             StitchRecordingCover(
@@ -751,6 +797,13 @@ struct ContextualVideoOverlay: View {
             )
         }
         .shareOverlay()
+        .sheet(isPresented: $showingReportSheet) {
+            ReportSheetView(
+                targetType: reportTargetType,
+                targetID: reportTargetID.isEmpty ? video.id : reportTargetID,
+                onDismiss: { showingReportSheet = false }
+            )
+        }
         .sheet(isPresented: $showingEditSheet) {
             VideoEditSheet(
                 video: currentVideo ?? video,
@@ -856,6 +909,15 @@ struct ContextualVideoOverlay: View {
     // MARK: - Bottom Section
     private var bottomSection: some View {
         VStack(spacing: 12) {
+            if let place = video.place {
+                HStack {
+                    LocationChip(location: place) {
+                        // TODO v2: navigate to place feed for this placeID
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+            }
             HStack {
                 Text(currentTitle)
                     .font(.system(size: 14, weight: .semibold))
@@ -1259,6 +1321,7 @@ enum ContextualOverlayAction {
     case profileSettings
     case viewers
     case edit
+    case report(String)  // String = targetID (videoID or userID)
 }
 
 enum EngagementType {

@@ -405,7 +405,7 @@ class ConversationLaneService: ObservableObject {
         let hashtags = data[FirebaseSchema.VideoDocument.hashtags] as? [String] ?? []
         let recordingSource = data[FirebaseSchema.VideoDocument.recordingSource] as? String ?? "unknown"
         
-        return CoreVideoMetadata(
+        var video = CoreVideoMetadata(
             id: id,
             title: title,
             description: desc,
@@ -440,5 +440,7 @@ class ConversationLaneService: ObservableObject {
             recordingSource: recordingSource,
             hashtags: hashtags
         )
+        video.place = VideoLocation.decode(from: data["place"] as? [String: Any])
+        return video
     }
 }

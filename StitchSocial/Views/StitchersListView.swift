@@ -786,25 +786,27 @@ class StitchersViewModel: ObservableObject {
     }
     
     func toggleBlock(for targetUserID: String) async {
-        // TODO: Implement when UserService block methods are available
-        // do {
-        //     if blockedUsers.contains(where: { $0.id == targetUserID }) {
-        //         try await userService.unblockUser(blockerID: userID, blockedID: targetUserID)
-        //         blockedUsers.removeAll { $0.id == targetUserID }
-        //     } else {
-        //         try await userService.blockUser(blockerID: userID, blockedID: targetUserID)
-        //         if let user = try await userService.getUser(id: targetUserID) {
-        //             blockedUsers.append(user)
-        //         }
-        //         followers.removeAll { $0.id == targetUserID }
-        //         following.removeAll { $0.id == targetUserID }
-        //     }
-        // } catch {
-        //     print("❌ STITCHERS: Failed to toggle block: \(error)")
-        // }
-        #if DEBUG
-        print("⚠️ STITCHERS: Block functionality not yet implemented")
-        #endif
+        do {
+            let isCurrentlyBlocked = blockedUsers.contains(where: { $0.id == targetUserID })
+            if isCurrentlyBlocked {
+                try await BlockService.shared.unblockUser(targetUserID)
+                blockedUsers.removeAll { $0.id == targetUserID }
+            } else {
+                try await BlockService.shared.blockUser(targetUserID)
+                // Optimistic local update — surface the change before next refresh.
+                // Caller is expected to reload follower/following lists separately;
+                // blocking a user does NOT automatically remove follow edges, but
+                // they will be filtered from feeds via BlockService.blockedUserIDs.
+                if let user = followers.first(where: { $0.id == targetUserID })
+                    ?? following.first(where: { $0.id == targetUserID }) {
+                    blockedUsers.append(user)
+                }
+            }
+        } catch {
+            #if DEBUG
+            print("❌ STITCHERS: Failed to toggle block: \(error)")
+            #endif
+        }
     }
     
     func removeFollower(_ followerID: String) async {

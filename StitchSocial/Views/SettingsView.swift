@@ -38,6 +38,8 @@ struct SettingsView: View {
     @State private var showingFriendSuggestions = false
     @State private var showingBusinessAnalytics = false
     @State private var showingBusinessCampaigns = false
+    @State private var showingMarketplace = false
+    @State private var showingPayouts = false
     
     // Preferences
     @State private var isHapticEnabled = UserDefaults.standard.bool(forKey: "hapticFeedbackEnabled")
@@ -196,6 +198,21 @@ struct SettingsView: View {
         .fullScreenCover(isPresented: $showingAdOpportunities) {
             if let user = currentUser {
                 AdOpportunitiesView(user: user)
+            }
+        }
+        .fullScreenCover(isPresented: $showingMarketplace) {
+            if let user = currentUser {
+                CreatorCampaignsHubView(
+                    currentUserID: user.id,
+                    isBrandAccount: user.isBusiness,
+                    brandName: user.displayName.isEmpty ? user.username : user.displayName,
+                    brandLogoURL: nil
+                )
+            }
+        }
+        .sheet(isPresented: $showingPayouts) {
+            NavigationStack {
+                PayoutsSetupView()
             }
         }
         .sheet(isPresented: $showingAccountSwitcher) {
@@ -429,6 +446,16 @@ struct SettingsView: View {
             ) {
                 showingBusinessCampaigns = true
             }
+
+            // Creator Marketplace (Mode B)
+            SettingsRow(
+                icon: "person.2.badge.gearshape.fill",
+                title: "Creator Marketplace",
+                subtitle: "Post briefs, review applicants, pay creators",
+                iconColor: .pink
+            ) {
+                showingMarketplace = true
+            }
             
             // Ad Spend Summary
             SettingsRow(
@@ -495,6 +522,26 @@ struct SettingsView: View {
                 iconColor: .green
             ) {
                 showingAdOpportunities = true
+            }
+
+            // Brand Marketplace (Mode B — browse + apply)
+            SettingsRow(
+                icon: "person.2.badge.gearshape.fill",
+                title: "Brand Marketplace",
+                subtitle: "Apply to paid creator briefs",
+                iconColor: .pink
+            ) {
+                showingMarketplace = true
+            }
+
+            // Payouts (Stripe Connect)
+            SettingsRow(
+                icon: "creditcard.and.123",
+                title: "Payouts",
+                subtitle: "Connect bank account to receive earnings",
+                iconColor: .cyan
+            ) {
+                showingPayouts = true
             }
             
             // My Subscribers

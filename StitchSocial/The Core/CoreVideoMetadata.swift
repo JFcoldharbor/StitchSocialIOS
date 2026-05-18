@@ -190,7 +190,14 @@ struct CoreVideoMetadata: Identifiable, Codable, Hashable {
     
     // MARK: - Hashtags
     var hashtags: [String]            // Extracted hashtags from description
-    
+
+    // MARK: - Location
+    /// Optional place attached at upload time. Decoded from the nested `place`
+    /// map written by VideoUploadService. Nil for legacy videos and any post
+    /// where the creator didn't attach a location. Default value avoids having
+    /// to thread this through every hand-written init in this file.
+    var place: VideoLocation? = nil
+
     /// True if this thread is a spin-off from another video
     var isSpinOff: Bool {
         return spinOffFromVideoID != nil

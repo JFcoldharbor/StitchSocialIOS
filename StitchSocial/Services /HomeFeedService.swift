@@ -125,8 +125,12 @@ class HomeFeedService: ObservableObject {
                 .whereField(FirebaseSchema.VideoDocument.conversationDepth, isEqualTo: 0)
             
             let snapshot = try await query.getDocuments()
-            
+
             for document in snapshot.documents {
+                // Skip videos hidden by moderation (Rekognition flagged/blocked).
+                let publicVis = document.data()["publicVisibility"] as? String ?? "public"
+                if publicVis != "public" { continue }
+
                 if let thread = try await createParentThreadFromDocument(document) {
                     threads.append(thread)
                 }
@@ -344,7 +348,11 @@ class HomeFeedService: ObservableObject {
             let videoID = document.data()[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
             if excludeVideoIDs.contains(videoID) { continue }
             if currentFeedVideoIDs.contains(videoID) { continue }
-            
+
+            // Skip videos hidden by moderation (Rekognition flagged/blocked).
+            let publicVis = document.data()["publicVisibility"] as? String ?? "public"
+            if publicVis != "public" { continue }
+
             if let thread = try await createParentThreadFromDocument(document) {
                 threads.append(thread)
                 if threads.count >= limit { break }

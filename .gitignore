@@ -1,2 +1,11 @@
 StitchSocial/Secrets.plist
-StitchSocial/Secrets.plist
+
+# Xcode user-specific
+**/xcuserdata/
+**/*.xcuserstate
+
+# macOS
+.DS_Store
+
+# Build/working artifacts
+screenshots/

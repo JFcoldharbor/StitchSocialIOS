@@ -1158,6 +1158,7 @@ struct ProfileView: View {
             tabTitles: viewModel.tabTitles,
             isLoading: viewModel.isLoadingVideos,
             isCurrentUserProfile: viewModel.isOwnProfile,
+            moderationHiddenVideoIDs: viewModel.moderationHiddenVideoIDs,
             pinnedVideos: viewModel.pinnedVideos,
             canPinMore: viewModel.pinnedVideoIDs.count < ProfileViewModel.maxPinnedVideos,
             hasMoreVideos: viewModel.hasMoreVideos,

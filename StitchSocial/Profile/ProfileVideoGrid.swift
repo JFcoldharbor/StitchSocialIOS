@@ -25,6 +25,11 @@ struct ProfileVideoGrid: View {
     let onVideoTap: (CoreVideoMetadata, Int, [CoreVideoMetadata]) -> Void
     let onVideoDelete: ((CoreVideoMetadata) -> Void)?
     let isCurrentUserProfile: Bool
+
+    /// Video IDs hidden from public surfaces by Rekognition moderation.
+    /// Used only on the owner's profile to render the "Under review" banner.
+    /// Pass empty for non-owner views or when moderation isn't relevant.
+    let moderationHiddenVideoIDs: Set<String>
     
     let pinnedVideos: [CoreVideoMetadata]
     let onPinVideo: ((CoreVideoMetadata) -> Void)?
@@ -220,7 +225,7 @@ struct ProfileVideoGrid: View {
             let adjustedIndex = pinnedVideos.count + index
             let combinedVideos = pinnedVideos + videos
             onVideoTap(video, adjustedIndex, combinedVideos)
-            
+
             Task { await preloadAdjacentVideos(currentIndex: index) }
         }
         .contextMenu {
@@ -232,6 +237,28 @@ struct ProfileVideoGrid: View {
             if isDeletingVideo && videoToDelete?.id == video.id {
                 Color.black.opacity(0.7)
                     .overlay(ProgressView().tint(.white).scaleEffect(1.2))
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            // "Under review" banner — owner-only, shown when AWS Rekognition
+            // has hidden this video from public surfaces (publicVisibility != "public").
+            if isCurrentUserProfile && moderationHiddenVideoIDs.contains(video.id) {
+                HStack(spacing: 4) {
+                    Image(systemName: "eye.slash.fill")
+                        .font(.system(size: 9, weight: .bold))
+                    Text("Under review")
+                        .font(.system(size: 9, weight: .bold))
+                        .lineLimit(1)
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    Capsule()
+                        .fill(Color.orange)
+                        .shadow(color: .black.opacity(0.3), radius: 2)
+                )
+                .padding(6)
             }
         }
         .onAppear {
@@ -395,6 +422,7 @@ extension ProfileVideoGrid {
         self.onVideoTap = onVideoTap
         self.onVideoDelete = nil
         self.isCurrentUserProfile = false
+        self.moderationHiddenVideoIDs = []
         self.pinnedVideos = []
         self.onPinVideo = nil
         self.onUnpinVideo = nil
@@ -404,13 +432,14 @@ extension ProfileVideoGrid {
         self.hasMoreVideos = false
         self.isLoadingMore = false
     }
-    
+
     init(
         videos: [CoreVideoMetadata],
         selectedTab: Int,
         tabTitles: [String],
         isLoading: Bool,
         isCurrentUserProfile: Bool,
+        moderationHiddenVideoIDs: Set<String> = [],
         pinnedVideos: [CoreVideoMetadata] = [],
         canPinMore: Bool = false,
         hasMoreVideos: Bool = false,
@@ -429,6 +458,7 @@ extension ProfileVideoGrid {
         self.onVideoTap = onVideoTap
         self.onVideoDelete = onVideoDelete
         self.isCurrentUserProfile = isCurrentUserProfile
+        self.moderationHiddenVideoIDs = moderationHiddenVideoIDs
         self.pinnedVideos = pinnedVideos
         self.onPinVideo = onPinVideo
         self.onUnpinVideo = onUnpinVideo
@@ -457,6 +487,7 @@ extension ProfileVideoGrid {
         self.onVideoTap = onVideoTap
         self.onVideoDelete = nil
         self.isCurrentUserProfile = false
+        self.moderationHiddenVideoIDs = []
         self.pinnedVideos = pinnedVideos
         self.onPinVideo = nil
         self.onUnpinVideo = nil

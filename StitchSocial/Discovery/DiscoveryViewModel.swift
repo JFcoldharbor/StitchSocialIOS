@@ -75,7 +75,8 @@ class DiscoveryViewModel: ObservableObject {
                 "isCollectionSegment": 0,
                 "depth>0": 0,
                 "notPublic": 0,
-                "emptyURL": 0
+                "emptyURL": 0,
+                "moderationHidden": 0
             ]
 
             let loaded = snapshot.documents.compactMap { doc -> CoreVideoMetadata? in
@@ -103,6 +104,15 @@ class DiscoveryViewModel: ObservableObject {
                 if vis == "private" || vis == "followersOnly" {
                     filteredOut["notPublic"]! += 1
                     if isTracked { print("🔍 DISCOVERY TRACE [\(creatorID.prefix(8))]: filtered — visibility=\(vis)") }
+                    return nil
+                }
+                // Moderation visibility — exclude videos flagged or blocked by
+                // Rekognition. Default to "public" when field is missing (older
+                // docs predating the moderation pipeline).
+                let publicVis = data["publicVisibility"] as? String ?? "public"
+                if publicVis != "public" {
+                    filteredOut["moderationHidden"]! += 1
+                    if isTracked { print("🔍 DISCOVERY TRACE [\(creatorID.prefix(8))]: filtered — publicVisibility=\(publicVis)") }
                     return nil
                 }
                 guard let url = data["videoURL"] as? String, !url.isEmpty else {

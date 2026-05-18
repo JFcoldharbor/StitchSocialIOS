@@ -469,7 +469,7 @@ class DiscoveryService: ObservableObject {
         let coolCount = data[FirebaseSchema.VideoDocument.coolCount] as? Int ?? 0
         let engagementRatio = hypeCount + coolCount > 0 ? Double(hypeCount) / Double(hypeCount + coolCount) : 0.5
         
-        return CoreVideoMetadata(
+        var video = CoreVideoMetadata(
             id: id,
             title: data[FirebaseSchema.VideoDocument.title] as? String ?? "",
             description: data[FirebaseSchema.VideoDocument.description] as? String ?? "",
@@ -504,6 +504,8 @@ class DiscoveryService: ObservableObject {
             isCollectionSegment: data["isCollectionSegment"] as? Bool ?? false,
             replyTimestamp: data["replyTimestamp"] as? TimeInterval
         )
+        video.place = VideoLocation.decode(from: data["place"] as? [String: Any])
+        return video
     }
     
     // MARK: - Category Methods (All TTL Cached)

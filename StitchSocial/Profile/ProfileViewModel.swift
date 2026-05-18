@@ -63,6 +63,13 @@ class ProfileViewModel: ObservableObject {
     @Published var selectedTab = 0
     @Published var userVideos: [CoreVideoMetadata] = []
     @Published var isLoadingVideos = false
+
+    /// Set of video IDs that have been hidden from public surfaces by the
+    /// AWS Rekognition moderation pipeline (publicVisibility != "public").
+    /// Populated only when the viewer is the profile owner — used to render
+    /// the "Under review" banner via ProfileVideoGrid. Always empty when
+    /// viewing someone else's profile.
+    @Published var moderationHiddenVideoIDs: Set<String> = []
     
     // MARK: - Pinned Videos State (NEW)
     
@@ -648,10 +655,24 @@ class ProfileViewModel: ObservableObject {
                 .order(by: FirebaseSchema.VideoDocument.createdAt, descending: true)
                 .limit(to: initialVideoLimit)
                 .getDocuments()
-            
+
+            // Owner sees their own moderation-hidden videos (with "Under review"
+            // banner via ProfileVideoGrid). Other viewers only see public videos.
+            let isOwnProfile = (targetUserID == currentUser?.id)
+
+            var hiddenSet: Set<String> = []
             let videos = snapshot.documents.compactMap { doc -> CoreVideoMetadata? in
-                return createVideoMetadata(from: doc.data(), documentID: doc.documentID)
+                let data = doc.data()
+                let publicVis = data["publicVisibility"] as? String ?? "public"
+                let isHidden = publicVis != "public"
+                if isHidden {
+                    if !isOwnProfile { return nil }  // hide from other viewers
+                    let vid = data["id"] as? String ?? doc.documentID
+                    hiddenSet.insert(vid)
+                }
+                return createVideoMetadata(from: data, documentID: doc.documentID)
             }
+            self.moderationHiddenVideoIDs = hiddenSet
             
             // CACHE: Store fresh videos for next load
             cachingService.cacheVideos(videos)

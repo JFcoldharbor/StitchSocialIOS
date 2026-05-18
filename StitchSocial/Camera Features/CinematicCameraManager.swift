@@ -171,8 +171,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
     private func addVideoInput() {
         guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
             #if DEBUG
-            print("❌ CAMERA: No camera found"); return
+            print("❌ CAMERA: No camera found")
             #endif
+            return
         }
         do {
             let input = try AVCaptureDeviceInput(device: camera)
@@ -198,8 +199,9 @@ class CinematicCameraManager: NSObject, ObservableObject {
     private func addAudioInput() {
         guard let mic = AVCaptureDevice.default(for: .audio) else {
             #if DEBUG
-            print("❌ CAMERA: No audio device"); return
+            print("❌ CAMERA: No audio device")
             #endif
+            return
         }
         do {
             let input = try AVCaptureDeviceInput(device: mic)

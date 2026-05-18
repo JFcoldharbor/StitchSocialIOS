@@ -706,7 +706,12 @@ class SearchService: ObservableObject {
         
         let data = document.data()
         guard let data = data else { return nil }
-        
+
+        // Skip videos hidden by moderation (Rekognition flagged/blocked).
+        // Default to "public" for older docs that predate the field.
+        let publicVis = data["publicVisibility"] as? String ?? "public"
+        if publicVis != "public" { return nil }
+
         // Basic required fields
         let id = data[FirebaseSchema.VideoDocument.id] as? String ?? document.documentID
         let title = data[FirebaseSchema.VideoDocument.title] as? String ?? ""

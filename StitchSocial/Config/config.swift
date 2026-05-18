@@ -228,7 +228,7 @@ struct Config {
         
         /// Content generation limits
         static let maxTitleLength = 100
-        static let maxDescriptionLength = 500
+        static let maxDescriptionLength = 150
         static let maxHashtags = 10
         static let maxHashtagLength = 30
         
